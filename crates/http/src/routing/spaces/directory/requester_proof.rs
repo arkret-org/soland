@@ -111,6 +111,7 @@ async fn directory_requester_proof_verified(
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::{Did, project_did_to_core_id};
     use arkret_models_discovery::DirectoryResolveHandleRequestBody;
     use arkret_wire::{Hash, ProofContextId};
 

@@ -1000,12 +1000,14 @@ fn registration_outcome(
 
 pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, namespace: &str) {
     let now = database_timestamp_now();
-    let principal_id = format!("ak:did_core:web:{namespace}.example");
+    let principal_id = DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
+        .expect("idempotency principal id");
     let idempotency_key = format!("idempotency:{namespace}");
     let first = IdempotencyRecord {
         principal_id: principal_id.clone(),
         idempotency_key: idempotency_key.clone(),
-        service_id: "did:web:soland.example".to_owned(),
+        service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example".to_owned())
+            .unwrap(),
         request_hash: "sha256:first".to_owned(),
         response_status: 200,
         response_body: serde_json::json!({"accepted": true}),
@@ -1046,12 +1048,12 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     let consent_id = format!("ak:consent:{namespace}");
     let first = MimiConsentCorrelationRecord {
         consent_id: consent_id.clone(),
-        requester_id: format!("did:web:{namespace}-requester.example"),
+        requester_id: format!("ak:did_core:web:{namespace}-requester.example"),
         target_kind: "did".to_owned(),
-        target_id: format!("did:web:{namespace}-target.example"),
+        target_id: format!("ak:did_core:web:{namespace}-target.example"),
         purpose: "direct_message".to_owned(),
         strand_id: None,
-        source_service_id: Some(format!("did:web:{namespace}-provider.example")),
+        source_service_id: Some(format!("ak:did_core:web:{namespace}-provider.example")),
         created_at: now,
         expires_at: Some(now + Duration::hours(1)),
     };
@@ -1062,7 +1064,7 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     );
 
     let mut competing = first.clone();
-    competing.target_id = format!("did:web:{namespace}-other-target.example");
+    competing.target_id = format!("ak:did_core:web:{namespace}-other-target.example");
     store
         .put(&competing)
         .await
@@ -1146,10 +1148,8 @@ fn canonical_wire_event_record(
     } else {
         event_kind
     };
-    let actor_id = arkret_wire::project_did_to_core_id(
-        &arkret_identifiers::Did::new(actor_id.to_owned()).expect("contract actor DID"),
-    )
-    .expect("contract actor core id");
+    let actor_id =
+        arkret_identifiers::DidCoreId::new(actor_id.to_owned()).expect("contract actor core id");
     let event = arkret_wire::test_support::raw_event_at(
         event_kind,
         arkret_wire::ScopeRef::Realm {
@@ -1296,7 +1296,7 @@ fn contract_applet_event_group(
     group: &str,
     count: u64,
 ) -> Vec<EventCommitRequest> {
-    let actor_id = format!("did:web:{namespace}-{group}.example");
+    let actor_id = format!("ak:did_core:web:{namespace}-{group}.example");
     let now = database_timestamp_now();
     (0..count)
         .map(|actor_seq| {
@@ -1716,6 +1716,8 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event_uuid = uuid::Uuid::now_v7();
     let realm_id = contract_realm_id(&format!("event-commit:{namespace}:{event_uuid}"));
     let principal_id = format!("ak:did_core:web:{namespace}.example");
+    let idempotency_principal_id =
+        DidCoreId::new(principal_id.clone()).expect("idempotency principal id");
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
@@ -1741,9 +1743,12 @@ pub async fn assert_event_commit_unit_of_work_contract(
             received_at: now,
         }],
         idempotency: Some(IdempotencyRecord {
-            principal_id: principal_id.clone(),
+            principal_id: idempotency_principal_id.clone(),
             idempotency_key: idempotency_key.clone(),
-            service_id: "did:web:soland.example".to_owned(),
+            service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example".to_owned(),
+            )
+            .unwrap(),
             request_hash: format!("sha256:{event_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({"event_id": event_id}),
@@ -1807,7 +1812,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&principal_id, &idempotency_key)
+            .get(&idempotency_principal_id, &idempotency_key)
             .await
             .expect("read idempotency record")
             .is_some()
@@ -2053,7 +2058,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
         response_event_ref: None,
         tombstone_event_ref: None,
         message: None,
-        peer_service_id: Some(format!("did:web:contact-service-{namespace}.example")),
+        peer_service_id: Some(format!(
+            "ak:did_core:web:contact-service-{namespace}.example"
+        )),
         peer_service_resolution: None,
         created_at: now,
         updated_at: now,
@@ -2077,9 +2084,12 @@ pub async fn assert_event_commit_unit_of_work_contract(
         device_revocation_gate: None,
         projections: Vec::new(),
         idempotency: Some(IdempotencyRecord {
-            principal_id: principal_id.clone(),
+            principal_id: idempotency_principal_id.clone(),
             idempotency_key: contact_idempotency_key.clone(),
-            service_id: "did:web:soland.example".to_owned(),
+            service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example".to_owned(),
+            )
+            .unwrap(),
             request_hash: format!("sha256:contact-{event_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({"status": "accepted"}),
@@ -2130,7 +2140,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&principal_id, &contact_idempotency_key)
+            .get(&idempotency_principal_id, &contact_idempotency_key)
             .await
             .unwrap()
             .is_some(),
@@ -2225,9 +2235,12 @@ pub async fn assert_event_commit_unit_of_work_contract(
             received_at: now,
         }],
         idempotency: Some(IdempotencyRecord {
-            principal_id: principal_id.clone(),
+            principal_id: idempotency_principal_id.clone(),
             idempotency_key: rollback_idempotency_key.clone(),
-            service_id: "did:web:soland.example".to_owned(),
+            service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example".to_owned(),
+            )
+            .unwrap(),
             request_hash: format!("sha256:{rollback_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({}),
@@ -2282,7 +2295,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&principal_id, &rollback_idempotency_key)
+            .get(&idempotency_principal_id, &rollback_idempotency_key)
             .await
             .expect("idempotency rollback")
             .is_none()
@@ -2696,7 +2709,7 @@ pub async fn assert_federation_outbox_store_contract(
     let realm_id = contract_realm_id(&format!("fanout:{namespace}"));
     let source_event = canonical_wire_event_record(
         "",
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         &realm_id,
         0,
         database_timestamp_now(),
@@ -3175,7 +3188,7 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         keypackage_ref: format!("ak:mls:keypackage:{namespace}-{suffix}"),
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-        actor_id: format!("did:web:{namespace}.example"),
+        actor_id: format!("ak:did_core:web:{namespace}.example"),
         device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
         endpoint_verification_method: None,
         intended_realm_id: None,
@@ -3396,7 +3409,7 @@ pub async fn assert_last_resort_claim_ledger_contract(
         .expect("publish last-resort KeyPackage");
 
     let ledger = |suffix: &str, welcome: &str| PeerKeyPackageClaimLedgerRecord {
-        source_service_id: format!("did:web:{namespace}.example"),
+        source_service_id: format!("ak:did_core:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-{suffix}"),
         request_digest: format!("sha256:{:0>64}", suffix),
         key_package_use: "last_resort".to_owned(),
@@ -4339,7 +4352,7 @@ pub async fn assert_member_identity_store_contract(
 ) {
     let subject = MemberIdentitySubjectKey {
         realm_id: format!("ak:realm:{namespace}"),
-        actor_id: format!("did:web:{namespace}.example"),
+        actor_id: format!("ak:did_core:web:{namespace}.example"),
         segment: "member_identity".to_owned(),
     };
     let first = MemberIdentityEventRecord {
@@ -4388,15 +4401,15 @@ pub async fn assert_member_identity_store_contract(
 
     let claim = HandleClaimEvidenceRecord {
         digest: format!("sha256:{}", "c".repeat(64)),
-        subject_id: format!("did:web:{namespace}.example"),
+        subject_id: format!("ak:did_core:web:{namespace}.example"),
         issuer: format!("did:web:{namespace}-issuer.example"),
-        issuer_service_id: Some(format!("did:web:{namespace}-issuer.example")),
+        issuer_service_id: Some(format!("ak:did_core:web:{namespace}-issuer.example")),
         audience: Some("ak:service:directory".to_owned()),
         binding_state: "bound".to_owned(),
         visibility: Some("public".to_owned()),
         expires_at: Some(database_timestamp_now() + Duration::hours(1)),
         revoked: false,
-        envelope: serde_json::json!({"subject": format!("did:web:{namespace}.example")}),
+        envelope: serde_json::json!({"subject": format!("ak:did_core:web:{namespace}.example")}),
     };
     store
         .put_handle_claim(&claim)
@@ -4704,9 +4717,9 @@ pub async fn assert_consent_projection_commit_contract(
 ) {
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
     let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
-    let holder = format!("did:web:{namespace}-holder.example");
-    let peer = format!("did:web:{namespace}-peer.example");
-    let other_peer = format!("did:web:{namespace}-other.example");
+    let holder = format!("ak:did_core:web:{namespace}-holder.example");
+    let peer = format!("ak:did_core:web:{namespace}-peer.example");
+    let other_peer = format!("ak:did_core:web:{namespace}-other.example");
     let cell_id = format!(
         "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
         namespace.len()

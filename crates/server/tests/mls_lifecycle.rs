@@ -194,6 +194,7 @@ async fn realm_seal_frontier(
 ) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
     for attempt in 0..50 {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
+            .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -343,13 +344,13 @@ async fn project_authorized_principal_device(
     let principal_server_id =
         arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
     let pcr_realm_id = arkret_identifiers::RealmId::new(
-        soland_test_support::fixture_principal_control_realm(principal_did),
+        soland_test_support::fixture_principal_control_realm(principal_did.as_str()),
     )
     .unwrap();
     soland_test_support::cba_basis::seed_realm_genesis_event(
         state,
         pcr_realm_id.as_str(),
-        principal_did,
+        principal_did.as_str(),
     )
     .await;
     let genesis_record = state
@@ -521,6 +522,7 @@ async fn mls_lifecycle_end_to_end_body() {
     // never seen is not a claim into that Realm, so the bootstrap unit is
     // submitted first rather than after the claim.
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(
@@ -592,6 +594,11 @@ async fn mls_lifecycle_end_to_end_body() {
     .unwrap();
     let publish_body = publish_unsigned.into_signed(publish_signature);
     let mut publish_resp = TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.keys.keypackages.upload.create.v1",
+            true,
+        )
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(
@@ -677,6 +684,11 @@ async fn mls_lifecycle_end_to_end_body() {
         group_id,
     );
     let claim_resp = TestClient::post(&claim_url)
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.keys.keypackages.command.claim.v1",
+            true,
+        )
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&initial_claim).unwrap())
@@ -715,6 +727,11 @@ async fn mls_lifecycle_end_to_end_body() {
         group_id,
     );
     let same_group_claim_resp = TestClient::post(&claim_url)
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.keys.keypackages.command.claim.v1",
+            true,
+        )
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&same_group_claim).unwrap())
@@ -727,8 +744,8 @@ async fn mls_lifecycle_end_to_end_body() {
     let mut same_group_claim_resp = same_group_claim_resp;
     let same_group_claim_json: Value = same_group_claim_resp.take_json().await.unwrap();
     assert_eq!(
-        same_group_claim_json["error"]["code"],
-        json!("claim_failed")
+        same_group_claim_json["type"],
+        json!("https://arkret.org/problems/claim_failed")
     );
 
     let bob_did = "did:web:bob.example";
@@ -784,6 +801,11 @@ async fn mls_lifecycle_end_to_end_body() {
         lifecycle_publish_unsigned.into_signed(lifecycle_publish_signature);
     let lifecycle_publish_resp =
         TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
+            .add_header(
+                "Arkret-Operation",
+                "ak.self.keys.keypackages.upload.create.v1",
+                true,
+            )
             .add_header("authorization", format!("Bearer {bob_token}"), true)
             .add_header("content-type", "application/json", true)
             .body(
@@ -808,6 +830,11 @@ async fn mls_lifecycle_end_to_end_body() {
         group_id,
     );
     let mut lifecycle_claim_resp = TestClient::post(&claim_url)
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.keys.keypackages.command.claim.v1",
+            true,
+        )
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&lifecycle_claim_body).unwrap())
@@ -919,6 +946,7 @@ async fn mls_lifecycle_end_to_end_body() {
     set_event_prev_refs(&mut genesis, &[bootstrap_frontier_event_id.as_str()]);
     let mls_genesis_event_id = genesis["event_id"].as_str().unwrap().to_owned();
     let genesis_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&genesis).unwrap())
@@ -1017,6 +1045,7 @@ async fn mls_lifecycle_end_to_end_body() {
     set_event_prev_refs(&mut welcome, &[mls_genesis_event_id.as_str()]);
     let welcome_event_id = welcome["event_id"].as_str().unwrap().to_owned();
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&welcome).unwrap())
@@ -1074,6 +1103,7 @@ async fn mls_lifecycle_end_to_end_body() {
     );
     set_event_prev_refs(&mut commit, &[welcome_event_id.as_str()]);
     let commit_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&commit).unwrap())
@@ -1094,6 +1124,11 @@ async fn mls_lifecycle_end_to_end_body() {
 
     // ── 4. Bob sees the Welcome on the standard to-device queue ─
     let device_messages_resp = TestClient::get("http://server/_arkret/self/device_messages")
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.device_messages.read.list.v1",
+            true,
+        )
         .add_header("authorization", format!("Bearer {bob_token}"), true)
         .send(&app_from_state(state.clone()))
         .await;

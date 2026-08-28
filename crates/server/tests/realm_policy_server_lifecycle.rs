@@ -42,6 +42,7 @@ use soland_test_support::signed_event::{
 };
 
 const ALICE: &str = "did:web:alice.example";
+const ALICE_ID: &str = "ak:did_core:web:alice.example";
 const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const POLICY_CELL: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
 const TRUST_DOMAIN: &str = "ak:trust_domain:soland-policy-test.local";
@@ -183,6 +184,7 @@ async fn submit_realm_bootstrap(state: &AppState, token: &str, title: &str) -> S
     arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&bootstrap)
         .expect("routable fixture ordinary Realm bootstrap unit");
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "events": bootstrap
@@ -208,8 +210,8 @@ fn grant_policy_manage(state: &AppState, realm_id: &str) {
     soland_http::authz::install_projected_grant(
         state.test_authz(),
         realm_id.to_owned(),
-        ALICE.to_owned(),
-        ALICE.to_owned(),
+        ALICE_ID.to_owned(),
+        ALICE_ID.to_owned(),
         realm_id.to_owned(),
         vec![arkret_wire::CapabilityActionId::POLICY_MANAGE.to_owned()],
         Vec::new(),
@@ -318,6 +320,11 @@ async fn send_put_policy_server(
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/realms/{realm_id}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.replace.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(request))
@@ -332,6 +339,11 @@ async fn get_policy_server(state: &AppState, token: &str, realm_id: &str) -> (St
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/realms/{realm_id}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.get.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
@@ -371,6 +383,11 @@ async fn send_delete_policy_server(
     let mut response = TestClient::delete(format!(
         "http://server/_arkret/self/realms/{realm_id}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.delete.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&request))
@@ -383,6 +400,7 @@ async fn send_delete_policy_server(
 
 async fn policy_server_events(state: &AppState, token: &str, realm_id: &str) -> Vec<Value> {
     let events: Value = TestClient::query("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.read.scan.v1", true)
         .json(&serde_json::json!({"realms": [realm_id], "limit": 200}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -415,6 +433,7 @@ async fn accepted_seal_frontier(state: &AppState, token: &str, realm_id: &str) -
     const MAX_ATTEMPTS: usize = 400;
     for attempt in 0..MAX_ATTEMPTS {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
+            .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
             .json(
                 &arkret_models_collaboration::event_query::SealFrontierRequestBody {
                     realm_id: RealmId::new(realm_id.to_owned())
@@ -460,6 +479,7 @@ fn accepted_seal_frontier_covering<'a>(
         for attempt in 0..MAX_ATTEMPTS {
             let frontier = accepted_seal_id(state, token, realm_id).await;
             let mut response = TestClient::query("http://server/_arkret/self/seals/resolve")
+                .add_header("Arkret-Operation", "ak.self.seals.read.resolve.v1", true)
                 .json(
                     &arkret_models_collaboration::http_bodies::SelfSealResolveRequestBody {
                         realm_id: RealmId::new(realm_id.to_owned())
@@ -499,6 +519,7 @@ fn accepted_control_event_digest<'a>(
 ) -> Pin<Box<dyn Future<Output = arkret_identifiers::Hash> + 'a>> {
     Box::pin(async move {
         let mut response = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
+            .add_header("Arkret-Operation", "ak.self.events.resource.get.v1", true)
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
             .await;
@@ -520,6 +541,7 @@ async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, 
     )
     .expect("fixture frontier actor core DID");
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
+        .add_header("Arkret-Operation", "ak.self.events.read.frontier.v1", true)
         .json(
             &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
                 actor_id: actor_core,
@@ -577,6 +599,11 @@ async fn link_governed_by(state: &AppState, token: &str, realm_id: &str, target:
     let body: Value = TestClient::post(format!(
         "http://server/_arkret/self/realms/{realm_id}/links"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_link.command.create.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&request))
@@ -609,6 +636,7 @@ async fn control_seal_coordinator_drains_multiple_bounded_concurrency_waves() {
     }
     for realm_id in &realms {
         let response = TestClient::query("http://server/_arkret/self/seals/frontier")
+            .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
             .json(
                 &arkret_models_collaboration::event_query::SealFrontierRequestBody {
                     realm_id: RealmId::new(realm_id.clone()).expect("fixture pending Realm id"),
@@ -1177,13 +1205,21 @@ async fn policy_server_same_basis_sibling_fails_closed() {
     let mut response = TestClient::get(format!(
         "http://server/_arkret/self/realms/{child_realm}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.get.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app)
     .await;
     let status = response.status_code.expect("GET status");
     let body = response.take_json().await.unwrap_or(Value::Null);
     assert_eq!(status, StatusCode::CONFLICT, "GET after ⊥: {body}");
-    assert_eq!(body["error"]["code"], "failed_bottom", "GET body: {body}");
+    assert_eq!(
+        body["type"], "https://arkret.org/problems/failed_bottom",
+        "GET body: {body}"
+    );
 
     // The conflict above exists only in this in-memory projection; it is not
     // in the durable Event log. Restore that exact synthetic snapshot before
@@ -1193,6 +1229,11 @@ async fn policy_server_same_basis_sibling_fails_closed() {
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/realms/{child_realm}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.replace.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&blocked_put))
@@ -1206,6 +1247,11 @@ async fn policy_server_same_basis_sibling_fails_closed() {
     let mut response = TestClient::delete(format!(
         "http://server/_arkret/self/realms/{child_realm}/policy-server"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_policy_server.resource.delete.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&blocked_delete))
@@ -1259,7 +1305,10 @@ async fn policy_server_replace_without_head_eq_is_refused() {
         StatusCode::PRECONDITION_FAILED,
         "unguarded replace of a settled register: {body}"
     );
-    assert_eq!(body["error"]["code"], "failed_precondition", "body: {body}");
+    assert_eq!(
+        body["type"], "https://arkret.org/problems/failed_precondition",
+        "body: {body}"
+    );
 
     // The refusal is total: the register still holds the first declaration and
     // the Event log did not grow.
@@ -1304,6 +1353,7 @@ async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
     let create_event_id = RealmId::new(realm.clone()).unwrap().event_id();
 
     let resolved: Value = TestClient::query("http://server/_arkret/self/events/resolve")
+        .add_header("Arkret-Operation", "ak.self.events.read.resolve.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_body(
@@ -1329,6 +1379,7 @@ async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
     );
     let seal_ref = accepted_seal_frontier(&state, &token, &realm).await;
     let mut seal_response = TestClient::query("http://server/_arkret/self/seals/resolve")
+        .add_header("Arkret-Operation", "ak.self.seals.read.resolve.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&json!({
@@ -1361,6 +1412,7 @@ async fn events_resolve_excludes_seals_and_seal_resolve_returns_exact_leaf() {
     // An Event id that does not exist stays in `missing[]`; Event resolve still
     // cannot expose any Seal material.
     let unknown: Value = TestClient::query("http://server/_arkret/self/events/resolve")
+        .add_header("Arkret-Operation", "ak.self.events.read.resolve.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&json!({

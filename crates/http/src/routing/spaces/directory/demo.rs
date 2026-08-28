@@ -31,7 +31,7 @@ pub(super) fn require_demo_directory_provider(state: &AppState) -> Result<(), Ap
 
 pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> Value {
     json!({
-        "organization_id": "ak:org:demo",
+        "organization_id": service_id,
         "organization_principal_id": service_id,
         "handle": "@arkret-demo",
         "title": "Arkret Demo Organization",
@@ -47,10 +47,10 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
 
 pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let mut actors = vec![json!({
-        "id": "ak:did_core:web:alice.example",
+        "actor_id": "ak:did_core:web:alice.example",
         "handle": "@alice",
         "display_name": "Alice Example",
-        "organization_id": "ak:org:demo",
+        "organization_id": state.service_id(),
         "avatar_blob_ref": null,
     })];
 
@@ -58,7 +58,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     for account in accounts {
         if actors
             .iter()
-            .any(|actor| actor["id"].as_str() == Some(account.principal_id.as_str()))
+            .any(|actor| actor["actor_id"].as_str() == Some(account.principal_id.as_str()))
         {
             continue;
         }
@@ -88,13 +88,13 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             .as_ref()
             .and_then(|profile| profile.avatar_blob_ref.clone());
         actors.push(json!({
-            "id": account.principal_id,
+            "actor_id": account.principal_id,
             "handle": account.handle(),
             "display_name": display_name,
             "state": account_state.clone(),
             "account_state": account_state,
             "bio": bio,
-            "organization_id": "ak:org:demo",
+            "organization_id": state.service_id(),
             "avatar_blob_ref": avatar_blob_ref,
         }));
     }
@@ -114,28 +114,29 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             grouped
         })
         .unwrap_or_default();
-    for (did, actor_devices) in devices.iter() {
-        let account_state = state.account_lifecycle_state(did);
+    for (actor_id, actor_devices) in devices.iter() {
+        let account_state = state.account_lifecycle_state(actor_id);
         if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
-        if actors
-            .iter()
-            .any(|actor| actor["did"].as_str().is_some_and(|known| known == did))
-        {
+        if actors.iter().any(|actor| {
+            actor["actor_id"]
+                .as_str()
+                .is_some_and(|known| known == actor_id)
+        }) {
             continue;
         }
         let display_name = actor_devices
             .values()
             .find_map(|device| device["display_name"].as_str())
-            .unwrap_or(did);
+            .unwrap_or(actor_id);
         actors.push(json!({
-            "did": did,
-            "handle": handle_for_did(did),
+            "actor_id": actor_id,
+            "handle": handle_for_did(actor_id),
             "display_name": display_name,
             "state": account_state.clone(),
             "account_state": account_state,
-            "organization_id": "ak:org:demo",
+            "organization_id": state.service_id(),
             "avatar_blob_ref": null,
         }));
     }

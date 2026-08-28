@@ -5071,7 +5071,7 @@ mod trust_binding_tests {
     #[test]
     fn claim_failed_query_rejects_a_contradictory_existing_winner() {
         let expected = PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "did:web:source.example".to_owned(),
+            source_service_id: "ak:did_core:web:source.example".to_owned(),
             claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             request_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),

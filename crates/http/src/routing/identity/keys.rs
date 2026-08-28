@@ -535,9 +535,7 @@ async fn keys_claim(
     let body = body.into_inner();
     let mut claimed = BTreeMap::new();
     for (actor, devices) in body.one_time_keys {
-        let actor_core = arkret_wire::project_did_to_core_id(&actor).map_err(|error| {
-            AppError::param_invalid(format!("claim actor cannot project: {error}"))
-        })?;
+        let actor_core = actor.clone();
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {
             let facet =

@@ -180,7 +180,7 @@ async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
     let state = make_state(false);
     let payload = json!({
         "realm_id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
-        "actor_id": "did:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
+        "actor_id": "ak:did_core:key:z6MkeTG3bFFSLYVU7VqhgZxqr6YzpaGrQtFMh1uvqGy1vDnP",
         "segment": "member_identity",
         "identity_payload": {
             "encrypted_payload": {
@@ -686,10 +686,12 @@ async fn applet_registration_requires_realm_admin() {
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
-            issuer: owner.to_owned(),
-            issuer_principal_server_id: owner.to_owned(),
-            subject: owner.to_owned(),
-            subject_principal_server_id: Some(owner.to_owned()),
+            issuer: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            issuer_principal_server_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            subject: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            subject_principal_server_id: Some(
+                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            ),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             constraints: Vec::new(),
@@ -1355,10 +1357,15 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     crate::authz::Grant {
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
-        issuer: "ak:did_core:web:owner.example".to_owned(),
-        issuer_principal_server_id: DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
-        subject: DATA_EVENT_ACTOR.to_owned(),
-        subject_principal_server_id: Some(DATA_EVENT_PRINCIPAL_SERVER.to_owned()),
+        issuer: arkret_wire::DidCoreId::new("ak:did_core:web:owner.example".to_owned()).unwrap(),
+        issuer_principal_server_id: arkret_wire::DidCoreId::new(
+            DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
+        )
+        .unwrap(),
+        subject: arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR.to_owned()).unwrap(),
+        subject_principal_server_id: Some(
+            arkret_wire::DidCoreId::new(DATA_EVENT_PRINCIPAL_SERVER.to_owned()).unwrap(),
+        ),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
         constraints: Vec::new(),
@@ -1572,7 +1579,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
         authority_grant_id,
         action,
         "ak:did_core:web:authority.example",
-        "did:web:owner.example",
+        "ak:did_core:web:owner.example",
         true,
         None,
     );
@@ -1580,7 +1587,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
         child_grant_id,
         action,
         DATA_EVENT_ACTOR,
-        "did:web:authority.example",
+        "ak:did_core:web:authority.example",
         false,
         Some(authority_grant_id),
     );

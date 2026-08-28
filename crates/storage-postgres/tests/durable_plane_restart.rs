@@ -231,7 +231,7 @@ async fn postgres_member_identity_survives_restart_when_configured() {
         event_id: format!("ak:event:{namespace}-restart"),
         subject: MemberIdentitySubjectKey {
             realm_id: format!("ak:realm:{namespace}"),
-            actor_id: format!("did:web:{namespace}.example"),
+            actor_id: format!("ak:did_core:web:{namespace}.example"),
             segment: "member_identity".to_owned(),
         },
         payload_digest: format!("sha256:{}", "d".repeat(64)),

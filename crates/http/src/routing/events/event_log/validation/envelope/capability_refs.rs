@@ -188,8 +188,11 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             )
         })?;
-        if stored.subject != capability_subject
-            || stored.subject_principal_server_id.as_deref()
+        if stored.subject.as_str() != capability_subject
+            || stored
+                .subject_principal_server_id
+                .as_ref()
+                .map(arkret_wire::DidCoreId::as_str)
                 != Some(capability_subject_principal_server_id)
             || stored.realm_id != realm_id
         {
@@ -268,7 +271,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} is revoked"),
             ));
         }
-        if stored.subject != capability_subject || stored.realm_id != realm_id {
+        if stored.subject.as_str() != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -660,8 +663,12 @@ pub(super) fn effective_historical_grants_for_subject(
     snapshot
         .iter()
         .filter(|grant| {
-            grant.subject == actor_id
-                && grant.subject_principal_server_id.as_deref() == Some(principal_server_id)
+            grant.subject.as_str() == actor_id
+                && grant
+                    .subject_principal_server_id
+                    .as_ref()
+                    .map(arkret_wire::DidCoreId::as_str)
+                    == Some(principal_server_id)
                 && grant.realm_id == realm_id
                 && !grant.revoked
                 && crate::authz::grant_scope_valid(grant).is_ok()
@@ -1058,8 +1065,9 @@ mod constraint_tests {
         const SERVICE: &str = "ak:did_core:web:applet.example";
         const TARGET_PS: &str = "ak:did_core:web:principal.example";
         let mut applet_grant = grant(Vec::new());
-        applet_grant.subject = SERVICE.to_owned();
-        applet_grant.subject_principal_server_id = Some(TARGET_PS.to_owned());
+        applet_grant.subject = arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap();
+        applet_grant.subject_principal_server_id =
+            Some(arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap());
         let grant_id = applet_grant.grant_id.clone();
         let grants = std::collections::BTreeMap::from([(grant_id.clone(), applet_grant)]);
         let now = chrono::Utc::now();

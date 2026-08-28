@@ -175,7 +175,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         .unwrap_or_else(chrono::Utc::now);
     let expires_at = required_pairing_expires_at(&agent_record)?;
     let write = soland_services::identity::StoreAgentRuntimeApprovalCommand {
-        agent_id: agent_id.to_owned(),
+        agent_id: agent_id.to_string(),
         pairing_request_id: body.pairing_request_id.clone(),
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),

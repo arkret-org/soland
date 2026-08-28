@@ -326,7 +326,7 @@ async fn server_describe_accepts_only_its_selected_role_body() {
         .await;
     assert_eq!(rejected.status_code.unwrap().as_u16(), 400);
     let rejected: Value = rejected.take_json().await.unwrap();
-    assert_eq!(rejected["error"]["code"], "param_invalid");
+    assert_eq!(problem_code(&rejected), "param_invalid");
 }
 
 #[test]

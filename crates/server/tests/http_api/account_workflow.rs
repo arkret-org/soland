@@ -412,7 +412,7 @@ async fn erasure_pending_account_refuses_self_reads_with_account_erased_body() {
         .await;
     assert_eq!(viewer.status_code.unwrap().as_u16(), 401);
     let viewer_body: Value = viewer.take_json().await.unwrap();
-    assert_eq!(viewer_body["error"]["code"], "account_erased");
+    assert_eq!(problem_code(&viewer_body), "account_erased");
 }
 
 /// `account-lifecycle.md` §3: an already-issued session on a
@@ -474,7 +474,7 @@ async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_
         .await;
     assert_eq!(viewer.status_code.unwrap().as_u16(), 401);
     let viewer_body: Value = viewer.take_json().await.unwrap();
-    assert_eq!(viewer_body["error"]["code"], "soft_logged_out");
+    assert_eq!(problem_code(&viewer_body), "soft_logged_out");
 
     seed_state("suspended").await;
     assert_eq!(state.account_lifecycle_state(actor.as_str()), "suspended");
@@ -574,7 +574,7 @@ async fn account_lifecycle_errors_surface_specific_codes_body() {
         .await;
     assert_eq!(old_me.status_code.unwrap().as_u16(), 401);
     let old_me_body: Value = old_me.take_json().await.unwrap();
-    assert_eq!(old_me_body["error"]["code"], "account_locked");
+    assert_eq!(problem_code(&old_me_body), "account_locked");
 
     let mut login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
@@ -586,7 +586,7 @@ async fn account_lifecycle_errors_surface_specific_codes_body() {
         .await;
     assert_eq!(login.status_code.unwrap().as_u16(), 403);
     let login_body: Value = login.take_json().await.unwrap();
-    assert_eq!(login_body["error"]["code"], "account_locked");
+    assert_eq!(problem_code(&login_body), "account_locked");
 
     let carol = register_account(
         state.clone(),
@@ -628,7 +628,7 @@ async fn account_lifecycle_errors_surface_specific_codes_body() {
         .await;
     assert_eq!(suspended_login.status_code.unwrap().as_u16(), 403);
     let suspended_login_body: Value = suspended_login.take_json().await.unwrap();
-    assert_eq!(suspended_login_body["error"]["code"], "account_suspended");
+    assert_eq!(problem_code(&suspended_login_body), "account_suspended");
 
     let dave = register_account(
         state.clone(),
@@ -659,7 +659,7 @@ async fn account_lifecycle_errors_surface_specific_codes_body() {
         .await;
     assert_eq!(deactivated_me.status_code.unwrap().as_u16(), 401);
     let deactivated_me_body: Value = deactivated_me.take_json().await.unwrap();
-    assert_eq!(deactivated_me_body["error"]["code"], "account_deactivated");
+    assert_eq!(problem_code(&deactivated_me_body), "account_deactivated");
 
     let mut deactivated_login = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&serde_json::json!({
@@ -671,10 +671,7 @@ async fn account_lifecycle_errors_surface_specific_codes_body() {
         .await;
     assert_eq!(deactivated_login.status_code.unwrap().as_u16(), 403);
     let deactivated_login_body: Value = deactivated_login.take_json().await.unwrap();
-    assert_eq!(
-        deactivated_login_body["error"]["code"],
-        "account_deactivated"
-    );
+    assert_eq!(problem_code(&deactivated_login_body), "account_deactivated");
 }
 
 #[test]
@@ -742,8 +739,9 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
     // placeholder until that possession-bound authorization is accepted.
     let state = soland_test_support::app_state(test_config());
     let founding_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
-    let did = "did:web:bob.example";
-    let did = fixture_actor_core_id(did);
+    let principal_did = Did::new("did:web:bob.example").expect("fixture principal DID");
+    let principal_id =
+        arkret_wire::project_did_to_core_id(&principal_did).expect("fixture principal core id");
     let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
@@ -751,8 +749,8 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did,
-            "did": did,
+            "principal_id": principal_id,
+            "did": principal_did,
             "display_name": "bob",
             "device_id": founding_device,
         }))
@@ -763,10 +761,16 @@ async fn account_viewer_authorizes_founding_device_registered_with_account_body(
         .unwrap();
     assert_eq!(
         registered["principal_id"],
-        did.as_str(),
+        principal_id.as_str(),
         "register response: {registered}"
     );
-    let token = dev_token_for_device(state.clone(), did, founding_device, "bob").await;
+    let token = dev_token_for_device(
+        state.clone(),
+        principal_did.as_str(),
+        founding_device,
+        "bob",
+    )
+    .await;
 
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -797,14 +801,14 @@ fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device() {
 async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000002";
-    let did = "did:web:bob-pcr-first.example";
-    let did = fixture_actor_core_id(did);
+    let principal_did = "did:web:bob-pcr-first.example";
+    let principal_id = fixture_actor_core_id(principal_did);
     let authorized_at = chrono::Utc::now();
     state
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: did.to_string(),
+            actor: principal_id.to_string(),
             device_id: device_id.to_owned(),
             display_name: None,
             verification_state: "verified".to_owned(),
@@ -828,8 +832,8 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did.as_str(),
-            "did": did,
+            "principal_id": principal_id.as_str(),
+            "did": principal_did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -840,7 +844,7 @@ async fn first_gate_registration_does_not_downgrade_a_pcr_authorized_device_body
     let preserved = state
         .test_persistence()
         .devices()
-        .get(did.as_str(), device_id)
+        .get(principal_id.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -872,8 +876,8 @@ fn repeated_gate_registration_does_not_downgrade_an_authorized_device() {
 async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body() {
     let state = soland_test_support::app_state(test_config());
     let device_id = "ak:device:01904100-0000-7000-8000-b0b0b0000003";
-    let did = "did:web:bob-repeat.example";
-    let did = fixture_actor_core_id(did);
+    let principal_did = "did:web:bob-repeat.example";
+    let principal_id = fixture_actor_core_id(principal_did);
     let first = TestClient::post("http://server/_soland/gate/account/project")
         .add_header(
             "authorization",
@@ -881,8 +885,8 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did.as_str(),
-            "did": did,
+            "principal_id": principal_id.as_str(),
+            "did": principal_did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -893,7 +897,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
     let placeholder = state
         .test_persistence()
         .devices()
-        .get(did.as_str(), device_id)
+        .get(principal_id.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -922,8 +926,8 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
             true,
         )
         .json(&serde_json::json!({
-            "principal_id": did.as_str(),
-            "did": did,
+            "principal_id": principal_id.as_str(),
+            "did": principal_did,
             "display_name": "bob",
             "device_id": device_id,
         }))
@@ -934,7 +938,7 @@ async fn repeated_gate_registration_does_not_downgrade_an_authorized_device_body
     let preserved = state
         .test_persistence()
         .devices()
-        .get(did.as_str(), device_id)
+        .get(principal_id.as_str(), device_id)
         .await
         .unwrap()
         .unwrap();
@@ -1588,7 +1592,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     .await;
     assert_eq!(expired.status_code.unwrap(), StatusCode::GONE);
     let expired_body: Value = expired.take_json().await.unwrap();
-    assert_eq!(expired_body["error"]["code"], "cursor_expired");
+    assert_eq!(problem_code(&expired_body), "cursor_expired");
 
     let exported: Value = TestClient::get(format!(
         "http://server/_arkret/self/realms/{realm_id}/export"

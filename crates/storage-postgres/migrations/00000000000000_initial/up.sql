@@ -2610,9 +2610,9 @@ CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id,
 
 CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,
-    principal_id text,
+    binding_subject text,
     device_id text,
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     filter_digest text,
     purpose text NOT NULL,
     positions jsonb,
@@ -2624,7 +2624,7 @@ CREATE TABLE public.sync_cursor_handles (
 
 CREATE INDEX sync_cursor_handles_expiry_idx ON public.sync_cursor_handles USING btree (expires_at_ms);
 
-CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING btree (principal_id, device_id, filter_digest);
+CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING btree (binding_subject, device_id, filter_digest);
 
 CREATE TABLE public.sync_cursor_revocations (
     id uuid PRIMARY KEY,
@@ -2666,9 +2666,9 @@ CREATE TABLE public.websocket_auth_replay_ledger (
 CREATE INDEX websocket_auth_replay_ledger_retain_until_idx ON public.websocket_auth_replay_ledger (retain_until);
 
 CREATE TABLE public.idempotency_keys (
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     idempotency_key text NOT NULL,
-    service_id text NOT NULL,
+    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     request_hash text NOT NULL,
     response_status integer NOT NULL,
     response_body jsonb NOT NULL,

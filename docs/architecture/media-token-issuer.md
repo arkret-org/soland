@@ -80,7 +80,7 @@ the realm's `ak.realm.media_service.foci[]` set, returning `focus_mismatch`.
   "realm_id": "ak:realm:...",
   "call_id": "ak:call:...",
   "focus_id": "livekit_eu-west-1",
-  "actor_id": "did:webvh:...",
+  "actor_id": "ak:did_core:webvh:...",
   "device_id": "ak:device:...",
   "participant_identity": "ak:participant:<realm>:<actor>:<device>:<call>",
   "expires_at": "2026-05-27T12:34:56.789Z",

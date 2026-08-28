@@ -3287,7 +3287,7 @@ mod tests {
             actor_id: &str,
         ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(
-                (actor_id == "did:web:alice.example").then(|| AccountIdentity {
+                (actor_id == "ak:did_core:web:alice.example").then(|| AccountIdentity {
                     account_id: "ak:account:alice".to_owned(),
                 }),
             )
@@ -3594,7 +3594,7 @@ mod tests {
         );
         let account = service
             .find_account_by_actor(FindAccountByActorQuery {
-                actor_id: "did:web:alice.example".to_owned(),
+                actor_id: "ak:did_core:web:alice.example".to_owned(),
             })
             .await
             .expect("lookup account")

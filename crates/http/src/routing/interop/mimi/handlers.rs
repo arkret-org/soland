@@ -45,13 +45,7 @@ pub(super) async fn mimi_key_material(
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
     verify_mimi_key_material_request_proofs(state, &typed).await?;
-    let target = body
-        .get("target_identifier")
-        .or_else(|| body.get("target_did"))
-        .or_else(|| body.get("mimi_room_uri"))
-        .or_else(|| body.get("strand_id"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("unknown");
+    let target = typed.strand_id.as_str();
     let _receipt = mimi_receipt(
         state,
         arkret_wire::ServiceOperationId::OPEN_MIMI_EXCHANGE_REQUEST_KEY_MATERIAL_V1,
@@ -1341,7 +1335,7 @@ mod consent_proof_tests {
             Hlc::new(state.hlc().now()).unwrap(),
             json!({
                 "consent_id": consent_id,
-                "peer": "did:web:mimi-peer-test.invalid",
+                "peer": "ak:did_core:web:mimi-peer-test.invalid",
                 "consent_scope": "direct_message"
             }),
             now(),
@@ -1538,7 +1532,7 @@ mod consent_proof_tests {
             .consents()
             .save_mimi_correlation(MimiConsentCorrelation {
                 consent_id: request.consent_id.to_string(),
-                requester_id: "did:web:mimi-peer-test.invalid".to_owned(),
+                requester_id: "ak:did_core:web:mimi-peer-test.invalid".to_owned(),
                 target_kind: "did".to_owned(),
                 target_id: target_id.to_owned(),
                 purpose: "direct_message".to_owned(),

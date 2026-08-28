@@ -560,11 +560,8 @@ async fn self_invite_dispatch_rejects_an_invite_event_this_service_never_accepte
         arkret_identifiers::EventId::new(UNKNOWN_EVENT_ID.to_owned()).expect("unknown Event id");
     let (status, body) = fixture.dispatch(&fixture.alice_token, &delivery).await;
     assert_eq!(status, StatusCode::CONFLICT, "dispatch response: {body}");
-    assert_eq!(body["error"]["code"], "failed_precondition", "{body}");
-    assert_eq!(
-        body["error"]["details"]["reason_code"], "invite_event_unaccepted",
-        "{body}"
-    );
+    assert_eq!(problem_code(&body), "failed_precondition", "{body}");
+    assert_eq!(body["reason_code"], "invite_event_unaccepted", "{body}");
     assert!(
         fixture.quarantine_entries().await.is_empty(),
         "a closed precondition rejection MUST NOT produce a holder-private write"
@@ -588,11 +585,8 @@ async fn self_invite_dispatch_rejects_an_invite_event_signed_by_another_actor_bo
     let delivery = fixture.delivery("ak:idempotency:actor-mismatch");
     let (status, body) = fixture.dispatch(&fixture.bob_token, &delivery).await;
     assert_eq!(status, StatusCode::CONFLICT, "dispatch response: {body}");
-    assert_eq!(body["error"]["code"], "failed_precondition", "{body}");
-    assert_eq!(
-        body["error"]["details"]["reason_code"], "invite_event_actor_mismatch",
-        "{body}"
-    );
+    assert_eq!(problem_code(&body), "failed_precondition", "{body}");
+    assert_eq!(body["reason_code"], "invite_event_actor_mismatch", "{body}");
     assert!(
         fixture.quarantine_entries().await.is_empty(),
         "a closed precondition rejection MUST NOT produce a holder-private write"

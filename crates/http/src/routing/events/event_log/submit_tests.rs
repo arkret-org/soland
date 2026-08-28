@@ -382,7 +382,7 @@ mod received_at_stamp_tests {
             RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned())
                 .unwrap(),
             kind.as_ref(),
-            json!({ "actor_id": "did:web:alice.example" }),
+            json!({ "actor_id": "ak:did_core:web:alice.example" }),
         )
     }
 
@@ -517,18 +517,18 @@ mod internal_event_admission_tests {
     }
 
     fn mimi_session() -> SessionRecord {
-        internal_session("did:web:mimi.example", "")
+        internal_session("ak:did_core:web:mimi.example", "")
     }
 
     #[test]
     fn mimi_provider_admission_reads_provenance_from_canonical_payload() {
         let admission = InternalEventAdmission::mimi_provider(
             "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "did:web:mimi.example",
+            "ak:did_core:web:mimi.example",
             "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
         );
         let object = json!({
-            "actor_id": "did:web:mimi.example",
+            "actor_id": "ak:did_core:web:mimi.example",
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "kind": "ak.message.create",
             "payload": {

@@ -138,7 +138,7 @@ async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target
         .await;
     assert_eq!(request_conflict.status_code, Some(StatusCode::CONFLICT));
     let request_conflict: Value = request_conflict.take_json().await.unwrap();
-    assert_eq!(request_conflict["error"]["code"], "duplicate_conflict");
+    assert_eq!(problem_code(&request_conflict), "duplicate_conflict");
 
     let message_replay: Value = TestClient::post("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -233,11 +233,8 @@ async fn device_message_id_idempotency_survives_ack_and_rejects_canonical_target
         .await;
     assert_eq!(conflict.status_code, Some(StatusCode::CONFLICT));
     let conflict: Value = conflict.take_json().await.unwrap();
-    assert_eq!(conflict["error"]["code"], "duplicate_conflict");
-    assert_eq!(
-        conflict["error"]["details"]["reason_code"],
-        "device_message_id_conflict"
-    );
+    assert_eq!(problem_code(&conflict), "duplicate_conflict");
+    assert_eq!(conflict["reason_code"], "device_message_id_conflict");
 }
 
 #[test]

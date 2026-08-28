@@ -798,8 +798,8 @@ pub use soland_http::project_accepted_operations;
 
 /// Stable event-derived PCR address for fixtures that do not exercise the
 /// full signed genesis builder. Production code must resolve accepted PCRs.
-pub fn fixture_principal_control_realm(principal_id: &str) -> String {
-    cba_basis::fixture_principal_control_realm_create(principal_id)
+pub fn fixture_principal_control_realm(principal_did: &str) -> String {
+    cba_basis::fixture_principal_control_realm_create(principal_did)
         .realm_id
         .to_string()
 }
@@ -815,12 +815,12 @@ pub async fn project_authorized_principal_device(
     let principal_did = Did::new(principal_did.to_owned()).unwrap();
     let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
     let pcr_create = cba_basis::fixture_principal_control_realm_create_for_server(
-        principal_did,
+        principal_did.as_str(),
         arkret_identifiers::DidCoreId::new(state.service_id().clone())
             .expect("fixture service core DID"),
     );
     let pcr_realm_id = pcr_create.realm_id.clone();
-    cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_did).await;
+    cba_basis::seed_realm_genesis_event(state, pcr_realm_id.as_str(), principal_did.as_str()).await;
     let genesis_record = state
         .test_persistence()
         .events()

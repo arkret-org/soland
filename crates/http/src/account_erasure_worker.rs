@@ -38,8 +38,8 @@ struct AccountErasureExecution {
     package: Option<ErasureReceiptPackage>,
 }
 
-fn execution_scope(state: &AppState) -> String {
-    format!("erasure-execution:{}", state.service_id())
+fn execution_principal_id(state: &AppState) -> arkret_wire::DidCoreId {
+    state.service_core_id()
 }
 
 fn execution_key(record_id: &AccountStatusRecordId, state: ExecutionState) -> String {
@@ -82,7 +82,7 @@ pub async fn ensure_intent(
     principal_id: &arkret_wire::DidCoreId,
     record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
-    let scope = execution_scope(state);
+    let principal_idempotency_id = execution_principal_id(state);
     let key = execution_key(record_id, ExecutionState::Pending);
     let execution = AccountErasureExecution {
         receiver_service_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
@@ -101,7 +101,7 @@ pub async fn ensure_intent(
     let request_hash = execution_hash(&execution)?;
     if let Some(existing) = state
         .jobs()
-        .idempotency_record(&scope, &key)
+        .idempotency_record(&principal_idempotency_id, &key)
         .await
         .map_err(|error| AppError::internal(format!("erasure intent lookup: {error}")))?
     {
@@ -116,9 +116,9 @@ pub async fn ensure_intent(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: scope,
+            principal_id: principal_idempotency_id,
             idempotency_key: key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: 202,
             response_body: serde_json::to_value(&execution)
@@ -138,9 +138,9 @@ async fn store_execution(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: execution_scope(state),
+            principal_id: execution_principal_id(state),
             idempotency_key: execution_key(&execution.triggering_status_record_id, execution.state),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: execution_hash(execution)?,
             response_status: if execution.state == ExecutionState::Pending {
                 202
@@ -173,7 +173,7 @@ async fn run_execution(
         record_id,
     )
     .await?;
-    let scope = execution_scope(state);
+    let principal_idempotency_id = execution_principal_id(state);
     let mut stored = None;
     for phase in [
         ExecutionState::FanoutEnqueued,
@@ -182,7 +182,7 @@ async fn run_execution(
     ] {
         if let Some(record) = state
             .jobs()
-            .idempotency_record(&scope, &execution_key(record_id, phase))
+            .idempotency_record(&principal_idempotency_id, &execution_key(record_id, phase))
             .await
             .map_err(|error| AppError::internal(format!("erasure execution lookup: {error}")))?
         {
@@ -212,7 +212,10 @@ async fn run_execution(
         store_execution(state, &execution, stored.created_at).await?;
         let completed = state
             .jobs()
-            .idempotency_record(&scope, &execution_key(record_id, ExecutionState::Completed))
+            .idempotency_record(
+                &principal_idempotency_id,
+                &execution_key(record_id, ExecutionState::Completed),
+            )
             .await
             .map_err(|error| AppError::internal(format!("erasure completion lookup: {error}")))?
             .ok_or_else(|| AppError::internal("erasure completion was not persisted"))?;

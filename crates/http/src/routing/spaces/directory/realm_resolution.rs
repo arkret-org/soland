@@ -564,10 +564,8 @@ pub(super) fn organization_preview_with_spaces(
 pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, AppError> {
     let actor_id = actor
         .get("actor_id")
-        .or_else(|| actor.get("did"))
-        .or_else(|| actor.get("subject"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("directory actor preview missing actor DID"))?;
+        .ok_or_else(|| AppError::internal("directory actor preview missing actor_id"))?;
     Ok(ActorPreview {
         actor_id: directory_actor_core_id(actor_id)?,
         handle: actor

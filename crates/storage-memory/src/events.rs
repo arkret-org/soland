@@ -1,5 +1,4 @@
 use serde_json::Value;
-use arkret_wire::DidCoreId;
 
 use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord,
@@ -990,6 +989,7 @@ impl EventStore for MemoryEventStore {
 
 #[cfg(test)]
 mod tests {
+    use arkret_wire::DidCoreId;
     use chrono::Utc;
 
     use super::*;
@@ -1002,7 +1002,7 @@ mod tests {
         let event_id = ids::format_event_id(&id);
         CanonicalEventRecord {
             event_id: event_id.clone(),
-            actor_id: "did:web:founder.example".to_owned(),
+            actor_id: "ak:did_core:web:founder.example".to_owned(),
             actor_seq: 1,
             realm_id: Some("ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw".to_owned()),
             kind: "ak.realm.join_rule".to_owned(),

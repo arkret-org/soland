@@ -167,21 +167,24 @@ pub fn engine_grant_from_cell_body(
     let issuer = body
         .get("issuer")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+        .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())?;
     let issuer_principal_server_id = body
         .get("issuer_principal_server_id")
         .and_then(Value::as_str)?
         .to_owned();
+    let issuer_principal_server_id =
+        arkret_identifiers::DidCoreId::new(issuer_principal_server_id).ok()?;
     let subject = body
         .get("subject")
         .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+        .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())?;
     let subject_principal_server_id = body
         .get("subject_principal_server_id")
         .and_then(Value::as_str)
-        .map(str::to_owned);
+        .map(str::to_owned)
+        .map(arkret_identifiers::DidCoreId::new)
+        .transpose()
+        .ok()?;
     let actions: Vec<String> = string_set_field(body, "actions").into_iter().collect();
     if actions.is_empty() {
         return None;
@@ -705,8 +708,12 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject == issuer
-                && grant.subject_principal_server_id.as_deref() == Some(issuer_principal_server_id)
+            grant.subject.as_str() == issuer
+                && grant
+                    .subject_principal_server_id
+                    .as_ref()
+                    .map(arkret_identifiers::DidCoreId::as_str)
+                    == Some(issuer_principal_server_id)
                 && projected_grant_is_active_for(
                     &grant,
                     realm_id,
@@ -745,8 +752,12 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject == issuer
-                && grant.subject_principal_server_id.as_deref() == Some(issuer_principal_server_id)
+            grant.subject.as_str() == issuer
+                && grant
+                    .subject_principal_server_id
+                    .as_ref()
+                    .map(arkret_identifiers::DidCoreId::as_str)
+                    == Some(issuer_principal_server_id)
                 && projected_grant_covers_action(
                     &grant,
                     realm_id,
@@ -780,8 +791,12 @@ impl ProjectionState {
             return false;
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
-        grant.subject == subject
-            && grant.subject_principal_server_id.as_deref() == Some(subject_principal_server_id)
+        grant.subject.as_str() == subject
+            && grant
+                .subject_principal_server_id
+                .as_ref()
+                .map(arkret_identifiers::DidCoreId::as_str)
+                == Some(subject_principal_server_id)
             && projected_grant_covers_action(
                 &grant,
                 realm_id,
@@ -1168,8 +1183,11 @@ impl ProjectionState {
         if parent.revoked || crate::capability::is_grant_expired(parent, operation.created_at) {
             return Err("grant_revoked_upstream");
         }
-        if issuer != parent.subject
-            || parent.subject_principal_server_id.as_deref()
+        if issuer != parent.subject.as_str()
+            || parent
+                .subject_principal_server_id
+                .as_ref()
+                .map(arkret_identifiers::DidCoreId::as_str)
                 != Some(operation.context.principal_server_id.as_str())
         {
             return Err("grant_exceeds_issuer_authority");
@@ -1324,7 +1342,10 @@ impl ProjectionState {
                         return false;
                     };
                     parent.subject == grant.issuer
-                        && parent.subject_principal_server_id.as_deref()
+                        && parent
+                            .subject_principal_server_id
+                            .as_ref()
+                            .map(arkret_identifiers::DidCoreId::as_str)
                             == Some(grant.issuer_principal_server_id.as_str())
                         && !parent.revoked
                         && !crate::capability::is_grant_expired(&parent, evaluation_basis)
@@ -1485,7 +1506,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer;
+        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer.as_str();
         let actor_is_target_realm_controller = self
             .realm_authority_root(&target.realm_id)
             .is_some_and(|root| root.controller_id.as_str() == operation.context.sender.as_str());
@@ -1518,7 +1539,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        if operation.context.sender.as_str() != target.subject {
+        if operation.context.sender.as_str() != target.subject.as_str() {
             return ProjectionEffect::Rejected {
                 reason: "grant_relinquish_not_subject".to_owned(),
             };

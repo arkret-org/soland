@@ -212,10 +212,11 @@ async fn peer_account_status_submit(
     let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
         AppError::internal(format!("account-status request digest failed: {error}"))
     })?;
-    let scope = format!("account-status:{source_service_id}:{}", state.service_id());
+    let idempotency_principal_id = arkret_wire::DidCoreId::new(source_service_id.clone())
+        .map_err(|error| AppError::param_invalid(format!("Source-Service-ID invalid: {error}")))?;
     if let Some(stored) = state
         .jobs()
-        .idempotency_record(&scope, &idempotency_key)
+        .idempotency_record(&idempotency_principal_id, &idempotency_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -335,9 +336,9 @@ async fn peer_account_status_submit(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: scope,
+            principal_id: idempotency_principal_id,
             idempotency_key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(&outcome)

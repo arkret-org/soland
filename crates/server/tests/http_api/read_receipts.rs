@@ -331,7 +331,8 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable_body() {
     assert_eq!(over_ceiling.status_code, Some(StatusCode::BAD_REQUEST));
     let over_ceiling_body: Value = over_ceiling.take_json().await.unwrap();
     assert_eq!(
-        over_ceiling_body["error"]["code"], "signal_ttl_out_of_range",
+        problem_code(&over_ceiling_body),
+        "signal_ttl_out_of_range",
         "over-ceiling receipt body: {over_ceiling_body}"
     );
 

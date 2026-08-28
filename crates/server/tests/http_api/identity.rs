@@ -18,13 +18,13 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
     let principal_server_id = DidCoreId::new(state.service_id().clone()).unwrap();
     let pcr_realm_id = RealmId::new(soland_test_support::fixture_principal_control_realm(
-        principal_did,
+        principal_did.as_str(),
     ))
     .unwrap();
     let basis_seal_id = soland_test_support::cba_basis::seed_realm_basis(
         state,
         pcr_realm_id.as_str(),
-        principal_did,
+        principal_did.as_str(),
         soland_test_support::cba_basis::FixtureBasis::shared(&[]),
     )
     .await;
@@ -474,7 +474,7 @@ async fn identity_surface_works_body() {
     );
     let missing_requested_evidence: Value = missing_requested_evidence.take_json().await.unwrap();
     assert_eq!(
-        missing_requested_evidence["error"]["code"],
+        problem_code(&missing_requested_evidence),
         "current_did_authority_unavailable"
     );
 
@@ -756,7 +756,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
             .await;
     assert_eq!(fork_response.status_code.unwrap(), StatusCode::CONFLICT);
     let error: Value = fork_response.take_json().await.unwrap();
-    assert_eq!(error["error"]["code"], "service_identity_conflict");
+    assert_eq!(problem_code(&error), "service_identity_conflict");
 }
 
 #[test]
@@ -839,7 +839,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity_body() {
         .await;
     assert_eq!(reused_key.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let reused_key_body: Value = reused_key.take_json().await.unwrap();
-    assert_eq!(reused_key_body["error"]["code"], "param_invalid");
+    assert_eq!(problem_code(&reused_key_body), "param_invalid");
 
     let did_signing = SigningKey::from_bytes(&[41u8; 32]);
     let update_signing = SigningKey::from_bytes(&[42u8; 32]);

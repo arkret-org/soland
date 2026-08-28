@@ -56,7 +56,11 @@ pub(super) async fn issue_authorization_leases(
     })?;
     match state
         .jobs()
-        .idempotency_record(&session.actor, idempotency_key)
+        .idempotency_record(
+            &arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            idempotency_key,
+        )
         .await
         .map_err(|error| {
             AppError::new(
@@ -116,9 +120,10 @@ pub(super) async fn issue_authorization_leases(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: session.actor.clone(),
+            principal_id: arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
             idempotency_key: idempotency_key.to_owned(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body,

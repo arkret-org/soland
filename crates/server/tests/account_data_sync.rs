@@ -83,6 +83,11 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
     };
     let body = TestClient::get(url)
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1,
+            true,
+        )
         .send(&app_from_state(state))
         .await
         .take_string()
@@ -115,6 +120,11 @@ async fn put_account_data(
         "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
+    .add_header(
+        "Arkret-Operation",
+        arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+        true,
+    )
     .json(&json!({"set_event": set_event}))
     .send(&app_from_state(state))
     .await;
@@ -142,15 +152,25 @@ async fn signed_account_data_submission(
         &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor DID projects to a core id");
+    let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+            true,
+        )
+        .send(&app_from_state(state))
+        .await;
+    let status = response.status_code;
+    let body: Value = response
+        .take_json()
+        .await
+        .expect("actor Realm frontier JSON");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
-        TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state))
-            .await
-            .take_json()
-            .await
-            .expect("typed actor Realm frontier");
+        serde_json::from_value(body.clone()).unwrap_or_else(|error| {
+            panic!("typed actor Realm frontier failed with {status:?}: {body}: {error}")
+        });
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {
@@ -347,15 +367,25 @@ async fn submit_actor_private_event(
         &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor DID projects to a core id");
+    let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
+        .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+            true,
+        )
+        .send(&app_from_state(state.clone()))
+        .await;
+    let status = response.status_code;
+    let body: Value = response
+        .take_json()
+        .await
+        .expect("actor Realm frontier JSON");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
-        TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .send(&app_from_state(state.clone()))
-            .await
-            .take_json()
-            .await
-            .expect("typed actor Realm frontier");
+        serde_json::from_value(body.clone()).unwrap_or_else(|error| {
+            panic!("typed actor Realm frontier failed with {status:?}: {body}: {error}")
+        });
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
         frontier.frontier
     else {
@@ -373,6 +403,11 @@ async fn submit_actor_private_event(
     );
     TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -546,19 +581,13 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     )
     .await;
     assert_eq!(stale_status, StatusCode::CONFLICT, "{stale}");
-    assert_eq!(stale["error"]["code"], "cas_conflict");
     assert_eq!(
-        stale["error"]["details"]["account_data_key"],
-        account_data_key
+        stale["type"], "https://arkret.org/problems/cas_conflict",
+        "{stale}"
     );
-    assert_eq!(
-        stale["error"]["details"]["current_revision"],
-        second["revision"]
-    );
-    assert_eq!(
-        stale["error"]["details"]["current_entry"]["content"],
-        second_value
-    );
+    assert_eq!(stale["account_data_key"], account_data_key);
+    assert_eq!(stale["current_revision"], second["revision"]);
+    assert_eq!(stale["current_entry"]["content"], second_value);
 
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     let event = account_data_entry(&phone_sync, account_data_key)
@@ -608,12 +637,16 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {desktop}"), true)
+    .add_header(
+        "Arkret-Operation",
+        arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
+        true,
+    )
     .json(&json!({"set_event": delete_event}))
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(delete.status_code, Some(StatusCode::OK));
     let delete_body: Value = delete.take_json().await.unwrap();
-    assert_eq!(delete_body["ok"], true);
     assert_eq!(delete_body["revision"], 3);
 
     let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
@@ -708,12 +741,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     // is a registered encrypted account-data key, so the carrier — not just the
     // outcome — is what has to fail.
     assert_eq!(
-        put["error"]["code"],
-        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+        put["type"], "https://arkret.org/problems/schema_violation",
         "plaintext blocklist must be rejected: {put}"
     );
     assert!(
-        put["error"]["message"]
+        put["detail"]
             .as_str()
             .is_some_and(|message| message.contains("encrypted")),
         "plaintext blocklist must be rejected by the encrypted-carrier floor, \
@@ -777,16 +809,13 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         }),
     )
     .await;
-    assert_eq!(stale["error"]["code"], "cas_conflict", "{stale}");
     assert_eq!(
-        stale["error"]["details"]["account_data_key"],
-        "ak.account.blocklist"
+        stale["type"], "https://arkret.org/problems/cas_conflict",
+        "{stale}"
     );
-    assert_eq!(stale["error"]["details"]["current_revision"], 1);
-    assert_eq!(
-        stale["error"]["details"]["current_entry"]["content"],
-        encrypted_blocklist
-    );
+    assert_eq!(stale["account_data_key"], "ak.account.blocklist");
+    assert_eq!(stale["current_revision"], 1);
+    assert_eq!(stale["current_entry"]["content"], encrypted_blocklist);
     let current = state
         .test_persistence()
         .account_data()
@@ -809,6 +838,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
 
     let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -827,6 +861,11 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
 
     let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -921,6 +960,11 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
 
     let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {alice_phone}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -947,6 +991,11 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     assert!(bob_markers.is_empty());
     let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
         .add_header("authorization", format!("Bearer {bob}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -967,6 +1016,11 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
     .await;
     let registered: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_REGISTER_DEVICE_V1,
+            true,
+        )
         .json(&json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "push_gateway": "https://push.example",
@@ -979,7 +1033,6 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["ok"], true);
     assert!(
         registered["registration_id"]
             .as_str()
@@ -1001,7 +1054,12 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         Some(push_target_id.as_str()),
         "register-device response must carry the service-derived push_target_id"
     );
-    let rejected = TestClient::post("http://server/_arkret/edge/push/notify")
+    let mut rejected = TestClient::post("http://server/_arkret/edge/push/notify")
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1,
+            true,
+        )
         .json(&json!({
             "notification": {
                 "push_target_id": push_target_id.as_str(),
@@ -1009,13 +1067,19 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "timing_profile_hint": "default",
                 "event_id": "ak:event:AT4Mf1sJBtwy4lOrQHfsPt7KtsUYo1LogrjcZnl5oAco",
                 "realm_id": "ak:realm:AWRb-Bbhs1lJYMdAAkBJQ7GGxWqzFGTYiQRGUA3wq0Z5",
-                "sender_actor_id": "did:web:bob.example",
+                "sender_actor_id": "ak:did_core:web:bob.example",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
             }
         }))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(rejected.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
+    let rejected_status = rejected.status_code;
+    let rejected_body: Value = rejected.take_json().await.unwrap();
+    assert_eq!(
+        rejected_status,
+        Some(StatusCode::BAD_REQUEST),
+        "{rejected_body}"
+    );
 
     // `push-operations.schema.json#/$defs/push_notify_outcome` is a closed
     // response whose only members are `push_target_id` and a conserved
@@ -1026,6 +1090,11 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
     // stayed empty.
     let accepted: arkret_models_integration::models_push::PushNotifyOutcome =
         TestClient::post("http://server/_arkret/edge/push/notify")
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::EDGE_PUSH_COMMAND_NOTIFY_V1,
+                true,
+            )
             .json(&json!({
                 "notification": {
                     "push_target_id": push_target_id.as_str(),

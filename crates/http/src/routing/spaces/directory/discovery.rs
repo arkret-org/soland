@@ -166,15 +166,15 @@ pub async fn actor_visible_to(
     actor: &Value,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Some(did) = actor["did"].as_str() else {
+    let Some(actor_id) = actor["actor_id"].as_str() else {
         return false;
     };
-    if did == "did:web:alice.example" {
+    if actor_id == "ak:did_core:web:alice.example" {
         return true;
     }
     match session {
         Some(session) => {
-            session.actor == did || has_accepted_contact(state, &session.actor, did).await
+            session.actor == actor_id || has_accepted_contact(state, &session.actor, actor_id).await
         }
         None => false,
     }
@@ -190,8 +190,8 @@ mod tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let alice = "did:web:alice.example";
-        let bob = "did:web:bob.example";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
         let observed_at = now();
         state
             .contacts()
@@ -232,7 +232,7 @@ mod tests {
             revoked_at: None,
         };
         let candidate = json!({
-            "did": bob,
+            "actor_id": bob,
             "handle": "@collab-bob",
             "display_name": "collab-bob"
         });

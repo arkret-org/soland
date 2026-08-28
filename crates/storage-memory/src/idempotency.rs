@@ -1,3 +1,5 @@
+use arkret_wire::DidCoreId;
+
 use super::{
     Arc, BTreeMap, IdempotencyRecord, IdempotencyStore, Mutex, PersistenceResult, Utc, async_trait,
 };
@@ -6,7 +8,7 @@ use super::{
 pub(crate) struct MemoryIdempotencyStore {
     #[cfg(feature = "fault-injection")]
     fault_injector: Arc<crate::FaultInjector>,
-    pub(crate) data: Arc<Mutex<BTreeMap<(String, String), IdempotencyRecord>>>,
+    pub(crate) data: Arc<Mutex<BTreeMap<(DidCoreId, String), IdempotencyRecord>>>,
 }
 impl MemoryIdempotencyStore {
     #[cfg(not(feature = "fault-injection"))]
@@ -30,12 +32,12 @@ impl MemoryIdempotencyStore {
 impl IdempotencyStore for MemoryIdempotencyStore {
     async fn get(
         &self,
-        principal_id: &str,
+        principal_id: &DidCoreId,
         idempotency_key: &str,
     ) -> PersistenceResult<Option<IdempotencyRecord>> {
         let data = self.data.lock();
         Ok(data
-            .get(&(principal_id.to_owned(), idempotency_key.to_owned()))
+            .get(&(principal_id.clone(), idempotency_key.to_owned()))
             .cloned())
     }
 

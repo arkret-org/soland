@@ -502,7 +502,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let conflict_status = conflict.status_code;
     let conflict_body: Value = conflict.take_json().await.unwrap();
     assert_eq!(conflict_status, Some(StatusCode::CONFLICT));
-    assert_eq!(conflict_body["error"]["code"], "duplicate_conflict");
+    assert_eq!(problem_code(&conflict_body), "duplicate_conflict");
 
     let query = serde_json::json!({
         "claim_request_id": request.claim_request_id,
@@ -564,9 +564,9 @@ async fn direct_resolve_fails_closed_without_accepted_contact_body() {
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status.as_u16(), 412, "body: {body}");
-    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
+    assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(
-        body["error"]["details"]["reason_detail"],
+        body["reason_detail"],
         "no owned active managed-Agent authorization or accepted contact projection: requester=ak:did_core:web:alice.example, peer=ak:did_core:web:bob.example"
     );
 }
@@ -597,8 +597,8 @@ async fn direct_resolve_private_detail_stays_redacted_in_production_body() {
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert!(body["error"]["details"]["reason_detail"].is_null());
+    assert_eq!(problem_code(&body), "direct_conversation_unavailable");
+    assert!(body["reason_detail"].is_null());
 }
 
 #[test]
@@ -650,7 +650,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link_body()
 
     assert_eq!(response.status_code.unwrap().as_u16(), 422);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&body), "schema_violation");
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 

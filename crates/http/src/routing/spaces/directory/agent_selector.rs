@@ -182,7 +182,7 @@ pub(super) async fn resolve_agent_selector(
         })
         .ok_or_else(selector_not_found)?;
     let controller_subject = controller_actor
-        .get("did")
+        .get("actor_id")
         .and_then(Value::as_str)
         .ok_or_else(selector_not_found)?;
     if !selector_resolution_allowed(state, session.as_ref(), controller_subject, &body).await {

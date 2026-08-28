@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -11,7 +12,7 @@ pub trait MaintenancePort: Send + Sync {
     async fn prune_expired_idempotency(&self, now: DateTime<Utc>) -> ServiceResult<usize>;
     async fn idempotency_record(
         &self,
-        principal_id: &str,
+        principal_id: &DidCoreId,
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>>;
     async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
@@ -36,9 +37,9 @@ pub trait RuntimeHealthPort: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct IdempotencyState {
-    pub principal_id: String,
+    pub principal_id: DidCoreId,
     pub idempotency_key: String,
-    pub service_id: String,
+    pub service_id: DidCoreId,
     pub request_hash: String,
     pub response_status: i32,
     pub response_body: Value,
@@ -97,7 +98,7 @@ impl JobsService {
 
     pub async fn idempotency_record(
         &self,
-        principal_id: &str,
+        principal_id: &DidCoreId,
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>> {
         self.maintenance.idempotency_record(principal_id, key).await
@@ -163,7 +164,7 @@ mod tests {
         }
         async fn idempotency_record(
             &self,
-            _principal_id: &str,
+            _principal_id: &DidCoreId,
             _key: &str,
         ) -> ServiceResult<Option<IdempotencyState>> {
             Ok(None)

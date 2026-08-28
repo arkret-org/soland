@@ -11,7 +11,7 @@ use crate::ServiceResult;
 #[derive(Clone, Debug, PartialEq)]
 pub struct CursorState {
     pub handle: String,
-    pub principal_id: Option<String>,
+    pub binding_subject: Option<String>,
     pub device_id: Option<String>,
     pub service_id: String,
     pub filter_digest: Option<String>,
@@ -40,7 +40,7 @@ pub trait CursorStorePort: Send + Sync {
     async fn delete(&self, handle: &str) -> ServiceResult<bool>;
     async fn prune_stream_superseded(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
@@ -202,14 +202,14 @@ impl SyncService {
 
     pub async fn prune_superseded_cursors(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
     ) -> ServiceResult<usize> {
         self.cursors
             .prune_stream_superseded(
-                principal_id,
+                binding_subject,
                 device_id,
                 filter_digest,
                 presented_issued_at_ms,
@@ -271,7 +271,7 @@ mod tests {
 
         async fn prune_stream_superseded(
             &self,
-            _principal_id: &str,
+            _binding_subject: &str,
             _device_id: &str,
             _filter_digest: &str,
             _presented_issued_at_ms: i64,
@@ -343,9 +343,9 @@ mod tests {
         let service = SyncService::new(port, Arc::new(UnusedWebsocketAuth), [0; 32]);
         let record = CursorState {
             handle: "cursor-handle".to_owned(),
-            principal_id: None,
+            binding_subject: None,
             device_id: None,
-            service_id: "did:web:service.example".to_owned(),
+            service_id: "ak:did_core:web:service.example".to_owned(),
             filter_digest: None,
             purpose: "stream".to_owned(),
             positions: None,

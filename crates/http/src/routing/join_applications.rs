@@ -118,7 +118,7 @@ fn join_application_list_cursor_context(
     Ok(CursorBindingContext::new(
         actor,
         Some(device_id.to_owned()),
-        state.service_id().clone(),
+        state.service_core_id(),
         filter_digest,
     ))
 }
@@ -166,9 +166,9 @@ async fn mint_join_application_list_cursor(
         .sync()
         .upsert_cursor(&soland_services::sync::CursorState {
             handle: record.handle,
-            principal_id: Some(record.context.principal_id),
+            binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id,
+            service_id: record.context.service_id.to_string(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),

@@ -426,15 +426,8 @@ fn capability_grant_from_authz_grant(
 ) -> Result<CapabilityGrant, AppError> {
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let issuer = arkret_wire::DidCoreId::new(grant.issuer.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let subject = arkret_wire::DidCoreId::new(grant.subject.clone())
-        .map(CapabilitySubject::CoreDid)
-        .map_err(|error| {
-            AppError::internal(format!(
-                "stored authorization grant subject is not a core DID: {error}"
-            ))
-        })?;
+    let issuer = grant.issuer.clone();
+    let subject = CapabilitySubject::CoreDid(grant.subject.clone());
     let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
     let constraints = grant
         .constraints
@@ -447,16 +440,9 @@ fn capability_grant_from_authz_grant(
         schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
         realm_id: Some(realm_id),
         issuer,
-        issuer_principal_server_id: arkret_wire::DidCoreId::new(
-            grant.issuer_principal_server_id,
-        )
-        .map_err(|error| AppError::internal(error.to_string()))?,
+        issuer_principal_server_id: grant.issuer_principal_server_id,
         subject,
-        subject_principal_server_id: grant
-            .subject_principal_server_id
-            .map(arkret_wire::DidCoreId::new)
-            .transpose()
-            .map_err(|error| AppError::internal(error.to_string()))?,
+        subject_principal_server_id: grant.subject_principal_server_id,
         actions: grant.actions,
         resources: vec![resource_selector],
         constraints,

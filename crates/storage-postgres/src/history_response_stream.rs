@@ -302,7 +302,7 @@ mod capability_authorization_tests {
     fn row(commitment: &Hash, expires_at: DateTime<Utc>) -> ResponseStreamRow {
         ResponseStreamRow {
             request_id: "ak:history-key-request:01910000-0000-7000-8000-000000000001".to_owned(),
-            release_service_id: "did:webvh:example".to_owned(),
+            release_service_id: "ak:did_core:webvh:example".to_owned(),
             response_capability_commitment: commitment.as_str().to_owned(),
             expires_at,
             acked_sequence: None,

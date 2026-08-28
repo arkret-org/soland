@@ -129,8 +129,10 @@ pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: 
 
 #[cfg(test)]
 pub(crate) mod test_event {
-    use arkret_identifiers::{DidCoreId, Hlc};
-    use arkret_wire::{Event, Result, ScopeRef};
+    use arkret_identifiers::{DidCoreId, Hash, Hlc};
+    use arkret_wire::{
+        DidUrl, Event, EventProof, ProducerEventProof, Result, ScopeRef, proof_kind,
+    };
     use chrono::{DateTime, Utc};
     use serde_json::Value;
 
@@ -179,5 +181,26 @@ pub(crate) mod test_event {
             payload,
             created_at,
         )
+    }
+
+    pub fn attach_fixture_producer_proof(event: &mut Event, verification_method: DidUrl) {
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .expect("fixture Event digest"),
+        )
+        .expect("fixture Event digest is typed");
+        event.proofs = vec![EventProof::Producer(ProducerEventProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
+            proof_purpose: None,
+            verification_method,
+            event_digest,
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
+            created_at: event.created_at,
+            domain: None,
+            audience: None,
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
+        })];
     }
 }

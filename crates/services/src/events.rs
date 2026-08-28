@@ -792,9 +792,9 @@ pub enum ProjectedEventAppendResult {
 
 #[derive(Clone, Debug)]
 pub struct IdempotentResponse {
-    pub principal_id: String,
+    pub principal_id: DidCoreId,
     pub key: String,
-    pub service_id: String,
+    pub service_id: DidCoreId,
     pub request_hash: String,
     pub status: i32,
     pub body: Value,
@@ -2368,7 +2368,7 @@ mod tests {
         };
         AcceptedEvent {
             event_id: event_id(suffix),
-            actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
+            actor_id: "ak:did_core:webvh:z6mkalice".to_owned(),
             actor_seq: u64::from(suffix),
             realm_id: Some("ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6".to_owned()),
             kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
@@ -2529,7 +2529,7 @@ mod tests {
                 consent_projection: None,
                 event: AcceptedEvent {
                     event_id: event_id.clone(),
-                    actor_id: "did:web:alice.example".to_owned(),
+                    actor_id: "ak:did_core:web:alice.example".to_owned(),
                     actor_seq: 1,
                     realm_id: Some(realm_id.clone()),
                     kind: "ak.message.create".to_owned(),
@@ -2557,7 +2557,8 @@ mod tests {
                 idempotency: None,
                 deliveries: vec![FederationDeliveryRecord {
                     id: "delivery:test".to_owned(),
-                    peer_service_id: "did:web:peer.example".to_owned(),
+                    peer_service_id: arkret_wire::DidCoreId::new("ak:did_core:web:peer.example")
+                        .expect("peer service id"),
                     peer_url: Some("https://peer.example".to_owned()),
                     endpoint: "/_arkret/peer/events".to_owned(),
                     idempotency_key: "event:test".to_owned(),
@@ -2665,7 +2666,7 @@ mod tests {
         ));
 
         let wrong_controller = ActiveAgentAccountabilityQuery {
-            controller_id: "did:web:other.example".to_owned(),
+            controller_id: "ak:did_core:web:other.example".to_owned(),
             ..query
         };
         assert!(!active_agent_accountability(

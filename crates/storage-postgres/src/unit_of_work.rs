@@ -1073,9 +1073,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                      ON CONFLICT (principal_id, idempotency_key) DO NOTHING",
                 )
-                .bind::<Text, _>(&record.principal_id)
+                .bind::<Text, _>(record.principal_id.as_str())
                 .bind::<Text, _>(&record.idempotency_key)
-                .bind::<Text, _>(&record.service_id)
+                .bind::<Text, _>(record.service_id.as_str())
                 .bind::<Text, _>(&record.request_hash)
                 .bind::<Integer, _>(record.response_status)
                 .bind::<Jsonb, _>(&record.response_body)
@@ -1107,7 +1107,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                      ON CONFLICT (peer_service_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
-                .bind::<Text, _>(&record.peer_service_id)
+                .bind::<Text, _>(record.peer_service_id.as_str())
                 .bind::<Nullable<Text>, _>(record.peer_url.as_deref())
                 .bind::<Text, _>(&record.endpoint)
                 .bind::<Text, _>(&record.idempotency_key)

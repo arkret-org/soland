@@ -478,6 +478,8 @@ async fn store_prepare(
     reservation: &ContactReservation,
 ) -> Result<(), AppError> {
     let created_at = now();
+    let principal_id = DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     let outcome = prepared_outcome(reservation);
     for (key, body) in [
         (
@@ -495,9 +497,9 @@ async fn store_prepare(
         state
             .jobs()
             .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                principal_id: principal.to_owned(),
+                principal_id: principal_id.clone(),
                 idempotency_key: key,
-                service_id: state.service_id().clone(),
+                service_id: state.service_core_id(),
                 request_hash: request_hash.to_owned(),
                 response_status: StatusCode::OK.as_u16().into(),
                 response_body: body,
@@ -516,9 +518,11 @@ async fn replay<T: DeserializeOwned>(
     key: &str,
     request_hash: &str,
 ) -> Result<Option<T>, AppError> {
+    let principal_id = DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     let Some(record) = state
         .jobs()
-        .idempotency_record(principal, key)
+        .idempotency_record(&principal_id, key)
         .await
         .map_err(|error| AppError::internal(format!("Contact idempotency lookup: {error}")))?
     else {
@@ -542,12 +546,14 @@ async fn persist_final(
     outcome: &ContactOperationOutcome,
 ) -> Result<(), AppError> {
     let created_at = now();
+    let principal_id = DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: principal.to_owned(),
+            principal_id,
             idempotency_key: key.to_owned(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: request_hash.to_owned(),
             response_status: StatusCode::OK.as_u16().into(),
             response_body: serde_json::to_value(outcome)
@@ -813,10 +819,12 @@ async fn reservation_for_commit(
     principal: &str,
     body: &ContactCommitRequestBody,
 ) -> Result<ContactReservation, AppError> {
+    let principal_id = DidCoreId::new(principal.to_owned())
+        .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     let record = state
         .jobs()
         .idempotency_record(
-            principal,
+            &principal_id,
             &contact_reservation_key(&body.reservation_handle),
         )
         .await
@@ -1130,9 +1138,10 @@ async fn commit(
     .await?;
     let idempotency_created_at = now();
     let contact_idempotency = soland_services::events::IdempotentResponse {
-        principal_id: session.actor.clone(),
+        principal_id: DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
         key: contact_phase_idempotency_key("commit", &body.idempotency_key),
-        service_id: state.service_id().clone(),
+        service_id: state.service_core_id(),
         request_hash: request_hash.clone(),
         status: StatusCode::OK.as_u16() as i32,
         body: serde_json::to_value(&outcome)

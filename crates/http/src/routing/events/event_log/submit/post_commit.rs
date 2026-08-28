@@ -480,7 +480,8 @@ pub(super) async fn peer_event_batch_fanout_records(
             .ok_or_else(|| format!("failed to encode peer Event batch for {}", peer.service_id))?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_service_id: peer.service_id,
+            peer_service_id: arkret_wire::DidCoreId::new(peer.service_id)
+                .map_err(|error| format!("peer Event target service_id is invalid: {error}"))?,
             peer_url: peer
                 .url
                 .as_deref()
@@ -584,7 +585,8 @@ pub(super) async fn direct_conversation_founding_fanout_records(
             .ok_or_else(|| format!("failed to encode founding delivery for {}", peer.service_id))?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_service_id: peer.service_id.clone(),
+            peer_service_id: arkret_wire::DidCoreId::new(peer.service_id.clone())
+                .map_err(|error| format!("founding target service_id is invalid: {error}"))?,
             peer_url: peer
                 .url
                 .as_deref()
@@ -786,7 +788,9 @@ pub(super) async fn peer_event_fanout_records(
             })?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_service_id: peer.service_id,
+            peer_service_id: arkret_wire::DidCoreId::new(peer.service_id).map_err(|error| {
+                format!("dynamic peer Event target service_id is invalid: {error}")
+            })?,
             peer_url: peer
                 .url
                 .as_deref()
@@ -1031,7 +1035,9 @@ async fn realm_bootstrap_fanout_record(
     Ok(Some(
         soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
-            peer_service_id: peer.service_id.clone(),
+            peer_service_id: arkret_wire::DidCoreId::new(peer.service_id.clone()).map_err(
+                |error| format!("Realm bootstrap target service_id is invalid: {error}"),
+            )?,
             peer_url: peer
                 .url
                 .as_deref()
@@ -1222,12 +1228,12 @@ mod tests {
     fn bootstrap_fanout_reads_routable_peer_service_from_member_join() {
         let envelope = json!({
             "payload": {
-                "actor_id": "did:web:bob.example",
+                "actor_id": "ak:did_core:web:bob.example",
                 "membership": "join",
                 "delivery_status": "routable",
                 "delivery_binding": {
                     "binding_source": "explicit",
-                    "recipient_service_id": "did:web:soland-beta.example"
+                    "recipient_service_id": "ak:did_core:web:soland-beta.example"
                 }
             }
         });
@@ -1236,7 +1242,10 @@ mod tests {
                 arkret_wire::EventKind::MemberState.as_str(),
                 &envelope,
             ),
-            Some(("did:web:bob.example", "did:web:soland-beta.example"))
+            Some((
+                "ak:did_core:web:bob.example",
+                "ak:did_core:web:soland-beta.example"
+            ))
         );
         assert_eq!(
             routable_member_delivery_target(

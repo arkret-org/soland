@@ -1414,7 +1414,7 @@ fn conformance_cursor_error(error: CursorAuthorityError) -> AppError {
 fn query_cursor_context(state: &AppState, query_digest: &str) -> CursorBindingContext {
     // The conformance namespace is unauthenticated; the binding still pins
     // service identity and the canonical query digest.
-    CursorBindingContext::new("anonymous", None, state.service_id().clone(), query_digest)
+    CursorBindingContext::new("anonymous", None, state.service_core_id(), query_digest)
 }
 
 async fn persist_query_cursor_row(
@@ -1443,9 +1443,9 @@ async fn mint_query_cursor(
         state,
         soland_services::sync::CursorState {
             handle: record.handle,
-            principal_id: Some(record.context.principal_id),
+            binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id,
+            service_id: record.context.service_id.to_string(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),
@@ -1474,9 +1474,9 @@ async fn mint_query_barrier_cursor(
         state,
         soland_services::sync::CursorState {
             handle: minted.h.clone(),
-            principal_id: Some(context.principal_id),
+            binding_subject: Some(context.binding_subject),
             device_id: context.device_id,
-            service_id: context.service_id,
+            service_id: context.service_id.to_string(),
             filter_digest: Some(context.filter_digest),
             purpose: "barrier".to_owned(),
             positions: None,

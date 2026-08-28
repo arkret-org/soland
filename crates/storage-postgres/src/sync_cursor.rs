@@ -11,7 +11,7 @@ struct SyncCursorRow {
     #[diesel(sql_type = Text)]
     handle: String,
     #[diesel(sql_type = Nullable<Text>)]
-    principal_id: Option<String>,
+    binding_subject: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
     #[diesel(sql_type = Text)]
@@ -33,7 +33,7 @@ impl From<SyncCursorRow> for SyncCursorRecord {
     fn from(row: SyncCursorRow) -> Self {
         SyncCursorRecord {
             handle: row.handle,
-            principal_id: row.principal_id,
+            binding_subject: row.binding_subject,
             device_id: row.device_id,
             service_id: row.service_id,
             filter_digest: row.filter_digest,
@@ -52,7 +52,7 @@ impl SyncCursorStore for PgSyncCursorStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS handle, principal_id, device_id, service_id, filter_digest, purpose, \
+            "SELECT id AS handle, binding_subject, device_id, service_id, filter_digest, purpose, \
              positions, target, issued_at_ms, expires_at_ms \
              FROM sync_cursor_handles WHERE id = $1",
         )
@@ -72,12 +72,12 @@ impl SyncCursorStore for PgSyncCursorStore {
         // the pruning watermark for this handle (see trait doc).
         sql_query(
             "INSERT INTO sync_cursor_handles \
-             (id, principal_id, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
+             (id, binding_subject, device_id, service_id, filter_digest, purpose, positions, target, issued_at_ms, expires_at_ms) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET expires_at_ms = EXCLUDED.expires_at_ms",
         )
         .bind::<Text, _>(&record.handle)
-        .bind::<Nullable<Text>, _>(&record.principal_id)
+        .bind::<Nullable<Text>, _>(&record.binding_subject)
         .bind::<Nullable<Text>, _>(&record.device_id)
         .bind::<Text, _>(&record.service_id)
         .bind::<Nullable<Text>, _>(&record.filter_digest)
@@ -106,7 +106,7 @@ impl SyncCursorStore for PgSyncCursorStore {
 
     async fn prune_stream_superseded(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
@@ -116,10 +116,10 @@ impl SyncCursorStore for PgSyncCursorStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "DELETE FROM sync_cursor_handles \
-             WHERE purpose = 'stream' AND principal_id = $1 AND device_id = $2 \
+             WHERE purpose = 'stream' AND binding_subject = $1 AND device_id = $2 \
              AND filter_digest = $3 AND issued_at_ms < $4",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(binding_subject)
         .bind::<Text, _>(device_id)
         .bind::<Text, _>(filter_digest)
         .bind::<BigInt, _>(presented_issued_at_ms)

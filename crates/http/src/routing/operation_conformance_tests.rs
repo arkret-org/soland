@@ -517,7 +517,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet discovery",
             kind: arkret_wire::EventKind::AppletDiscovery,
             payload: json!({
-                "resource_id": "did:web:applet.example",
+                "resource_id": "applet.example",
                 "value": {
                     "resource_kind": "applet",
                     "discoverability": "listed",
@@ -530,7 +530,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet discovery missing directory services",
             kind: arkret_wire::EventKind::AppletDiscovery,
             payload: json!({
-                "resource_id": "did:web:applet.example",
+                "resource_id": "ak:did_core:web:applet.example",
                 "value": {
                     "resource_kind": "applet",
                     "discoverability": "listed"

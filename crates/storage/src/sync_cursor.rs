@@ -2,18 +2,18 @@ use super::{CursorRevocation, PersistenceResult, Utc, Value, async_trait};
 /// Stateful sync-cursor handle binding (`cursor.schema.json` `h`).
 ///
 /// One row per distinct cursor content: the handle is an HMAC digest of the
-/// binding (principal, device, service, filter, purpose, positions/target),
+/// binding (subject, device, service, filter, purpose, positions/target),
 /// so re-minting an unchanged cursor upserts the same row instead of growing
 /// the table. Durable so a server restart does not invalidate every client's
 /// resume cursor with `cursor_integrity_invalid`.
 ///
-/// `principal_id` / `device_id` / `filter_digest` are `None` for generic
+/// `binding_subject` / `device_id` / `filter_digest` are `None` for generic
 /// service-level cursors (`sync_token_for_state`), which bind no session and
 /// are rejected by `parse_and_validate_sync_cursor` by construction.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SyncCursorRecord {
     pub handle: String,
-    pub principal_id: Option<String>,
+    pub binding_subject: Option<String>,
     pub device_id: Option<String>,
     pub service_id: String,
     pub filter_digest: Option<String>,
@@ -42,7 +42,7 @@ pub trait SyncCursorStore: Send + Sync {
     /// presented row itself or anything newer.
     async fn prune_stream_superseded(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,

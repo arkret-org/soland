@@ -355,7 +355,7 @@ mod tests {
                 id: "audit-1".to_owned(),
                 request_id: Some("req-1".to_owned()),
                 action: "admin.actors.query".to_owned(),
-                actor_id: Some("did:web:op.example".to_owned()),
+                actor_id: Some("ak:did_core:web:op.example".to_owned()),
                 device_id: None,
                 realm_id: None,
                 operation_id: None,

@@ -429,7 +429,7 @@ pub(crate) async fn assert_recovery_policy_grant_binding_rejections(state: AppSt
         StatusCode::UNAUTHORIZED,
         "unregistered grant response: {unknown_body}"
     );
-    assert_eq!(unknown_body["error"]["code"], "unauthenticated");
+    assert_eq!(problem_code(&unknown_body), "unauthenticated");
 
     // The exact registered grant is still rejected when DPoP is signed by a
     // key whose thumbprint does not match the introspected cnf_jkt binding.
@@ -450,7 +450,7 @@ pub(crate) async fn assert_recovery_policy_grant_binding_rejections(state: AppSt
         StatusCode::UNAUTHORIZED,
         "mismatched holder response: {mismatch_body}"
     );
-    assert_eq!(mismatch_body["error"]["code"], "unauthenticated");
+    assert_eq!(problem_code(&mismatch_body), "unauthenticated");
 }
 
 pub(crate) async fn shared_recovery_state(persistence: Arc<dyn PersistenceStore>) -> AppState {
@@ -949,7 +949,7 @@ pub(crate) async fn post_recovery_policy(
             StatusCode::SERVICE_UNAVAILABLE,
             "first publication must wait for Seal coverage: {response_body}"
         );
-        assert_eq!(response_body["error"]["code"], "frontier_unavailable");
+        assert_eq!(problem_code(&response_body), "frontier_unavailable");
 
         let leaves = state
             .test_seal_leaves(&realm)

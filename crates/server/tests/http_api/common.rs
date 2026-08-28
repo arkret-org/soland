@@ -222,6 +222,17 @@ pub(crate) fn advertises_operation(describe: &Value, operation_id: &str) -> bool
         })
 }
 
+/// Return the canonical RFC 9457 Arkret problem code encoded by the problem
+/// type URI. Error responses are closed problem-detail objects; tests must not
+/// depend on the removed legacy `{ "error": { ... } }` envelope.
+pub(crate) fn problem_code(body: &Value) -> &str {
+    body["type"]
+        .as_str()
+        .and_then(|problem_type| problem_type.rsplit('/').next())
+        .filter(|code| !code.is_empty())
+        .expect("response must contain a canonical Arkret problem type URI")
+}
+
 /// Prepare the closed authority-authored self-principal PCR submission path.
 ///
 /// These Control Moves still carry the HTTP-issued authorization lease, but
@@ -579,11 +590,26 @@ fn signed_federation_request_headers(
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let keyid = format!("{origin_did}#federation-fanout-key");
-    let covered_components = if idempotency_key.is_some() {
-        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"idempotency-key\""
-    } else {
-        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\""
-    };
+    let operation = reqwest::Url::parse(target_uri)
+        .ok()
+        .and_then(|url| arkret_wire::ServiceOperationId::from_http_request(method, url.path()));
+    let mut covered_components = vec![
+        "\"@method\"",
+        "\"@target-uri\"",
+        "\"@authority\"",
+        "\"content-digest\"",
+        "\"source-service-id\"",
+        "\"destination-service-id\"",
+        "\"source-trust-domain\"",
+        "\"destination-trust-domain\"",
+    ];
+    if operation.is_some() {
+        covered_components.push("\"arkret-operation\"");
+    }
+    if idempotency_key.is_some() {
+        covered_components.push("\"idempotency-key\"");
+    }
+    let covered_components = covered_components.join(" ");
     let signature_params = format!(
         "({covered_components});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
     );
@@ -598,6 +624,9 @@ fn signed_federation_request_headers(
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}",
     );
+    if let Some(operation) = operation {
+        signature_base.push_str(&format!("\n\"arkret-operation\": {}", operation.as_str()));
+    }
     if let Some(idempotency_key) = idempotency_key {
         signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
     }
@@ -621,6 +650,9 @@ fn signed_federation_request_headers(
     ];
     if let Some(idempotency_key) = idempotency_key {
         headers.push(("idempotency-key", idempotency_key.to_owned()));
+    }
+    if let Some(operation) = operation {
+        headers.push(("arkret-operation", operation.as_str().to_owned()));
     }
     headers
 }
@@ -1516,7 +1548,7 @@ pub(crate) async fn register_account(
     device_id: &str,
 ) -> String {
     let did = Did::new(did.to_owned()).expect("fixture account DID");
-    let principal_id = fixture_actor_core_id(did);
+    let principal_id = fixture_actor_core_id(did.as_str());
     let registered: Value = TestClient::post("http://server/_soland/gate/account/project")
         .json(&serde_json::json!({
             "principal_id": principal_id,
@@ -2029,7 +2061,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
         .unwrap_or_else(|| {
             panic!("fixture grant must be reconstructible at the head Seal: {cell_state:?}")
         });
-        assert_eq!(projected.subject, subject_core.as_str());
+        assert_eq!(projected.subject, subject_core);
         assert_eq!(projected.realm_id, realm_id);
         assert!(
             !projected.actions.is_empty(),

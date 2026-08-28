@@ -106,7 +106,7 @@ mod tests {
             agent_session: Some(AgentSessionRecord {
                 granted_scope: scopes.iter().map(|scope| (*scope).to_owned()).collect(),
                 scope_details: serde_json::json!({
-                    "controller_id": "did:web:alice.example",
+                    "controller_id": "ak:did_core:web:alice.example",
                     "resources": {
                         "realm_refs": [],
                         "strand_refs": [],

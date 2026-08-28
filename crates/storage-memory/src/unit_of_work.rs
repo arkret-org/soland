@@ -1244,14 +1244,8 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::project_did_to_core_id(
-                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-            )
-            .unwrap(),
-            arkret_wire::project_did_to_core_id(
-                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-            )
-            .unwrap(),
+            arkret_wire::DidCoreId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new(actor_id.to_owned()).unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"seed": event_seed}),
@@ -1292,8 +1286,8 @@ mod tests {
         }
     }
 
-    fn cascade_event_request(seed: &str, realm_id: &str, actor_did: &str) -> EventCommitRequest {
-        let mut request = event_request(seed.to_owned(), realm_id.to_owned(), actor_did, None);
+    fn cascade_event_request(seed: &str, realm_id: &str, actor_id: &str) -> EventCommitRequest {
+        let mut request = event_request(seed.to_owned(), realm_id.to_owned(), actor_id, None);
         let event: arkret_wire::Event =
             serde_json::from_value(request.event.envelope.clone()).unwrap();
         request.event.actor_id = event.actor_id.to_string();
@@ -1304,7 +1298,7 @@ mod tests {
         let mut request = cascade_event_request(
             "emergency-terminal",
             realm_id,
-            "did:web:emergency-controller.example",
+            "ak:did_core:web:emergency-controller.example",
         );
         let mut event: arkret_wire::Event =
             serde_json::from_value(request.event.envelope.clone()).unwrap();
@@ -1376,7 +1370,8 @@ mod tests {
     }
 
     fn self_principal_pcr_control_request() -> EventCommitRequest {
-        let actor_id = "did:web:alice.example";
+        let actor_did = "did:web:alice.example";
+        let actor_id = "ak:did_core:web:alice.example";
         let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x31; 32],
@@ -1388,14 +1383,8 @@ mod tests {
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            arkret_wire::project_did_to_core_id(
-                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-            )
-            .unwrap(),
-            arkret_wire::project_did_to_core_id(
-                &arkret_wire::Did::new(actor_id.to_owned()).unwrap(),
-            )
-            .unwrap(),
+            arkret_wire::DidCoreId::new(actor_id.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new(actor_id.to_owned()).unwrap(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"contact_id": "ak:contact:test"}),
@@ -1420,7 +1409,7 @@ mod tests {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             proof_purpose: None,
             verification_method: arkret_wire::DidUrl::new(format!(
-                "{actor_id}#ak:device:01904100-0000-7000-8000-000000000001"
+                "{actor_did}#ak:device:01904100-0000-7000-8000-000000000001"
             ))
             .unwrap(),
             event_digest: event_digest.clone(),
@@ -1434,7 +1423,7 @@ mod tests {
         let admission = arkret_wire::PrincipalServerAdmissionProof {
             kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
             verification_method: arkret_wire::DidUrl::new(format!(
-                "{actor_id}#principal-server-admission-key"
+                "{actor_did}#principal-server-admission-key"
             ))
             .unwrap(),
             event_digest: event_digest.clone(),
@@ -1650,7 +1639,7 @@ mod tests {
         let mut request = event_request(
             typed_id("ak:event:"),
             realm_id(),
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             None,
         );
         let (control_request, _) = device_revoke_request();
@@ -1677,7 +1666,7 @@ mod tests {
         let request = event_request(
             "exact-replay".to_owned(),
             realm_id(),
-            "did:web:replay.example",
+            "ak:did_core:web:replay.example",
             None,
         );
         store
@@ -1710,7 +1699,7 @@ mod tests {
         let mut first = event_request(
             typed_id("ak:event:"),
             realm_id.clone(),
-            "did:web:reporter-one.example",
+            "ak:did_core:web:reporter-one.example",
             None,
         );
         first.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
@@ -1742,7 +1731,7 @@ mod tests {
         let mut competing = event_request(
             typed_id("ak:event:"),
             realm_id.clone(),
-            "did:web:reporter-two.example",
+            "ak:did_core:web:reporter-two.example",
             None,
         );
         competing.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
@@ -1785,10 +1774,18 @@ mod tests {
         let controller = cascade_event_request(
             "controller-terminal",
             &realm_id,
-            "did:web:controller.example",
+            "ak:did_core:web:controller.example",
         );
-        let agent_a = cascade_event_request("agent-a-leave", &realm_id, "did:web:agent-a.example");
-        let agent_b = cascade_event_request("agent-b-leave", &realm_id, "did:web:agent-b.example");
+        let agent_a = cascade_event_request(
+            "agent-a-leave",
+            &realm_id,
+            "ak:did_core:web:agent-a.example",
+        );
+        let agent_b = cascade_event_request(
+            "agent-b-leave",
+            &realm_id,
+            "ak:did_core:web:agent-b.example",
+        );
         let controller_event_id =
             arkret_wire::EventId::new(controller.event.event_id.clone()).unwrap();
         let agent_event_ids = vec![
@@ -1871,12 +1868,12 @@ mod tests {
         let cleanup_a = cascade_event_request(
             "emergency-agent-a-leave",
             &realm_id,
-            "did:web:emergency-agent-a.example",
+            "ak:did_core:web:emergency-agent-a.example",
         );
         let cleanup_b = cascade_event_request(
             "emergency-agent-b-leave",
             &realm_id,
-            "did:web:emergency-agent-b.example",
+            "ak:did_core:web:emergency-agent-b.example",
         );
         let cleanup_event_ids = vec![
             arkret_wire::EventId::new(cleanup_a.event.event_id.clone()).unwrap(),
@@ -1950,7 +1947,7 @@ mod tests {
         let mut gated_event = event_request(
             gated_event_id.clone(),
             realm_id(),
-            "did:web:alice.example",
+            "ak:did_core:web:alice.example",
             None,
         );
         gated_event.device_revocation_gate = Some(selector.clone());
@@ -2155,15 +2152,19 @@ mod tests {
             test_applet_key(&applet_id, &applet_scope),
             original_record.clone(),
         );
-        let principal_id = "ak:did_core:web:bridge.example";
+        let principal_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:bridge.example".to_owned()).unwrap();
         let idempotency_key = "ghost-batch-conflict";
         let now = Utc::now();
         store.idempotency_keys.data.lock().insert(
-            (principal_id.to_owned(), idempotency_key.to_owned()),
+            (principal_id.clone(), idempotency_key.to_owned()),
             IdempotencyRecord {
-                principal_id: principal_id.to_owned(),
+                principal_id: principal_id.clone(),
                 idempotency_key: idempotency_key.to_owned(),
-                service_id: "ak:did_core:web:soland.example".to_owned(),
+                service_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:web:soland.example".to_owned(),
+                )
+                .unwrap(),
                 request_hash: "sha256:first".to_owned(),
                 response_status: 201,
                 response_body: serde_json::json!({"first": true}),
@@ -2176,11 +2177,14 @@ mod tests {
             events: vec![event_request(
                 event_id.clone(),
                 realm_id(),
-                principal_id,
+                principal_id.as_str(),
                 Some(IdempotencyRecord {
-                    principal_id: principal_id.to_owned(),
+                    principal_id: principal_id.clone(),
                     idempotency_key: idempotency_key.to_owned(),
-                    service_id: "did:web:soland.example".to_owned(),
+                    service_id: arkret_wire::DidCoreId::new(
+                        "ak:did_core:web:soland.example".to_owned(),
+                    )
+                    .unwrap(),
                     request_hash: "sha256:competing".to_owned(),
                     response_status: 201,
                     response_body: serde_json::json!({"first": false}),
@@ -2201,7 +2205,7 @@ mod tests {
                         "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "did:web:bridge.example:ghost:one",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:one",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "one",
                         }],
@@ -2250,7 +2254,7 @@ mod tests {
                     "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                     "package": {"namespaces": {}},
                     "ghosts": [{
-                        "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                        "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
                         "actor_principal_server_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }],
@@ -2262,7 +2266,7 @@ mod tests {
             events: vec![event_request(
                 typed_id("ak:event:"),
                 realm_id(),
-                "did:web:bridge.example:ghost:second",
+                "ak:did_core:web:bridge.example:ghost:second",
                 None,
             )],
             agent_approval_nonce: None,
@@ -2277,7 +2281,7 @@ mod tests {
                         "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }],
@@ -2292,11 +2296,11 @@ mod tests {
                         "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }, {
-                            "ghost_actor_id": "did:web:bridge.example:ghost:second",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:second",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "second",
                         }],
@@ -2346,7 +2350,7 @@ mod tests {
             events: vec![event_request(
                 stale_event_id.clone(),
                 realm_id(),
-                "did:web:bridge.example:ghost:third",
+                "ak:did_core:web:bridge.example:ghost:third",
                 None,
             )],
             agent_approval_nonce: None,
@@ -2361,7 +2365,7 @@ mod tests {
                         "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }],
@@ -2376,11 +2380,11 @@ mod tests {
                         "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "did:web:bridge.example:ghost:first",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }, {
-                            "ghost_actor_id": "did:web:bridge.example:ghost:third",
+                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:third",
                             "actor_principal_server_id": "ak:did_core:web:soland.example",
                             "external_id": "third",
                         }],
@@ -2414,16 +2418,12 @@ mod tests {
             .as_array()
             .unwrap();
         assert_eq!(ghosts.len(), 2);
-        assert!(
-            ghosts
-                .iter()
-                .any(|ghost| { ghost["ghost_actor_id"] == "did:web:bridge.example:ghost:second" })
-        );
-        assert!(
-            !ghosts
-                .iter()
-                .any(|ghost| { ghost["ghost_actor_id"] == "did:web:bridge.example:ghost:third" })
-        );
+        assert!(ghosts.iter().any(|ghost| {
+            ghost["ghost_actor_id"] == "ak:did_core:web:bridge.example:ghost:second"
+        }));
+        assert!(!ghosts.iter().any(|ghost| {
+            ghost["ghost_actor_id"] == "ak:did_core:web:bridge.example:ghost:third"
+        }));
     }
 
     #[tokio::test]
@@ -2447,7 +2447,7 @@ mod tests {
                 events: vec![event_request(
                     event_id,
                     realm_id(),
-                    &format!("did:web:{suffix}.example"),
+                    &format!("ak:did_core:web:{suffix}.example"),
                     None,
                 )],
                 agent_approval_nonce: None,
@@ -2505,7 +2505,7 @@ mod tests {
                 events: vec![event_request(
                     typed_id("ak:event:"),
                     event_realm_id,
-                    "did:web:applet-admin.example",
+                    "ak:did_core:web:applet-admin.example",
                     None,
                 )],
                 agent_approval_nonce: None,

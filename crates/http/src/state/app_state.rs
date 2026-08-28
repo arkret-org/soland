@@ -713,6 +713,11 @@ impl AppState {
         &self.service_id
     }
 
+    pub fn service_core_id(&self) -> DidCoreId {
+        DidCoreId::new(self.service_id.clone())
+            .expect("runtime service_id was validated during AppState construction")
+    }
+
     /// Return the currently resolved, version-pinned service DID.
     ///
     /// `service_id` is the projected Arkret core identifier and must never be
@@ -2380,7 +2385,7 @@ mod membership_hydration_tests {
     #[tokio::test]
     async fn joined_member_survives_reducer_projection_hydration() {
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
-        let member = "did:web:bob.example";
+        let member = "ak:did_core:web:bob.example";
         let store = SolandMemoryPersistenceStore::new();
         store
             .events()
@@ -2393,7 +2398,7 @@ mod membership_hydration_tests {
             realm_id.to_owned(),
             soland_domain::reducer::SolandRealmState {
                 realm_id: realm_id.to_owned(),
-                owner: Some("did:web:alice.example".to_owned()),
+                owner: Some("ak:did_core:web:alice.example".to_owned()),
                 title: Some("Hydration Test Realm".to_owned()),
                 deleted: false,
                 archived: false,
@@ -2441,7 +2446,7 @@ mod membership_hydration_tests {
                 id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
-                actor_id: "did:web:bob.example".to_owned(),
+                actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
                 intended_realm_id: None,
@@ -2470,7 +2475,7 @@ mod membership_hydration_tests {
                 id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
-                actor_id: "did:web:bob.example".to_owned(),
+                actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
                 intended_realm_id: None,
@@ -2503,7 +2508,7 @@ mod membership_hydration_tests {
             .initialize_genesis(soland_storage::MlsCommitGenesis {
                 effective_scope: &effective_scope,
                 group_id,
-                leader_actor_id: "did:web:alice.example",
+                leader_actor_id: "ak:did_core:web:alice.example",
                 creator_device_id: "ak:device:alice-1",
                 genesis_event_ref: "ak:event:AZ6wcRvTARthqkHiE-HOofDuOIbhnuXN6XUmeCaLoGhn",
                 governance_binding: &governance_binding,
@@ -2522,7 +2527,7 @@ mod membership_hydration_tests {
             .mls_key_packages
             .get("keypackage-01")
             .expect("keypackage rehydrated");
-        assert_eq!(kp.actor_id, "did:web:bob.example");
+        assert_eq!(kp.actor_id, "ak:did_core:web:bob.example");
         assert!(kp.last_resort);
         assert!(kp.claimed_by.is_none());
         let retired = proj

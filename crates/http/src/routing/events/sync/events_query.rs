@@ -1456,7 +1456,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let sidecar_id = "ak:sidecar:AQYqC06461HNyfIIzUY8eXmafXvmC9i29nNObXCIbj0-";
-        let event = crate::test_event::raw_event_at(
+        let mut event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::SidecarContextAttach.as_str(),
             arkret_wire::ScopeRef::Sidecar {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
@@ -1476,6 +1476,10 @@ mod tests {
             created_at,
         )
         .unwrap();
+        crate::test_event::attach_fixture_producer_proof(
+            &mut event,
+            arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+        );
         let expected_digest = event
             .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
@@ -1544,6 +1548,10 @@ mod tests {
         )
         .unwrap();
         event.hlc = None;
+        crate::test_event::attach_fixture_producer_proof(
+            &mut event,
+            arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+        );
         event.event_id = event
             .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
@@ -1658,7 +1666,7 @@ mod tests {
         let strand_id = strand_id_from_realm_id(TEST_REALM).expect("canonical fixture RealmId");
         let realm_id = RealmId::new(TEST_REALM.to_owned()).unwrap();
         let actor_did = arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap();
-        let message_event = crate::test_event::raw_event_at(
+        let mut message_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageCreate.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1674,9 +1682,13 @@ mod tests {
             created_at,
         )
         .unwrap();
+        crate::test_event::attach_fixture_producer_proof(
+            &mut message_event,
+            arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+        );
         let message_event_id = message_event.event_id.to_string();
         let message_id = arkret_identifiers::MessageId::from_event_id(&message_event.event_id);
-        let revise_event = crate::test_event::raw_event_at(
+        let mut revise_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageRevise.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1693,8 +1705,12 @@ mod tests {
             revised_at,
         )
         .unwrap();
+        crate::test_event::attach_fixture_producer_proof(
+            &mut revise_event,
+            arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+        );
         let revise_event_id = revise_event.event_id.to_string();
-        let redaction_event = crate::test_event::raw_event_at(
+        let mut redaction_event = crate::test_event::raw_event_at(
             arkret_wire::EventKind::MessageRedact.as_str(),
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id(&actor_did),
@@ -1707,6 +1723,10 @@ mod tests {
             redacted_at,
         )
         .unwrap();
+        crate::test_event::attach_fixture_producer_proof(
+            &mut redaction_event,
+            arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+        );
         let redaction_event_id = redaction_event.event_id.to_string();
         let plaintext_payload = json!({
             "event_id": message_event_id,

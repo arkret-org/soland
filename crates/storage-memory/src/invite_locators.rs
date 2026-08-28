@@ -130,8 +130,8 @@ mod tests {
         InviteLocatorRecord {
             locator_id: locator_id.to_owned(),
             token_digest: digest.to_owned(),
-            subject_id: "did:webvh:z6mkfixture:bob.example".to_owned(),
-            recipient_service_id: "did:webvh:z6mkfixture:ps.example".to_owned(),
+            subject_id: "ak:did_core:webvh:z6mkfixturebob".to_owned(),
+            recipient_service_id: "ak:did_core:webvh:z6mkfixtureps".to_owned(),
             issued_at,
             expires_at: issued_at + Duration::minutes(15),
             one_time_use,

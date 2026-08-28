@@ -20,7 +20,6 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
-use soland_http::util::validate_did;
 use soland_services::governance::{OrganizationPolicyRecord, OrganizationRecord};
 
 use crate::routing::system::extract::AuthArgs;
@@ -250,8 +249,9 @@ async fn upsert_organization(
     // principals — not every authenticated user may mint organizations.
     ensure_organization_registry_admin(state, &session.actor)?;
     let body = body.into_inner();
-    validate_did(&body.organization_principal_id)
-        .map_err(|_| AppError::param_invalid("organization_principal_id must be a DID"))?;
+    arkret_identifiers::DidCoreId::new(body.organization_principal_id.clone()).map_err(|_| {
+        AppError::param_invalid("organization_principal_id must be a DID core identifier")
+    })?;
     let now = Utc::now();
     let organization_id = normalized_organization_id(
         body.organization_id
@@ -916,7 +916,7 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
                 .map(|target| {
                     json!({
                         "source": "realm_override",
-                        "target": { "kind": "actor", "did": target },
+                        "target": { "kind": "actor", "actor_id": target },
                         "action": "allow_join",
                     })
                 }),
@@ -936,10 +936,8 @@ fn policy_rules(policy: &Value) -> Vec<Value> {
                 rules.push(json!({
                     "target": {
                         "kind": object.get("kind").and_then(Value::as_str).unwrap_or("actor"),
-                        "did": object
-                            .get("did")
-                            .or_else(|| object.get("actor_id"))
-                            .or_else(|| object.get("target"))
+                        "actor_id": object
+                            .get("actor_id")
                             .cloned()
                             .unwrap_or(Value::Null),
                     },
@@ -961,7 +959,7 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
         if !matches!(action, "deny_join" | "deny_restricted_join") {
             return false;
         }
-        target_did(rule).is_some_and(|did| did == actor)
+        target_actor_id(rule).is_some_and(|actor_id| actor_id == actor)
     })
 }
 
@@ -987,7 +985,7 @@ fn allow_join_override_targets(payload: &Value) -> BTreeSet<String> {
             if action != "allow_join" {
                 continue;
             }
-            if let Some(target) = target_did(item) {
+            if let Some(target) = target_actor_id(item) {
                 targets.insert(target.to_owned());
             }
         }
@@ -1026,22 +1024,12 @@ fn approval_matches(approval: &Value, org_ids: &BTreeSet<String>) -> bool {
     org_ids.contains(org_id)
 }
 
-fn target_did(value: &Value) -> Option<&str> {
+fn target_actor_id(value: &Value) -> Option<&str> {
     value
         .get("target")
-        .and_then(|target| match target {
-            Value::String(s) => Some(s.as_str()),
-            Value::Object(object) => object
-                .get("did")
-                .or_else(|| object.get("actor_id"))
-                .or_else(|| object.get("member"))
-                .and_then(Value::as_str),
-            _ => None,
-        })
-        .or_else(|| value.get("target_did").and_then(Value::as_str))
-        .or_else(|| value.get("did").and_then(Value::as_str))
-        .or_else(|| value.get("actor_id").and_then(Value::as_str))
-        .or_else(|| value.get("member").and_then(Value::as_str))
+        .and_then(Value::as_object)
+        .and_then(|target| target.get("actor_id"))
+        .and_then(Value::as_str)
 }
 
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
@@ -1049,21 +1037,14 @@ fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
     if value.is_empty() {
         return Err(AppError::param_invalid("organization_id is required"));
     }
-    if value.starts_with("did:") {
-        validate_did(value)
-            .map_err(|_| AppError::param_invalid("organization_id DID is invalid"))?;
-    } else if !value.starts_with("ak:org:") {
-        return Err(AppError::param_invalid(
-            "organization_id must be a DID or ak:org: identifier",
-        ));
-    }
-    Ok(value.to_owned())
+    arkret_identifiers::DidCoreId::new(value.to_owned())
+        .map(|id| id.to_string())
+        .map_err(|_| AppError::param_invalid("organization_id must be a DID core identifier"))
 }
 
 fn display_name_from_organization_id(organization_id: &str) -> String {
     organization_id
-        .trim_start_matches("did:web:")
-        .trim_start_matches("ak:org:")
+        .trim_start_matches("ak:did_core:")
         .replace(['.', '-'], " ")
 }
 

@@ -1291,7 +1291,7 @@ async fn provision_ghost_actor_endpoint(
         .to_string();
     if let Some(replay) = state
         .jobs()
-        .idempotency_record(authoring_basis.service_id.as_str(), &idempotency_key)
+        .idempotency_record(&authoring_basis.service_id, &idempotency_key)
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
     {
@@ -1519,6 +1519,21 @@ async fn provision_ghost_actor_endpoint(
         created_at: now,
     };
     let expected_applet_record = encode_applet_record(&record)?;
+    let registration_epoch_evidence =
+        registration_epoch_evidence_from_event(&record.registration_event)?;
+    let producer_verification_method = arkret_wire::DidUrl::new(
+        super::signature::applet_registration_verification_method(&record, service_id.as_str())?,
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "validated Applet registration verification method is invalid: {error}"
+        ))
+    })?;
+    let producer_signing_key = super::install::registration_epoch_producer_signing_key(
+        state,
+        &record.package,
+        &registration_epoch_evidence,
+    )?;
     record.ghosts.push(ghost);
     let applet_record_value = encode_applet_record(&record)?;
     let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
@@ -1537,6 +1552,8 @@ async fn provision_ghost_actor_endpoint(
             .clone(),
         provision.managed_actor_bundle.profile_event.clone(),
         typed_path_applet_id,
+        producer_verification_method,
+        producer_signing_key,
         expected_applet_record,
         applet_record_value,
         applet_authoring_preview_subject_key(&provision.authoring_request)?,
@@ -1548,9 +1565,9 @@ async fn provision_ghost_actor_endpoint(
             })?
             .to_string(),
         crate::routing::events::event_log::EventCommitIdempotency {
-            principal_id: authoring_basis.service_id.to_string(),
+            principal_id: authoring_basis.service_id.clone(),
             key: idempotency_key.clone(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: request_digest.clone(),
         },
         serde_json::to_value(&outcome)
@@ -1566,7 +1583,7 @@ async fn provision_ghost_actor_endpoint(
             "duplicate" | "duplicate_conflict" | "cas_conflict"
         ) && let Some(replay) = state
             .jobs()
-            .idempotency_record(authoring_basis.service_id.as_str(), &idempotency_key)
+            .idempotency_record(&authoring_basis.service_id, &idempotency_key)
             .await
             .map_err(|lookup_error| {
                 AppError::internal(format!("idempotency lookup failed: {lookup_error}"))
@@ -1918,8 +1935,8 @@ mod revoke_saga_tests {
 
     fn completed_execution() -> Value {
         json!({
-            "principal_service_id": "did:web:service-a.example",
-            "admin_actor_id": "did:web:admin-a.example",
+            "principal_service_id": "ak:did_core:web:service-a.example",
+            "admin_actor_id": "ak:did_core:web:admin-a.example",
             "idempotency_key": "revoke-key",
             "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "outcome": {
@@ -1936,8 +1953,8 @@ mod revoke_saga_tests {
         let execution = completed_execution();
         let outcome = load_stored_revoke_outcome(
             Some(&execution),
-            "did:web:service-a.example",
-            "did:web:admin-a.example",
+            "ak:did_core:web:service-a.example",
+            "ak:did_core:web:admin-a.example",
             "revoke-key",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )

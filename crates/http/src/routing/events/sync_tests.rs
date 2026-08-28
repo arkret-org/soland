@@ -892,7 +892,7 @@ fn canonical_event_record_received_at(
     received_at: DateTime<Utc>,
 ) -> soland_services::events::AcceptedEvent {
     let kind = kind.as_ref();
-    let event = crate::test_event::raw_event_at(
+    let mut event = crate::test_event::raw_event_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(ROSTER_REALM.to_owned()).unwrap(),
@@ -904,6 +904,10 @@ fn canonical_event_record_received_at(
         created_at,
     )
     .expect("canonical sync fixture Event");
+    crate::test_event::attach_fixture_producer_proof(
+        &mut event,
+        arkret_wire::DidUrl::new(format!("{ROSTER_ACTOR_DID}#device-key")).unwrap(),
+    );
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes = crate::routing::events::event_log::event_canonical_bytes(&envelope)
         .expect("canonical sync fixture digest payload");

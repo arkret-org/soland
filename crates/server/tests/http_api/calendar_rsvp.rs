@@ -156,7 +156,7 @@ async fn rsvp_projects_exactly_the_registered_cell_write_body() {
     // in on a calendar-domain precondition (this fixture cites a synthetic
     // schedule basis), never on the cell contract.
     let response = submit(&state, &token, &event).await;
-    let code = response["error"]["code"].as_str().unwrap_or_default();
+    let code = problem_code(&response);
     assert!(
         !matches!(code, "schema_violation" | "capability_denied"),
         "registry-derived RSVP must clear the cell contract: {response}"

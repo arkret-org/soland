@@ -107,6 +107,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
     let bootstrap = complete_realm_bootstrap_unit(genesis, ALICE, ALICE_DEVICE, title);
     let mut created = TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "events": bootstrap
@@ -143,6 +144,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
 async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> SealId {
     for attempt in 0..50 {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
+            .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
             .json(&serde_json::json!({"realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
@@ -176,6 +178,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
+            .add_header("Arkret-Operation", "ak.self.events.read.frontier.v1", true)
             .json(&serde_json::json!({"actor_id": alice_core_id(), "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
@@ -238,6 +241,11 @@ async fn post_link(
     TestClient::post(format!(
         "http://server/_arkret/self/realms/{realm_id}/links"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_link.command.create.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&request))
@@ -262,6 +270,11 @@ async fn delete_link(
     TestClient::delete(format!(
         "http://server/_arkret/self/realms/{realm_id}/links/{target}"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_link.resource.delete.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .add_header("content-type", "application/json", true)
     .body(canonical_body(&request))
@@ -273,6 +286,11 @@ async fn effective_policy(state: &AppState, token: &str, realm_id: &str) -> Valu
     TestClient::get(format!(
         "http://server/_arkret/self/realms/{realm_id}/effective-policy"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.realm_link.read.effective_policy.v1",
+        true,
+    )
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state))
     .await
@@ -448,11 +466,11 @@ async fn realm_links_delete_recomputes_effective_policy() {
         .take_json()
         .await
         .expect("error envelope is JSON");
-    assert_eq!(body["error"]["code"], "failed_precondition");
     assert_eq!(
-        body["error"]["details"]["reason_code"],
-        "realm_link_invalid_transition"
+        body["type"],
+        "https://arkret.org/problems/failed_precondition"
     );
+    assert_eq!(body["reason_code"], "realm_link_invalid_transition");
 }
 
 /// G3.S5 — self-link is rejected as a schema violation with HTTP 422.
@@ -466,11 +484,8 @@ async fn realm_links_post_self_link_rejected() {
     let mut response = post_link(&state, &token, &realm_a, &realm_a).await;
     assert_eq!(response.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
     let body: Value = response.take_json().await.expect("error envelope is JSON");
-    assert_eq!(body["error"]["code"], "schema_violation");
-    assert_eq!(
-        body["error"]["details"]["reason_code"],
-        "realm_link_self_reference"
-    );
+    assert_eq!(body["type"], "https://arkret.org/problems/schema_violation");
+    assert_eq!(body["reason_code"], "realm_link_self_reference");
 }
 
 /// G3.S5 — effective-policy on a Realm with no

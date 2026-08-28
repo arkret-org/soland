@@ -176,7 +176,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     );
     let invalid_device_message_body: Value = invalid_device_message.take_json().await.unwrap();
     assert_eq!(
-        invalid_device_message_body["error"]["code"],
+        problem_code(&invalid_device_message_body),
         "schema_violation"
     );
 
@@ -588,7 +588,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .await;
     assert_eq!(presign.status_code.unwrap().as_u16(), 403);
     let presign_body: Value = presign.take_json().await.unwrap();
-    assert_eq!(presign_body["error"]["code"], "capability_denied");
+    assert_eq!(problem_code(&presign_body), "capability_denied");
 
     let mallory = register_account(
         state.clone(),
@@ -609,7 +609,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     assert!(invisible_blob.headers().get("content-range").is_none());
     assert!(invisible_blob.headers().get("accept-ranges").is_none());
     let invisible_body: Value = invisible_blob.take_json().await.unwrap();
-    assert_eq!(invisible_body["error"]["code"], "not_found");
+    assert_eq!(problem_code(&invisible_body), "not_found");
     let invisible_text = invisible_body.to_string();
     assert!(!invisible_text.contains(locked_realm["realm_id"].as_str().unwrap()));
     assert!(!invisible_text.contains(blob["blob_ref"].as_str().unwrap()));
@@ -666,7 +666,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
         .await;
     assert_eq!(plaintext_push.status_code.unwrap().as_u16(), 422);
     let plaintext_push_body: Value = plaintext_push.take_json().await.unwrap();
-    assert_eq!(plaintext_push_body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&plaintext_push_body), "schema_violation");
 
     // `push-notifications.md` §5.2 and
     // `push-operations.schema.json#/$defs/push_notify_outcome`: the response is
@@ -1364,5 +1364,5 @@ async fn revoked_device_blocks_encrypted_writes_body() {
         .await;
     assert_eq!(blocked_upload.status_code.unwrap().as_u16(), 422);
     let blocked_upload_body: Value = blocked_upload.take_json().await.unwrap();
-    assert_eq!(blocked_upload_body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&blocked_upload_body), "schema_violation");
 }

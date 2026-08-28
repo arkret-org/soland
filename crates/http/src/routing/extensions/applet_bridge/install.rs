@@ -882,9 +882,10 @@ pub(super) async fn register_package_install(
         authoring_preview_subject_key,
         authoring_request_digest,
         crate::routing::events::event_log::EventCommitIdempotency {
-            principal_id: session.actor.clone(),
+            principal_id: arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
             key: record.idempotency_key.clone(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: record.install_body_digest.to_string(),
         },
         serde_json::to_value(&response)

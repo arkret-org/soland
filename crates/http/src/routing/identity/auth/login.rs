@@ -279,7 +279,7 @@ mod tests {
         let created_at = now() - Duration::hours(1);
         let seen_at = now();
         let existing = DeviceIdentity {
-            actor_id: "did:example:alice".to_owned(),
+            actor_id: "ak:did_core:example:alice".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             display_name: Some("Original".to_owned()),
             verification_state: "verified".to_owned(),
@@ -378,7 +378,7 @@ mod tests {
         let created_at = now() - Duration::hours(1);
         let seen_at = now();
         let corrupted = DeviceIdentity {
-            actor_id: "did:example:alice".to_owned(),
+            actor_id: "ak:did_core:example:alice".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000004".to_owned(),
             display_name: Some("Corrupted".to_owned()),
             verification_state: "verified".to_owned(),

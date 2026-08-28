@@ -319,9 +319,9 @@ pub(in crate::routing) struct SubmittedEventOutcome {
 
 #[derive(Debug)]
 pub(in crate::routing) struct EventCommitIdempotency {
-    pub principal_id: String,
+    pub principal_id: arkret_wire::DidCoreId,
     pub key: String,
-    pub service_id: String,
+    pub service_id: arkret_wire::DidCoreId,
     pub request_hash: String,
 }
 
@@ -3251,7 +3251,7 @@ async fn prepare_agent_event_admission_receipt(
     );
     if let Some(record) = state
         .persistence()
-        .idempotency_record(receiver_service_id.as_str(), &receipt_key)
+        .idempotency_record(&receiver_service_id, &receipt_key)
         .await
         .map_err(|error| format!("receipt lookup failed: {error}"))?
     {
@@ -3296,9 +3296,9 @@ async fn prepare_agent_event_admission_receipt(
         .map_err(|error| format!("receipt encoding failed: {error}"))?;
     Ok(Some(PreparedAgentEventAdmissionReceipt {
         idempotency: Some(soland_services::events::IdempotentResponse {
-            principal_id: receiver_service_id.as_str().to_owned(),
+            principal_id: receiver_service_id.clone(),
             key: receipt_key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: event.event_id.as_str().to_owned(),
             status: 200,
             body,
@@ -3330,7 +3330,7 @@ async fn load_agent_event_admission_receipt(
     );
     let stored = state
         .persistence()
-        .idempotency_record(receiver_service_id.as_str(), &receipt_key)
+        .idempotency_record(&receiver_service_id, &receipt_key)
         .await
         .map_err(|error| format!("receipt replay lookup failed: {error}"))?
         .ok_or_else(|| "atomic receipt did not become visible".to_owned())?;

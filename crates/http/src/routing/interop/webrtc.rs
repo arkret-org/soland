@@ -1277,18 +1277,18 @@ mod tests {
             moderation: None,
             mute_override: Some(json!({
                 "status": "active",
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "audio_muted": true,
                 "video_muted": false,
-                "changed_by": "did:web:mod.example",
+                "changed_by": "ak:did_core:web:mod.example",
                 "changed_at": "2026-06-16T00:00:01.000Z"
             })),
         };
 
         assert_eq!(
             cell.participant_mute_override(
-                "did:web:alice.example",
+                "ak:did_core:web:alice.example",
                 "ak:device:01904100-0000-7000-8000-000000000001",
             ),
             (true, false)
@@ -1303,7 +1303,7 @@ mod tests {
                 {
                     "tag": "ak:event:AcGlxGJUvk7f1IQL9A3Jlg9JcPIuUVquBS_eLDo7S71q",
                     "value": {
-                        "actor_id": "did:web:bob.example",
+                        "actor_id": "ak:did_core:web:bob.example",
                         "action": "ban"
                     },
                     "removed": true
@@ -1311,7 +1311,7 @@ mod tests {
                 {
                     "tag": "ak:event:AS4AFkLeK4cxIX2CmEC7OAwstCL0qkWN6ZHZB1fMNUMx",
                     "value": {
-                        "actor_id": "did:web:carol.example",
+                        "actor_id": "ak:did_core:web:carol.example",
                         "action": "ban"
                     }
                 }
@@ -1319,8 +1319,8 @@ mod tests {
             mute_override: None,
         };
 
-        assert!(!cell.actor_is_banned("did:web:bob.example"));
-        assert!(cell.actor_is_banned("did:web:carol.example"));
+        assert!(!cell.actor_is_banned("ak:did_core:web:bob.example"));
+        assert!(cell.actor_is_banned("ak:did_core:web:carol.example"));
     }
 
     #[test]

@@ -586,7 +586,7 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching_body() 
         StatusCode::UNPROCESSABLE_ENTITY
     );
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&body), "schema_violation");
     assert!(
         body.get("matches").is_none(),
         "private contact discovery must not return plaintext matches: {body}"

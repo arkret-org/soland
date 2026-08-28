@@ -32,5 +32,5 @@ async fn self_seal_frontier_is_separate_from_event_frontier_body() {
         .await;
     assert_eq!(realm_only_events.status_code, Some(StatusCode::BAD_REQUEST));
     let body: Value = realm_only_events.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "json_invalid");
+    assert_eq!(problem_code(&body), "json_invalid");
 }

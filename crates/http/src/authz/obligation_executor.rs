@@ -164,7 +164,7 @@ mod tests {
     fn ctx() -> RequestContext {
         RequestContext {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
+            actor_id: "ak:did_core:web:alice.example".to_owned(),
             action: "ak.message.create".to_owned(),
             mfa_completed: false,
             mfa_requested: false,

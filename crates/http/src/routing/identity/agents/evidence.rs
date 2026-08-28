@@ -675,7 +675,7 @@ async fn reserve_evidence_challenge(
     let key = format!("agent-signer-evidence:{}", challenge.as_str());
     let persistence = state.persistence();
     if persistence
-        .idempotency_record(agent_id.as_str(), &key)
+        .idempotency_record(agent_id, &key)
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .is_some()
@@ -687,9 +687,9 @@ async fn reserve_evidence_challenge(
     let now = chrono::Utc::now();
     persistence
         .record_idempotency(&soland_storage::IdempotencyRecord {
-            principal_id: agent_id.as_str().to_owned(),
+            principal_id: agent_id.clone(),
             idempotency_key: key.clone(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: 201,
             response_body: serde_json::json!({"reservation": marker}),
@@ -699,7 +699,7 @@ async fn reserve_evidence_challenge(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let winner = persistence
-        .idempotency_record(agent_id.as_str(), &key)
+        .idempotency_record(agent_id, &key)
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .and_then(|record| {

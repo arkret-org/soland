@@ -199,7 +199,7 @@ mod tests {
         let operation = op(
             arkret_wire::EventKind::MemberState,
             json!({
-                "actor_id": "did:web:alice.example",
+                "actor_id": "ak:did_core:web:alice.example",
                 "membership": "join"
             }),
         );

@@ -266,7 +266,7 @@ mod tests {
 
     fn verified_mirror() -> ContactVerifiedMirrorRecord {
         ContactVerifiedMirrorRecord {
-            target_holder_id: "did:web:holder.example".to_owned(),
+            target_holder_id: "ak:did_core:web:holder.example".to_owned(),
             request_event_id: "ak:event:request".to_owned(),
             request_digest: "sha256:request".to_owned(),
             canonical_event_bytes: br#"{"event_id":"ak:event:request"}"#.to_vec(),
@@ -288,7 +288,7 @@ mod tests {
                 }
             }))
             .expect("typed Contact receipt fixture"),
-            issuer_service_id: "did:web:requester.example".to_owned(),
+            issuer_service_id: "ak:did_core:web:requester.example".to_owned(),
             verified_at: chrono::Utc
                 .timestamp_opt(1_700_000_000, 0)
                 .single()

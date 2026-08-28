@@ -109,8 +109,12 @@ impl SolandAuthzEngine {
         let mut count = 0usize;
         let mut grants = self.grants.lock();
         for grant in grants.values_mut() {
-            if grant.subject == subject
-                && grant.subject_principal_server_id.as_deref() == subject_principal_server_id
+            if grant.subject.as_str() == subject
+                && grant
+                    .subject_principal_server_id
+                    .as_ref()
+                    .map(arkret_wire::DidCoreId::as_str)
+                    == subject_principal_server_id
                 && !grant.revoked
             {
                 grant.revoked = true;
@@ -154,8 +158,11 @@ impl SolandAuthzEngine {
         snapshot
             .iter()
             .filter(|g| {
-                g.subject == subject
-                    && g.subject_principal_server_id.as_deref() == subject_principal_server_id
+                g.subject.as_str() == subject
+                    && g.subject_principal_server_id
+                        .as_ref()
+                        .map(arkret_wire::DidCoreId::as_str)
+                        == subject_principal_server_id
                     && g.realm_id == realm_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
@@ -181,8 +188,11 @@ impl SolandAuthzEngine {
         snapshot
             .iter()
             .filter(|g| {
-                g.subject == subject
-                    && g.subject_principal_server_id.as_deref() == subject_principal_server_id
+                g.subject.as_str() == subject
+                    && g.subject_principal_server_id
+                        .as_ref()
+                        .map(arkret_wire::DidCoreId::as_str)
+                        == subject_principal_server_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
@@ -253,8 +263,11 @@ impl SolandAuthzEngine {
             .filter(|g| {
                 !g.revoked
                     && g.realm_id == realm_id
-                    && g.subject == actor
-                    && g.subject_principal_server_id.as_deref() == actor_principal_server_id
+                    && g.subject.as_str() == actor
+                    && g.subject_principal_server_id
+                        .as_ref()
+                        .map(arkret_wire::DidCoreId::as_str)
+                        == actor_principal_server_id
                     && grant_scope_valid(g).is_ok()
                     && g.actions.iter().any(|a| a == action)
                     && resource_matches(&g.resource, resource)
@@ -394,9 +407,9 @@ pub fn projected_grant_fixture(
             arkret_identifiers::GrantId::from_event_id(&event_id).into_string()
         },
         realm_id,
-        issuer_principal_server_id: issuer.clone(),
-        issuer,
-        subject,
+        issuer_principal_server_id: arkret_wire::DidCoreId::new(issuer.clone()).unwrap(),
+        issuer: arkret_wire::DidCoreId::new(issuer).unwrap(),
+        subject: arkret_wire::DidCoreId::new(subject).unwrap(),
         subject_principal_server_id: None,
         resource,
         actions,
@@ -490,8 +503,12 @@ fn matching_request_has_revoked_upstream_grant(
 ) -> bool {
     snapshot.iter().any(|grant| {
         grant.realm_id == realm_id
-            && grant.subject == actor
-            && grant.subject_principal_server_id.as_deref() == actor_principal_server_id
+            && grant.subject.as_str() == actor
+            && grant
+                .subject_principal_server_id
+                .as_ref()
+                .map(arkret_wire::DidCoreId::as_str)
+                == actor_principal_server_id
             && grant_scope_valid(grant).is_ok()
             && grant.actions.iter().any(|candidate| candidate == action)
             && resource_matches(&grant.resource, resource)
@@ -983,11 +1000,11 @@ mod tests {
     fn owner_without_explicit_grant_is_denied() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "did:web:alice",
+            "ak:did_core:web:alice",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -999,11 +1016,11 @@ mod tests {
     fn unknown_action_denied_for_owner_without_registry_entry() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "did:web:alice",
+            "ak:did_core:web:alice",
             "ak.future.action",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1019,8 +1036,8 @@ mod tests {
         let grant = project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.future.action"],
             vec![],
@@ -1031,7 +1048,7 @@ mod tests {
         );
 
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.future.action",
             "ak:space:1",
             "ak:space:1",
@@ -1053,11 +1070,11 @@ mod tests {
             "ak.circle.audit",
         ] {
             let result = engine.check(
-                "did:web:alice",
+                "ak:did_core:web:alice",
                 action,
                 "ak:circle:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-                Some("did:web:alice"),
+                Some("ak:did_core:web:alice"),
                 &[],
                 &[],
             );
@@ -1069,13 +1086,13 @@ mod tests {
     #[test]
     fn membership_does_not_grant_baseline_capability() {
         let engine = SolandAuthzEngine::new();
-        let members = vec!["did:web:bob".to_owned()];
+        let members = vec!["ak:did_core:web:bob".to_owned()];
         let read = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &members,
             &[],
         );
@@ -1083,11 +1100,11 @@ mod tests {
         assert_eq!(read.reason, "capability_denied");
 
         let write = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &members,
             &[],
         );
@@ -1098,22 +1115,22 @@ mod tests {
     #[test]
     fn member_read_requires_explicit_grant() {
         let engine = SolandAuthzEngine::new();
-        let members = vec!["did:web:bob".to_owned()];
+        let members = vec!["ak:did_core:web:bob".to_owned()];
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.strand.read"],
             vec![],
         );
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &members,
             &[],
         );
@@ -1127,18 +1144,18 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![],
         );
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1152,8 +1169,8 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![GrantConstraint::Decision {
@@ -1163,8 +1180,8 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![GrantConstraint::Decision {
@@ -1172,11 +1189,11 @@ mod tests {
             }],
         );
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1192,8 +1209,8 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![GrantConstraint::Decision {
@@ -1203,8 +1220,8 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![GrantConstraint::Decision {
@@ -1212,11 +1229,11 @@ mod tests {
             }],
         );
         let reviewed = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1226,8 +1243,8 @@ mod tests {
         project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![GrantConstraint::Decision {
@@ -1235,11 +1252,11 @@ mod tests {
             }],
         );
         let quarantined = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1253,19 +1270,19 @@ mod tests {
         let grant = project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![],
         );
         engine.mark_projected_grant_revoked(&grant.grant_id);
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1278,16 +1295,16 @@ mod tests {
         let parent = project(
             &engine,
             "ak:space:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:space:1",
             &["ak.message.create"],
             vec![],
         );
         let mut child = projected_grant_fixture(
             "ak:space:1".to_owned(),
-            "did:web:bob".to_owned(),
-            "did:web:carol".to_owned(),
+            "ak:did_core:web:bob".to_owned(),
+            "ak:did_core:web:carol".to_owned(),
             "ak:space:1".to_owned(),
             vec!["ak.message.create".to_owned()],
             vec![],
@@ -1299,11 +1316,11 @@ mod tests {
         engine.upsert_projected_grant(child.clone());
         engine.mark_projected_grant_revoked(&parent.grant_id);
         let result = engine.check(
-            "did:web:carol",
+            "ak:did_core:web:carol",
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1325,11 +1342,11 @@ mod tests {
     fn stranger_denied() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "did:web:eve",
+            "ak:did_core:web:eve",
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
-            Some("did:web:alice"),
+            Some("ak:did_core:web:alice"),
             &[],
             &[],
         );
@@ -1342,14 +1359,14 @@ mod tests {
         project(
             &engine,
             "ak:realm:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "ak:realm:1",
             &["ak.pin.*"],
             vec![],
         );
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",
@@ -1367,14 +1384,14 @@ mod tests {
         project(
             &engine,
             "ak:realm:1",
-            "did:web:alice",
-            "did:web:bob",
+            "ak:did_core:web:alice",
+            "ak:did_core:web:bob",
             "*",
             &["ak.pin.add"],
             vec![],
         );
         let result = engine.check(
-            "did:web:bob",
+            "ak:did_core:web:bob",
             "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",

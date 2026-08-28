@@ -824,7 +824,7 @@ async fn enqueue_member_history_request_replicas(
         );
         let delivery = soland_services::federation::FederationDeliveryRecord {
             id: outbox_id.clone(),
-            peer_service_id: destination_service_id.to_string(),
+            peer_service_id: destination_service_id.clone(),
             peer_url: Some(route.base_url),
             endpoint: "/_arkret/peer/history-key-requests/replicate".to_owned(),
             idempotency_key: format!(
@@ -1544,7 +1544,7 @@ async fn enqueue_remote_history_response(
     let outbox_id = history_response_relay_outbox_id(response);
     let delivery = soland_services::federation::FederationDeliveryRecord {
         id: outbox_id.clone(),
-        peer_service_id: destination.to_string(),
+        peer_service_id: destination,
         peer_url: Some(route.base_url),
         endpoint: HISTORY_RESPONSE_RELAY_ENDPOINT.to_owned(),
         idempotency_key: response.response_id.to_string(),

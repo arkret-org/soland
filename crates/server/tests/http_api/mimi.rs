@@ -412,7 +412,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     .await;
     let room_binding_status = room_binding_response.status_code;
     let room_binding: Value = room_binding_response.take_json().await.unwrap();
-    if room_binding["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if problem_code(&room_binding) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
         assert_eq!(room_binding_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -611,7 +611,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     .await;
     let update_status = update_response.status_code;
     let update_resp: Value = update_response.take_json().await.unwrap();
-    if update_resp["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if problem_code(&update_resp) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
         assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -873,7 +873,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     assert_eq!(reopen_resp.status_code.unwrap().as_u16(), 400);
     let reopen_error: Value = reopen_resp.take_json().await.unwrap();
     assert_eq!(
-        reopen_error["error"]["code"],
+        problem_code(&reopen_error),
         "mimi_room_binding_status_transition_invalid"
     );
 }
@@ -919,7 +919,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     .await;
     let update_status = update_response.status_code;
     let update_resp: Value = update_response.take_json().await.unwrap();
-    if update_resp["error"]["code"] == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
+    if problem_code(&update_resp) == arkret_wire::ErrorCode::UnsupportedFeature.as_str() {
         assert_eq!(update_status, Some(StatusCode::NOT_IMPLEMENTED));
         assert!(
             state
@@ -959,10 +959,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
     .await;
     assert_eq!(unmarked.status_code.unwrap().as_u16(), 400);
     let unmarked_body: Value = unmarked.take_json().await.unwrap();
-    assert_eq!(
-        unmarked_body["error"]["code"],
-        "mimi_e2ee_boundary_unmarked"
-    );
+    assert_eq!(problem_code(&unmarked_body), "mimi_e2ee_boundary_unmarked");
 
     let downgrade_resp: Value = signed_mimi_post!(
         state,

@@ -2352,7 +2352,7 @@ mod tests {
         }
         AcceptedEvent {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
-            actor_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
+            actor_id: "ak:did_core:webvh:z6mkfixture".to_owned(),
             actor_seq,
             realm_id: Some("ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX".to_owned()),
             kind: envelope["kind"].as_str().unwrap().to_owned(),
@@ -2434,7 +2434,7 @@ mod tests {
         .collect();
         let (max_seq, heads) = preserved_actor_frontier(
             &records,
-            "did:webvh:z6mkfixture:alice.example",
+            "ak:did_core:webvh:z6mkfixture",
             "ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX",
             &covered,
         )

@@ -103,7 +103,7 @@ mod tests {
 
         let handover: DeliveryBindingHandoverRow = serde_json::from_value(serde_json::json!({
             "realm_id": "ak:realm:test",
-            "actor_id": "did:web:example.test"
+            "actor_id": "ak:did_core:web:example.test"
         }))
         .expect("optional handover fields may be absent");
         assert!(handover.handover_frontier.is_empty());

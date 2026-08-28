@@ -1537,7 +1537,7 @@ mod did_binding_tests {
         verification_method: &str,
     ) -> (Vec<u8>, arkret_wire::ProducerEventProof) {
         let envelope_bytes =
-            br#"{"actor_id":"did:web:principal.example","kind":"ak.test.event"}"#.to_vec();
+            br#"{"actor_id":"ak:did_core:web:principal.example","kind":"ak.test.event"}"#.to_vec();
         let event_digest =
             Hash::new(arkret_canonical::sha256_digest(&envelope_bytes)).expect("event digest");
         let proof = build_proof_envelope(
@@ -1682,7 +1682,7 @@ mod did_binding_tests {
 
         verify_registered_identity_resolution_event_proof_async(
             &proof,
-            br#"{"actor_id":"did:web:principal.example","kind":"ak.other.event"}"#,
+            br#"{"actor_id":"ak:did_core:web:principal.example","kind":"ak.other.event"}"#,
             &actor_id,
             &verification_method,
             actor_id.as_str(),

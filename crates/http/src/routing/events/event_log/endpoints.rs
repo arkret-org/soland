@@ -305,13 +305,17 @@ async fn issue_seal_availability_receipts(
     let _availability_guard = availability_lock.lock().await;
     if let Some(record) = state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .idempotency_record(
+            &arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            &idempotency_key,
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("availability idempotency lookup failed: {error}"))
         })?
     {
-        if record.request_hash != request_hash || record.service_id != *state.service_id() {
+        if record.request_hash != request_hash || record.service_id.as_str() != state.service_id() {
             return Err(AppError::internal(
                 "availability idempotency record binding mismatch",
             ));
@@ -468,9 +472,10 @@ async fn issue_seal_availability_receipts(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: session.actor.clone(),
+            principal_id: arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
             idempotency_key: idempotency_key.clone(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: request_hash.clone(),
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(&outcome).map_err(|error| {
@@ -485,7 +490,11 @@ async fn issue_seal_availability_receipts(
         })?;
     let landed = state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .idempotency_record(
+            &arkret_wire::DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            &idempotency_key,
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("reload availability idempotency outcome: {error}"))
@@ -729,6 +738,18 @@ fn submit_event_authenticated<'a>(
         // canonical body is a `duplicate_conflict`. Event-ID idempotency below
         // still applies independently (a write with no header relies on it).
         if let Some(key) = idempotency_key.as_deref() {
+            let principal_id = match arkret_wire::DidCoreId::new(session.actor.clone()) {
+                Ok(principal_id) => principal_id,
+                Err(error) => {
+                    render_error(
+                        res,
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        &format!("authenticated session actor is invalid: {error}"),
+                    );
+                    return;
+                }
+            };
             let request_hash = match arkret_canonical::canonical_sha256(&submit) {
                 Ok(hash) => hash,
                 Err(error) => {
@@ -741,7 +762,7 @@ fn submit_event_authenticated<'a>(
                     return;
                 }
             };
-            match state.jobs().idempotency_record(&session.actor, key).await {
+            match state.jobs().idempotency_record(&principal_id, key).await {
                 Ok(Some(record)) if record.request_hash == request_hash => {
                     // Replay: re-emit the cached first response verbatim, no
                     // re-execution and no second side effect.
@@ -779,9 +800,9 @@ fn submit_event_authenticated<'a>(
                         session,
                         envelope,
                         EventCommitIdempotency {
-                            principal_id: session.actor.clone(),
+                            principal_id: principal_id.clone(),
                             key: key.to_owned(),
-                            service_id: state.service_id().clone(),
+                            service_id: state.service_core_id(),
                             request_hash: request_hash.clone(),
                         },
                     )
@@ -980,10 +1001,17 @@ async fn persist_idempotency_first_response(
     body: &Value,
 ) {
     let created_at = now();
+    let principal_id = match arkret_wire::DidCoreId::new(principal_id.to_owned()) {
+        Ok(principal_id) => principal_id,
+        Err(error) => {
+            tracing::warn!(%error, idempotency_key, "idempotency principal id invalid");
+            return;
+        }
+    };
     let record = soland_services::jobs::IdempotencyState {
-        principal_id: principal_id.to_owned(),
+        principal_id,
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_id().clone(),
+        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: status.as_u16() as i32,
         response_body: body.clone(),
@@ -1121,15 +1149,10 @@ async fn event_delivery_status(
             state,
             &session,
             binding,
-            &delivery.delivery.peer_service_id,
+            delivery.delivery.peer_service_id.as_str(),
         )
         .await;
-        let service_id = can_read_service_id
-            .then(|| DidCoreId::new(delivery.delivery.peer_service_id.clone()))
-            .transpose()
-            .map_err(|error| {
-                AppError::internal(format!("stored delivery service id is invalid: {error}"))
-            })?;
+        let service_id = can_read_service_id.then(|| delivery.delivery.peer_service_id.clone());
         let target = EventDeliveryTargetStatus {
             target_id: target_id.clone(),
             status,

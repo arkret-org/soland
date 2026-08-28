@@ -110,7 +110,7 @@ mod tests {
         AgentSidecarRecord {
             sidecar_id: sidecar_id.to_owned(),
             realm_id: "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b".to_owned(),
-            controller_id: "did:web:example.com:users:alice".to_owned(),
+            controller_id: "ak:did_core:web:example.com:users:alice".to_owned(),
             state: AgentSidecarState::Active,
             state_changed_at: None,
             created_at: chrono::Utc::now(),

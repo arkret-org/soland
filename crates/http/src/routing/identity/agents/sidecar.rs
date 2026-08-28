@@ -687,6 +687,8 @@ async fn store_sidecar_prepare(
     expires_at: chrono::DateTime<chrono::Utc>,
     outcome: &SidecarEnsureOutcome,
 ) -> Result<(), AppError> {
+    let principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
+        .map_err(|error| AppError::internal(format!("Sidecar principal id invalid: {error}")))?;
     let response_body = serde_json::to_value(outcome)
         .map_err(|error| AppError::internal(format!("Sidecar outcome encode: {error}")))?;
     let created_at = chrono::Utc::now();
@@ -697,9 +699,9 @@ async fn store_sidecar_prepare(
         state
             .jobs()
             .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                principal_id: principal_id.to_owned(),
+                principal_id: principal_id.clone(),
                 idempotency_key: key,
-                service_id: state.service_id().clone(),
+                service_id: state.service_core_id(),
                 request_hash: request_hash.to_owned(),
                 response_status: StatusCode::OK.as_u16().into(),
                 response_body: response_body.clone(),
@@ -720,12 +722,14 @@ async fn store_sidecar_final_outcome(
     outcome: &SidecarEnsureOutcome,
 ) -> Result<(), AppError> {
     let created_at = chrono::Utc::now();
+    let principal_id = arkret_wire::DidCoreId::new(principal_id.to_owned())
+        .map_err(|error| AppError::internal(format!("Sidecar principal id invalid: {error}")))?;
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: principal_id.to_owned(),
+            principal_id,
             idempotency_key: idempotency_key.to_owned(),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: request_hash.to_owned(),
             response_status: StatusCode::OK.as_u16().into(),
             response_body: serde_json::to_value(outcome)
@@ -742,6 +746,8 @@ async fn prepare_sidecar(
     session: &SessionRecord,
     body: arkret_models_collaboration::sidecar_operations::SidecarEnsurePrepareRequestBody,
 ) -> JsonResult<SidecarEnsureOutcome> {
+    let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     if body.controller_id.as_str() != session.actor {
         return Err(sidecar_create_denied(
             "Sidecar controller_id must match the authenticated session",
@@ -764,7 +770,7 @@ async fn prepare_sidecar(
         .map_err(|error| AppError::internal(format!("Sidecar prepare digest: {error}")))?;
     if let Some(cached) = state
         .jobs()
-        .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+        .idempotency_record(&principal_id, body.idempotency_key.as_str())
         .await
         .map_err(|error| AppError::internal(format!("Sidecar idempotency lookup: {error}")))?
     {
@@ -968,12 +974,11 @@ async fn validate_sidecar_commit_reservation(
     create_event: Option<&arkret_wire::Event>,
     context_attach_event: &arkret_wire::Event,
 ) -> Result<SidecarPreparedOutcome, AppError> {
+    let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     let record = state
         .jobs()
-        .idempotency_record(
-            session.actor.as_str(),
-            &sidecar_reservation_key(reservation_handle),
-        )
+        .idempotency_record(&principal_id, &sidecar_reservation_key(reservation_handle))
         .await
         .map_err(|error| AppError::internal(format!("Sidecar reservation lookup: {error}")))?
         .ok_or_else(|| AppError::conflict("Sidecar reservation is missing or expired"))?;
@@ -1095,6 +1100,8 @@ async fn ensure_sidecar_impl(
 ) -> JsonResult<SidecarEnsureOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     match body {
         SidecarEnsureRequestBody::Prepare(body) => prepare_sidecar(state, &session, body).await,
         SidecarEnsureRequestBody::Commit(body) => {
@@ -1102,7 +1109,7 @@ async fn ensure_sidecar_impl(
                 .map_err(|error| AppError::internal(format!("Sidecar commit digest: {error}")))?;
             if let Some(cached) = state
                 .jobs()
-                .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+                .idempotency_record(&principal_id, body.idempotency_key.as_str())
                 .await
                 .map_err(|error| AppError::internal(format!("Sidecar commit replay: {error}")))?
             {
@@ -1182,7 +1189,7 @@ async fn ensure_sidecar_impl(
                 .map_err(|error| AppError::internal(format!("Sidecar attach digest: {error}")))?;
             if let Some(cached) = state
                 .jobs()
-                .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+                .idempotency_record(&principal_id, body.idempotency_key.as_str())
                 .await
                 .map_err(|error| AppError::internal(format!("Sidecar attach replay: {error}")))?
             {

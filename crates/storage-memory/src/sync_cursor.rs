@@ -43,7 +43,7 @@ impl SyncCursorStore for MemorySyncCursorStore {
 
     async fn prune_stream_superseded(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
@@ -52,7 +52,7 @@ impl SyncCursorStore for MemorySyncCursorStore {
         let before = data.len();
         data.retain(|_, record| {
             !(record.purpose == "stream"
-                && record.principal_id.as_deref() == Some(principal_id)
+                && record.binding_subject.as_deref() == Some(binding_subject)
                 && record.device_id.as_deref() == Some(device_id)
                 && record.filter_digest.as_deref() == Some(filter_digest)
                 && record.issued_at_ms < presented_issued_at_ms)

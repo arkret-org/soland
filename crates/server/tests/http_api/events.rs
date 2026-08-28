@@ -482,9 +482,9 @@ async fn seed_agent_grant_session(
 
 fn assert_agent_scope_denied(body: &Value, scope: &str) {
     assert_eq!(body["ok"], false, "{body}");
-    assert_eq!(body["error"]["code"], "capability_denied", "{body}");
+    assert_eq!(problem_code(&body), "capability_denied", "{body}");
     assert!(
-        body["error"]["message"]
+        body["detail"]
             .as_str()
             .is_some_and(|message| message.contains(scope)),
         "{body}"
@@ -743,7 +743,7 @@ async fn memory_account_subscribe_cursor_handle_does_not_survive_app_state_rebui
     .await;
 
     assert_eq!(status, StatusCode::BAD_REQUEST, "memory resume: {rejected}");
-    assert_eq!(rejected["error"]["code"], "cursor_integrity_invalid");
+    assert_eq!(problem_code(&rejected), "cursor_integrity_invalid");
 }
 
 #[test]
@@ -808,7 +808,7 @@ async fn events_describe_and_single_event_submit_work_body() {
         .test_persistence()
         .idempotency_keys()
         .get(
-            fixture_actor_core_id("did:web:alice.example").as_str(),
+            &fixture_actor_core_id("did:web:alice.example"),
             "single-event-atomic-commit",
         )
         .await
@@ -952,7 +952,7 @@ async fn events_describe_and_single_event_submit_work_body() {
         StatusCode::BAD_REQUEST
     );
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
-    assert_eq!(unknown_schema_body["error"]["code"], "unknown_schema");
+    assert_eq!(problem_code(&unknown_schema_body), "unknown_schema");
 
     let missing_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")
@@ -982,7 +982,8 @@ async fn events_describe_and_single_event_submit_work_body() {
         .await;
     let over_budget_body: Value = over_budget.take_json().await.unwrap();
     assert_eq!(
-        over_budget_body["error"]["code"], "limit_exceeded",
+        problem_code(&over_budget_body),
+        "limit_exceeded",
         "response: {over_budget_body}"
     );
 
@@ -1084,9 +1085,9 @@ async fn events_describe_and_single_event_submit_work_body() {
         "a projection-only Realm must not invent an accepted Seal"
     );
     let seal_view: Value = seal_view_response.take_json().await.unwrap();
-    assert_eq!(seal_view["error"]["code"], "not_found");
+    assert_eq!(problem_code(&seal_view), "not_found");
     assert_eq!(
-        seal_view["error"]["message"],
+        seal_view["detail"],
         "realm has no accepted Seal on this deployment"
     );
 
@@ -1100,7 +1101,7 @@ async fn events_describe_and_single_event_submit_work_body() {
         .await;
     assert_eq!(hidden.status_code.unwrap(), StatusCode::NOT_FOUND);
     let hidden_body: Value = hidden.take_json().await.unwrap();
-    assert_eq!(hidden_body["error"]["code"], "not_found");
+    assert_eq!(problem_code(&hidden_body), "not_found");
 }
 
 #[test]
@@ -1197,9 +1198,9 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         .await;
     assert_eq!(mismatch_response.status_code, Some(StatusCode::BAD_REQUEST));
     let mismatch_body: Value = mismatch_response.take_json().await.unwrap();
-    assert_eq!(mismatch_body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&mismatch_body), "schema_violation");
     assert!(
-        mismatch_body["error"]["message"]
+        mismatch_body["detail"]
             .as_str()
             .is_some_and(|message| message.contains("plane_cross_write")),
         "an anchor-unit member carrying a CBA basis must fail the §5 plane check \
@@ -1598,11 +1599,8 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
         .await;
     assert_eq!(rejected.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "param_invalid", "{body}");
-    assert_eq!(
-        body["error"]["details"]["reason_code"], "invalid_cursor",
-        "{body}"
-    );
+    assert_eq!(problem_code(&body), "param_invalid", "{body}");
+    assert_eq!(body["reason_code"], "invalid_cursor", "{body}");
 
     // ak.self.account.stream.subscribe.v1 — `after=` reconnect parameter.
     let frame = account_subscribe_frame(
@@ -1611,11 +1609,8 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
         "catchup=true&after=ak:cursor:!!!not-base64url",
     )
     .await;
-    assert_eq!(frame["error"]["code"], "param_invalid", "{frame}");
-    assert_eq!(
-        frame["error"]["details"]["reason_code"], "invalid_cursor",
-        "{frame}"
-    );
+    assert_eq!(problem_code(&frame), "param_invalid", "{frame}");
+    assert_eq!(frame["reason_code"], "invalid_cursor", "{frame}");
 }
 
 #[test]
@@ -1758,7 +1753,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
     let invalid_cursor_body: Value = invalid_cursor.take_json().await.unwrap();
-    assert_eq!(invalid_cursor_body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&invalid_cursor_body), "schema_violation");
 }
 
 #[test]

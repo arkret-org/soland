@@ -206,10 +206,11 @@ pub fn cursor_binding_record_from_state(
         handle: record.handle,
         context: arkret_server::CursorBindingContext::new(
             record
-                .principal_id
+                .binding_subject
                 .ok_or(CursorAuthorityError::IntegrityInvalid)?,
             record.device_id,
-            record.service_id,
+            arkret_wire::DidCoreId::new(record.service_id)
+                .map_err(|_| CursorAuthorityError::IntegrityInvalid)?,
             record
                 .filter_digest
                 .ok_or(CursorAuthorityError::IntegrityInvalid)?,

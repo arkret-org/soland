@@ -126,7 +126,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         state,
         CursorState {
             handle: handle.clone(),
-            principal_id: Some(principal_id),
+            binding_subject: Some(principal_id),
             device_id: Some(device_id),
             service_id: state.service_id().clone(),
             filter_digest: Some(filter_digest),
@@ -167,7 +167,7 @@ pub(crate) async fn sync_token_for_events_query(
         state,
         CursorState {
             handle: handle.clone(),
-            principal_id: Some(principal_id),
+            binding_subject: Some(principal_id),
             device_id: Some(device_id),
             service_id: state.service_id().clone(),
             filter_digest: Some(filter_digest.to_owned()),
@@ -206,7 +206,7 @@ pub(crate) async fn sync_barrier_token_for_event(
         state,
         CursorState {
             handle,
-            principal_id: Some(session.actor.clone()),
+            binding_subject: Some(session.actor.clone()),
             device_id: Some(session.device_id.clone()),
             service_id: state.service_id().clone(),
             filter_digest: None,
@@ -241,7 +241,7 @@ async fn sync_token_for_state_positions(
         state,
         CursorState {
             handle: handle.clone(),
-            principal_id: None,
+            binding_subject: None,
             device_id: None,
             service_id: state.service_id().clone(),
             filter_digest: None,
@@ -468,12 +468,12 @@ async fn stored_sync_cursor_record_by_handle(
 
 /// Rebuild the in-memory `{ctx, positions, target?, expires_at_ms}` stored
 /// shape from a persisted row. Generic rows reconstruct a ctx WITHOUT
-/// `principal_id`/`device_id`, which `parse_and_validate_sync_cursor` rejects
+/// `binding_subject`/`device_id`, which `parse_and_validate_sync_cursor` rejects
 /// by construction.
 fn stored_value_from_sync_cursor_record(record: CursorState) -> Value {
     let mut ctx = serde_json::Map::new();
-    if let Some(principal_id) = record.principal_id {
-        ctx.insert("principal_id".to_owned(), Value::String(principal_id));
+    if let Some(binding_subject) = record.binding_subject {
+        ctx.insert("binding_subject".to_owned(), Value::String(binding_subject));
     }
     if let Some(device_id) = record.device_id {
         ctx.insert("device_id".to_owned(), Value::String(device_id));
@@ -554,7 +554,7 @@ pub async fn parse_and_validate_sync_cursor(
         .get("ctx")
         .and_then(|ctx| ctx.as_object())
         .ok_or(SyncCursorError::Integrity("cursor handle is missing ctx"))?;
-    let expected_principal = session
+    let expected_binding_subject = session
         .map(|session| session.actor.as_str())
         .unwrap_or("anonymous");
     let expected_device = session
@@ -570,12 +570,12 @@ pub async fn parse_and_validate_sync_cursor(
         ));
     }
     if ctx
-        .get("principal_id")
-        .and_then(|principal| principal.as_str())
-        .is_none_or(|principal| principal != expected_principal)
+        .get("binding_subject")
+        .and_then(|subject| subject.as_str())
+        .is_none_or(|subject| subject != expected_binding_subject)
     {
         return Err(SyncCursorError::Mismatch(
-            "cursor principal does not match request actor",
+            "cursor binding subject does not match request actor",
         ));
     }
     if ctx
@@ -671,10 +671,10 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
             "cursor handle purpose does not match stream",
         ));
     }
-    let (expected_principal, expected_device) = cursor_principal_device(session);
-    if record.principal_id.as_deref() != Some(expected_principal.as_str()) {
+    let (expected_binding_subject, expected_device) = cursor_principal_device(session);
+    if record.binding_subject.as_deref() != Some(expected_binding_subject.as_str()) {
         return Err(SyncCursorError::Mismatch(
-            "cursor principal does not match request actor",
+            "cursor binding subject does not match request actor",
         ));
     }
     if record.device_id.as_deref() != Some(expected_device.as_str()) {
@@ -737,9 +737,9 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
             "cursor handle purpose does not match barrier",
         ));
     }
-    if record.principal_id.as_deref() != Some(session.actor.as_str()) {
+    if record.binding_subject.as_deref() != Some(session.actor.as_str()) {
         return Err(SyncCursorError::Mismatch(
-            "barrier cursor principal does not match request actor",
+            "barrier cursor binding subject does not match request actor",
         ));
     }
     if record.device_id.as_deref() != Some(session.device_id.as_str()) {

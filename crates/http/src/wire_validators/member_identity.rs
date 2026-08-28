@@ -56,11 +56,11 @@ mod tests {
     fn accepts_clean_payload() {
         let payload = json!({
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "actor_id": "did:web:alice.example",
+            "actor_id": "ak:did_core:web:alice.example",
             "segment": "member_identity",
             "identity_payload": {
                 "member_identity": {
-                    "subject_id": "did:web:alice-principal.example",
+                    "subject_id": "ak:did_core:web:alice-principal.example",
                     "display_profile": {"display_name": "Alice"}
                 }
             }
@@ -83,7 +83,7 @@ mod tests {
             "segment": "member_identity",
             "identity_payload": {
                 "member_identity": {
-                    "subject_id": "did:web:alice-principal.example",
+                    "subject_id": "ak:did_core:web:alice-principal.example",
                     "handles": []
                 }
             }

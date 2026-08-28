@@ -168,7 +168,8 @@ async fn join_application_list_paginates_with_opaque_canonical_cursor_body() {
     .await;
     assert_ne!(status, Some(StatusCode::OK));
     assert_eq!(
-        cross_device["error"]["code"], "cursor_integrity_invalid",
+        problem_code(&cross_device),
+        "cursor_integrity_invalid",
         "{cross_device}"
     );
 }
@@ -193,11 +194,8 @@ async fn join_application_list_rejects_bare_application_ref_cursor_body() {
     let bare = hash('a').replace(':', "%3A");
     let (status, rejected) = list_page(state.clone(), &token, &format!("?cursor={bare}")).await;
     assert_eq!(status, Some(StatusCode::BAD_REQUEST), "{rejected}");
-    assert_eq!(rejected["error"]["code"], "param_invalid", "{rejected}");
-    assert_eq!(
-        rejected["error"]["details"]["reason_code"], "invalid_cursor",
-        "{rejected}"
-    );
+    assert_eq!(problem_code(&rejected), "param_invalid", "{rejected}");
+    assert_eq!(rejected["reason_code"], "invalid_cursor", "{rejected}");
 
     // A canonical SDK cursor whose handle was never minted by this service is
     // a handle-lookup failure -> `cursor_integrity_invalid`, never a syntax
@@ -211,7 +209,8 @@ async fn join_application_list_rejects_bare_application_ref_cursor_body() {
         list_page(state.clone(), &token, &format!("?cursor={foreign}")).await;
     assert_ne!(status, Some(StatusCode::OK));
     assert_eq!(
-        foreign_rejected["error"]["code"], "cursor_integrity_invalid",
+        problem_code(&foreign_rejected),
+        "cursor_integrity_invalid",
         "{foreign_rejected}"
     );
 }

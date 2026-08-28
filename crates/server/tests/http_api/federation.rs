@@ -280,10 +280,9 @@ async fn peer_events_describe_advertises_formal_surface_body() {
         &describe,
         "ak.peer.events.read.frontier.v1"
     ));
-    // `ak.peer.snapshot.read.manifest_head.v1` MUST NOT be declared while soland cannot
-    // produce a signed ak.schema.snapshot.v1 manifest; the endpoint
-    // answers `not_implemented` instead (service-surface.md §5.2).
-    assert!(!advertises_operation(
+    // The canonical registry owns the formal surface even when a deployment
+    // returns a closed `not_implemented` problem for an optional capability.
+    assert!(advertises_operation(
         &describe,
         "ak.peer.snapshot.read.manifest_head.v1"
     ));
@@ -427,11 +426,8 @@ async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_b
     let mut rejected = query.send(&app_from_state(state)).await;
     assert_eq!(rejected.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "param_invalid", "{body}");
-    assert_eq!(
-        body["error"]["details"]["reason_code"], "invalid_cursor",
-        "{body}"
-    );
+    assert_eq!(problem_code(&body), "param_invalid", "{body}");
+    assert_eq!(body["reason_code"], "invalid_cursor", "{body}");
 }
 
 #[test]
@@ -1089,9 +1085,9 @@ async fn self_events_reject_federation_wire_body() {
         .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "schema_violation");
+    assert_eq!(problem_code(&body), "schema_violation");
     assert!(
-        body["error"]["message"]
+        body["detail"]
             .as_str()
             .unwrap_or_default()
             .contains("/_arkret/peer/events"),

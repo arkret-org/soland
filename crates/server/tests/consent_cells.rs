@@ -89,6 +89,11 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
 
     let mut requested = TestClient::post("http://server/_arkret/self/consent/request")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_CONSENT_COMMAND_REQUEST_V1,
+            true,
+        )
         .json(&serde_json::json!({
             "holder_principal_id": bob,
             "consent_scope": "direct_message",
@@ -99,7 +104,6 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
     assert_eq!(
         requested.take_json::<Value>().await.unwrap(),
         serde_json::json!({
-            "ok": true,
             "accepted_for_processing": true,
         })
     );
@@ -108,6 +112,11 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
         "http://server/_arkret/self/consent/cells/{bob}?peer={alice}&consent_scope=direct_message"
     ))
     .add_header("Authorization", format!("Bearer {bob_token}"), true)
+    .add_header(
+        "Arkret-Operation",
+        arkret_wire::ServiceOperationId::SELF_CONSENT_RESOURCE_GET_V1,
+        true,
+    )
     .send(&app)
     .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
@@ -124,6 +133,11 @@ async fn invite_receive_policy_get_set_round_trips() {
 
     let default_policy: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
+            true,
+        )
         .send(&app)
         .await
         .take_json()
@@ -148,6 +162,11 @@ async fn invite_receive_policy_get_set_round_trips() {
     });
     let stored: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_REPLACE_V1,
+            true,
+        )
         .json(&custom)
         .send(&app)
         .await
@@ -159,6 +178,11 @@ async fn invite_receive_policy_get_set_round_trips() {
 
     let reread: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
+            true,
+        )
         .send(&app)
         .await
         .take_json()
@@ -176,6 +200,11 @@ async fn invite_receive_policy_get_set_round_trips() {
     });
     let rejected = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_REPLACE_V1,
+            true,
+        )
         .json(&mismatched)
         .send(&app)
         .await;

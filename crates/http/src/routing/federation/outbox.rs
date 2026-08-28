@@ -815,7 +815,7 @@ impl FederationDispatcher {
         for row in rows {
             let peer_target = super::federation::resolved_peer_target(
                 &self.state,
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
                 "principal_server",
                 false,
             )
@@ -839,7 +839,7 @@ impl FederationDispatcher {
             // released row goes straight back to the wire, so a policy that
             // still denies the peer must still deny it after a version bump.
             let trust_domain_denied = crate::security::federation_outbound_trust_domain_denial(
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
                 Some(&peer_target.trust_domain),
             )
             .is_some();
@@ -918,7 +918,7 @@ impl FederationDispatcher {
         }
         let peer_target = super::federation::resolved_peer_target(
             &self.state,
-            &row.delivery.peer_service_id,
+            row.delivery.peer_service_id.as_str(),
             "principal_server",
             false,
         )
@@ -996,7 +996,7 @@ impl FederationDispatcher {
         // decides on the host, and §8 binds the decision to the peer's
         // service_id.
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-            &row.delivery.peer_service_id,
+            row.delivery.peer_service_id.as_str(),
             Some(&peer_target.trust_domain),
         ) {
             tracing::warn!(
@@ -1121,7 +1121,7 @@ impl FederationDispatcher {
                     let body = serde_json::to_string(&outcome).unwrap_or_default();
                     let recovered = crate::routing::mls::capture_relayed_keypackage_claim_query(
                         &self.state,
-                        &row.delivery.peer_service_id,
+                        row.delivery.peer_service_id.as_str(),
                         &row.delivery.payload_json,
                         &outcome,
                     )
@@ -1194,7 +1194,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-service-id",
-            &row.delivery.peer_service_id,
+            row.delivery.peer_service_id.as_str(),
         );
         insert_header_if_valid(
             &mut headers,
@@ -1423,7 +1423,7 @@ impl FederationDispatcher {
                     != admission
                         .producer_signer_resolution_evidence_digest
                         .as_ref()
-                || receipt.receiver_service_id.as_str() != row.delivery.peer_service_id
+                || receipt.receiver_service_id != row.delivery.peer_service_id
             {
                 return Err("Agent Event receipt does not match the delivered Event".to_owned());
             }
@@ -1538,7 +1538,7 @@ impl FederationDispatcher {
                 crate::routing::identity::contact_federation::validate_mirror_receipt_cryptography(
                     &self.state,
                     &event_outcome.mirror_receipt,
-                    &row.delivery.peer_service_id,
+                    row.delivery.peer_service_id.as_str(),
                     "outbound_request_mirror_receipt",
                 )
                 .map_err(|error| error.to_string())?;
@@ -1574,7 +1574,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 event_outcome,
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1586,7 +1586,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 deferred,
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1598,7 +1598,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 &outcome,
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1609,7 +1609,7 @@ impl FederationDispatcher {
                 &self.state,
                 &request,
                 &outcome,
-                &row.delivery.peer_service_id,
+                row.delivery.peer_service_id.as_str(),
             )
             .await
             .map_err(|error| error.to_string()),
@@ -1660,7 +1660,7 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-service-id",
-            &row.delivery.peer_service_id,
+            row.delivery.peer_service_id.as_str(),
         );
         insert_header_if_valid(
             &mut headers,
@@ -1714,7 +1714,7 @@ impl FederationDispatcher {
         }
         crate::routing::mls::capture_relayed_keypackage_claim_outcome(
             &self.state,
-            &row.delivery.peer_service_id,
+            row.delivery.peer_service_id.as_str(),
             &row.delivery.payload_json,
             response_body,
         )

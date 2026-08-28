@@ -1267,8 +1267,8 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     .await
     .unwrap();
     assert_eq!(
-        rejected["error"]["code"],
-        json!("param_invalid"),
+        rejected["type"],
+        json!("https://arkret.org/problems/param_invalid"),
         "rejection: {rejected}"
     );
     assert!(
@@ -1516,7 +1516,10 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     .await;
     assert_eq!(conflict_response.status_code.unwrap(), StatusCode::CONFLICT);
     let conflict: Value = conflict_response.take_json().await.unwrap();
-    assert_eq!(conflict["error"]["code"], json!("duplicate_conflict"));
+    assert_eq!(
+        conflict["type"],
+        json!("https://arkret.org/problems/duplicate_conflict")
+    );
 }
 
 #[tokio::test]
@@ -1561,7 +1564,11 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     )
     .await;
     let rejected: Value = response.take_json().await.unwrap();
-    assert_eq!(rejected["error"]["code"], json!("capability_denied"));
+    assert_eq!(
+        rejected["type"],
+        json!("https://arkret.org/problems/capability_denied"),
+        "rejection: {rejected}"
+    );
 }
 
 #[tokio::test]
@@ -1615,8 +1622,9 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     .await
     .unwrap();
     assert_eq!(
-        rejected["error"]["code"],
-        json!("applet_namespace_mismatch")
+        rejected["type"],
+        json!("https://arkret.org/problems/applet_namespace_mismatch"),
+        "rejection: {rejected}"
     );
 }
 
@@ -2102,11 +2110,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         },
     )
     .await;
-    assert_eq!(
-        transaction["ok"],
-        json!(false),
-        "transaction response: {transaction}"
-    );
+    assert_eq!(transaction["status"], json!("rejected"));
     assert_eq!(
         transaction["rejected"][0]["reason_code"],
         json!("capability_denied"),
@@ -2143,7 +2147,10 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         .await
         .unwrap()
         .expect("applet record remains durable after ghost provision");
-    assert_eq!(stored_applet["registry_id"], json!(package.controller_id));
+    assert_eq!(
+        stored_applet["identity"]["registry_id"],
+        json!(package.controller_id)
+    );
 
     let revoke_preview: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke/preview"
@@ -2198,11 +2205,6 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(
-        revoke["ok"],
-        json!(true),
-        "Applet revoke failed: {revoke:#}"
-    );
     assert_eq!(revoke["status"], json!("complete"));
 
     let replay: Value = TestClient::post(format!(
@@ -2234,7 +2236,10 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .take_json()
     .await
     .unwrap();
-    assert_eq!(conflict["error"]["code"], json!("duplicate_conflict"));
+    assert_eq!(
+        conflict["type"],
+        json!("https://arkret.org/problems/duplicate_conflict")
+    );
 
     let rejected_idempotency_key = format!("tx-after-revoke-{suffix}");
     let rejected = post_signed_applet_message_transaction(
@@ -2255,8 +2260,8 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     )
     .await;
     assert_eq!(
-        rejected["error"]["code"],
-        json!("applet_registration_unauthorized")
+        rejected["type"],
+        json!("https://arkret.org/problems/applet_registration_unauthorized")
     );
 
     let revoked_applet = state

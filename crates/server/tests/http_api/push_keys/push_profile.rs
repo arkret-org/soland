@@ -125,11 +125,8 @@ async fn signal_requires_active_authorized_device_signature_body() {
     .await;
     assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
     let rejected_body: Value = rejected.take_json().await.unwrap();
-    assert_eq!(rejected_body["error"]["code"], "param_invalid");
-    assert_eq!(
-        rejected_body["error"]["details"]["reason_code"],
-        "proof_invalid"
-    );
+    assert_eq!(problem_code(&rejected_body), "param_invalid");
+    assert_eq!(rejected_body["reason_code"], "proof_invalid");
     assert!(
         state
             .test_persistence()
@@ -191,10 +188,7 @@ async fn signal_requires_active_authorized_device_signature_body() {
     .await;
     assert_eq!(unauthorized.status_code, Some(StatusCode::BAD_REQUEST));
     let unauthorized_body: Value = unauthorized.take_json().await.unwrap();
-    assert_eq!(
-        unauthorized_body["error"]["details"]["reason_code"],
-        "proof_invalid"
-    );
+    assert_eq!(unauthorized_body["reason_code"], "proof_invalid");
 
     // Full revocation fails even earlier: the session itself no longer
     // authenticates, so a revoked device never reaches the Signal admission set.
@@ -983,7 +977,7 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
     .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
     let denied_body: Value = denied.take_json().await.unwrap();
-    assert_eq!(denied_body["error"]["code"], "signal_class_denied");
+    assert_eq!(problem_code(&denied_body), "signal_class_denied");
     assert!(
         state
             .test_persistence()
@@ -1013,8 +1007,10 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
-    grant.issuer_principal_server_id = state.service_id().clone();
-    grant.subject_principal_server_id = Some(state.service_id().clone());
+    grant.issuer_principal_server_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
+    grant.subject_principal_server_id =
+        Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
     let granted = post_signal(
         state.clone(),
@@ -1191,7 +1187,7 @@ async fn signal_envelope_structural_contract_is_enforced_body() {
     .await;
     assert_eq!(over_ttl.status_code, Some(StatusCode::BAD_REQUEST));
     let over_ttl_body: Value = over_ttl.take_json().await.unwrap();
-    assert_eq!(over_ttl_body["error"]["code"], "signal_ttl_out_of_range");
+    assert_eq!(problem_code(&over_ttl_body), "signal_ttl_out_of_range");
 
     // §1 — the algorithm is carried by `aead_profile`, which MUST name an
     // `status=active` row of the MLS ciphersuite registry. A reserved row fails
@@ -1210,7 +1206,7 @@ async fn signal_envelope_structural_contract_is_enforced_body() {
     let mut reserved = post_signal(state.clone(), &token, &reserved_suite).await;
     assert_eq!(reserved.status_code, Some(StatusCode::BAD_REQUEST));
     let reserved_body: Value = reserved.take_json().await.unwrap();
-    assert_eq!(reserved_body["error"]["code"], "param_invalid");
+    assert_eq!(problem_code(&reserved_body), "param_invalid");
 
     // §1 — `aad_digest` is recomputed from the immutable header, never trusted.
     let mut forged_aad = envelope(arkret_wire::SignalClass::Session, 30);
@@ -1260,7 +1256,7 @@ async fn signal_envelope_structural_contract_is_enforced_body() {
         Some(StatusCode::BAD_REQUEST)
     );
     let unknown_seal_body: Value = unknown_seal_response.take_json().await.unwrap();
-    assert_eq!(unknown_seal_body["error"]["code"], "param_invalid");
+    assert_eq!(problem_code(&unknown_seal_body), "param_invalid");
 
     // Only the one accepted `setup` frame ever reached the relay.
     let relayed = state

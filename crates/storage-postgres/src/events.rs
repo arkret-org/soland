@@ -465,7 +465,7 @@ pub(crate) async fn bind_event_outbox_rows(
     let outbox_id = sql_query(
         "SELECT id FROM federation_outbox WHERE peer_service_id = $1 AND idempotency_key = $2",
     )
-    .bind::<Text, _>(&delivery.peer_service_id)
+    .bind::<Text, _>(delivery.peer_service_id.as_str())
     .bind::<Text, _>(&delivery.idempotency_key)
     .get_result::<TextIdRow>(&mut *conn)
     .await

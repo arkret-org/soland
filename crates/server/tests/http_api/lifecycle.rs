@@ -68,7 +68,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "restore on Active must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_restore_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "space_not_archived");
+    assert_eq!(problem_code(&body), "space_not_archived");
 
     // 3) ak.space.archive — legal (Active → Archived).
     let archive_event = signed_space_event(
@@ -146,7 +146,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         "tombstone-again on Tombstoned must yield HTTP 412 failed_precondition"
     );
     let body: Value = bad_tombstone_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "space_already_terminal");
+    assert_eq!(problem_code(&body), "space_already_terminal");
 
     // 7) ak.space.restore on Tombstoned → 412 space_not_archived (terminal
     // state cannot be revived even though tombstone-vs-restore are different
@@ -168,7 +168,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
         412
     );
     let body: Value = bad_restore_terminal_response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "space_not_archived");
+    assert_eq!(problem_code(&body), "space_not_archived");
 }
 
 #[test]
@@ -229,7 +229,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_not_archived");
+    assert_eq!(problem_code(&body), "strand_not_archived");
 
     // 3) strand archive — legal.
     let archive = signed_strand_event(
@@ -265,7 +265,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_not_active");
+    assert_eq!(problem_code(&body), "strand_not_active");
 
     // 5) strand update on Archived → 412 strand_not_active.
     let bad_update = signed_strand_event(
@@ -285,7 +285,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_not_active");
+    assert_eq!(problem_code(&body), "strand_not_active");
 
     // 6) strand restore — legal now.
     let good_restore = signed_strand_event(
@@ -349,7 +349,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "morph_not_archived");
+    assert_eq!(problem_code(&body), "morph_not_archived");
 
     // morph archive — legal.
     let morph_archive = signed_morph_event(
@@ -388,7 +388,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "morph_not_active");
+    assert_eq!(problem_code(&body), "morph_not_active");
 }
 
 #[test]
@@ -505,7 +505,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
         .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "content_encryption_floor_violation");
+    assert_eq!(problem_code(&body), "content_encryption_floor_violation");
     assert!(
         state
             .test_persistence()
@@ -575,7 +575,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
         .await;
     let body: Value = resp.take_json().await.unwrap();
     assert_eq!(resp.status_code.unwrap().as_u16(), 412, "{body}");
-    assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
+    assert_eq!(problem_code(&body), "strand_status_transition_invalid");
 
     let good_in_progress = signed_strand_event(
         "ak:event:AamjDwNA62hX10_JO_rxjuHZCdr-NgRw5mfVW6bO3gpy",
@@ -661,7 +661,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_status_transition_invalid");
+    assert_eq!(problem_code(&body), "strand_status_transition_invalid");
 
     let audit_actor = fixture_actor_core_id("did:web:alice.example");
     let audit_events: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=50")
@@ -803,7 +803,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_already_terminal");
+    assert_eq!(problem_code(&body), "strand_already_terminal");
 
     // ── Morph path ───────────────────────────────────────────────────
 
@@ -873,7 +873,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "morph_already_terminal");
+    assert_eq!(problem_code(&body), "morph_already_terminal");
 }
 
 #[test]
@@ -972,5 +972,5 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived_body() {
         .await;
     assert_eq!(resp.status_code.unwrap().as_u16(), 412);
     let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "strand_not_active");
+    assert_eq!(problem_code(&body), "strand_not_active");
 }

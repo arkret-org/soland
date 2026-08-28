@@ -260,7 +260,7 @@ impl PersistenceHandle {
 
     pub async fn idempotency_record(
         &self,
-        principal_id: &str,
+        principal_id: &arkret_identifiers::DidCoreId,
         idempotency_key: &str,
     ) -> crate::ServiceResult<Option<soland_storage::IdempotencyRecord>> {
         Ok(self

@@ -362,7 +362,7 @@ fn shared_view_events_never_carry_a_private_view() {
         "visibility": "private",
         "title": "personal board",
         "query": {"realm_id": realm_id.as_str()},
-        "created_by": "did:web:alice.example",
+        "created_by": "ak:did_core:web:alice.example",
         "created_at": "2026-07-30T00:00:00.000Z"
     });
     for (seed, kind, payload) in [
@@ -445,8 +445,10 @@ fn install_projected_grant(
         constraints,
     );
     let principal_server_id = crate::test_event::principal_server_id().into_string();
-    grant.issuer_principal_server_id = principal_server_id.clone();
-    grant.subject_principal_server_id = Some(principal_server_id);
+    grant.issuer_principal_server_id =
+        arkret_wire::DidCoreId::new(principal_server_id.clone()).unwrap();
+    grant.subject_principal_server_id =
+        Some(arkret_wire::DidCoreId::new(principal_server_id).unwrap());
     authorization.upsert_projected_grant(grant.clone());
     grant
 }
@@ -533,7 +535,7 @@ fn grant_circle_action(
     install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:owner.example".to_owned(),
+        "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         circle_id.to_owned(),
         vec![action.to_owned()],
@@ -582,7 +584,7 @@ fn grant_moderation_decision(
     install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:owner.example".to_owned(),
+        "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
         vec![
@@ -603,7 +605,7 @@ fn grant_call_action(
     install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:owner.example".to_owned(),
+        "ak:did_core:web:owner.example".to_owned(),
         actor.to_owned(),
         realm_id.to_string(),
         vec![action.to_owned()],
@@ -902,7 +904,7 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
                 fields: Default::default(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
-                created_by: "did:web:alice.example".to_owned(),
+                created_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
                 history_basis_seals: Vec::new(),
                 updated_by: None,
@@ -1429,9 +1431,9 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000601",
         arkret_wire::EventKind::InviteCreate,
         json!({
-            "invitee": "did:web:charlie.example",
+            "invitee": "ak:did_core:web:charlie.example",
             "invite_delivery_target": {
-                "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+                "recipient_service_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
                 "recipient_service_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -1466,7 +1468,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000603",
         arkret_wire::EventKind::MemberState,
         json!({
-            "actor_id": "did:web:charlie.example",
+            "actor_id": "ak:did_core:web:charlie.example",
             "membership": "invite",
             "sender": "ak:did_core:web:alice.example"
         }),
@@ -1513,7 +1515,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000605",
         arkret_wire::EventKind::MemberState,
         json!({
-            "actor_id": "did:web:charlie.example",
+            "actor_id": "ak:did_core:web:charlie.example",
             "membership": "join",
             "sender": "ak:did_core:web:alice.example"
         }),
@@ -1580,15 +1582,15 @@ async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                "did:web:alice.example".to_owned(),
-                "did:web:bob.example".to_owned(),
+                ALICE_CORE_ID.to_owned(),
+                "ak:did_core:webvh:z6mkbob".to_owned(),
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
-            actor_id: "did:web:bob.example".to_owned(),
+            actor_id: "ak:did_core:webvh:z6mkbob".to_owned(),
             binding_event_ref: "ak:event:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1".to_owned(),
         },
     );
@@ -1631,7 +1633,7 @@ async fn two_distinct_endorsement_digests_freeze_the_pair() {
         "sha256:00000000000000000000000000000000000000000000000000000000000006ff",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                "did:web:alice.example".to_owned(),
+                "ak:did_core:web:alice.example".to_owned(),
                 "did:web:bob.example".to_owned(),
             ],
             realm_id: "ak:realm:ARM1n3PTeYfi_CEquXWAA_goRY85bAGIYUrIFzp-2oey".to_owned(),
@@ -1639,7 +1641,7 @@ async fn two_distinct_endorsement_digests_freeze_the_pair() {
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
-            actor_id: "did:web:bob.example".to_owned(),
+            actor_id: "ak:did_core:web:bob.example".to_owned(),
             binding_event_ref: "ak:event:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
         },
     );
@@ -1673,7 +1675,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -1707,7 +1709,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::ReactionAdd.as_str().to_owned()],
@@ -1772,7 +1774,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::StrandCreate.as_str().to_owned()],
@@ -1840,7 +1842,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     let envelope_grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::RelationCreate.as_str().to_owned()],
@@ -1849,7 +1851,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     let context_grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::RelationCreate.as_str().to_owned()],
@@ -1922,7 +1924,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::ViewCreate.as_str().to_owned()],
@@ -1962,7 +1964,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec!["*".to_owned()],
@@ -2001,7 +2003,7 @@ async fn reply_agent_unknown_kind_fails_closed_at_participation_registry() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec!["*".to_owned()],
@@ -2038,7 +2040,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -2078,7 +2080,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -2148,7 +2150,7 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "ak.identity.accountability_grant",
         json!({
             "sender": "ak:did_core:web:mallory.example",
-            "issuer": "did:web:alice.example",
+            "issuer": "ak:did_core:web:alice.example",
             "subject": "did:web:agent.example",
             "grant_status": "active",
             "not_before": "2026-01-01T00:00:00.000Z",
@@ -2274,11 +2276,11 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
     )
     .unwrap();
     let grant_envelope = json!({
-        "actor_id": "did:web:mallory.example",
+        "actor_id": "ak:did_core:web:mallory.example",
         "kind": "ak.identity.accountability_grant",
         "realm_id": realm_id.to_string(),
         "payload": {
-            "issuer": "did:web:alice.example",
+            "issuer": "ak:did_core:web:alice.example",
             "subject": "did:web:agent.example",
             "grant_status": "active",
             "not_before": "2026-01-01T00:00:00.000Z",
@@ -2291,7 +2293,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         .event_queries()
         .store_canonical_event(AcceptedEvent {
             event_id: grant_event_id,
-            actor_id: "did:web:mallory.example".to_owned(),
+            actor_id: "ak:did_core:web:mallory.example".to_owned(),
             actor_seq: 1,
             realm_id: Some(realm_id.to_string()),
             kind: "ak.identity.accountability_grant".to_owned(),
@@ -2434,7 +2436,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -2466,7 +2468,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -2500,7 +2502,7 @@ async fn act_on_behalf_validation_defers_nonce_consumption_until_commit() {
     let grant = install_projected_grant(
         state.authorization(),
         realm_id.to_string(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         agent.to_owned(),
         realm_id.to_string(),
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
@@ -2645,7 +2647,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         "ak:realm:ARkNLd10PLFU6nWXwpfON7eQhZGezakXw3pvJ5cRGc0Q".to_owned(),
     )
     .unwrap();
-    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
     let decision = op(
         realm_id,
         "000000000901",
@@ -2702,7 +2704,7 @@ async fn moderation_decision_rejects_missing_issuer_even_with_sender_grant() {
         "ak:realm:AQsAANkzbRAod6oC5lFzs1OxsLEt5mVJ35YGKc4cf_Vn".to_owned(),
     )
     .unwrap();
-    grant_moderation_decision(&state, &realm_id, "did:web:moderator.example");
+    grant_moderation_decision(&state, &realm_id, "ak:did_core:web:moderator.example");
     let decision = op(
         realm_id,
         "000000000903",

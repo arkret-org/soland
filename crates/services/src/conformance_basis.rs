@@ -667,7 +667,7 @@ mod tests {
     fn content_grant_is_visible_to_the_capability_engine() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
         let realm_id = "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic";
-        let subject = "did:web:soland.example";
+        let subject = "ak:did_core:web:soland.example";
         let action = "ak.message.create".to_owned();
         let body = grant_body(
             grant_id,
@@ -691,7 +691,7 @@ mod tests {
         let state = CellState::Value(json!([{"value": body}]));
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("content grant must enter the effective capability set");
-        assert_eq!(grant.subject, subject);
+        assert_eq!(grant.subject.as_str(), subject);
         assert_eq!(grant.actions, vec![action]);
     }
 

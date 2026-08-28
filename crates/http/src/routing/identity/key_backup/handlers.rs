@@ -206,6 +206,8 @@ pub(super) async fn put_key_backup(
 ) -> JsonResult<KeysBackupsReplaceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let idempotency_principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
@@ -243,7 +245,7 @@ pub(super) async fn put_key_backup(
     })?;
     match state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .idempotency_record(&idempotency_principal_id, &idempotency_key)
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
     {
@@ -285,7 +287,7 @@ pub(super) async fn put_key_backup(
         };
         persist_key_backup_idempotency(
             state,
-            &session.actor,
+            &idempotency_principal_id,
             &idempotency_key,
             &request_hash,
             &outcome,
@@ -321,7 +323,7 @@ pub(super) async fn put_key_backup(
     };
     persist_key_backup_idempotency(
         state,
-        &session.actor,
+        &idempotency_principal_id,
         &idempotency_key,
         &request_hash,
         &outcome,
@@ -332,7 +334,7 @@ pub(super) async fn put_key_backup(
 
 async fn persist_key_backup_idempotency(
     state: &AppState,
-    principal_id: &str,
+    principal_id: &arkret_wire::DidCoreId,
     idempotency_key: &str,
     request_hash: &str,
     outcome: &KeysBackupsReplaceOutcome,
@@ -346,9 +348,9 @@ async fn persist_key_backup_idempotency(
         }
     };
     let record = soland_services::jobs::IdempotencyState {
-        principal_id: principal_id.to_owned(),
+        principal_id: principal_id.clone(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_id().clone(),
+        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: StatusCode::OK.as_u16() as i32,
         response_body,
@@ -543,6 +545,8 @@ pub(super) async fn delete_key_backup(
 ) -> JsonResult<KeysBackupsDeleteOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let idempotency_principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     let backup_id = backup_id.into_inner();
     // spec `keys_backups_delete_request_body` (additionalProperties: false):
     // `{request_id, challenge_id, proof, reason?}` travels in the JSON body,
@@ -574,7 +578,7 @@ pub(super) async fn delete_key_backup(
     })?;
     match state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .idempotency_record(&idempotency_principal_id, &idempotency_key)
         .await
     {
         Ok(Some(record)) if record.request_hash == request_hash => {
@@ -651,7 +655,7 @@ pub(super) async fn delete_key_backup(
     };
     record_delete_idempotency(
         state,
-        &session.actor,
+        &idempotency_principal_id,
         &idempotency_key,
         &request_hash,
         &outcome,
@@ -668,7 +672,7 @@ pub(super) async fn delete_key_backup(
 /// fails closed, which is safe).
 async fn record_delete_idempotency(
     state: &AppState,
-    actor_id: &str,
+    actor_id: &arkret_wire::DidCoreId,
     idempotency_key: &str,
     request_hash: &str,
     outcome: &KeysBackupsDeleteOutcome,
@@ -678,9 +682,9 @@ async fn record_delete_idempotency(
     };
     let created_at = chrono::Utc::now();
     let record = soland_services::jobs::IdempotencyState {
-        principal_id: actor_id.to_owned(),
+        principal_id: actor_id.clone(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_id().clone(),
+        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: 200,
         response_body,

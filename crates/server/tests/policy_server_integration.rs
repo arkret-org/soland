@@ -169,8 +169,8 @@ fn engine_granting_event_read() -> AuthorizationService {
     soland_http::authz::install_projected_grant(
         &engine,
         REALM_ID.to_owned(),
-        "did:web:alice.example".to_owned(),
-        "did:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
+        "ak:did_core:web:alice.example".to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
         vec!["ak.event.read".to_owned()],
         Vec::new(),
@@ -216,7 +216,7 @@ async fn policy_server_integration_hits_mock() {
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
-        actor_id: "did:web:alice.example".to_owned(),
+        actor_id: "ak:did_core:web:alice.example".to_owned(),
         action: "ak.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,
@@ -225,12 +225,12 @@ async fn policy_server_integration_hits_mock() {
 
     let decision = check_with_policy_server(
         &engine,
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         None,
         "ak.event.read",
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
         REALM_ID,
-        Some("did:web:alice.example"),
+        Some("ak:did_core:web:alice.example"),
         &[],
         &[],
         Some(&client),
@@ -277,7 +277,7 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
-        actor_id: "did:web:alice.example".to_owned(),
+        actor_id: "ak:did_core:web:alice.example".to_owned(),
         action: "ak.message.create".to_owned(),
         mfa_completed: true,
         mfa_requested: false,
@@ -286,12 +286,12 @@ async fn policy_server_integration_timeout_fails_closed() {
 
     let decision = check_with_policy_server(
         &engine,
-        "did:web:alice.example",
+        "ak:did_core:web:alice.example",
         None,
         "ak.event.read",
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
         REALM_ID,
-        Some("did:web:alice.example"),
+        Some("ak:did_core:web:alice.example"),
         &[],
         &[],
         Some(&client),

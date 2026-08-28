@@ -31,6 +31,8 @@ async fn submit(
     let state = depot.get_typed::<AppState>().expect("state injected");
     verify_inbound_peer_http_signature(state, req, true).await?;
     let source = required_header(req, "source-service-id")?;
+    let source_service_id = arkret_wire::DidCoreId::new(source.clone())
+        .map_err(|error| AppError::param_invalid(format!("Source-Service-ID invalid: {error}")))?;
     let key = required_header(req, "idempotency-key")?;
     let body = body.into_inner();
     if body.package.receipt.issuer.as_str() != source {
@@ -107,10 +109,9 @@ async fn submit(
 
     let request_hash = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(format!("erasure receipt request digest: {error}")))?;
-    let scope = format!("erasure-receipt:{source}:{}", state.service_id());
     if let Some(stored) = state
         .jobs()
-        .idempotency_record(&scope, &key)
+        .idempotency_record(&source_service_id, &key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -129,7 +130,7 @@ async fn submit(
     let lookup_key = format!("erasure-receipt:lookup:{}", body.package.receipt.receipt_id);
     let existing = state
         .jobs()
-        .idempotency_record(state.service_id(), &lookup_key)
+        .idempotency_record(&state.service_core_id(), &lookup_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let acceptance = if let Some(existing) = existing {
@@ -167,9 +168,9 @@ async fn submit(
     state
         .jobs()
         .store_idempotency_record(IdempotencyState {
-            principal_id: scope,
+            principal_id: source_service_id,
             idempotency_key: key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(&outcome)
@@ -198,7 +199,7 @@ async fn get(
     let lookup_key = format!("erasure-receipt:lookup:{}", receipt_id.into_inner());
     let stored = state
         .jobs()
-        .idempotency_record(state.service_id(), &lookup_key)
+        .idempotency_record(&state.service_core_id(), &lookup_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("erasure receipt not found"))?;
@@ -241,9 +242,9 @@ async fn persist_lookup(
     state
         .jobs()
         .store_idempotency_record(IdempotencyState {
-            principal_id: state.service_id().clone(),
+            principal_id: state.service_core_id(),
             idempotency_key: lookup_key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: package
                 .computed_receipt_digest()
                 .map_err(|error| AppError::internal(error.to_string()))?

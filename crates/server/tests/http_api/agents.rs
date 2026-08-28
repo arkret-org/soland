@@ -1691,7 +1691,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
         "{body}"
     );
     assert_eq!(
-        body["error"]["details"]["reason_code"], "agent_provision_allocation_missing",
+        body["reason_code"], "agent_provision_allocation_missing",
         "{body}"
     );
     assert!(

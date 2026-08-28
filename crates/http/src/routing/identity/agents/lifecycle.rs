@@ -211,9 +211,11 @@ async fn lookup_provision_allocation(
     controller_id: &str,
     key: &str,
 ) -> Result<Option<soland_services::jobs::IdempotencyState>, AppError> {
+    let controller_id = DidCoreId::new(controller_id.to_owned())
+        .map_err(|error| AppError::internal(format!("controller principal id invalid: {error}")))?;
     state
         .jobs()
-        .idempotency_record(controller_id, key)
+        .idempotency_record(&controller_id, key)
         .await
         .map_err(|error| {
             AppError::internal(format!("Agent provision allocation lookup failed: {error}"))
@@ -335,7 +337,7 @@ pub(super) async fn provision_agent(
             );
             let active_recovery_policy = state
                 .recovery_policies()
-                .active_policy(&controller_id)
+                .active_policy(controller_id.as_str())
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("controller recovery policy lookup failed: {error}"))
@@ -353,7 +355,7 @@ pub(super) async fn provision_agent(
                     .await?;
             let mut existing = state
                 .agent_pairings()
-                .agents_for_controller(&controller_id)
+                .agents_for_controller(controller_id.as_str())
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("agent slug conflict check failed: {error}"))
@@ -390,8 +392,12 @@ pub(super) async fn provision_agent(
             })?;
             let controller_authorization_ref =
                 crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&did)?;
-            let allocation_handle =
-                issue_allocation_handle(state, &controller_id, &operation_id, &idempotency_key)?;
+            let allocation_handle = issue_allocation_handle(
+                state,
+                controller_id.as_str(),
+                &operation_id,
+                &idempotency_key,
+            )?;
             let outcome = AgentProvisionOutcome::AwaitingControllerEvent {
                 agent_id,
                 did,
@@ -415,7 +421,7 @@ pub(super) async fn provision_agent(
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
                     principal_id: controller_id.clone(),
                     idempotency_key: key.clone(),
-                    service_id: state.service_id().clone(),
+                    service_id: state.service_core_id(),
                     request_hash: request_hash.clone(),
                     response_status: i32::from(StatusCode::OK.as_u16()),
                     response_body: serde_json::to_value(&prepared).map_err(|error| {
@@ -434,7 +440,7 @@ pub(super) async fn provision_agent(
                     ))
                 })?;
 
-            let landed = lookup_provision_allocation(state, &controller_id, &key)
+            let landed = lookup_provision_allocation(state, controller_id.as_str(), &key)
                 .await?
                 .ok_or_else(|| {
                     AppError::internal("Agent provision allocation disappeared after persist")
@@ -468,7 +474,7 @@ pub(super) async fn provision_agent(
             let allocation = lookup_provision_allocation(state, &controller_id, &prepare_key)
                 .await?
                 .filter(|record| {
-                    record.expires_at > now_utc && record.service_id == *state.service_id()
+                    record.expires_at > now_utc && record.service_id.as_str() == state.service_id()
                 })
                 .ok_or_else(allocation_missing)?;
             let prepared: PreparedAgentProvision =
@@ -793,9 +799,11 @@ pub(super) async fn provision_agent(
             state
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                    principal_id: controller_id.clone(),
+                    principal_id: DidCoreId::new(controller_id.clone()).map_err(|error| {
+                        AppError::internal(format!("controller principal id invalid: {error}"))
+                    })?,
                     idempotency_key: commit_key,
-                    service_id: state.service_id().clone(),
+                    service_id: state.service_core_id(),
                     request_hash,
                     response_status: i32::from(StatusCode::CREATED.as_u16()),
                     response_body: serde_json::to_value(&outcome).map_err(|error| {

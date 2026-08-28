@@ -538,7 +538,7 @@ mod tests {
             private_key(),
             &json!({
                 "key": private_key(),
-                "holder_id": "did:web:alice.example",
+                "holder_id": "ak:did_core:web:alice.example",
                 "body": encrypted_envelope(private_key()),
                 "updated_at": "2026-06-18T00:00:00.000Z"
             }),
@@ -549,7 +549,7 @@ mod tests {
             private_key(),
             &json!({
                 "key": private_key(),
-                "holder_id": "did:web:alice.example",
+                "holder_id": "ak:did_core:web:alice.example",
                 "body": {"collection_title": "Leaks"},
                 "updated_at": "2026-06-18T00:00:00.000Z"
             }),

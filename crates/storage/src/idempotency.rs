@@ -1,3 +1,5 @@
+use arkret_identifiers::DidCoreId;
+
 use super::{PersistenceResult, Utc, Value, async_trait};
 /// A persisted generic `Idempotency-Key` mapping (api-conventions.md §6).
 ///
@@ -11,9 +13,9 @@ use super::{PersistenceResult, Utc, Value, async_trait};
 /// least until the related Event is fully synced or expired").
 #[derive(Clone, Debug, PartialEq)]
 pub struct IdempotencyRecord {
-    pub principal_id: String,
+    pub principal_id: DidCoreId,
     pub idempotency_key: String,
-    pub service_id: String,
+    pub service_id: DidCoreId,
     pub request_hash: String,
     pub response_status: i32,
     pub response_body: Value,
@@ -27,7 +29,7 @@ pub trait IdempotencyStore: Send + Sync {
     /// Conflict against the request hash at the call site).
     async fn get(
         &self,
-        principal_id: &str,
+        principal_id: &DidCoreId,
         idempotency_key: &str,
     ) -> PersistenceResult<Option<IdempotencyRecord>>;
     /// Persist the FIRST response under a key. `ON CONFLICT DO NOTHING`: a

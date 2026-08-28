@@ -126,9 +126,11 @@ pub(crate) async fn contact_continuity_checkpoint(
     let request_hash = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(format!("checkpoint request digest: {error}")))?;
     let replay_key = format!("contact-checkpoint:{}", body.idempotency_key.as_str());
+    let principal_id = DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     if let Some(stored) = state
         .jobs()
-        .idempotency_record(&session.actor, &replay_key)
+        .idempotency_record(&principal_id, &replay_key)
         .await
         .map_err(|error| AppError::internal(format!("checkpoint replay lookup: {error}")))?
     {
@@ -248,9 +250,9 @@ pub(crate) async fn contact_continuity_checkpoint(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: session.actor,
+            principal_id,
             idempotency_key: replay_key,
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash,
             response_status: salvo::http::StatusCode::OK.as_u16().into(),
             response_body: serde_json::to_value(&outcome)

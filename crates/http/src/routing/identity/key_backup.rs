@@ -309,7 +309,7 @@ mod tests {
     fn duplicate_backup_id_rejects_cross_actor_overwrite() {
         let existing = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": "did:web:bob.example"
+            "actor_id": "ak:did_core:web:bob.example"
         });
 
         let err = key_backup_idempotent_retry(Some(&existing), ACTOR, &existing)

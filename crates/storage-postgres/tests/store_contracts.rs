@@ -1503,7 +1503,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     let now = chrono::Utc::now();
     let realm_id =
         event_derived_realm_id(format!("postgres-collision-contract-realm-{run_id}").as_bytes());
-    let actor_id = format!("did:web:collision-{run_id}.example");
+    let actor_id = format!("ak:did_core:web:collision-{run_id}.example");
     let incoming = CanonicalEventRecord {
         event_id: event_id.clone(),
         actor_id: actor_id.clone(),
@@ -1568,7 +1568,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     sql_query(
         "INSERT INTO federation_outbox \
          (id, peer_service_id, peer_url, endpoint, idempotency_key, payload_json, next_attempt_at, created_at) \
-         VALUES ($1, 'did:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
+         VALUES ($1, 'ak:did_core:web:peer.example', 'https://peer.example', '/events', $1, '{}', 0, 0)",
     )
     .bind::<Text, _>(&outbox_id)
     .execute(&mut conn)
@@ -1855,7 +1855,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     );
 
     let concurrent = PeerKeyPackageClaimLedgerRecord {
-        source_service_id: format!("did:web:{namespace}.example"),
+        source_service_id: format!("ak:did_core:web:{namespace}.example"),
         claim_request_id: format!("local-last-resort:{namespace}-concurrent"),
         request_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
             .to_owned(),

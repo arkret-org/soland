@@ -300,7 +300,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    assert_eq!(body["error"]["code"], "device_unauthorized", "{body}");
+    assert_eq!(problem_code(&body), "device_unauthorized", "{body}");
 
     let (status, body) = post_account_device_pair(
         state.clone(),
@@ -311,7 +311,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
-    assert_eq!(body["error"]["code"], "schema_violation", "{body}");
+    assert_eq!(problem_code(&body), "schema_violation", "{body}");
 
     let (status, body) = post_account_device_pair(
         state.clone(),
@@ -322,10 +322,7 @@ async fn account_device_pair_rejects_untrusted_authorizers_and_bad_proofs_body()
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(
-        body["error"]["code"], "cannot_pair_current_device",
-        "{body}"
-    );
+    assert_eq!(problem_code(&body), "cannot_pair_current_device", "{body}");
 
     let (status, body) = post_account_device_pair(
         state.clone(),
@@ -846,10 +843,8 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
-    assert_eq!(
-        denied.take_json::<Value>().await.unwrap()["error"]["code"],
-        "capability_denied"
-    );
+    let denied_body: Value = denied.take_json().await.unwrap();
+    assert_eq!(problem_code(&denied_body), "capability_denied");
 
     // Grant ak.call.join → the token is issued against the brand-new call even
     // though no signaling session or durable call cell exists.
@@ -932,7 +927,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .send(&app_from_state(state.clone()))
         .await;
     let focus_mismatch_body: Value = focus_mismatch.take_json().await.unwrap();
-    assert_eq!(focus_mismatch_body["error"]["code"], "focus_mismatch");
+    assert_eq!(problem_code(&focus_mismatch_body), "focus_mismatch");
 
     // A cell sealed to somebody else's media service: this deployment's signing
     // key does not project onto that `service_id`, so it must refuse to mint.
@@ -962,7 +957,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .await;
     let issuer_mismatch_body: Value = issuer_mismatch.take_json().await.unwrap();
     assert_eq!(
-        issuer_mismatch_body["error"]["code"],
+        problem_code(&issuer_mismatch_body),
         "token_issuer_unauthorised"
     );
 }
@@ -1002,7 +997,7 @@ async fn rtc_media_token_rejects_non_member_actor_body() {
         .await;
     assert_eq!(response.status_code, Some(StatusCode::FORBIDDEN));
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "capability_denied");
+    assert_eq!(problem_code(&body), "capability_denied");
 }
 
 #[test]
@@ -1047,7 +1042,7 @@ async fn rtc_media_token_requires_call_join_capability_body() {
         .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
     let denied_body: Value = denied.take_json().await.unwrap();
-    assert_eq!(denied_body["error"]["code"], "capability_denied");
+    assert_eq!(problem_code(&denied_body), "capability_denied");
 
     // After granting ak.call.join, the exchange is admitted (focus matches the
     // oldest-membership default).
@@ -1350,7 +1345,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         .await;
     assert_eq!(post_ban.status_code, Some(StatusCode::FORBIDDEN));
     let body: Value = post_ban.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "call_participant_removed");
+    assert_eq!(problem_code(&body), "call_participant_removed");
 }
 
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
@@ -1365,8 +1360,10 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
         vec![action.to_owned()],
         vec![],
     );
-    grant.issuer_principal_server_id = state.service_id().clone();
-    grant.subject_principal_server_id = Some(state.service_id().clone());
+    grant.issuer_principal_server_id =
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
+    grant.subject_principal_server_id =
+        Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
 }
 
@@ -1762,10 +1759,7 @@ async fn call_signal_not_delivered_after_ttl_expiry_body() {
     .await;
     assert_eq!(over_ceiling.status_code, Some(StatusCode::BAD_REQUEST));
     let over_ceiling_body: Value = over_ceiling.take_json().await.unwrap();
-    assert_eq!(
-        over_ceiling_body["error"]["code"],
-        "signal_ttl_out_of_range"
-    );
+    assert_eq!(problem_code(&over_ceiling_body), "signal_ttl_out_of_range");
 }
 
 /// Restates `ephemeral_call_signal_without_send_capability_is_denied`.

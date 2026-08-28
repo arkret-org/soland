@@ -99,14 +99,13 @@ pub(super) fn project_search_users_row(
         .and_then(Value::as_str)
         .and_then(|handle| canonicalize_handle_for_service(handle, &service_domain))
         .unwrap_or_default();
-    let did = actor
-        .get("did")
-        .or_else(|| actor.get("subject"))
+    let principal_id = actor
+        .get("actor_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("directory user search row missing DID"))?;
+        .ok_or_else(|| AppError::internal("directory user search row missing actor_id"))?;
     Ok(UserSearchOutcome {
         handle: (!canonical.is_empty()).then_some(canonical),
-        principal_id: Some(directory_actor_core_id(did)?),
+        principal_id: Some(directory_actor_core_id(principal_id)?),
         display_name: actor
             .get("display_name")
             .and_then(Value::as_str)

@@ -701,7 +701,7 @@ mod tests {
             keypackage_ref: format!("ak:mls:keypackage:{id}"),
             keypackage_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-            actor_id: "did:web:bob.example".to_owned(),
+            actor_id: "ak:did_core:web:bob.example".to_owned(),
             device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
             endpoint_verification_method: None,
             intended_realm_id: None,
@@ -727,7 +727,7 @@ mod tests {
 
     fn ledger(outcome: &str) -> PeerKeyPackageClaimLedgerRecord {
         PeerKeyPackageClaimLedgerRecord {
-            source_service_id: "did:web:alpha.example".to_owned(),
+            source_service_id: "ak:did_core:web:alpha.example".to_owned(),
             claim_request_id: "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
             request_digest:
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
@@ -844,7 +844,7 @@ mod tests {
         );
         assert!(
             store
-                .get_peer_claim("did:web:alpha.example", "AAAAAAAAAAAAAAAAAAAAAA")
+                .get_peer_claim("ak:did_core:web:alpha.example", "AAAAAAAAAAAAAAAAAAAAAA")
                 .await
                 .unwrap()
                 .is_none()
@@ -879,7 +879,7 @@ mod tests {
         );
         assert!(
             store
-                .get_peer_claim("did:web:alpha.example", "expiry-drift-request")
+                .get_peer_claim("ak:did_core:web:alpha.example", "expiry-drift-request")
                 .await
                 .unwrap()
                 .is_none()
@@ -954,7 +954,7 @@ mod tests {
             None
         );
         let stored_audit = store
-            .get_peer_claim("did:web:alpha.example", "local-last-resort:fixture")
+            .get_peer_claim("ak:did_core:web:alpha.example", "local-last-resort:fixture")
             .await
             .unwrap()
             .unwrap();
@@ -1023,7 +1023,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .get_peer_claim("did:web:alpha.example", "BBBBBBBBBBBBBBBBBBBBBB")
+                .get_peer_claim("ak:did_core:web:alpha.example", "BBBBBBBBBBBBBBBBBBBBBB")
                 .await
                 .unwrap()
                 .unwrap()
@@ -1032,7 +1032,7 @@ mod tests {
         );
         assert_eq!(
             store
-                .get_peer_claim("did:web:alpha.example", "CCCCCCCCCCCCCCCCCCCCCC")
+                .get_peer_claim("ak:did_core:web:alpha.example", "CCCCCCCCCCCCCCCCCCCCCC")
                 .await
                 .unwrap()
                 .unwrap()

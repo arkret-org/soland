@@ -29,7 +29,7 @@ async fn external_bearer_without_dpop_is_rejected_body() {
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["ok"], false);
-    assert_eq!(body["error"]["code"], "unauthenticated");
+    assert_eq!(problem_code(&body), "unauthenticated");
 }
 
 #[test]
@@ -308,8 +308,8 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after_body() {
 
     let limited: Value = second.take_json().await.unwrap();
     assert_eq!(limited["ok"], false);
-    assert_eq!(limited["error"]["code"], "rate_limited");
-    assert!(limited["error"]["retry_after_ms"].as_u64().unwrap() > 0);
+    assert_eq!(problem_code(&limited), "rate_limited");
+    assert!(limited["retry_after_ms"].as_u64().unwrap() > 0);
     assert!(
         limited["request_id"]
             .as_str()
@@ -334,7 +334,7 @@ async fn framework_errors_use_arkret_error_envelope_body() {
         .await
         .unwrap();
     assert_eq!(not_found["ok"], false);
-    assert_eq!(not_found["error"]["code"], "unrecognized_endpoint");
+    assert_eq!(problem_code(&not_found), "unrecognized_endpoint");
 
     let method_not_allowed: Value = TestClient::post("http://server/_arkret/describe")
         .send(&app())
@@ -343,7 +343,7 @@ async fn framework_errors_use_arkret_error_envelope_body() {
         .await
         .unwrap();
     assert_eq!(method_not_allowed["ok"], false);
-    assert_eq!(method_not_allowed["error"]["code"], "method_not_allowed");
+    assert_eq!(problem_code(&method_not_allowed), "method_not_allowed");
 }
 
 #[test]
@@ -366,9 +366,9 @@ async fn protected_endpoints_reject_query_auth_material_body() {
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["ok"], false);
-    assert_eq!(body["error"]["code"], "unauthenticated");
+    assert_eq!(problem_code(&body), "unauthenticated");
     assert_eq!(
-        body["error"]["message"],
+        body["detail"],
         "auth material in query strings is not allowed"
     );
 }

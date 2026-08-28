@@ -95,7 +95,7 @@ fn media_plaintext_authority_requires_matching_service_and_data_class() {
         }),
         json!({
             "plaintext_visible_services": [{
-                "service_id": "did:web:other.example",
+                "service_id": "ak:did_core:web:other.example",
                 "data_classes": ["media_plaintext"]
             }]
         }),

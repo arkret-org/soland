@@ -280,22 +280,22 @@ fn fixture_pcr_founding_device_descriptor(
 
 /// Deterministic, fully content-bound PCR create Event shared by fixtures that
 /// need to name the PCR before seeding its accepted projection.
-pub fn fixture_principal_control_realm_create(principal_id: &str) -> arkret_wire::AuthoredEvent {
+pub fn fixture_principal_control_realm_create(principal_did: &str) -> arkret_wire::AuthoredEvent {
     fixture_principal_control_realm_create_for_server(
-        principal_id,
+        principal_did,
         crate::fixture_principal_server_id(),
     )
 }
 
 /// Deterministic PCR create Event for the exact Principal Server authority.
 pub fn fixture_principal_control_realm_create_for_server(
-    principal_id: &str,
+    principal_did: &str,
     principal_server_id: arkret_identifiers::DidCoreId,
 ) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
         .with_timezone(&chrono::Utc);
-    let principal_did = Did::new(principal_id.to_owned()).expect("fixture principal DID");
+    let principal_did = Did::new(principal_did.to_owned()).expect("fixture principal DID");
     let principal =
         arkret_wire::project_did_to_core_id(&principal_did).expect("fixture principal projection");
     arkret_bootstrap::build_self_principal_pcr_create(

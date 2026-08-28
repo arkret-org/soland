@@ -99,7 +99,7 @@ async fn account_data_accepts_fresh_principal_control_realm_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(denied["error"]["code"], "capability_denied", "{denied}");
+    assert_eq!(problem_code(&denied), "capability_denied", "{denied}");
 }
 
 #[test]
@@ -330,7 +330,8 @@ async fn encrypted_account_data_requires_standard_envelope_metadata_body() {
     )
     .await;
     assert_eq!(
-        rejected["error"]["code"], "schema_violation",
+        problem_code(&rejected),
+        "schema_violation",
         "invalid encrypted account_data response: {rejected}"
     );
 
@@ -428,7 +429,8 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier_body() {
     .await;
 
     assert_eq!(
-        rejected["error"]["code"], "schema_violation",
+        problem_code(&rejected),
+        "schema_violation",
         "plaintext realm remark carrier must be rejected: {rejected}"
     );
 }

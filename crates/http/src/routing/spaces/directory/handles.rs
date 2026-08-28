@@ -544,9 +544,10 @@ pub(super) async fn resolve_handle(
             // default to the explicit `audience` param, falling back to
             // `realm_id` for membership-builder resolves, then `requester`.
             let audience = resolve_handle_audience(&body, state.service_id());
-            let did = actor["did"].as_str().unwrap_or_default().to_owned();
+            let principal_id = actor["actor_id"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
-                signed_handle_claim(state, &lookup.canonical, &did, &audience, true).await?;
+                signed_handle_claim(state, &lookup.canonical, &principal_id, &audience, true)
+                    .await?;
             let recipient_service_id = handle_claim
                 .member_delivery_binding
                 .as_ref()
@@ -557,7 +558,7 @@ pub(super) async fn resolve_handle(
                 state,
                 body.intent,
                 body.requester.as_ref(),
-                &did,
+                &principal_id,
                 recipient_service_id,
                 state.service_id().as_str(),
                 &handle_claim,
@@ -575,7 +576,7 @@ pub(super) async fn resolve_handle(
                 .map(|handle| handle.canonical().to_owned())
                 .ok_or_else(|| AppError::internal("signed handle claim is missing handle"))?;
             json_ok(local_handle_resolution_outcome(
-                did,
+                principal_id,
                 canonical_handle,
                 audience,
                 handle_claim,
@@ -662,10 +663,15 @@ pub(super) async fn signed_handle_claim(
         ))
     })?;
     let signer_did = state.service_resolution_commitment().did.clone();
+    let signer_id = DidCoreId::new(service_id).map_err(|err| {
+        AppError::internal(format!(
+            "invalid serving service id for handle claim: {err}"
+        ))
+    })?;
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
-        recipient_service_id: signer_did.clone(),
+        recipient_service_id: signer_id.clone(),
         recipient_service_kind: RecipientServiceKind::PrincipalServer,
         binding_source: HandleHintBindingSource::Explicit,
         delivery_modes: BTreeSet::from([
@@ -683,8 +689,8 @@ pub(super) async fn signed_handle_claim(
         handle: Some(handle),
         handle_aliases: vec![handle_alias],
         subject: Some(subject),
-        issuer: Some(signer_did.clone()),
-        issuer_service_id: Some(signer_did.clone()),
+        issuer: Some(signer_id.clone()),
+        issuer_service_id: Some(signer_id),
         binding_state: Some(HandleBindingState::Verified),
         claim_kind: Some(HandleClaimKind::HandleBinding),
         visibility: Some(HandleVisibility::Public),
@@ -786,7 +792,7 @@ pub(super) async fn list_handles_for_subject(
     let cursor_context = CursorBindingContext::new(
         subject.as_str(),
         None,
-        state.service_id().clone(),
+        state.service_core_id(),
         filter_digest,
     );
     let start = list_handles_cursor_start(state, body.cursor.as_deref(), &cursor_context).await?;
@@ -795,7 +801,7 @@ pub(super) async fn list_handles_for_subject(
 
     let mut generated_claim = None;
     for actor in demo_actors(state).await {
-        if actor.get("did").and_then(Value::as_str) != Some(subject.as_str()) {
+        if actor.get("actor_id").and_then(Value::as_str) != Some(subject.as_str()) {
             continue;
         }
         if !actor_visible_to(state, &actor, session.as_ref()).await {
@@ -946,9 +952,9 @@ async fn mint_list_handles_cursor(
         .sync()
         .upsert_cursor(&soland_services::sync::CursorState {
             handle: record.handle,
-            principal_id: Some(record.context.principal_id),
+            binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id,
+            service_id: record.context.service_id.to_string(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),

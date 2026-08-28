@@ -61,12 +61,12 @@ const BACKOFF_CAP_SECS: u64 = 300;
 /// deactivation fanout before erasing.
 const FANOUT_LIFECYCLE_STATES: [&str; 2] = ["deactivated", "erasure_pending"];
 
-fn completion_scope(state: &AppState) -> String {
-    format!("deactivation-push-fanout:{}", state.service_id())
+fn completion_principal_id(state: &AppState) -> arkret_wire::DidCoreId {
+    state.service_core_id()
 }
 
 fn completion_key(did: &str) -> String {
-    format!("{did}:completed")
+    format!("deactivation-push-fanout:{did}:completed")
 }
 
 /// Deterministic first-attempt fanout id: stable across process restarts so a
@@ -96,7 +96,7 @@ fn gateway_fanout_url(state: &AppState) -> Option<String> {
 async fn fanout_completed(state: &AppState, did: &str) -> Result<bool, String> {
     state
         .jobs()
-        .idempotency_record(&completion_scope(state), &completion_key(did))
+        .idempotency_record(&completion_principal_id(state), &completion_key(did))
         .await
         .map(|record| record.is_some())
         .map_err(|error| format!("fanout completion lookup: {error}"))
@@ -112,9 +112,9 @@ async fn store_completion(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: completion_scope(state),
+            principal_id: completion_principal_id(state),
             idempotency_key: completion_key(did),
-            service_id: state.service_id().clone(),
+            service_id: state.service_core_id(),
             request_hash: base_fanout_id(state.service_id(), did),
             response_status: 200,
             response_body: serde_json::to_value(ack)

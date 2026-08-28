@@ -463,7 +463,7 @@ mod tests {
     fn corrupt_record_is_skipped_without_hiding_valid_snapshot_entries() {
         let subject = MemberIdentitySubjectKey {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
+            actor_id: "ak:did_core:web:alice.example".to_owned(),
             segment: "member_identity".to_owned(),
         };
         let mut registry = MemberIdentityRegistry::new();
@@ -486,7 +486,7 @@ mod tests {
                     "payload": {
                         "identity_payload": {
                             "member_identity": {
-                                "subject_id": "did:web:alice.example"
+                                "subject_id": "ak:did_core:web:alice.example"
                             }
                         }
                     }

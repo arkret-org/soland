@@ -798,7 +798,7 @@ mod tests {
         ) -> ServiceResult<Option<AgentController>> {
             Ok(
                 (agent_id == "did:web:agent.alice.example").then(|| AgentController {
-                    controller_id: "did:web:alice.example".to_owned(),
+                    controller_id: "ak:did_core:web:alice.example".to_owned(),
                 }),
             )
         }

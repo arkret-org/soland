@@ -148,7 +148,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
     Ok(Some(
         soland_services::federation::FederationDeliveryRecord {
             id: Uuid::new_v4().to_string(),
-            peer_service_id: recipient_service_id.to_owned(),
+            peer_service_id: contact_address.recipient_service_id.clone(),
             peer_url: Some(peer_url.trim_end_matches('/').to_owned()),
             endpoint: "/_arkret/peer/contacts".to_owned(),
             idempotency_key: idempotency_key.to_owned(),

@@ -1025,7 +1025,7 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
 
     async fn idempotency_record(
         &self,
-        principal_id: &str,
+        principal_id: &arkret_identifiers::DidCoreId,
         key: &str,
     ) -> crate::ServiceResult<Option<crate::jobs::IdempotencyState>> {
         Ok(self
@@ -1113,7 +1113,7 @@ fn persistence_idempotency(
 fn application_cursor_state(record: soland_storage::SyncCursorRecord) -> crate::sync::CursorState {
     crate::sync::CursorState {
         handle: record.handle,
-        principal_id: record.principal_id,
+        binding_subject: record.binding_subject,
         device_id: record.device_id,
         service_id: record.service_id,
         filter_digest: record.filter_digest,
@@ -1128,7 +1128,7 @@ fn application_cursor_state(record: soland_storage::SyncCursorRecord) -> crate::
 fn persistence_cursor_state(record: &crate::sync::CursorState) -> soland_storage::SyncCursorRecord {
     soland_storage::SyncCursorRecord {
         handle: record.handle.clone(),
-        principal_id: record.principal_id.clone(),
+        binding_subject: record.binding_subject.clone(),
         device_id: record.device_id.clone(),
         service_id: record.service_id.clone(),
         filter_digest: record.filter_digest.clone(),
@@ -1189,7 +1189,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
 
     async fn prune_stream_superseded(
         &self,
-        principal_id: &str,
+        binding_subject: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
@@ -1198,7 +1198,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .0
             .sync_cursors()
             .prune_stream_superseded(
-                principal_id,
+                binding_subject,
                 device_id,
                 filter_digest,
                 presented_issued_at_ms,

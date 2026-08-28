@@ -265,13 +265,13 @@ pub async fn requeue_dead_letter(
     // intentionally does not pin a handover-era route.
     let peer_target = super::federation::resolved_peer_target(
         state,
-        &original.delivery.peer_service_id,
+        original.delivery.peer_service_id.as_str(),
         "principal_server",
         true,
     )
     .await?;
     if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
-        &original.delivery.peer_service_id,
+        original.delivery.peer_service_id.as_str(),
         Some(&peer_target.trust_domain),
     ) {
         return Err(format!(

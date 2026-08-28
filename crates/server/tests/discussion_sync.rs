@@ -64,6 +64,11 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
         "http://server/_arkret/self/account/subscribe?{query}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
+    .add_header(
+        "Arkret-Operation",
+        arkret_wire::generated::operation_ids::ServiceOperationId::SELF_ACCOUNT_STREAM_SUBSCRIBE_V1,
+        true,
+    )
     .send(&app_from_state(state))
     .await
     .take_string()
@@ -220,6 +225,11 @@ async fn admit_member(
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {owner_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -316,6 +326,11 @@ async fn accept_invite(
     .await;
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -353,6 +368,11 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -503,6 +523,11 @@ async fn send_circle_scoped_encrypted_message(
     .await;
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -614,6 +639,11 @@ async fn submit_projection_event_result_with_causal_refs(
         .to_owned();
     let sent: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT_V1,
+            true,
+        )
         .json(&event)
         .send(&app_from_state(state))
         .await
@@ -654,6 +684,11 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_EVENTS_READ_FRONTIER_V1,
+                true,
+            )
             .send(&app_from_state(state.clone()))
             .await
             .take_json()
@@ -842,6 +877,11 @@ async fn since_join_hides_pre_join_messages_from_sync_and_events_query_body() {
     let events: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
         .add_header("authorization", format!("Bearer {bob}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1039,6 +1079,11 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages_body() {
     let events: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
         .add_header("authorization", format!("Bearer {bob}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1149,6 +1194,11 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 
     let bob_read: Value = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {bob}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_RESOURCE_GET_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1198,6 +1248,11 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
 
     let mallory_read = TestClient::get(format!("http://server/_arkret/self/events/{event_id}"))
         .add_header("authorization", format!("Bearer {mallory}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::generated::operation_ids::ServiceOperationId::SELF_EVENTS_RESOURCE_GET_V1,
+            true,
+        )
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(mallory_read.status_code.unwrap().as_u16(), 404);

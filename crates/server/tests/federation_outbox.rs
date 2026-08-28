@@ -41,10 +41,10 @@ use soland_services::service_route::{
 use soland_storage::FederationOutboxState;
 use soland_test_support::AppStateTestExt as _;
 
-const PEER_DID: &str = "did:web:peer.example";
-const PEER_DID: &str = "ak:did_core:web:peer.example";
-const DENIED_PEER_DID: &str = "did:web:denied-peer.example";
-const DENIED_PEER_DID: &str = "ak:did_core:web:denied-peer.example";
+const PEER_SERVICE_DID: &str = "did:web:peer.example";
+const PEER_SERVICE_ID: &str = "ak:did_core:web:peer.example";
+const DENIED_PEER_SERVICE_DID: &str = "did:web:denied-peer.example";
+const DENIED_PEER_SERVICE_ID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
 const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[],"service_binding_ref":{"delivery_binding_frontier":[],"destination_service_kind":"principal_server","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
@@ -181,13 +181,18 @@ fn verified_peer_route(
 }
 
 fn standard_peer_route(base_url: &str) -> VerifiedPeerRoute {
-    verified_peer_route(PEER_DID, PEER_DID, base_url, "ak:trust_domain:peer.example")
+    verified_peer_route(
+        PEER_SERVICE_DID,
+        PEER_SERVICE_ID,
+        base_url,
+        "ak:trust_domain:peer.example",
+    )
 }
 
 fn denied_peer_route() -> VerifiedPeerRoute {
     verified_peer_route(
-        DENIED_PEER_DID,
-        DENIED_PEER_DID,
+        DENIED_PEER_SERVICE_DID,
+        DENIED_PEER_SERVICE_ID,
         "http://169.254.169.254",
         "ak:trust_domain:denied-peer.example",
     )
@@ -445,7 +450,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -486,7 +491,7 @@ async fn permanent_4xx_routes_to_dead_letter() {
     );
     let dead = &dead_letters[0];
     assert_eq!(dead.outbox_id, row.id);
-    assert_eq!(dead.peer_service_id, PEER_DID);
+    assert_eq!(dead.peer_service_id.as_str(), PEER_SERVICE_ID);
     assert_eq!(dead.last_http_status, Some(404));
     assert_eq!(dead.reason, "terminal_http_status");
     assert!(
@@ -521,7 +526,7 @@ async fn retryable_5xx_keeps_the_same_transport_identity_and_backs_off() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -574,7 +579,7 @@ async fn peer_retry_after_is_a_floor_the_dispatcher_never_undercuts() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -612,7 +617,7 @@ async fn dependency_missing_supersedes_the_attempt_with_a_fresh_key() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -676,7 +681,7 @@ async fn egress_policy_denial_is_policy_suppressed_rather_than_delivered() {
     let row = enqueue_outbound(
         &state,
         "http://169.254.169.254",
-        DENIED_PEER_DID,
+        DENIED_PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -735,7 +740,7 @@ async fn persisted_peer_url_is_not_service_resolution_evidence() {
     let row = enqueue_outbound(
         &state,
         "http://127.0.0.1:9",
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -772,7 +777,7 @@ async fn a_stale_lease_holder_cannot_overwrite_the_new_holders_state() {
     let row = enqueue_outbound(
         &state,
         "http://127.0.0.1:9",
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -855,7 +860,7 @@ async fn operator_requeue_mints_a_new_intent_and_records_the_audit() {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         "/_soland/peer/federation/operations",
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -1267,7 +1272,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
     let first = enqueue_outbound(
         &state,
         "http://127.0.0.1:9",
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -1277,7 +1282,7 @@ async fn outbound_enqueue_is_idempotent_for_same_peer_and_key() {
     let second = enqueue_outbound(
         &state,
         "http://127.0.0.1:9",
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -1330,7 +1335,7 @@ async fn capture_signed_request() -> CapturedSignedRequestBody {
     let row = enqueue_outbound(
         &state,
         &peer_url,
-        PEER_DID,
+        PEER_SERVICE_ID,
         FEDERATION_ENDPOINT,
         IDEMPOTENCY_KEY,
         PAYLOAD_JSON,
@@ -1430,6 +1435,9 @@ fn http_signature_verifies_with_headers(
          \"source-trust-domain\": {source_trust_domain}\n\
          \"destination-trust-domain\": {destination_trust_domain}",
     );
+    if let Some(operation) = headers.get("arkret-operation") {
+        signature_base.push_str(&format!("\n\"arkret-operation\": {operation}"));
+    }
     if let Some(idempotency_key) = headers.get("idempotency-key") {
         signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
     }

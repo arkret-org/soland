@@ -60,7 +60,7 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
             // Contract: security-relevant fields are answered
             // authoritatively by soland (never fabricated defaults).
             assert!(actor["id"].as_str().is_some(), "row without id: {actor}");
-            assert!(actor["did"].as_str().is_some());
+            assert!(actor["principal_id"].as_str().is_some());
             assert!(
                 actor["status"].as_str().is_some(),
                 "lifecycle status must be reported: {actor}"

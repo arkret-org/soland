@@ -475,8 +475,8 @@ mod tests {
     fn pending_agent() -> AgentPrincipalRecord {
         let now = Utc::now();
         let mut record = AgentPrincipalRecord::new(
-            "did:web:agent.example".to_owned(),
-            "did:web:controller.example".to_owned(),
+            "ak:did_core:web:agent.example".to_owned(),
+            "ak:did_core:web:controller.example".to_owned(),
             "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
             DidUrl::new("did:web:agent.example#controller").unwrap(),
             AgentLifecycleState::Active,
@@ -519,7 +519,7 @@ mod tests {
         let store = MemoryAgentParticipationStore::new();
         let record = |version| {
             serde_json::json!({
-                "agent_id": "did:web:agent.example",
+                "agent_id": "ak:did_core:web:agent.example",
                 "scope_key": "realm:01904100-0000-7000-8000-000000000001",
                 "version": version
             })
@@ -551,7 +551,7 @@ mod tests {
         );
 
         let rows = store
-            .list_selections("did:web:agent.example")
+            .list_selections("ak:did_core:web:agent.example")
             .await
             .unwrap();
         assert_eq!(rows.len(), 1);
@@ -563,7 +563,7 @@ mod tests {
         let store = MemoryAgentStore::default();
         store.put(pending_agent()).await.unwrap();
         let intent = AgentPairingCommitIntent {
-            agent_id: "did:web:agent.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
             runtime_key_binding_digest: "sha256:binding".to_owned(),
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
@@ -600,7 +600,7 @@ mod tests {
                 .is_none()
         );
         let stored = store
-            .get("did:web:agent.example")
+            .get("ak:did_core:web:agent.example")
             .await
             .unwrap()
             .unwrap()
@@ -622,7 +622,7 @@ mod tests {
         let store = MemoryAgentStore::default();
         store.put(pending_agent()).await.unwrap();
         let activation = AgentRuntimeActivation {
-            agent_id: "did:web:agent.example".to_owned(),
+            agent_id: "ak:did_core:web:agent.example".to_owned(),
             approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
             runtime_key_binding_digest: "sha256:binding".to_owned(),
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
@@ -661,7 +661,11 @@ mod tests {
                 .unwrap()
         );
 
-        let stored = store.get("did:web:agent.example").await.unwrap().unwrap();
+        let stored = store
+            .get("ak:did_core:web:agent.example")
+            .await
+            .unwrap()
+            .unwrap();
         assert!(stored.pending_pairing_commit_intent.is_none());
         assert_eq!(
             stored.paired_request_digest.as_deref(),
@@ -687,7 +691,7 @@ mod tests {
             request_key: "repair:request-1:recipient".to_owned(),
             request_digest: "sha256:repair-request".to_owned(),
             snapshot: AgentRuntimeSnapshotGuard {
-                agent_id: "did:web:agent.example".to_owned(),
+                agent_id: "ak:did_core:web:agent.example".to_owned(),
                 verification_method: "did:web:agent.example#key-1".to_owned(),
                 authorized_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
                     .to_owned(),
@@ -709,7 +713,7 @@ mod tests {
         // the already durable result.
         let replacement_at = {
             let mut agents = store.data.lock();
-            let agent = agents.get_mut("did:web:agent.example").unwrap();
+            let agent = agents.get_mut("ak:did_core:web:agent.example").unwrap();
             agent.updated_at += chrono::Duration::seconds(1);
             agent.authorized_verification_method = Some("did:web:agent.example#key-2".to_owned());
             agent.authorized_event_ref =

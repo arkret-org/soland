@@ -481,6 +481,6 @@ mod tests {
             "did:web:unregistered-applet.invalid#applet-webhook",
         )
         .expect_err("an unregistered DID method must fail closed in development mode");
-        assert_eq!(error.wire_code(), "unauthenticated");
+        assert_eq!(error.wire_code(), "http_signature_invalid");
     }
 }
