@@ -36,6 +36,16 @@ use soland_http::state::AppState;
 use soland_test_support::AppStateTestExt as _;
 use url::Url;
 
+/// The durable Applet installation key is `(applet_id, effective_scope_key)`
+/// since Applet identity was split from scoped installations. Tests derive the
+/// scope key the same way production does instead of hardcoding a digest.
+fn realm_scope_key(realm_id: &str) -> String {
+    soland_storage::applet_effective_scope_key(&ScopeRef::Realm {
+        realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+    })
+    .expect("canonical Applet effective scope key")
+}
+
 /// Derived, never copied: the demo Realm id is `retype(genesis.event_id)` and
 /// moves with any `arkret-spec` change that touches the genesis payload.
 fn demo_realm_id() -> &'static str {
@@ -979,16 +989,21 @@ async fn applet_protocol_describe_smoke() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state);
 
-    let ping: Value = TestClient::get("http://server/_arkret/edge/applet/ping")
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(ping["ok"], json!(true));
+    // applet-integration.md 7 fixes the ping response fields; there is no
+    // free-form `ok` flag to assert.
+    let ping: arkret_models_integration::AppletPingOutcome =
+        TestClient::get("http://server/_arkret/edge/applet/ping")
+            .add_header("Arkret-Operation", "ak.edge.applet.read.ping.v1", true)
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(ping.protocol_version, arkret_wire::PROTOCOL_VERSION);
 
     let describe: arkret_models_discovery::ServiceDescribe =
         TestClient::get("http://server/_arkret/edge/applet/describe")
+            .add_header("Arkret-Operation", "ak.edge.applet.read.describe.v1", true)
             .send(&app)
             .await
             .take_json()
@@ -1019,6 +1034,11 @@ async fn applet_transaction_requires_signature_before_typed_body_validation() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state);
     let mut response = TestClient::post("http://server/_arkret/edge/applet/transactions")
+        .add_header(
+            "Arkret-Operation",
+            "ak.edge.applet.command.transaction.v1",
+            true,
+        )
         .add_header("Authorization", "Bearer bearer-only", true)
         .add_header("Idempotency-Key", "missing-signature-order", true)
         .json(&json!({
@@ -1030,7 +1050,10 @@ async fn applet_transaction_requires_signature_before_typed_body_validation() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let error: Value = response.take_json().await.unwrap();
-    assert_eq!(error["reason"], json!("http_signature_required"));
+    assert_eq!(
+        error["type"],
+        json!("https://arkret.org/problems/http_signature_required")
+    );
 }
 
 #[tokio::test]
@@ -1078,7 +1101,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let stored_applet = state
         .test_persistence()
         .applets()
-        .get(&applet_id)
+        .get(&applet_id, &realm_scope_key(realm_id))
         .await
         .unwrap()
         .expect("applet record is durable");
@@ -1293,7 +1316,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
         state
             .test_persistence()
             .applets()
-            .get(&applet_id)
+            .get(&applet_id, &realm_scope_key(realm_id))
             .await
             .unwrap()
             .unwrap()["ghosts"]
@@ -1606,6 +1629,11 @@ async fn extension_actor_view(app: &salvo::Service, actor_id: &str) -> Value {
     TestClient::get(format!(
         "http://server/_arkret/edge/applet/actors/{actor_id}"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.edge.applet.actor.read.resolve.v1",
+        true,
+    )
     .send(app)
     .await
     .take_json()
@@ -1678,6 +1706,11 @@ async fn post_signed_applet_message_transaction(
         base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
     );
     TestClient::post("http://server/_arkret/edge/applet/transactions")
+        .add_header(
+            "Arkret-Operation",
+            "ak.edge.applet.command.transaction.v1",
+            true,
+        )
         .add_header("Content-Digest", content_digest, true)
         .add_header("Source-Service-ID", package.service_id.to_string(), true)
         .add_header("Destination-Service-ID", request.state.service_id(), true)
@@ -1740,6 +1773,11 @@ async fn post_signed_ghost_provision(
     TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.applet.ghost.command.provision.v1",
+        true,
+    )
     .add_header("Content-Digest", content_digest, true)
     .add_header("Source-Service-ID", package.service_id.to_string(), true)
     .add_header("Destination-Service-ID", state.service_id(), true)
@@ -1794,6 +1832,11 @@ async fn post_signed_ghost_preview(
     TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/ghosts/provision/preview"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.applet.ghost.command.preview.v1",
+        true,
+    )
     .add_header("Content-Digest", content_digest, true)
     .add_header("Source-Service-ID", package.service_id.to_string(), true)
     .add_header("Destination-Service-ID", state.service_id(), true)
@@ -2101,7 +2144,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let stored_applet = state
         .test_persistence()
         .applets()
-        .get(&applet_id)
+        .get(&applet_id, &realm_scope_key(realm_id))
         .await
         .unwrap()
         .expect("applet record remains durable after ghost provision");
@@ -2110,6 +2153,11 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let revoke_preview: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke/preview"
     ))
+    .add_header(
+        "Arkret-Operation",
+        "ak.self.applet.revoke.command.preview.v1",
+        true,
+    )
     .add_header("Authorization", format!("Bearer {token}"), true)
     .json(&json!({
         "effective_scope": {"kind": "realm", "realm_id": realm_id},
@@ -2146,6 +2194,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let revoke: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke"
     ))
+    .add_header("Arkret-Operation", "ak.self.applet.command.revoke.v1", true)
     .add_header("Authorization", format!("Bearer {token}"), true)
     .add_header("Idempotency-Key", revoke_key.clone(), true)
     .json(&revoke_body)
@@ -2164,6 +2213,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let replay: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke"
     ))
+    .add_header("Arkret-Operation", "ak.self.applet.command.revoke.v1", true)
     .add_header("Authorization", format!("Bearer {token}"), true)
     .add_header("Idempotency-Key", revoke_key.clone(), true)
     .json(&revoke_body)
@@ -2180,6 +2230,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let conflict: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke"
     ))
+    .add_header("Arkret-Operation", "ak.self.applet.command.revoke.v1", true)
     .add_header("Authorization", format!("Bearer {token}"), true)
     .add_header("Idempotency-Key", revoke_key, true)
     .json(&conflicting_body)
@@ -2216,7 +2267,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let revoked_applet = state
         .test_persistence()
         .applets()
-        .get(&applet_id)
+        .get(&applet_id, &realm_scope_key(realm_id))
         .await
         .unwrap()
         .expect("revoked applet record remains durable");
@@ -2264,7 +2315,12 @@ async fn tsp_local_stub_routes_are_not_mounted() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(rejected["error"]["code"], json!("unrecognized_endpoint"));
+    // api-conventions.md 5: non-2xx replies are RFC 9457 Problem Details, so the
+    // discriminator is the root `type`, not a nested `error.code` envelope.
+    assert_eq!(
+        rejected["type"],
+        json!("https://arkret.org/problems/unrecognized_endpoint")
+    );
 }
 
 fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
@@ -2885,6 +2941,7 @@ async fn install_applet_package_with_approved_actions(
     .await;
     let target_principal_server_id = state.service_id().clone();
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
+        .add_header("Arkret-Operation", "ak.self.applet.install.command.preview.v1", true)
         .add_header("Authorization", format!("Bearer {token}"), true)
         .json(&json!({
             "applet_package": applet_package,
@@ -2976,6 +3033,11 @@ async fn install_applet_package_with_approved_actions(
     )
     .unwrap();
     let mut commit: Value = TestClient::post("http://server/_arkret/self/applets/install")
+        .add_header(
+            "Arkret-Operation",
+            "ak.self.applet.command.install.v1",
+            true,
+        )
         .add_header("Authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
         .json(&json!({
