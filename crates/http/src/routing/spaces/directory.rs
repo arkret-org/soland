@@ -189,7 +189,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         ],
         supported_features: Vec::new(),
         calendar_tzdb_versions: Vec::new(),
-        auth_metadata: arkret_models_discovery::service_description::AuthMetadata::minimal("public_no_auth"),
+        auth_metadata: arkret_models_discovery::service_description::AuthMetadata::minimal(),
         limits: Default::default(),
         plaintext_visibility: arkret_models_discovery::service_description::PlaintextVisibility::none(),
         privacy_derivation: None,

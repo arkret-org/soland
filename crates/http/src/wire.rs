@@ -446,12 +446,9 @@ pub fn describe(
         });
     }
 
+    // `development_mode` is the registered top-level ServiceDescribe field for
+    // this fact; auth_metadata MUST NOT carry a second unregistered copy.
     let auth_metadata = AuthMetadata {
-        mode: if development_mode {
-            "development".to_owned()
-        } else {
-            "production".to_owned()
-        },
         account_authority: Some(AccountAuthority {
             origin: account_origin,
             gate_account_base,
