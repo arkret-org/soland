@@ -881,6 +881,7 @@ pub struct CommitAppletRecord {
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventBatchCommand {
     pub events: Vec<CommitAcceptedEventCommand>,
+    pub agent_approval_nonce: Option<soland_storage::AgentApprovalNonceCommit>,
     pub franking_replay_nonce: Option<soland_storage::FrankingReplayNonceCommit>,
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,

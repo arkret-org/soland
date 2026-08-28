@@ -353,7 +353,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
     operation: &Operation,
     agent_id: &str,
     authorization_ref: &str,
-) -> Result<(), &'static str> {
+) -> Result<ValidatedAgentApprovalNonce, &'static str> {
     let request_id = operation
         .payload
         .get("approval_request_id")
@@ -377,16 +377,22 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         action.as_str(),
         chrono::Utc::now(),
     )?;
-    if !state.remember_agent_approval_nonce(
-        agent_id,
-        authorization_ref,
-        request_id,
-        approval_nonce,
-        approval.expires_at,
-    ) {
-        return Err(arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED);
-    }
-    Ok(())
+    Ok(ValidatedAgentApprovalNonce {
+        agent_id: agent_id.to_owned(),
+        authorization_ref: authorization_ref.to_owned(),
+        request_id: request_id.to_owned(),
+        approval_nonce: approval_nonce.to_owned(),
+        expires_at: approval.expires_at,
+    })
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ValidatedAgentApprovalNonce {
+    pub agent_id: String,
+    pub authorization_ref: String,
+    pub request_id: String,
+    pub approval_nonce: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub(super) fn operation_agent_context(operation: &Operation) -> Option<&Value> {
@@ -668,7 +674,8 @@ pub(super) fn validate_agent_context(
 pub async fn validate_agent_reply_participation(
     state: &AppState,
     operations: &[Operation],
-) -> Result<(), &'static str> {
+) -> Result<Vec<ValidatedAgentApprovalNonce>, &'static str> {
+    let mut approvals = Vec::new();
     for operation in operations {
         let Some((agent_id, mode)) = operation_agent_write_context(state, operation).await? else {
             continue;
@@ -710,8 +717,13 @@ pub async fn validate_agent_reply_participation(
             return Err(mode.rejection_reason());
         }
         if let Some(authorization_ref) = authorization_ref {
-            validate_agent_act_on_behalf_approval(state, operation, &agent_id, &authorization_ref)?;
+            approvals.push(validate_agent_act_on_behalf_approval(
+                state,
+                operation,
+                &agent_id,
+                &authorization_ref,
+            )?);
         }
     }
-    Ok(())
+    Ok(approvals)
 }

@@ -2233,6 +2233,7 @@ pub(super) async fn submit_event_value_with_context(
     );
     let mut strand_status_audit_payload = None;
     let mut consent_admission = None;
+    let mut validated_agent_approval = None;
     if let Some(operation) = projection_operation.as_ref() {
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
@@ -2306,15 +2307,29 @@ pub(super) async fn submit_event_value_with_context(
         // missing materialised grants are preconditions, not auth-context
         // denials.
         let agent_policy_operation = operation_with_unsigned_agent_context(operation, &envelope);
-        if let Err(reason) =
-            validate_agent_reply_participation(state, std::slice::from_ref(&agent_policy_operation))
-                .await
+        match validate_agent_reply_participation(
+            state,
+            std::slice::from_ref(&agent_policy_operation),
+        )
+        .await
         {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
+            Ok(mut approvals) => {
+                validated_agent_approval = approvals.pop();
+                if !approvals.is_empty() {
+                    return Err(SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "one Event operation cannot consume multiple agent approvals",
+                    ));
+                }
+            }
+            Err(reason) => {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason,
+                    reason,
+                ));
+            }
         }
         // Policy validation always sees the whole submit batch, so facet
         // writes can cross-check sibling scheme/profile values instead of
@@ -3057,6 +3072,16 @@ pub(super) async fn submit_event_value_with_context(
         } else {
             None
         };
+    let agent_approval_nonce =
+        validated_agent_approval.map(|approval| soland_storage::AgentApprovalNonceCommit {
+            agent_id: approval.agent_id,
+            authorization_ref: approval.authorization_ref,
+            request_id: approval.request_id,
+            approval_nonce: approval.approval_nonce,
+            event_id: parsed.event_id.to_string(),
+            expires_at: approval.expires_at,
+            consumed_at: received_at,
+        });
     let command = soland_services::events::CommitAcceptedEventCommand {
         governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: commit_options
@@ -3215,17 +3240,19 @@ pub(super) async fn submit_event_value_with_context(
             .events()
             .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
                 events: vec![command, proof_command],
+                agent_approval_nonce,
                 franking_replay_nonce,
                 applet_record: None,
                 applet_authoring_preview: None,
                 agent_membership_cascade: None,
             })
             .await
-    } else if franking_replay_nonce.is_some() {
+    } else if franking_replay_nonce.is_some() || agent_approval_nonce.is_some() {
         state
             .events()
             .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
                 events: vec![command],
+                agent_approval_nonce,
                 franking_replay_nonce,
                 applet_record: None,
                 applet_authoring_preview: None,
@@ -3309,6 +3336,13 @@ pub(super) async fn submit_event_value_with_context(
                     StatusCode::CONFLICT,
                     "device_revoked",
                     "device generation is revoked",
+                ));
+            }
+            if conflict == Some(ConflictCode::ApprovalNonceReused) {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
+                    "agent approval nonce was already consumed",
                 ));
             }
             if conflict == Some(ConflictCode::DuplicateConflict) {

@@ -1617,6 +1617,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
             ],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,

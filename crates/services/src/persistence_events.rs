@@ -1776,6 +1776,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     .into_iter()
                     .map(persistence_event_commit_request)
                     .collect(),
+                agent_approval_nonce: command.agent_approval_nonce,
                 franking_replay_nonce: command.franking_replay_nonce,
                 applet_record: command.applet_record.map(|mutation| {
                     soland_storage::AppletRecordCommit {

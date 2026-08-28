@@ -410,6 +410,9 @@ pub struct ManagedAuthorityClaim {
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
+    /// One native-agent act-on-behalf approval nonce consumed by an Event in
+    /// this batch. The ledger row and Event are committed atomically.
+    pub agent_approval_nonce: Option<AgentApprovalNonceCommit>,
     /// One moderation franking nonce consumed by a report Event in this
     /// batch. The ledger write is inseparable from the report Event: a failed
     /// commit consumes nothing, and a concurrent replay can commit at most
@@ -427,6 +430,83 @@ pub struct FrankingReplayNonceCommit {
     pub replay_nonce: String,
     pub report_event_id: String,
     pub consumed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentApprovalNonceCommit {
+    pub agent_id: String,
+    pub authorization_ref: String,
+    pub request_id: String,
+    pub approval_nonce: String,
+    pub event_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub consumed_at: DateTime<Utc>,
+}
+
+/// Refuse an approval nonce ledger row unless the same batch contains the
+/// exact Event and projected operation that admission validated.
+pub fn validate_agent_approval_nonce_commit(
+    events: &[EventCommitRequest],
+    commit: Option<&AgentApprovalNonceCommit>,
+) -> PersistenceResult<()> {
+    let Some(commit) = commit else {
+        return Ok(());
+    };
+    if commit.expires_at <= commit.consumed_at {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: expired agent approval nonce cannot be consumed".to_owned(),
+        ));
+    }
+    let Some(event) = events
+        .iter()
+        .find(|request| request.event.event_id == commit.event_id)
+    else {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: agent approval nonce is not bound to an Event in the batch"
+                .to_owned(),
+        ));
+    };
+    let event_agent_id = event
+        .event
+        .envelope
+        .pointer("/unsigned/agent_context/agent_id")
+        .and_then(Value::as_str);
+    let matches = event.projections.iter().any(|projection| {
+        projection.event_id == commit.event_id
+            && projection
+                .payload
+                .get("authorization_ref")
+                .and_then(Value::as_str)
+                == Some(commit.authorization_ref.as_str())
+            && projection
+                .payload
+                .get("approval_request_id")
+                .or_else(|| projection.payload.get("request_id"))
+                .and_then(Value::as_str)
+                == Some(commit.request_id.as_str())
+            && projection
+                .payload
+                .get("approval_nonce")
+                .and_then(Value::as_str)
+                == Some(commit.approval_nonce.as_str())
+            && (projection
+                .payload
+                .pointer("/agent_context/agent_id")
+                .or_else(|| {
+                    projection
+                        .payload
+                        .pointer("/provenance/agent_context/agent_id")
+                })
+                .and_then(Value::as_str)
+                == Some(commit.agent_id.as_str())
+                || event_agent_id == Some(commit.agent_id.as_str()))
+    });
+    if !matches {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: agent approval nonce does not match its Event operation".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 /// Refuse a nonce ledger row unless the same batch contains the exact report

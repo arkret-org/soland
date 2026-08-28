@@ -2489,7 +2489,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
 }
 
 #[tokio::test]
-async fn act_on_behalf_agent_consumes_approval_nonce_once() {
+async fn act_on_behalf_validation_defers_nonce_consumption_until_commit() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AXaV71ycRWgQPn3H4tFrOYekLOPFiR6LNl9sGqWBs1T2".to_owned(),
@@ -2515,15 +2515,13 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     );
     insert_approved_agent_action(&state, &message, "request-705", agent, "nonce-705");
 
-    validate_agent_reply_participation(&state, std::slice::from_ref(&message))
+    let first = validate_agent_reply_participation(&state, std::slice::from_ref(&message))
         .await
         .expect("first approval nonce use should pass");
-    assert_eq!(
-        validate_agent_reply_participation(&state, &[message])
-            .await
-            .unwrap_err(),
-        arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED
-    );
+    let second = validate_agent_reply_participation(&state, &[message])
+        .await
+        .expect("validation must not consume before the Event transaction");
+    assert_eq!(first, second);
 }
 
 #[tokio::test]

@@ -22,28 +22,28 @@ use chrono::{Duration, Utc};
 use super::{
     AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
-    AppletRecordCommit, AppletStore, CanonicalEventRecord, ConsentCellRecord, ConsentCellStore,
-    ConsentGrantDot, ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
-    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
-    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
-    DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
-    DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
-    DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector,
-    DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetStatus,
-    DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
-    EventStore, ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
-    FederationOutboxTransition, GovernanceDependencySource, GovernanceDependencyStore,
-    GovernanceDependencyWrite, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
-    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
-    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
-    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
-    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
-    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
-    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    AgentApprovalNonceCommit, AppletRecordCommit, AppletStore, CanonicalEventRecord,
+    ConsentCellRecord, ConsentCellStore, ConsentGrantDot, ConsentProjectionCommit,
+    ContactProjectionCommit, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
+    ControlProposalAuthorityAckStore, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
+    DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
+    DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
+    DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
+    DeviceRevocationTargetStatus, DeviceRevocationTransition, EventBatchCommitRequest,
+    EventCommitRequest, EventCommitUnitOfWork, EventStore, ExactWriteOutcome,
+    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
+    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
+    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition,
+    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
+    HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore,
+    MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentityStore,
+    MemberIdentitySubjectKey, MessageRecord, MessageStore, MimiConsentCorrelationRecord,
+    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, OneTimeKeyStore, OrganizationRegistrationEnsureCommit,
+    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
+    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
     ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
     RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
@@ -1321,6 +1321,7 @@ fn contract_applet_batch(
 ) -> EventBatchCommitRequest {
     EventBatchCommitRequest {
         events,
+        agent_approval_nonce: None,
         franking_replay_nonce: None,
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
@@ -1811,6 +1812,95 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .await
             .expect("read idempotency record")
             .is_some()
+    );
+
+    // Native-agent approvals are consumed by the same transaction as their
+    // accepted Event. A competing Event using the same tuple must lose and
+    // leave no canonical or projection prefix behind.
+    let approval_agent = format!("did:web:agent-{namespace}.example");
+    let approval_ref = format!("ak:grant:{event_uuid}");
+    let approval_request_id = format!("approval-request:{event_uuid}");
+    let approval_nonce = format!("approval-nonce:{event_uuid}");
+    let approval_payload = serde_json::json!({
+        "authorization_ref": approval_ref,
+        "approval_request_id": approval_request_id,
+        "approval_nonce": approval_nonce,
+        "agent_context": { "agent_id": approval_agent },
+    });
+    let first_approval_realm = contract_realm_id(&format!("approval-a:{namespace}:{event_uuid}"));
+    let first_approval_event =
+        canonical_wire_event_record("", &principal_id, &first_approval_realm, 0, now);
+    let first_approval_event_id = first_approval_event.event_id.clone();
+    let approval_request = |event: CanonicalEventRecord, realm_id: String| EventCommitRequest {
+        governance_dependencies: Vec::new(),
+        device_pairing_authorization: None,
+        contact_projection: None,
+        consent_projection: None,
+        control_proposal_ingress: None,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        projections: vec![ProjectionEventRecord {
+            event_id: event.event_id.clone(),
+            realm_id,
+            event_kind: "ak.message.create".to_owned(),
+            operation_kind: "create".to_owned(),
+            operation_id: None,
+            sender: Some(principal_id.clone()),
+            payload: approval_payload.clone(),
+            created_at: now,
+            received_at: now,
+        }],
+        event,
+        idempotency: None,
+        outbox: Vec::new(),
+    };
+    let approval_commit = |event_id: String| AgentApprovalNonceCommit {
+        agent_id: approval_agent.clone(),
+        authorization_ref: approval_ref.clone(),
+        request_id: approval_request_id.clone(),
+        approval_nonce: approval_nonce.clone(),
+        event_id,
+        expires_at: now + Duration::minutes(5),
+        consumed_at: now,
+    };
+    stores
+        .unit_of_work
+        .commit_event_batch(EventBatchCommitRequest {
+            events: vec![approval_request(first_approval_event, first_approval_realm)],
+            agent_approval_nonce: Some(approval_commit(first_approval_event_id.clone())),
+            franking_replay_nonce: None,
+            applet_record: None,
+            applet_authoring_preview: None,
+            agent_membership_cascade: None,
+        })
+        .await
+        .expect("agent approval nonce and Event commit together");
+
+    let competing_realm = contract_realm_id(&format!("approval-b:{namespace}:{event_uuid}"));
+    let competing_event = canonical_wire_event_record("", &principal_id, &competing_realm, 0, now);
+    let competing_event_id = competing_event.event_id.clone();
+    let conflict = stores
+        .unit_of_work
+        .commit_event_batch(EventBatchCommitRequest {
+            events: vec![approval_request(competing_event, competing_realm)],
+            agent_approval_nonce: Some(approval_commit(competing_event_id.clone())),
+            franking_replay_nonce: None,
+            applet_record: None,
+            applet_authoring_preview: None,
+            agent_membership_cascade: None,
+        })
+        .await
+        .expect_err("agent approval nonce replay must lose atomically");
+    assert_eq!(
+        conflict.conflict_code(),
+        Some(super::ConflictCode::ApprovalNonceReused)
+    );
+    assert!(
+        !stores
+            .events
+            .contains(&competing_event_id)
+            .await
+            .expect("competing approval Event rollback")
     );
     assert!(
         stores

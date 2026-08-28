@@ -1884,25 +1884,6 @@ impl AppState {
             target_ref,
         )
     }
-
-    /// Consume a native-agent act-on-behalf approval nonce until the approval
-    /// expires. Returns false when the nonce was already consumed or expired.
-    pub fn remember_agent_approval_nonce(
-        &self,
-        agent_id: &str,
-        authorization_ref: &str,
-        request_id: &str,
-        approval_nonce: &str,
-        expires_at: chrono::DateTime<chrono::Utc>,
-    ) -> bool {
-        self.runtime_guards.remember_agent_approval_nonce(
-            agent_id,
-            authorization_ref,
-            request_id,
-            approval_nonce,
-            expires_at,
-        )
-    }
 }
 
 fn verification_key_belongs_to_service(candidate: &str, service_id: &str) -> bool {

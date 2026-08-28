@@ -561,6 +561,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
     ) -> PersistenceResult<EventCommitOutcome> {
         self.commit_event_batch(EventBatchCommitRequest {
             events: vec![request],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
@@ -581,6 +582,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         soland_storage::validate_franking_replay_nonce_commit(
             &request.events,
             request.franking_replay_nonce.as_ref(),
+        )?;
+        soland_storage::validate_agent_approval_nonce_commit(
+            &request.events,
+            request.agent_approval_nonce.as_ref(),
         )?;
         let mut conn = pg_conn(&self.pool).await?;
         let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
@@ -1162,6 +1167,30 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .map_err(PersistenceError::database)?;
                 if inserted != 1 {
                     return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                }
+            }
+
+            if let Some(nonce) = request.agent_approval_nonce {
+                let inserted = sql_query(
+                    "INSERT INTO agent_approval_nonces \
+                     (agent_id, authorization_ref, request_id, approval_nonce, event_id, expires_at, consumed_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
+                )
+                .bind::<Text, _>(&nonce.agent_id)
+                .bind::<Text, _>(&nonce.authorization_ref)
+                .bind::<Text, _>(&nonce.request_id)
+                .bind::<Text, _>(&nonce.approval_nonce)
+                .bind::<Text, _>(&nonce.event_id)
+                .bind::<Timestamptz, _>(nonce.expires_at)
+                .bind::<Timestamptz, _>(nonce.consumed_at)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if inserted != 1 {
+                    return Err(PersistenceError::Conflict(
+                        arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED.to_owned(),
+                    )
+                    .into());
                 }
             }
 

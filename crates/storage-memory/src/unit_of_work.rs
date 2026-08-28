@@ -791,6 +791,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             &request.events,
             request.franking_replay_nonce.as_ref(),
         )?;
+        soland_storage::validate_agent_approval_nonce_commit(
+            &request.events,
+            request.agent_approval_nonce.as_ref(),
+        )?;
         // Same seal-derived settlement as `commit_event` above.
         self.device_revocations.settle_from_control_events();
         let mut events = self.events.data.lock();
@@ -800,6 +804,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
         let mut franking_replay_nonces = self.franking_replay_nonces.lock();
+        let mut agent_approval_nonces = self.agent_approval_nonces.lock();
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
@@ -817,6 +822,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_franking_replay_nonces = franking_replay_nonces.clone();
+        let mut staged_agent_approval_nonces = agent_approval_nonces.clone();
         let mut staged_outbox = outbox.clone();
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
         let mut staged_applets = applets.clone();
@@ -1006,6 +1012,20 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             }
         }
 
+        if let Some(nonce) = request.agent_approval_nonce {
+            let key = (
+                nonce.agent_id.clone(),
+                nonce.authorization_ref.clone(),
+                nonce.request_id.clone(),
+                nonce.approval_nonce.clone(),
+            );
+            if staged_agent_approval_nonces.insert(key, nonce).is_some() {
+                return Err(PersistenceError::Conflict(
+                    arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED.to_owned(),
+                ));
+            }
+        }
+
         if let Some(preview) = request.applet_authoring_preview {
             let matches_current = staged_authoring_previews
                 .get(&preview.subject_key)
@@ -1124,6 +1144,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *franking_replay_nonces = staged_franking_replay_nonces;
+        *agent_approval_nonces = staged_agent_approval_nonces;
         *outbox = staged_outbox;
         *event_outbox_ids = staged_event_outbox_ids;
         *applets = staged_applets;
@@ -1707,6 +1728,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![first],
+                agent_approval_nonce: None,
                 franking_replay_nonce: Some(FrankingReplayNonceCommit {
                     realm_id: realm_id.clone(),
                     received_by: received_by.to_owned(),
@@ -1738,6 +1760,7 @@ mod tests {
         let error = store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![competing],
+                agent_approval_nonce: None,
                 franking_replay_nonce: Some(FrankingReplayNonceCommit {
                     realm_id,
                     received_by: received_by.to_owned(),
@@ -1779,6 +1802,7 @@ mod tests {
 
         let mut incomplete = EventBatchCommitRequest {
             events: vec![controller.clone(), agent_a.clone()],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: None,
             applet_authoring_preview: None,
@@ -1829,6 +1853,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![terminal.clone()],
+                agent_approval_nonce: None,
                 franking_replay_nonce: None,
                 applet_record: None,
                 applet_authoring_preview: None,
@@ -1864,6 +1889,7 @@ mod tests {
         store
             .commit_event_batch(EventBatchCommitRequest {
                 events: vec![cleanup_a, cleanup_b],
+                agent_approval_nonce: None,
                 franking_replay_nonce: None,
                 applet_record: None,
                 applet_authoring_preview: None,
@@ -2166,6 +2192,7 @@ mod tests {
                     expires_at: now + Duration::hours(1),
                 }),
             )],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
@@ -2242,6 +2269,7 @@ mod tests {
                 "did:web:bridge.example:ghost:second",
                 None,
             )],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
@@ -2325,6 +2353,7 @@ mod tests {
                 "did:web:bridge.example:ghost:third",
                 None,
             )],
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
@@ -2425,6 +2454,7 @@ mod tests {
                     &format!("did:web:{suffix}.example"),
                     None,
                 )],
+                agent_approval_nonce: None,
                 franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id).unwrap(),
@@ -2482,6 +2512,7 @@ mod tests {
                     "did:web:applet-admin.example",
                     None,
                 )],
+                agent_approval_nonce: None,
                 franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),

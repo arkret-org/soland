@@ -177,6 +177,8 @@ impl PersistenceError {
 /// into a caller-facing reason.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ConflictCode {
+    /// A native-agent act-on-behalf approval nonce was already consumed.
+    ApprovalNonceReused,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
     /// `actor_seq` is older than the accepted actor frontier.
@@ -226,7 +228,8 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 22] = [
+    pub const ALL: [Self; 23] = [
+        Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
         Self::DevicePairingNotFound,
@@ -254,6 +257,7 @@ impl ConflictCode {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::ApprovalNonceReused => arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
             Self::AppletRevoked => "applet_revoked",
             Self::CasConflict => "cas_conflict",
             Self::DevicePairingNotFound => "device_pairing_not_found",

@@ -487,6 +487,7 @@ async fn submit_applet_record_event_batch(
         .events()
         .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
             events: prepared.iter().map(|event| event.command.clone()).collect(),
+            agent_approval_nonce: None,
             franking_replay_nonce: None,
             applet_record: Some(soland_services::events::CommitAppletRecord {
                 applet_id,

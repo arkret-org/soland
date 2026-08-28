@@ -20,7 +20,6 @@ const MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW: u32 = 10;
 const MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW: u32 = 80;
 const MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW: u32 = 1;
 const MODERATION_REPORT_RATE_TRACKER_MAX_ENTRIES: usize = 32_768;
-const AGENT_APPROVAL_NONCE_MAX_ENTRIES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyBackupDownloadOutcome {
@@ -47,7 +46,6 @@ struct RuntimeGuards {
     peer_keypackage_claims: Mutex<BTreeMap<(String, String), WindowRecord>>,
     key_backup_downloads: Mutex<BTreeMap<String, WindowRecord>>,
     moderation_reports: Mutex<BTreeMap<String, WindowRecord>>,
-    agent_approval_nonces: Mutex<BTreeMap<String, DateTime<Utc>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -64,7 +62,6 @@ impl Default for RuntimeGuardService {
                 peer_keypackage_claims: Mutex::new(BTreeMap::new()),
                 key_backup_downloads: Mutex::new(BTreeMap::new()),
                 moderation_reports: Mutex::new(BTreeMap::new()),
-                agent_approval_nonces: Mutex::new(BTreeMap::new()),
             }),
         }
     }
@@ -195,28 +192,6 @@ impl RuntimeGuardService {
             limit: 0,
             retry_after_ms: 0,
         })
-    }
-
-    pub fn remember_agent_approval_nonce(
-        &self,
-        agent_id: &str,
-        authorization_ref: &str,
-        request_id: &str,
-        approval_nonce: &str,
-        expires_at: DateTime<Utc>,
-    ) -> bool {
-        let now = Utc::now();
-        if expires_at <= now {
-            return false;
-        }
-        let mut records = self.inner.agent_approval_nonces.lock();
-        records.retain(|_, expiry| *expiry > now);
-        let key = format!("{agent_id}:{authorization_ref}:{request_id}:{approval_nonce}");
-        if records.contains_key(&key) || records.len() >= AGENT_APPROVAL_NONCE_MAX_ENTRIES {
-            return false;
-        }
-        records.insert(key, expires_at);
-        true
     }
 }
 
