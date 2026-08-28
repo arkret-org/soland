@@ -266,7 +266,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             full_id,
-            controller_authority,
+            controller_principal_server_id,
             slug,
             requested_scope,
             pairing_ttl_ms,
@@ -326,6 +326,13 @@ pub(super) async fn provision_agent(
             }
             validate_agent_slug(&slug)
                 .map_err(|error| AppError::param_invalid(format!("slug is invalid: {error}")))?;
+            let controller_did = DidCoreId::new(controller_id.clone()).map_err(|error| {
+                AppError::internal(format!("authenticated controller id is invalid: {error}"))
+            })?;
+            let controller_authority = arkret_wire::PrincipalAuthorityKey::new(
+                controller_did.clone(),
+                controller_principal_server_id,
+            );
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(&controller_id)
@@ -366,7 +373,6 @@ pub(super) async fn provision_agent(
             let agent_id = arkret_wire::project_full_id_to_core_id(&full_id).map_err(|error| {
                 AppError::param_invalid(format!("Agent full_id projection failed: {error}"))
             })?;
-            let controller_did = controller_authority.principal_id.clone();
             let initial_resolution =
                 crate::routing::identity::managed_agent_pcr::accepted_managed_agent_initial_resolution(
                     state,
@@ -492,7 +498,10 @@ pub(super) async fn provision_agent(
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
                     full_id: full_id.clone(),
-                    controller_authority: prepared.controller_authority.clone(),
+                    controller_principal_server_id: prepared
+                        .controller_authority
+                        .principal_server_id
+                        .clone(),
                     slug: slug.clone(),
                     requested_scope: requested_scope.clone(),
                     pairing_ttl_ms,

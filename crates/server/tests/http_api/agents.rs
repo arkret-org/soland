@@ -667,7 +667,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             operation_id: operation_id.clone(),
             idempotency_key: idempotency_key.clone(),
             full_id: full_id.clone(),
-            controller_authority: controller_authority.clone(),
+            controller_principal_server_id: controller_authority.principal_server_id.clone(),
             slug: slug.to_owned(),
             requested_scope: scope.clone(),
             pairing_ttl_ms: None,
@@ -1653,7 +1653,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
                     .to_owned(),
             )
             .unwrap(),
-            controller_authority: controller_authority.clone(),
+            controller_principal_server_id: controller_authority.principal_server_id.clone(),
             slug: "summary".to_owned(),
             requested_scope: duplicate_scope,
             pairing_ttl_ms: None,
@@ -1668,9 +1668,12 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
 
     assert_eq!(duplicate.status_code.unwrap(), StatusCode::BAD_REQUEST);
     let duplicate_body: Value = duplicate.take_json().await.unwrap();
-    assert_eq!(duplicate_body["error"]["code"], "param_invalid");
+    assert_eq!(
+        duplicate_body["type"],
+        "https://arkret.org/problems/param_invalid"
+    );
     assert!(
-        duplicate_body["error"]["message"]
+        duplicate_body["detail"]
             .as_str()
             .unwrap_or_default()
             .contains("slug is already bound"),
