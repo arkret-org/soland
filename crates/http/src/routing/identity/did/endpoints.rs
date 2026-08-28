@@ -55,8 +55,6 @@ pub(crate) async fn identity_describe(
         .insert(
             "x_soland_identity_registry".to_owned(),
             json!({
-                "registry_mode": "development_local",
-                "supported_receipts": ["local"],
                 "supported_did_methods": supported_did_methods,
                 "resolver_allow_methods": state.config().did_resolver_allow_methods,
                 "trust_roots": trust_roots,

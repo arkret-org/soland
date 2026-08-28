@@ -425,6 +425,12 @@ async fn identity_surface_works_body() {
     assert_eq!(typed_describe.service_id, expected_service_id);
     assert_eq!(describe["protocol_version"], "1.0");
     let identity = &describe["x_soland_identity_registry"];
+    for retired_field in ["registry_mode", "supported_receipts", "profiles"] {
+        assert!(
+            describe.get(retired_field).is_none() && identity.get(retired_field).is_none(),
+            "retired IdentityDescription field must not survive in ServiceDescribe: {retired_field}"
+        );
+    }
     assert_eq!(
         identity["resolver_allow_methods"],
         serde_json::json!(["web", "key", "uuid"])
