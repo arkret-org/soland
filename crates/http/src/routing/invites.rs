@@ -2208,15 +2208,13 @@ mod invite_locator_security_tests {
                 crate::wire::DeviceMessageSender::Service { sender_id }
                     if sender_id.as_str() == state.service_id()
             ));
+            let content = serde_json::to_value(&envelope.content).unwrap();
             assert_eq!(
-                envelope.content.get("account_data_key"),
+                content.get("account_data_key"),
                 Some(&json!(account_data_key))
             );
-            assert_eq!(
-                envelope.content.get("revision"),
-                Some(&json!(expected_revision))
-            );
-            assert_eq!(envelope.content.get("content"), Some(expected_payload));
+            assert_eq!(content.get("revision"), Some(&json!(expected_revision)));
+            assert_eq!(content.get("content"), Some(expected_payload));
         }
     }
 

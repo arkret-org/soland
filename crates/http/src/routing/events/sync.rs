@@ -30,7 +30,7 @@ pub(crate) use std::time::Duration;
 
 pub(crate) use arkret_identifiers::{Cursor, RealmId};
 pub(crate) use arkret_models_collaboration::http_bodies::{
-    EventsQueryOutcome, EventsSubscribeFrame, EventsSubscribeFrameKind,
+    EventsQueryOutcome, EventsSubscribeFrame,
 };
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::URL_SAFE_NO_PAD;

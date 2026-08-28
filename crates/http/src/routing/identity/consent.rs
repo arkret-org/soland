@@ -1692,7 +1692,8 @@ mod tests {
             crate::wire::DeviceMessageSender::Service { sender_id }
                 if sender_id.as_str() == state.service_id()
         ));
-        assert_eq!(envelope.content.get("revision"), Some(&json!(2)));
+        let content = serde_json::to_value(&envelope.content).unwrap();
+        assert_eq!(content.get("revision"), Some(&json!(2)));
         assert_eq!(
             state
                 .consents()
