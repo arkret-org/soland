@@ -28,7 +28,6 @@ async fn external_bearer_without_dpop_is_rejected_body() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["ok"], false);
     assert_eq!(problem_code(&body), "unauthenticated");
 }
 
@@ -268,14 +267,14 @@ async fn oversized_json_body_is_rejected_before_handler_body() {
 }
 
 #[test]
-fn rate_limit_errors_use_standard_envelope_with_retry_after() {
+fn rate_limit_errors_use_problem_details_with_retry_after() {
     run_on_deep_stack(
-        "rate_limit_errors_use_standard_envelope_with_retry_after",
-        rate_limit_errors_use_standard_envelope_with_retry_after_body,
+        "rate_limit_errors_use_problem_details_with_retry_after",
+        rate_limit_errors_use_problem_details_with_retry_after_body,
     );
 }
 
-async fn rate_limit_errors_use_standard_envelope_with_retry_after_body() {
+async fn rate_limit_errors_use_problem_details_with_retry_after_body() {
     let state = soland_test_support::app_state(test_config());
     let limited_service = service_with_rate_limiter_config(
         state,
@@ -307,7 +306,6 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after_body() {
     assert_eq!(retry_after, "60");
 
     let limited: Value = second.take_json().await.unwrap();
-    assert_eq!(limited["ok"], false);
     assert_eq!(problem_code(&limited), "rate_limited");
     assert!(limited["retry_after_ms"].as_u64().unwrap() > 0);
     assert!(
@@ -319,21 +317,20 @@ async fn rate_limit_errors_use_standard_envelope_with_retry_after_body() {
 }
 
 #[test]
-fn framework_errors_use_arkret_error_envelope() {
+fn framework_errors_use_problem_details() {
     run_on_deep_stack(
-        "framework_errors_use_arkret_error_envelope",
-        framework_errors_use_arkret_error_envelope_body,
+        "framework_errors_use_problem_details",
+        framework_errors_use_problem_details_body,
     );
 }
 
-async fn framework_errors_use_arkret_error_envelope_body() {
+async fn framework_errors_use_problem_details_body() {
     let not_found: Value = TestClient::get("http://server/_arkret/self/missing")
         .send(&app())
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(not_found["ok"], false);
     assert_eq!(problem_code(&not_found), "unrecognized_endpoint");
 
     let method_not_allowed: Value = TestClient::post("http://server/_arkret/describe")
@@ -342,7 +339,6 @@ async fn framework_errors_use_arkret_error_envelope_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(method_not_allowed["ok"], false);
     assert_eq!(problem_code(&method_not_allowed), "method_not_allowed");
 }
 
@@ -365,7 +361,6 @@ async fn protected_endpoints_reject_query_auth_material_body() {
 
     assert_eq!(response.status_code.unwrap(), StatusCode::UNAUTHORIZED);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["ok"], false);
     assert_eq!(problem_code(&body), "unauthenticated");
     assert_eq!(
         body["detail"],
