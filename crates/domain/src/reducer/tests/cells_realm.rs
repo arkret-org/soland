@@ -339,7 +339,7 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
         }),
     );
     invite_in_new_realm.context.preconditions = serde_json::from_value(serde_json::json!([{
-        "cell": member_cell,
+        "cell_id": member_cell,
         "predicate": { "op": "head_eq", "value": null }
     }]))
     .unwrap();
@@ -355,7 +355,7 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
     );
     duplicate_genesis_in_same_realm.context.preconditions =
         serde_json::from_value(serde_json::json!([{
-            "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
+            "cell_id": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
             "predicate": { "op": "head_eq", "value": null }
         }]))
         .unwrap();
@@ -683,6 +683,35 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
 
 /// The `ak.audit.erasure_receipt` reducer pass extracts `scope.realm_id`
 /// and stamps the payload's default `fanout_status = "pending"`.
+fn valid_erasure_receipt_payload() -> Value {
+    serde_json::json!({
+        "receipt_id": "ak:receipt:019b5c20-0000-7000-8000-000000000030",
+        "trigger": {
+            "kind": "account_status_record",
+            "account_status_record_id": "ak:account_status_record:AUPhm9XGSn2ah7YYExswNu0yaccqupAufE2bFvqEoD5N"
+        },
+        "schema": "ak.schema.erasure_receipt.v1",
+        "issuer_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
+        "subject": {
+            "kind": "space",
+            "subject_ref": "ak:space:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"
+        },
+        "scope": {
+            "storage_boundary": "projection_store",
+            "realm_id": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"
+        },
+        "outcome": "completed",
+        "erased_classes": ["projection_rows"],
+        "retained_stub_digest": "sha256:aa67f34cd4e055246b8a73abe15734c39945b5c0e2e5693c00cada4e13d93e59",
+        "completed_at": "2026-08-02T00:10:00.000Z",
+        "proofs": [{
+            "verification_method": "did:webvh:z6mkfixtureprincipalexample:principal.example#key-1",
+            "payload_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "signature": "receipt-signature-base64url-placeholder"
+        }]
+    })
+}
+
 #[test]
 fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     let mut state = ProjectionState::new();
@@ -691,23 +720,16 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
         &make_operation(
             arkret_wire::EventKind::AuditErasureReceipt,
             "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({
-                "receipt_id": "ak:receipt:01",
-                "schema": "ak.schema.erasure_receipt.v1",
-                "issuer": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
-                "subject": {"kind": "realm", "subject_ref": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"},
-                "scope": {
-                    "storage_boundary": "projection_store",
-                    "realm_id": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-                },
-                "outcome": "completed",
-            }),
+            valid_erasure_receipt_payload(),
         ),
         &hlc,
     );
     assert_eq!(state.erasure_receipts.len(), 1);
     let record = &state.erasure_receipts[0];
-    assert_eq!(record.receipt_id.as_deref(), Some("ak:receipt:01"));
+    assert_eq!(
+        record.receipt_id.as_deref(),
+        Some("ak:receipt:019b5c20-0000-7000-8000-000000000030")
+    );
     assert_eq!(record.outcome, "completed");
     assert_eq!(
         record.scope_realm_id.as_deref(),
@@ -715,6 +737,42 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
         "scope.realm_id MUST be extracted for receipt inspection"
     );
     assert_eq!(record.fanout_status, "pending");
+}
+
+#[test]
+fn audit_erasure_receipt_rejects_noncanonical_or_incomplete_payloads() {
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+
+    for payload in [
+        {
+            let mut payload = valid_erasure_receipt_payload();
+            payload["outcome"] = serde_json::json!("scheduled");
+            payload
+        },
+        {
+            let mut payload = valid_erasure_receipt_payload();
+            payload.as_object_mut().unwrap().remove("issuer_id");
+            payload
+        },
+    ] {
+        let mut state = ProjectionState::new();
+        let effect = state.apply(
+            &make_operation(
+                arkret_wire::EventKind::AuditErasureReceipt,
+                realm_id,
+                payload,
+            ),
+            &hlc,
+        );
+
+        assert!(matches!(
+            effect,
+            ProjectionEffect::Rejected { reason }
+                if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
+        ));
+        assert!(state.erasure_receipts.is_empty());
+    }
 }
 
 #[test]
@@ -808,7 +866,7 @@ fn direct_conversation_role_survives_sealed_create_log_reload_via_genesis() {
     state.realm_create_cells.insert(
         realm_id.to_string(),
         arkret_state::lattice::CellState::Value(serde_json::json!([{
-            "issuer": "ak:did_core:web:alice.example",
+            "issuer_id": "ak:did_core:web:alice.example",
             "issuer_seq": 1,
             "value": realm_id.as_str(),
         }])),
@@ -869,7 +927,7 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
                     "gate_id": "principal",
                     "kind": "principal_admission",
                     "auto_resolve": true,
-                    "denied_principal_dids": [invitee_id]
+                    "denied_principal_ids": [invitee_id]
                 }]
             }
         })),

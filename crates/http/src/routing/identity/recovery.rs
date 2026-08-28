@@ -28,7 +28,7 @@ use arkret_models_crypto::{
 };
 use arkret_wire::{
     AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
-    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, DeviceId, DidCoreId, DidUrl,
+    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, DeviceId, DidUrl,
     LeaseBasisRef, PrincipalAuthorityKey, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, RequestId,
     SchemaId, SecurityTransaction, SecurityTransactionCreateRequest, SessionGrantId, TransactionId,
 };

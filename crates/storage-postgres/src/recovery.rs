@@ -56,7 +56,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
         })?;
         Ok(Self {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
-            principal_id: row.principal_id.into_string(),
+            principal_id: row.principal_id,
             version,
             acceptance_basis,
             trust_domain: row.trust_domain,
@@ -171,7 +171,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             )));
         }
         if self
-            .get_by_principal_version(&record.principal_id, record.version)
+            .get_by_principal_version(record.principal_id.as_str(), record.version)
             .await
             .map_err(PersistenceError::database)?
             .is_some()
@@ -184,7 +184,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             )));
         }
         if let Some(active) = self
-            .get_active_for_principal(&record.principal_id)
+            .get_active_for_principal(record.principal_id.as_str())
             .await
             .map_err(PersistenceError::database)?
         {
@@ -387,8 +387,8 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             ),
             session_grant_id: row.session_grant_id,
             session_grant_cnf_jkt: row.session_grant_cnf_jkt,
-            principal_id: row.principal_id.into_string(),
-            principal_server_id: row.principal_server_id.into_string(),
+            principal_id: row.principal_id,
+            principal_server_id: row.principal_server_id,
             requesting_device_id: row.requesting_device_id,
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),

@@ -491,7 +491,7 @@ mod control_proposal_ack_quorum_tests {
     fn threshold_requires_distinct_current_members() {
         let profile = NotaryValue::Threshold {
             threshold: 2,
-            members: vec![signer("a"), signer("b"), signer("c")],
+            signers: vec![signer("a"), signer("b"), signer("c")],
             forensic_attribution: ForensicAttribution::QuorumIntersection,
         };
         assert!(profile.proposal_quorum_met(&signers(&["a", "b"])));
@@ -502,7 +502,7 @@ mod control_proposal_ack_quorum_tests {
     #[test]
     fn open_set_ack_is_one_signer_slot_not_a_cross_leaf_quorum() {
         let profile = NotaryValue::OpenSet {
-            members: vec![signer("a"), signer("b")],
+            signers: vec![signer("a"), signer("b")],
         };
         assert!(profile.proposal_quorum_met(&signers(&["a"])));
         assert!(!profile.proposal_quorum_met(&signers(&["a", "b"])));
@@ -513,9 +513,9 @@ mod control_proposal_ack_quorum_tests {
     fn mixed_accepts_primary_or_complete_recovery_set_only() {
         let profile = NotaryValue::Mixed {
             signer: signer("primary"),
-            recovery_members: vec![signer("recovery-a"), signer("recovery-b")],
-            controller_organization: None,
-            recovery_controller_organizations: Vec::new(),
+            recovery_signers: vec![signer("recovery-a"), signer("recovery-b")],
+            controller_organization_id: None,
+            recovery_controller_organization_ids: Vec::new(),
         };
         assert!(profile.proposal_quorum_met(&signers(&["primary"])));
         assert!(profile.proposal_quorum_met(&signers(&["recovery-a", "recovery-b"])));

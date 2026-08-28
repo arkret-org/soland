@@ -10,8 +10,8 @@ pub const MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION: usize = 128;
 
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct DeviceRevocationGateSelector {
-    pub principal_id: String,
-    pub principal_server_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
+    pub principal_server_id: arkret_identifiers::DidCoreId,
     pub device_id: String,
     pub target_device_authorize_event_id: String,
     pub target_device_generation_ref: u64,
@@ -103,8 +103,8 @@ impl DeviceRevocationGateStatus {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeviceRevocationGateLinearizationRequest {
-    pub principal_id: String,
-    pub principal_server_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
+    pub principal_server_id: arkret_identifiers::DidCoreId,
     pub device_id: String,
     pub expected_device_authorize_event_id: Option<String>,
     pub expected_device_generation_ref: Option<u64>,

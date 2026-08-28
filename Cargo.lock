@@ -328,6 +328,7 @@ dependencies = [
  "salvo-oapi",
  "serde",
  "thiserror",
+ "url",
  "uuid",
  "web-time",
 ]
@@ -610,6 +611,7 @@ dependencies = [
  "arkret-canonical",
  "arkret-identifiers",
  "chrono",
+ "diesel",
  "getrandom 0.4.3",
  "hex",
  "idna",

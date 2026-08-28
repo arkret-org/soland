@@ -755,7 +755,7 @@ async fn preflight_controller_gate(
         request_id: request_id.clone(),
         principal_id: principal_id.clone(),
         agent_authority_id: source_id.clone(),
-        agent_authority_service_resolution:
+        agent_authority_resolution:
             crate::routing::system::service_resolution::current_authenticated_service_resolution(
                 state,
             )

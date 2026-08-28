@@ -729,14 +729,14 @@ async fn blob_presign(
         expires_at,
     )?;
     let base = state.config().public_base_url.trim_end_matches('/');
-    let uri = format!(
+    let url = format!(
         "{base}/_arkret/self/blob/get?blob_ref={}&purpose={}&presign={}",
         query_escape(blob_ref),
         query_escape(purpose),
         query_escape(&presign.token),
     );
     json_ok(BlobPresignOutcome {
-        uri,
+        url,
         expires_at,
         purpose: Some(purpose.to_owned()),
         realm_id: presign.payload.realm_id,
@@ -1498,7 +1498,7 @@ pub enum PresignBlobBlock {
     LegalHold,
     /// Blob has been redacted.
     Redacted,
-    /// Blob is actor_private and the requester is not the owner.
+    /// Blob is actor_private and the requester_id is not the owner.
     ActorPrivate,
     /// Blob is device_bound and this path has no bound-device verifier.
     DeviceBound,
@@ -1584,49 +1584,51 @@ mod presign_block_tests {
 
     #[test]
     fn presign_blob_e2ee_blocked() {
-        let blob = json!({"encryption": {"encryption_algorithm": "xchacha20poly1305"}, "uploaded_by": "did:web:alice.example"});
+        let blob = json!({"encryption": {"encryption_algorithm": "xchacha20poly1305"}, "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             Some(PresignBlobBlock::E2ee)
         );
     }
 
     #[test]
     fn presign_blob_legal_hold_blocked() {
-        let blob = json!({"legal_hold": true, "uploaded_by": "did:web:alice.example"});
+        let blob = json!({"legal_hold": true, "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             Some(PresignBlobBlock::LegalHold)
         );
     }
 
     #[test]
     fn presign_blob_redacted_blocked() {
-        let blob = json!({"redacted": true, "uploaded_by": "did:web:alice.example"});
+        let blob = json!({"redacted": true, "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             Some(PresignBlobBlock::Redacted)
         );
     }
 
     #[test]
     fn presign_blob_actor_private_blocked_for_non_owner() {
-        let blob = json!({"visibility": "actor_private", "uploaded_by": "did:web:alice.example"});
+        let blob =
+            json!({"visibility": "actor_private", "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:bob.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:bob.example"),
             Some(PresignBlobBlock::ActorPrivate)
         );
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             None
         );
     }
 
     #[test]
     fn presign_blob_device_bound_blocked() {
-        let blob = json!({"visibility": "device_bound", "uploaded_by": "did:web:alice.example"});
+        let blob =
+            json!({"visibility": "device_bound", "uploaded_by": "ak:did_core:web:alice.example"});
         assert_eq!(
-            classify_presign_blob_block(&blob, "did:web:alice.example"),
+            classify_presign_blob_block(&blob, "ak:did_core:web:alice.example"),
             Some(PresignBlobBlock::DeviceBound)
         );
     }
@@ -1666,7 +1668,7 @@ mod tests {
             legal_hold: false,
             redacted: false,
             visibility: BlobVisibility::RealmBound,
-            uploaded_by: "did:web:alice.example".to_owned(),
+            uploaded_by: "ak:did_core:web:alice.example".to_owned(),
             created_at: now(),
         }
     }

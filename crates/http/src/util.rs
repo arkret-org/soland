@@ -209,8 +209,7 @@ pub fn cursor_binding_record_from_state(
                 .binding_subject
                 .ok_or(CursorAuthorityError::IntegrityInvalid)?,
             record.device_id,
-            arkret_wire::DidCoreId::new(record.service_id)
-                .map_err(|_| CursorAuthorityError::IntegrityInvalid)?,
+            record.service_id,
             record
                 .filter_digest
                 .ok_or(CursorAuthorityError::IntegrityInvalid)?,

@@ -1,3 +1,4 @@
+use arkret_identifiers::EventId;
 use async_trait::async_trait;
 use diesel::sql_types::{
     Array, BigInt, Binary, Bool, Integer, Jsonb, Nullable, SmallInt, Text, Timestamptz, Uuid,
@@ -291,10 +292,11 @@ impl PgEventCommitUnitOfWork {
     }
 }
 
-fn contact_event_ref(value: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> {
+fn contact_event_ref(value: Option<&EventId>) -> PersistenceResult<Option<Vec<u8>>> {
     value
         .map(|value| {
-            ids::event_token_part_or_schema_violation(value, "event").map(|token| token.to_vec())
+            ids::event_token_part_or_schema_violation(value.as_str(), "event")
+                .map(|token| token.to_vec())
         })
         .transpose()
 }
@@ -324,8 +326,8 @@ async fn commit_consent_projection(
     )
     .bind::<Uuid, _>(uuid::Uuid::now_v7())
     .bind::<Text, _>(&cell.cell_id)
-    .bind::<Text, _>(&cell.holder)
-    .bind::<Text, _>(&cell.peer)
+    .bind::<Text, _>(&cell.holder_principal_id)
+    .bind::<Text, _>(&cell.peer_principal_id)
     .bind::<Text, _>(&cell.consent_scope)
     .bind::<Jsonb, _>(&grant_dots)
     .bind::<Jsonb, _>(&revoked_dots)
@@ -412,9 +414,9 @@ async fn commit_contact_projection(
     let version = record.version.map(i64::try_from).transpose().map_err(|_| {
         PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned())
     })?;
-    let request_event_ref = contact_event_ref(record.request_event_ref.as_deref())?;
-    let response_event_ref = contact_event_ref(record.response_event_ref.as_deref())?;
-    let tombstone_event_ref = contact_event_ref(record.tombstone_event_ref.as_deref())?;
+    let request_event_ref = contact_event_ref(record.request_event_ref.as_ref())?;
+    let response_event_ref = contact_event_ref(record.response_event_ref.as_ref())?;
+    let tombstone_event_ref = contact_event_ref(record.tombstone_event_ref.as_ref())?;
 
     let affected = if let Some(expected_updated_at) = commit.expected_updated_at {
         if record.updated_at <= expected_updated_at {
@@ -430,9 +432,9 @@ async fn commit_contact_projection(
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $19",
         )
-        .bind::<Text, _>(&record.requester)
-        .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
+        .bind::<Text, _>(&record.requester_id)
+        .bind::<Text, _>(&record.target_id)
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
@@ -446,7 +448,7 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_host_id.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(expected_updated_at)
         .execute(conn)
@@ -460,9 +462,9 @@ async fn commit_contact_projection(
              ON CONFLICT (requester_id, target_id) DO NOTHING",
         )
         .bind::<Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.requester)
-        .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
+        .bind::<Text, _>(&record.requester_id)
+        .bind::<Text, _>(&record.target_id)
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
@@ -476,7 +478,7 @@ async fn commit_contact_projection(
         .bind::<Nullable<Binary>, _>(response_event_ref)
         .bind::<Nullable<Binary>, _>(tombstone_event_ref)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_host_id.as_ref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(conn)
@@ -529,23 +531,23 @@ async fn commit_contact_projection(
         let payload = serde_json::to_value(&policy).map_err(|error| {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
         })?;
-        let denied_subjects = policy
+        let denied_subject_ids = policy
             .denied_subject_ids
             .iter()
             .map(|did| did.as_str().to_owned())
             .collect::<Vec<_>>();
         sql_query(
             "INSERT INTO invite_receive_policies \
-             (subject_id, policy_payload, denied_subjects, updated_at) \
+             (subject_id, policy_payload, denied_subject_ids, updated_at) \
              VALUES ($1, $2, $3, NOW()) \
              ON CONFLICT (subject_id) DO UPDATE SET \
                 policy_payload = EXCLUDED.policy_payload, \
-                denied_subjects = EXCLUDED.denied_subjects, \
+                denied_subject_ids = EXCLUDED.denied_subject_ids, \
                 updated_at = NOW()",
         )
         .bind::<Text, _>(&subject_id)
         .bind::<Jsonb, _>(&payload)
-        .bind::<Array<Text>, _>(&denied_subjects)
+        .bind::<Array<Text>, _>(&denied_subject_ids)
         .execute(conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -1158,7 +1160,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                      VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
                 )
                 .bind::<Text, _>(&nonce.realm_id)
-                .bind::<Text, _>(&nonce.received_by)
+                .bind::<Text, _>(nonce.received_by.as_str())
                 .bind::<Text, _>(&nonce.replay_nonce)
                 .bind::<Text, _>(&nonce.report_event_id)
                 .bind::<Timestamptz, _>(nonce.consumed_at)
@@ -1304,17 +1306,17 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     (
                         arkret_models_integration::AppletNamespaceDomain::Actors,
                         "actors",
-                        canonical_namespaces.actor_namespace_entries,
+                        canonical_namespaces.actors,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Realms,
                         "realms",
-                        canonical_namespaces.realm_namespace_entries,
+                        canonical_namespaces.realms,
                     ),
                     (
                         arkret_models_integration::AppletNamespaceDomain::Handles,
                         "handles",
-                        canonical_namespaces.handle_namespace_entries,
+                        canonical_namespaces.handles,
                     ),
                 ];
                 if !replacing && namespace_claims.iter().any(|(_, _, claims)| !claims.is_empty()) {

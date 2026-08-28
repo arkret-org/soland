@@ -83,7 +83,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
         "focus_id": FOCUS_ID,
         "actor_id": ACTOR_ID,
         "device_id": DEVICE_ID,
-        "participant_identity": PARTICIPANT_IDENTITY,
+        "participant_id": PARTICIPANT_IDENTITY,
         "issued_at": issued_at,
         "expires_at": expires_at,
         "sig": "",
@@ -109,7 +109,7 @@ fn call_state_op(binding: Value) -> Operation {
                 "participant": {
                     "actor_id": ACTOR_ID,
                     "device_id": DEVICE_ID,
-                    "participant_identity": PARTICIPANT_IDENTITY,
+                    "participant_id": PARTICIPANT_IDENTITY,
                     "participant_binding": binding,
                 }
             },
@@ -243,7 +243,7 @@ fn signing_input_matches_spec_construction() {
     let expected_json = format!(
         "{{\"actor_id\":\"{ACTOR_ID}\",\"call_id\":\"{CALL_ID}\",\
          \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00.000Z\",\
-         \"focus_id\":\"{FOCUS_ID}\",\"participant_identity\":\"{PARTICIPANT_IDENTITY}\",\
+         \"focus_id\":\"{FOCUS_ID}\",\"participant_id\":\"{PARTICIPANT_IDENTITY}\",\
          \"realm_id\":\"{REALM_ID}\"}}"
     );
     expected.extend_from_slice(expected_json.as_bytes());

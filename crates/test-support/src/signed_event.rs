@@ -350,7 +350,7 @@ impl<'a> CallerSignedEvent<'a> {
 #[must_use]
 pub fn head_eq_precondition(cell: &str, settled_value: Value) -> Precondition {
     serde_json::from_value(serde_json::json!({
-        "cell": cell,
+        "cell_id": cell,
         "predicate": { "op": "head_eq", "value": settled_value },
     }))
     .expect("fixture head_eq precondition")

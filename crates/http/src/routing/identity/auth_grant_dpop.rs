@@ -555,6 +555,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
     Ok(SessionRecord {
         token_hash,
+        service_account_id: Some(grant.service_account_id.clone()),
         actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
@@ -562,7 +563,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         agent_session,
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
-            issuer: grant.issuer_id.clone(),
+            issuer_id: grant.issuer_id.clone(),
             scopes: grant.scopes.clone(),
             credential_class: grant.credential_class,
             holder_binding: grant.holder_binding.clone(),
@@ -692,7 +693,7 @@ pub(crate) fn session_from_verified_grant(
 ) -> SessionRecord {
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
-        issuer: grant.issuer_id.clone(),
+        issuer_id: grant.issuer_id.clone(),
         scopes: grant.scopes.clone(),
         credential_class: grant.credential_class,
         holder_binding: grant.holder_binding.clone(),
@@ -704,6 +705,7 @@ pub(crate) fn session_from_verified_grant(
             grant_jwt,
             state.service_id(),
         ),
+        service_account_id: Some(grant.service_account_id.clone()),
         actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
@@ -838,9 +840,9 @@ mod tests {
                 "ak:session_grant:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
             )
             .unwrap(),
-            issuer_id: "did:web:coauth.local".to_owned(),
+            issuer_id: DidCoreId::new("ak:did_core:web:coauth.local").unwrap(),
             subject_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            service_account_id: "alice".to_owned(),
+            service_account_id: arkret_wire::ServiceAccountId::new("alice").unwrap(),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),

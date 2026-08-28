@@ -19,9 +19,9 @@ pub(super) async fn private_contact_discovery(
     let _ = body.into_inner();
     // When this grows a real implementation it MUST arrive with the
     // `identity/consent-model.md` §6.2.1 / §6.2.2 anti-probe controls, not
-    // after them: per-`(requester, holder)` rate limiting, a coarse time bucket
+    // after them: per-`(requester_id, holder)` rate limiting, a coarse time bucket
     // on the hit bitmap so a flipped bit does not date the holder's decision,
-    // a holder-auditable record of who probed them, and a per-requester-salted
+    // a holder-auditable record of who probed them, and a per-requester_id-salted
     // HMAC or audience-bound opaque token in place of any bare consent state
     // hash. They are properties of the response shape and of the request
     // budget, so retrofitting them means changing the wire contract — which is
@@ -148,16 +148,22 @@ pub(super) async fn directory_subscribe(
 }
 
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
+    let (Ok(left), Ok(right)) = (
+        arkret_wire::DidCoreId::new(left.to_owned()),
+        arkret_wire::DidCoreId::new(right.to_owned()),
+    ) else {
+        return false;
+    };
     state
         .contacts()
-        .contacts_for_actor(left)
+        .contacts_for_actor(&left)
         .await
         .unwrap_or_default()
         .iter()
         .any(|contact| {
             contact.status == "accepted"
-                && ((contact.requester == left && contact.target == right)
-                    || (contact.requester == right && contact.target == left))
+                && ((contact.requester_id == left && contact.target_id == right)
+                    || (contact.requester_id == right && contact.target_id == left))
         })
 }
 
@@ -196,9 +202,11 @@ mod tests {
         state
             .contacts()
             .save_contact(soland_services::identity::ContactRecord {
-                requester: alice.to_owned(),
-                target: bob.to_owned(),
-                contact_round_id: Some(format!("sha256:{}", "1".repeat(64))),
+                requester_id: arkret_wire::DidCoreId::new(alice.to_owned()).unwrap(),
+                target_id: arkret_wire::DidCoreId::new(bob.to_owned()).unwrap(),
+                contact_round_id: Some(
+                    arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                ),
                 version: Some(1),
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
@@ -212,7 +220,7 @@ mod tests {
                 response_event_ref: None,
                 tombstone_event_ref: None,
                 message: None,
-                peer_id: None,
+                peer_host_id: None,
                 peer_service_resolution: None,
                 created_at: observed_at,
                 updated_at: observed_at,
@@ -220,6 +228,7 @@ mod tests {
             .await
             .unwrap();
         let session = SessionRecord {
+            service_account_id: None,
             token_hash: "directory-test-token".to_owned(),
             actor: alice.to_owned(),
             device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),

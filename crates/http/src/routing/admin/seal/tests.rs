@@ -66,7 +66,7 @@ fn notary_value_from_cell_reads_authoritative_threshold_form() {
         signer_descriptor("did:web:c.example", 23),
     ];
     let notary = arkret_wire::NotaryValue::Threshold {
-        members,
+        signers: members,
         threshold: 2,
         forensic_attribution: arkret_wire::ForensicAttribution::QuorumIntersection,
     };
@@ -121,7 +121,9 @@ fn bottom_repair_request_body_round_trips_through_serde() {
         strategy: BottomRepairStrategy::HeadInWinner {
             head: BottomCandidateHead {
                 event_id: "ak:event:abc".to_owned(),
-                issuer: Some("did:ak:alice".to_owned()),
+                issuer_id: Some(
+                    arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                ),
                 hlc: None,
                 summary: None,
             },

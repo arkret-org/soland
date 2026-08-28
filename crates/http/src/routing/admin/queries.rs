@@ -143,7 +143,7 @@ pub(super) fn admin_actor_row(
     Some(AdminActor {
         id: principal_id.to_string(),
         principal_id: principal_id.clone(),
-        account_id: Some(account.id.clone()),
+        account_id: Some(account.id.to_string()),
         handle: (!handle.is_empty()).then_some(handle),
         display_name: account.display_name.clone(),
         status: Some(status),
@@ -442,8 +442,8 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
     CapabilitySummary {
         grant_id: grant.grant_id.clone(),
         realm_id: (!grant.realm_id.is_empty()).then(|| grant.realm_id.clone()),
-        issuer: grant.issuer_id.to_string(),
-        subject: grant.subject_id.to_string(),
+        issuer_id: grant.issuer_id.clone(),
+        subject_id: grant.subject_id.clone(),
         resource: (!grant.resource.is_empty()).then(|| grant.resource.clone()),
         actions: grant.actions.clone(),
         constraints: grant
@@ -541,7 +541,7 @@ pub(super) async fn admin_list_capabilities(
         rows.retain(|summary| summary.realm_id.as_deref() == Some(realm.as_str()));
     }
     if let Some(subject) = &subject_filter {
-        rows.retain(|summary| &summary.subject == subject);
+        rows.retain(|summary| summary.subject_id.as_str() == subject);
     }
     match state_filter {
         CapabilityGrantState::Active => rows.retain(|summary| !summary.revoked),
@@ -702,13 +702,14 @@ mod tests {
     }
 
     /// Production-mode admin-principal gate: a session whose actor is not
-    /// listed in `SOLAND_ADMIN_PRINCIPAL_DIDS` is a hard 403; listing the
-    /// DID admits it. (The HTTP-level 401 path is covered by the
+    /// listed in `SOLAND_ADMIN_PRINCIPAL_IDS` is a hard 403; listing the
+    /// stable principal ID admits it. (The HTTP-level 401 path is covered by the
     /// `admin_production_queries` contract tests; this locks the
     /// authorization decision itself, which dev-mode fixtures cannot reach.)
     #[test]
     fn require_admin_principal_is_fail_closed_in_production() {
         let session = |actor: &str| soland_services::identity::SessionIdentityState {
+            service_account_id: None,
             token_hash: "hash".to_owned(),
             actor: actor.to_owned(),
             device_id: "ak:device:test".to_owned(),
@@ -723,17 +724,20 @@ mod tests {
         let state = AppState::new(
             crate::config::AppConfig {
                 development_mode: false,
-                admin_principal_dids: vec!["did:web:op.example".to_owned()],
+                admin_principal_ids: vec![
+                    arkret_identifiers::DidCoreId::new("ak:did_core:web:op.example").unwrap(),
+                ],
                 ..crate::config::AppConfig::test_default()
             },
             soland_storage_postgres::Db { pool: None },
         );
 
-        let denied = super::require_admin_principal(&state, session("did:web:nobody.example"))
-            .expect_err("non-admin principal must be rejected in production");
+        let denied =
+            super::require_admin_principal(&state, session("ak:did_core:web:nobody.example"))
+                .expect_err("non-admin principal must be rejected in production");
         assert_eq!(denied.status, Some(salvo::http::StatusCode::FORBIDDEN));
 
-        super::require_admin_principal(&state, session("did:web:op.example"))
+        super::require_admin_principal(&state, session("ak:did_core:web:op.example"))
             .expect("listed admin principal must be admitted");
     }
 }

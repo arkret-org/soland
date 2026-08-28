@@ -79,6 +79,16 @@ impl AccountStore for MemoryAccountStore {
         Ok(record.map(|record| self.with_current_localpart(record)))
     }
 
+    async fn get_by_id(&self, account_id: &str) -> PersistenceResult<Option<AccountRecord>> {
+        let data = self.data.lock();
+        let record = data
+            .values()
+            .find(|record| record.id.as_str() == account_id)
+            .cloned();
+        drop(data);
+        Ok(record.map(|record| self.with_current_localpart(record)))
+    }
+
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.insert(record.principal_id.to_string(), record.clone());

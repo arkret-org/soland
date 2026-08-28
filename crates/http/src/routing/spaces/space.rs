@@ -338,7 +338,7 @@ async fn upsert_realm_moderation_policy(
         policy,
         &session.actor,
         updated_at,
-    ))
+    )?)
 }
 
 fn caller_signed_realm_moderation_policy(
@@ -558,7 +558,7 @@ pub async fn realm_lifecycle_response(
     Ok(RealmLifecycleView {
         realm_id: realm_id_value,
         owner_id,
-        members,
+        member_ids: members,
         deleted: record.deleted,
         archived,
         frozen,

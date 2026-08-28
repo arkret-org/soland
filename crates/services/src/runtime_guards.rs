@@ -120,7 +120,7 @@ impl RuntimeGuardService {
 
     pub fn record_moderation_report_attempt(
         &self,
-        reporter: &str,
+        reporter_id: &str,
         source_service: Option<&str>,
         realm_id: &str,
         source_ip_hash: &str,
@@ -128,11 +128,11 @@ impl RuntimeGuardService {
     ) -> ModerationReportRateOutcome {
         let mut buckets = vec![
             (
-                format!("reporter:{reporter}"),
+                format!("reporter_id:{reporter_id}"),
                 MODERATION_REPORT_MAX_PER_REPORTER_WINDOW,
             ),
             (
-                format!("reporter_realm:{reporter}:{realm_id}"),
+                format!("reporter_realm:{reporter_id}:{realm_id}"),
                 MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
             ),
             (
@@ -140,7 +140,7 @@ impl RuntimeGuardService {
                 MODERATION_REPORT_MAX_PER_SOURCE_IP_WINDOW,
             ),
             (
-                format!("reporter_target:{reporter}:{target_ref}"),
+                format!("reporter_target:{reporter_id}:{target_ref}"),
                 MODERATION_REPORT_MAX_PER_REPORTER_TARGET_WINDOW,
             ),
         ];
@@ -150,7 +150,7 @@ impl RuntimeGuardService {
                 MODERATION_REPORT_MAX_PER_SOURCE_SERVICE_WINDOW,
             ));
             buckets.push((
-                format!("reporter_source_service:{reporter}:{source_service}"),
+                format!("reporter_source_service:{reporter_id}:{source_service}"),
                 MODERATION_REPORT_MAX_PER_REPORTER_REALM_WINDOW,
             ));
         }

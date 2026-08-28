@@ -18,7 +18,7 @@ struct MemberIdentityEventRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    actor_id: String,
+    actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     segment: String,
     #[diesel(sql_type = Text)]
@@ -35,7 +35,7 @@ impl From<MemberIdentityEventRow> for MemberIdentityEventRecord {
             event_id: row.event_id,
             subject: MemberIdentitySubjectKey {
                 realm_id: row.realm_id,
-                actor_id: row.actor_id,
+                actor_id: row.actor_id.to_string(),
                 segment: row.segment,
             },
             payload_digest: row.payload_digest,
@@ -50,11 +50,9 @@ struct HandleClaimRow {
     #[diesel(sql_type = Text)]
     digest: String,
     #[diesel(sql_type = Text)]
-    subject_id: String,
+    subject_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
-    issuer: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    issuer_id: Option<String>,
+    issuer_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     audience: Option<String>,
     #[diesel(sql_type = Text)]
@@ -74,7 +72,6 @@ impl From<HandleClaimRow> for HandleClaimEvidenceRecord {
         Self {
             digest: row.digest,
             subject_id: row.subject_id,
-            issuer: row.issuer,
             issuer_id: row.issuer_id,
             audience: row.audience,
             binding_state: row.binding_state,
@@ -86,7 +83,7 @@ impl From<HandleClaimRow> for HandleClaimEvidenceRecord {
     }
 }
 
-const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer, issuer_id, audience, \
+const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer_id, audience, \
      binding_state, visibility, expires_at, revoked, envelope";
 
 #[async_trait]
@@ -148,11 +145,10 @@ impl MemberIdentityStore for PgMemberIdentityStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO member_identity_handle_claims \
-             (digest, subject_id, issuer, issuer_id, audience, binding_state, visibility, \
+             (digest, subject_id, issuer_id, audience, binding_state, visibility, \
               expires_at, revoked, envelope) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (subject_id, digest) DO UPDATE SET \
-                issuer = EXCLUDED.issuer, \
                 issuer_id = EXCLUDED.issuer_id, \
                 audience = EXCLUDED.audience, \
                 binding_state = EXCLUDED.binding_state, \
@@ -163,8 +159,7 @@ impl MemberIdentityStore for PgMemberIdentityStore {
         )
         .bind::<Text, _>(&record.digest)
         .bind::<Text, _>(&record.subject_id)
-        .bind::<Text, _>(&record.issuer)
-        .bind::<Nullable<Text>, _>(&record.issuer_id)
+        .bind::<Text, _>(&record.issuer_id)
         .bind::<Nullable<Text>, _>(&record.audience)
         .bind::<Text, _>(&record.binding_state)
         .bind::<Nullable<Text>, _>(&record.visibility)
@@ -177,7 +172,10 @@ impl MemberIdentityStore for PgMemberIdentityStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn delete_handle_claims_for_subject(&self, subject_id: &str) -> PersistenceResult<usize> {
+    async fn delete_handle_claims_for_subject(
+        &self,
+        subject_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;

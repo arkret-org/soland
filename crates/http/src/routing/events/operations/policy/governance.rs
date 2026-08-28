@@ -745,8 +745,7 @@ pub(super) fn moderation_actor<'a>(
     let actor = match kind {
         arkret_wire::EventKind::ModerationDecision => operation
             .payload
-            .get("issuer")
-            .or_else(|| operation.payload.get("decided_by"))
+            .get("issuer_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,

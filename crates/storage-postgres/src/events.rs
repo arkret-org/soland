@@ -51,7 +51,7 @@ pub(crate) struct CanonicalEventRow {
     #[diesel(sql_type = Binary)]
     pub(crate) digest: Vec<u8>,
     #[diesel(sql_type = Text)]
-    actor_id: String,
+    actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
     #[diesel(sql_type = Nullable<Text>)]
@@ -140,7 +140,7 @@ struct StoredEventIdentityRow {
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Text)]
-    actor_id: String,
+    actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
     #[diesel(sql_type = Nullable<Text>)]
@@ -182,7 +182,7 @@ struct EventBatchReceiptRow {
     #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
     #[diesel(sql_type = Text)]
-    issuer: String,
+    issuer_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Jsonb)]
     scope: Value,
     #[diesel(sql_type = Jsonb)]
@@ -210,7 +210,7 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
                 "receipt", &row.id,
             )))
             .map_err(invalid)?,
-            issuer_id: serde_json::from_value(Value::String(row.issuer)).map_err(invalid)?,
+            issuer_id: row.issuer_id,
             scope: serde_json::from_value(row.scope).map_err(invalid)?,
             events: serde_json::from_value(row.events).map_err(invalid)?,
             created_at: row.created_at,
@@ -288,7 +288,7 @@ pub(crate) async fn insert_canonical_event(
         ) in [
             (
                 stored.canonical_bytes,
-                stored.actor_id,
+                stored.actor_id.to_string(),
                 stored.actor_seq,
                 stored.realm_id,
                 stored.kind,
@@ -707,14 +707,14 @@ async fn insert_event_batch_receipt(
     })?;
     let receipt_pk = sql_query(
         "INSERT INTO event_batch_receipts \
-         (schema, id, issuer, scope, events, created_at, proofs) \
+         (schema, id, issuer_id, scope, events, created_at, proofs) \
          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING pk",
     )
     .bind::<Text, _>(&receipt.schema)
     .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
         receipt.receipt_id.as_str(),
     ))
-    .bind::<Text, _>(receipt.issuer_id.as_str())
+    .bind::<Text, _>(&receipt.issuer_id)
     .bind::<Jsonb, _>(scope)
     .bind::<Jsonb, _>(events)
     .bind::<Timestamptz, _>(arkret_canonical::normalize_timestamp_canonical(
@@ -768,7 +768,7 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
             .expect("canonical_events.digest must be 32 bytes");
         Self {
             event_id: ids::format_event_id(&id),
-            actor_id: row.actor_id,
+            actor_id: row.actor_id.to_string(),
             actor_seq: row.actor_seq.max(0) as u64,
             realm_id: row.realm_id,
             kind: row.kind,
@@ -1387,7 +1387,7 @@ impl EventStore for PgEventStore {
             return Ok(Vec::new());
         };
         let rows = sql_query(
-            "SELECT receipt.schema, receipt.id, receipt.issuer, receipt.scope, \
+            "SELECT receipt.schema, receipt.id, receipt.issuer_id, receipt.scope, \
                     receipt.events, receipt.created_at, receipt.proofs \
              FROM event_batch_receipts receipt \
              JOIN event_batch_receipt_events binding ON binding.receipt_pk = receipt.pk \
@@ -1411,7 +1411,7 @@ impl EventStore for PgEventStore {
             #[diesel(sql_type = Text)]
             account_subject: String,
             #[diesel(sql_type = Text)]
-            principal_id: String,
+            principal_id: arkret_identifiers::DidCoreId,
             #[diesel(sql_type = Text)]
             realm_id: String,
             #[diesel(sql_type = Text)]
@@ -1560,7 +1560,7 @@ impl EventStore for PgEventStore {
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut conn = pg_conn(&self.pool)
@@ -1575,7 +1575,7 @@ impl EventStore for PgEventStore {
              ORDER BY actor_seq ASC, id ASC",
         )
         .bind::<Text, _>(realm_id)
-        .bind::<Text, _>(received_by)
+        .bind::<Text, _>(received_by.as_str())
         .bind::<Text, _>(arkret_wire::EventKind::ModerationFrankingProof.as_str())
         .bind::<Text, _>(target_event_id)
         .load::<CanonicalEventRow>(&mut *conn)

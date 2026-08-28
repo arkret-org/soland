@@ -279,6 +279,7 @@ async fn peer_invites_submit(
             "peer-invite:{}:{request_hash}",
             trust_headers.source_trust_domain
         ),
+        service_account_id: None,
         actor: delivery.invite_event.actor_id.as_str().to_owned(),
         device_id: format!("peer-invite:{source_id}"),
         audience: state.service_id().clone(),
@@ -337,7 +338,7 @@ async fn receive_private_invite_delivery(
     validate_invite_delivery_consistency(body, delivery, state)?;
 
     // The inviter_id is the actor that signed the durable `ak.invite.create`
-    // event; it is the `peer` we test `denied_subjects` and the
+    // event; it is the `peer` we test `denied_subject_ids` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
     let inviter_id = delivery.invite_event.actor_id.as_str().to_owned();
     let subject_id = delivery.invite_address.subject_id.clone();
@@ -639,7 +640,7 @@ async fn enqueue_remote_invite_delivery(
             delivery: FederationDeliveryRecord {
                 id: enqueued_id.clone(),
                 peer_id: recipient_id.clone(),
-                peer_url: Some(entry.base_uri.trim_end_matches('/').to_owned()),
+                peer_url: Some(entry.base_url.trim_end_matches('/').to_owned()),
                 endpoint: PEER_INVITES_ENDPOINT.to_owned(),
                 idempotency_key: delivery.idempotency_key.clone(),
                 payload_json,
@@ -1314,7 +1315,7 @@ fn resolve_core_invite_receive_policy(
 pub(crate) fn directory_handle_claim_resolve_allowed(
     state: &AppState,
     intent: Option<DirectoryIntent>,
-    requester: Option<&DidCoreId>,
+    requester_id: Option<&DidCoreId>,
     subject: &str,
     recipient_id: &str,
     source_id: &str,
@@ -1329,7 +1330,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     ) {
         return true;
     }
-    let Some(requester) = requester else {
+    let Some(requester_id) = requester_id else {
         return false;
     };
     let Some(handle) = handle_claim.handle.clone() else {
@@ -1351,7 +1352,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
                 state,
                 &policy,
                 &evidence,
-                requester.as_str(),
+                requester_id.as_str(),
                 subject,
                 recipient_id,
                 source_id,
@@ -1369,7 +1370,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
                 state,
                 &policy,
                 &evidence,
-                requester.as_str(),
+                requester_id.as_str(),
                 subject,
                 recipient_id,
                 source_id,
@@ -1392,7 +1393,7 @@ fn evaluate_invite_receive(
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
 
-    // §5 — `denied_subjects` hit: MUST drop and force opaque disclosure so
+    // §5 — `denied_subject_ids` hit: MUST drop and force opaque disclosure so
     // the blocklist cannot leak through the response side channel.
     if policy
         .denied_subject_ids
@@ -1556,7 +1557,7 @@ pub(crate) fn evaluate_contact_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
     evidence: &ContactIntroductionEvidence,
-    requester: &str,
+    requester_id: &str,
     subject: &str,
     recipient_id: &str,
     source_id: &str,
@@ -1616,7 +1617,7 @@ pub(crate) fn evaluate_contact_receive(
     if policy
         .denied_subject_ids
         .iter()
-        .any(|did| did.as_str() == requester)
+        .any(|did| did.as_str() == requester_id)
         || principal_service_blocked(policy, constraints, source_id)
         || !principal_service_trusted(policy, constraints, source_id)
         || !subject_did_method_accepted(constraints, subject)
@@ -2142,7 +2143,7 @@ mod invite_locator_security_tests {
         state
             .identities()
             .save_account(AccountProfileState {
-                id: PRODUCTION_HOLDER.to_owned(),
+                id: arkret_wire::ServiceAccountId::new("production-holder-account").unwrap(),
                 principal_id: DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,

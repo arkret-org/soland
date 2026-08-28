@@ -23,7 +23,7 @@ diesel::table! {
 diesel::table! {
     account_localparts (id) {
         id -> Uuid,
-        account_id -> Uuid,
+        account_id -> Text,
         localpart -> Text,
         is_primary -> Bool,
         created_at -> Timestamptz,
@@ -33,7 +33,7 @@ diesel::table! {
 
 diesel::table! {
     accounts (id) {
-        id -> Uuid,
+        id -> Text,
         principal_id -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
@@ -110,7 +110,7 @@ diesel::table! {
         pairing_code -> Nullable<Text>,
         pairing_expires_at -> Nullable<Timestamptz>,
         approval_request_id -> Nullable<Text>,
-        controller_account_id -> Nullable<Uuid>,
+        controller_account_id -> Nullable<Text>,
         recipient_id -> Nullable<Text>,
         runtime_key_binding_digest -> Nullable<Text>,
         runtime_public_key_digest -> Nullable<Text>,
@@ -196,7 +196,7 @@ diesel::table! {
         sha256 -> Text,
         media_type -> Text,
         filename -> Nullable<Text>,
-        uploaded_by_id -> Text,
+        uploaded_by -> Text,
         realm_id -> Nullable<Text>,
         size_bytes -> Int8,
         storage_backend -> Text,
@@ -522,9 +522,8 @@ diesel::table! {
         pk -> Int8,
         schema -> Text,
         id -> Uuid,
-        issuer -> Text,
+        issuer_id -> Text,
         scope -> Jsonb,
-        frontier -> Jsonb,
         events -> Jsonb,
         created_at -> Timestamptz,
         proofs -> Jsonb,
@@ -689,7 +688,7 @@ diesel::table! {
     invite_receive_policies (subject_id) {
         subject_id -> Text,
         policy_payload -> Jsonb,
-        denied_subjects -> Array<Nullable<Text>>,
+        denied_subject_ids -> Array<Nullable<Text>>,
         updated_at -> Timestamptz,
     }
 }
@@ -751,8 +750,7 @@ diesel::table! {
     member_identity_handle_claims (subject_id, digest) {
         digest -> Text,
         subject_id -> Text,
-        issuer -> Text,
-        issuer_id -> Nullable<Text>,
+        issuer_id -> Text,
         audience -> Nullable<Text>,
         binding_state -> Text,
         visibility -> Nullable<Text>,
@@ -800,6 +798,7 @@ diesel::table! {
         id -> Text,
         keypackage_ref -> Text,
         keypackage_digest -> Text,
+        owner_account_id -> Text,
         actor_id -> Text,
         device_id -> Nullable<Text>,
         endpoint_verification_method -> Nullable<Text>,
@@ -886,7 +885,7 @@ diesel::table! {
         recipient_actor_id -> Text,
         realm_id -> Nullable<Text>,
         source_event_id -> Nullable<Text>,
-        controller_account_id -> Nullable<Uuid>,
+        controller_account_id -> Nullable<Text>,
         recipient_id -> Nullable<Text>,
         source_account_artifact_kind -> Nullable<Text>,
         source_account_artifact_id -> Nullable<Text>,
@@ -970,7 +969,7 @@ diesel::table! {
         policy_kind -> Text,
         document -> Jsonb,
         version -> Int4,
-        signed_by_id -> Nullable<Text>,
+        signed_by -> Nullable<Text>,
         active -> Bool,
         updated_at -> Timestamptz,
     }
@@ -1008,8 +1007,8 @@ diesel::table! {
         durability_policy -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by_id -> Text,
-        updated_by_id -> Nullable<Text>,
+        created_by -> Text,
+        updated_by -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -1040,9 +1039,9 @@ diesel::table! {
         title -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by_id -> Text,
+        created_by -> Text,
         history_basis_seals -> Jsonb,
-        updated_by_id -> Nullable<Text>,
+        updated_by -> Nullable<Text>,
         fields -> Jsonb,
         schema_refs -> Jsonb,
         facets -> Jsonb,
@@ -1070,9 +1069,9 @@ diesel::table! {
         rank -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by_id -> Text,
+        created_by -> Text,
         history_basis_seals -> Jsonb,
-        updated_by_id -> Nullable<Text>,
+        updated_by -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -1102,9 +1101,9 @@ diesel::table! {
         encrypted_content -> Nullable<Jsonb>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
-        created_by_id -> Text,
+        created_by -> Text,
         history_basis_seals -> Jsonb,
-        updated_by_id -> Nullable<Text>,
+        updated_by -> Nullable<Text>,
         created_at -> Timestamptz,
         updated_at -> Nullable<Timestamptz>,
     }
@@ -1422,9 +1421,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    service_identity_registrations (service_kind, public_base) {
+    service_identity_registrations (service_kind, public_base_url) {
         service_kind -> Text,
-        public_base -> Text,
+        public_base_url -> Text,
         service_id -> Text,
         version_id -> Text,
         inception_digest -> Text,
@@ -1437,6 +1436,7 @@ diesel::table! {
 diesel::table! {
     sessions (id) {
         id -> Text,
+        service_account_id -> Text,
         actor_id -> Text,
         device_id -> Text,
         audience -> Text,

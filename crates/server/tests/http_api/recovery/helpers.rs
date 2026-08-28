@@ -104,11 +104,11 @@ fn register_recovery_policy_grant(
             "id": arkret_identifiers::SessionGrantId::from_issuance_digest(
                 Sha256::digest(presentation.grant_jwt.as_bytes()).into(),
             ),
-            "issuer": "ak:did_core:web:coauth.example",
-            "subject": subject,
+            "issuer_id": "ak:did_core:web:coauth.example",
+            "subject_id": subject,
             "service_account_id": "recovery-policy-fixture",
             "device_id": device_id,
-            "audience": state.service_id(),
+            "audience_id": state.service_id(),
             "scopes": [
                 arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH_V1,
                 arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_RESOURCE_GET_V1,
@@ -279,7 +279,7 @@ async fn install_recovery_policy_introspection(config: &mut soland_http::config:
                     .expect("introspection request JSON");
                 let grant_jwt = match body {
                     arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectRequestBody::ByJwt(request) => {
-                        assert_eq!(request.audience.as_ref(), Some(&audience));
+                        assert_eq!(request.audience_id.as_ref(), Some(&audience));
                         assert!(request.proof.is_none());
                         request.grant_jwt
                     }
@@ -353,7 +353,7 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
         .cloned()
         .expect("notary fixture Seal covers a Control Move");
     let op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
+        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
         op: arkret_state::lattice::SealedOp::new(
             move_id,
             arkret_wire::LatticeOp {
@@ -505,7 +505,7 @@ pub(crate) async fn seed_recovery_policy(
             "issuers": [{"verification_method": verification_method}],
             "threshold": 1
         }],
-        "supersedes": supersedes,
+        "supersedes_id": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",
         "auth_data": {
@@ -519,7 +519,7 @@ pub(crate) async fn seed_recovery_policy(
         .recovery_policies()
         .insert(RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: principal_core.to_string(),
+            principal_id: principal_core,
             version,
             acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
@@ -577,11 +577,39 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
     let now = chrono::Utc::now();
     let device_id = RECOVERY_TEST_DEVICE;
     let actor_core = fixture_actor_core_id(actor).to_string();
+    let service_account_id = if let Some(account) = state
+        .test_persistence()
+        .accounts()
+        .get(&actor_core)
+        .await
+        .unwrap()
+    {
+        account.id
+    } else {
+        let account_id =
+            arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string()).unwrap();
+        state
+            .test_persistence()
+            .accounts()
+            .put(&soland_storage::AccountRecord {
+                id: account_id.clone(),
+                principal_id: fixture_actor_core_id(actor),
+                localpart: "recovery-test".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        account_id
+    };
     state
         .test_persistence()
         .sessions()
         .put(&SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
+            service_account_id,
             actor: actor_core.clone(),
             device_id: device_id.to_owned(),
             audience: state.service_id().clone(),
@@ -705,7 +733,7 @@ pub(crate) fn signed_recovery_policy(
             "issuers": [{"verification_method": verification_method}],
             "threshold": 1
         }],
-        "supersedes": supersedes,
+        "supersedes_id": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",
         "auth_data": {

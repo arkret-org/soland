@@ -168,7 +168,7 @@ async fn mint_join_application_list_cursor(
             handle: record.handle,
             binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id.to_string(),
+            service_id: record.context.service_id.clone(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),
@@ -421,7 +421,9 @@ async fn submit_join_application(
         updated_at: body.receipt.submitted_at,
     };
     let command = JoinApplicationCommand {
-        principal_id: session.actor,
+        principal_id: arkret_wire::DidCoreId::new(session.actor).map_err(|error| {
+            AppError::unauthenticated(format!("session principal_id is invalid: {error}"))
+        })?,
         idempotency_key,
         request_hash: request_hash(&body)?,
         idempotency_expires_at: expires_at + Duration::days(7),
@@ -496,7 +498,9 @@ async fn review_join_application(
         .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let command = JoinApplicationCommand {
-        principal_id: session.actor,
+        principal_id: arkret_wire::DidCoreId::new(session.actor).map_err(|error| {
+            AppError::unauthenticated(format!("session principal_id is invalid: {error}"))
+        })?,
         idempotency_key,
         request_hash: request_hash(&body)?,
         idempotency_expires_at: existing.expires_at + Duration::days(7),
@@ -569,7 +573,9 @@ async fn cancel_join_application(
         return Err(AppError::not_found("join application not found"));
     }
     let command = JoinApplicationCommand {
-        principal_id: session.actor,
+        principal_id: arkret_wire::DidCoreId::new(session.actor).map_err(|error| {
+            AppError::unauthenticated(format!("session principal_id is invalid: {error}"))
+        })?,
         idempotency_key,
         request_hash: request_hash(&body)?,
         idempotency_expires_at: existing.expires_at + Duration::days(7),
@@ -757,7 +763,7 @@ async fn list_join_applications(
     json_ok(JoinApplicationListOutcome {
         realm_id,
         viewer_is_reviewer: reviewer,
-        applications,
+        application_entries: applications,
         next_cursor,
     })
 }
@@ -826,6 +832,6 @@ async fn list_join_application_audit(
     json_ok(JoinApplicationAuditOutcome {
         realm_id,
         application_ref,
-        entries: record.audit_entries,
+        application_audit_entries: record.audit_entries,
     })
 }

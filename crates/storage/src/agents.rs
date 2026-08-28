@@ -1,4 +1,4 @@
-use arkret_wire::OpaqueLocalId;
+use arkret_wire::{OpaqueLocalId, ServiceAccountId};
 
 use super::{
     AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
@@ -76,7 +76,7 @@ pub struct AgentRuntimeApprovalWrite {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: chrono::DateTime<chrono::Utc>,
-    pub controller_account_id: String,
+    pub controller_account_id: ServiceAccountId,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,

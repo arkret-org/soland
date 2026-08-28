@@ -5,6 +5,7 @@
 //! tombstones as `[expired]`, preserving event_id / causal history for sealed
 //! chains without leaking retained content.
 
+use arkret_wire::DidCoreId;
 use chrono::{DateTime, Duration, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -45,7 +46,7 @@ struct SweepRetentionPolicyRequestBody {
 struct RetentionPolicyOutcome {
     realm_id: String,
     ttl_seconds: i64,
-    updated_by: String,
+    updated_by: DidCoreId,
     updated_at: String,
 }
 
@@ -101,7 +102,9 @@ async fn configure_retention_policy(
     let record = RetentionPolicyRecord {
         realm_id: realm_id.clone(),
         ttl_seconds,
-        updated_by: session.actor.clone(),
+        updated_by: DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::param_invalid(format!("authenticated principal_id: {error}"))
+        })?,
         updated_at: now,
     };
     state

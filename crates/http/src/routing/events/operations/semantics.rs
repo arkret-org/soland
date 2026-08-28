@@ -253,7 +253,7 @@ fn validate_typed_payload_shapes(
             Ok(())
         }
         // The complete canonical typed shape is required; validating only
-        // observed_dots would allow malformed identifiers.
+        // observed_dot_ids would allow malformed identifiers.
         arkret_wire::EventKind::ConsentRevoke => {
             let mut wire_payload = operation.payload.clone();
             // Event-to-projection conversion adds actor_seq so the consent
@@ -403,7 +403,7 @@ fn operation_extra_validator_for_kind(kind: &arkret_wire::EventKind) -> Option<O
 }
 
 /// Spec B1.14 — validate a `ak.consent.revoke` payload. Empty or missing
-/// `observed_dots[]` is `schema_violation` — implicit cascade revoke is
+/// `observed_dot_ids[]` is `schema_violation` — implicit cascade revoke is
 /// forbidden.
 pub fn validate_consent_revoke_payload(payload: &Value) -> Result<(), (&'static str, String)> {
     let parsed: arkret_models_collaboration::governance_payloads::ConsentRevokePayload =

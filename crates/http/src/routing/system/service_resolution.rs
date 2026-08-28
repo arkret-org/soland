@@ -79,7 +79,7 @@ fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError>
         .transport_bindings
         .iter()
         .find(|binding| binding.kind() == arkret_wire::BindingKind::HttpJson)
-        .map(arkret_models_discovery::TransportBinding::base_uri)
+        .map(arkret_models_discovery::TransportBinding::base_url)
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::ServiceIdentityConflict,
@@ -192,7 +192,7 @@ pub(crate) async fn ensure_current_record(
             && record.record.method_history_head == commitment.method_history_head
             && record.record.version_id == commitment.version_id
             && record.record.current_record_url == record_url
-            && record.record.base_uri == base_url
+            && record.record.base_url == base_url
             && record.record.describe_digest == describe_digest
             && record.record.refresh_after > now
             && record.record.expires_at > now
@@ -225,7 +225,7 @@ pub(crate) async fn ensure_current_record(
             record_sequence,
             previous_record_digest: predecessor_digest.clone(),
             current_record_url: record_url.clone(),
-            base_uri: base_url.clone(),
+            base_url: base_url.clone(),
             describe_digest: describe_digest.clone(),
             issued_at: now,
             refresh_after: now + Duration::seconds(RESOLUTION_REFRESH_SECONDS),

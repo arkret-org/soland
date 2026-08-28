@@ -944,7 +944,7 @@ mod tests {
             arkret_wire::ServiceKind::IdentityRegistry,
             vec!["ak.operation_bundle.identity_registry.describe.v1".to_owned()],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
-                base_uri: "https://webvh-provider.example/".to_owned(),
+                base_url: "https://webvh-provider.example/".to_owned(),
                 extension_profile_required: (),
             }],
         );

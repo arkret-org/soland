@@ -1,3 +1,4 @@
+use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
 use diesel::sql_types::{BigInt, Binary};
 
 use super::{
@@ -12,19 +13,25 @@ use super::{
 /// The `contacts` Event-reference columns hold the same 33-octet token
 /// `canonical_events.id` does, so a malformed wire id is rejected at the
 /// storage boundary rather than stored and discovered on read.
-fn parse_contact_event_ref(event_ref: Option<&str>) -> PersistenceResult<Option<Vec<u8>>> {
+fn parse_contact_event_ref(event_ref: Option<&EventId>) -> PersistenceResult<Option<Vec<u8>>> {
     event_ref
         .map(|value| {
-            ids::event_token_part_or_schema_violation(value, "event").map(|token| token.to_vec())
+            ids::event_token_part_or_schema_violation(value.as_str(), "event")
+                .map(|token| token.to_vec())
         })
         .transpose()
 }
 
-fn format_contact_event_ref(token: &[u8]) -> String {
-    ids::format_event_id(
+fn format_contact_event_ref(token: &[u8]) -> PersistenceResult<EventId> {
+    let value = ids::format_event_id(
         &<[u8; ids::EVENT_ID_BYTES]>::try_from(token)
             .expect("contacts Event reference is a 33-octet Event id"),
-    )
+    );
+    EventId::new(value).map_err(|_| {
+        PersistenceError::SchemaViolation(
+            "stored Contact Event reference is not a canonical EventId".to_owned(),
+        )
+    })
 }
 // ── Pg-backed contact projection store ───────────────────────────────────
 // Durable backing for the holder↔peer `ContactStore`. Mirrors the
@@ -160,11 +167,11 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
 #[derive(QueryableByName)]
 struct ContactRow {
     #[diesel(sql_type = Text)]
-    requester: String,
+    requester_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    target: String,
+    target_id: DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
-    contact_round_id: Option<String>,
+    contact_round_id: Option<Hash>,
     #[diesel(sql_type = Nullable<BigInt>)]
     version: Option<i64>,
     #[diesel(sql_type = Array<Text>)]
@@ -192,7 +199,7 @@ struct ContactRow {
     #[diesel(sql_type = Nullable<Text>)]
     message: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    peer_id: Option<String>,
+    peer_host_id: Option<DidCoreId>,
     #[diesel(sql_type = Nullable<Jsonb>)]
     peer_service_resolution: Option<Value>,
     #[diesel(sql_type = Timestamptz)]
@@ -220,8 +227,8 @@ fn encode_contact_json<T: serde::Serialize + ?Sized>(
 
 fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> {
     Ok(ContactRecord {
-        requester: row.requester,
-        target: row.target,
+        requester_id: row.requester_id,
+        target_id: row.target_id,
         contact_round_id: row.contact_round_id,
         version: row.version.map(u64::try_from).transpose().map_err(|_| {
             PersistenceError::Internal("contacts.version contains a negative value".to_owned())
@@ -232,7 +239,8 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
         request_event_ref: row
             .request_event_ref
             .as_deref()
-            .map(format_contact_event_ref),
+            .map(format_contact_event_ref)
+            .transpose()?,
         request_receipts: decode_contact_json(row.request_receipts, "request_receipts")?,
         request_mirror_receipts: decode_contact_json(
             row.request_mirror_receipts,
@@ -250,22 +258,28 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
         response_event_ref: row
             .response_event_ref
             .as_deref()
-            .map(format_contact_event_ref),
+            .map(format_contact_event_ref)
+            .transpose()?,
         tombstone_event_ref: row
             .tombstone_event_ref
             .as_deref()
-            .map(format_contact_event_ref),
+            .map(format_contact_event_ref)
+            .transpose()?,
         message: row.message,
-        peer_id: row.peer_id,
+        peer_host_id: row.peer_host_id,
         peer_service_resolution: row.peer_service_resolution,
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_id, peer_service_resolution, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
-    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
+    async fn get(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<Option<ContactRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -274,8 +288,8 @@ impl ContactStore for PgContactStore {
              WHERE requester_id = $1 AND target_id = $2 \
              LIMIT 1"
         ))
-        .bind::<Text, _>(requester)
-        .bind::<Text, _>(target)
+        .bind::<Text, _>(requester_id)
+        .bind::<Text, _>(target_id)
         .get_result::<ContactRow>(&mut *conn)
         .await
         .optional()
@@ -324,25 +338,25 @@ impl ContactStore for PgContactStore {
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.requester)
-        .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
+        .bind::<Text, _>(&record.requester_id)
+        .bind::<Text, _>(&record.target_id)
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(|_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()))?)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
-        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_deref())?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_ref())?)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
         .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
         .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
-        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_deref())?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_ref())?)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.tombstone_event_ref.as_deref(),
+            record.tombstone_event_ref.as_ref(),
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_host_id.as_ref())
         .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
@@ -387,9 +401,9 @@ impl ContactStore for PgContactStore {
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
         )
-        .bind::<Text, _>(&record.requester)
-        .bind::<Text, _>(&record.target)
-        .bind::<Nullable<Text>, _>(record.contact_round_id.as_deref())
+        .bind::<Text, _>(&record.requester_id)
+        .bind::<Text, _>(&record.target_id)
+        .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(
             |_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()),
         )?)
@@ -397,7 +411,7 @@ impl ContactStore for PgContactStore {
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.request_event_ref.as_deref(),
+            record.request_event_ref.as_ref(),
         )?)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
@@ -405,13 +419,13 @@ impl ContactStore for PgContactStore {
         .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.response_event_ref.as_deref(),
+            record.response_event_ref.as_ref(),
         )?)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.tombstone_event_ref.as_deref(),
+            record.tombstone_event_ref.as_ref(),
         )?)
         .bind::<Nullable<Text>, _>(record.message.as_deref())
-        .bind::<Nullable<Text>, _>(record.peer_id.as_deref())
+        .bind::<Nullable<Text>, _>(record.peer_host_id.as_ref())
         .bind::<Nullable<Jsonb>, _>(record.peer_service_resolution.as_ref())
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(expected_updated_at)
@@ -421,7 +435,7 @@ impl ContactStore for PgContactStore {
         Ok(affected == 1)
     }
 
-    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
+    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -430,20 +444,24 @@ impl ContactStore for PgContactStore {
              WHERE requester_id = $1 OR target_id = $1 \
              ORDER BY created_at ASC, requester_id ASC, target_id ASC"
         ))
-        .bind::<Text, _>(actor)
+        .bind::<Text, _>(actor_id)
         .get_results::<ContactRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
         rows.into_iter().map(contact_record_from_row).collect()
     }
 
-    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
+    async fn delete(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM contacts WHERE requester_id = $1 AND target_id = $2")
-            .bind::<Text, _>(requester)
-            .bind::<Text, _>(target)
+            .bind::<Text, _>(requester_id)
+            .bind::<Text, _>(target_id)
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -543,7 +561,7 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
 }
 // ── Pg-backed invite-receive policy store ────────────────────────────────
 // Durable backing for per-subject `invite_receive_policy` overrides. The full
-// `InviteReceivePolicy` is persisted as JSONB; `denied_subjects`
+// `InviteReceivePolicy` is persisted as JSONB; `denied_subject_ids`
 // is duplicated into a TEXT[] column for cheap hard-block lookups.
 pub struct PgInviteReceivePolicyStore {
     pub pool: PgPool,
@@ -604,7 +622,7 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         let payload = serde_json::to_value(policy).map_err(|error| {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
         })?;
-        let denied_subjects = policy
+        let denied_subject_ids = policy
             .denied_subject_ids
             .iter()
             .map(|did| did.as_str().to_owned())
@@ -614,16 +632,16 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO invite_receive_policies \
-             (subject_id, policy_payload, denied_subjects, updated_at) \
+             (subject_id, policy_payload, denied_subject_ids, updated_at) \
              VALUES ($1, $2, $3, NOW()) \
              ON CONFLICT (subject_id) DO UPDATE SET \
                 policy_payload = EXCLUDED.policy_payload, \
-                denied_subjects = EXCLUDED.denied_subjects, \
+                denied_subject_ids = EXCLUDED.denied_subject_ids, \
                 updated_at = NOW()",
         )
         .bind::<Text, _>(&subject_id)
         .bind::<Jsonb, _>(&payload)
-        .bind::<Array<Text>, _>(&denied_subjects)
+        .bind::<Array<Text>, _>(&denied_subject_ids)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -663,11 +681,11 @@ pub struct PgConsentCellStore {
 #[derive(QueryableByName)]
 struct ConsentCellRow {
     #[diesel(sql_type = Text)]
-    cell_id: String,
+    cell_id: CellRef,
     #[diesel(sql_type = Text)]
-    holder: String,
+    holder_principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    peer: String,
+    peer_principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
     consent_scope: String,
     #[diesel(sql_type = Jsonb)]
@@ -690,13 +708,13 @@ impl ConsentCellRow {
             })
             .unwrap_or_default();
         let key = ConsentCellKey {
-            holder: self.holder.clone(),
+            holder_principal_id: self.holder_principal_id.clone(),
             cell_id: self.cell_id.clone(),
         };
         let record = ConsentCellRecord {
             cell_id: self.cell_id,
-            holder: self.holder,
-            peer: self.peer,
+            holder_principal_id: self.holder_principal_id,
+            peer_principal_id: self.peer_principal_id,
             consent_scope: self.consent_scope,
             grant_dots: decode_grant_dots(&self.grant_dots),
             revoked_dots,
@@ -705,13 +723,13 @@ impl ConsentCellRow {
         (key, record)
     }
 }
-const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder, peer_id AS peer, consent_scope, grant_dots,      revoked_dots, updated_at";
+const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder_principal_id, peer_id AS peer_principal_id, consent_scope, grant_dots, revoked_dots, updated_at";
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(
         &self,
-        holder: &str,
-        cell_id: &str,
+        holder_principal_id: &DidCoreId,
+        cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -719,7 +737,7 @@ impl ConsentCellStore for PgConsentCellStore {
         let row = sql_query(format!(
             "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells              WHERE holder_id = $1 AND cell_id = $2"
         ))
-        .bind::<Text, _>(holder)
+        .bind::<Text, _>(holder_principal_id)
         .bind::<Text, _>(cell_id)
         .get_result::<ConsentCellRow>(&mut *conn)
         .await

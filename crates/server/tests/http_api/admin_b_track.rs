@@ -34,7 +34,7 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
     assert!(
         actor["account_id"]
             .as_str()
-            .is_some_and(|value| value.starts_with("ak:account:")),
+            .is_some_and(|value| { arkret_wire::ServiceAccountId::new(value.to_owned()).is_ok() }),
         "actor row must include the durable account row id: {actor}"
     );
     assert!(
@@ -153,7 +153,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs_body() {
                 legal_hold: false,
                 redacted: false,
                 visibility: arkret_models_collaboration::objects::blob::BlobVisibility::RealmBound,
-                uploaded_by: "did:web:alice.example".to_owned(),
+                uploaded_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: now,
             },
         )
@@ -176,7 +176,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs_body() {
                 legal_hold: false,
                 redacted: false,
                 visibility: arkret_models_collaboration::objects::blob::BlobVisibility::RealmBound,
-                uploaded_by: "did:web:alice.example".to_owned(),
+                uploaded_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: now,
             },
         )
@@ -207,7 +207,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs_body() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["actor_id"] == "did:web:alice.example")
+        .find(|row| row["actor_id"] == "ak:did_core:web:alice.example")
         .expect("alice media row");
     assert_eq!(row["blob_count"], 2);
     assert_eq!(row["total_size"], 192);

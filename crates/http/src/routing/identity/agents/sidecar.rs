@@ -1520,6 +1520,7 @@ mod tests {
                 id: "keypackage-controller-02".to_owned(),
                 keypackage_ref: "ak:keypackage:controller-02".to_owned(),
                 keypackage_digest: format!("sha256:{}", "2".repeat(64)),
+                owner_account_id: arkret_wire::ServiceAccountId::new("account-controller").unwrap(),
                 actor_id: controller.to_owned(),
                 device_id: Some(device.to_owned()),
                 endpoint_verification_method: None,

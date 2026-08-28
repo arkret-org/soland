@@ -46,8 +46,7 @@ pub(super) fn typed_recovery_policy_summary(
     Ok(RecoveryPolicySummary {
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
-        principal_id: DidCoreId::new(record.principal_id.clone())
-            .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
+        principal_id: record.principal_id.clone(),
         version: u64::from(record.version),
         acceptance_basis_ref: record.acceptance_basis.clone(),
         recovery_policy_ref: None,
@@ -88,8 +87,7 @@ fn recovery_policy_publish_outcome(
     Ok(RecoveryPolicyPublishOutcome {
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
-        principal_id: arkret_identifiers::DidCoreId::new(record.principal_id.clone())
-            .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
+        principal_id: record.principal_id.clone(),
         version: u64::from(record.version),
         acceptance_basis_ref: record.acceptance_basis.clone(),
         accepted_at: record.accepted_at,
@@ -256,7 +254,9 @@ pub(super) async fn recovery_policy_put(
         .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;
 
     let validated = validate_recovery_policy(&payload)?;
-    if validated.principal_id != session.actor || request.event.actor_id.as_str() != session.actor {
+    if validated.principal_id.as_str() != session.actor
+        || request.event.actor_id.as_str() != session.actor
+    {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Event actor and recovery policy principal must match the authenticated principal",
@@ -268,7 +268,7 @@ pub(super) async fn recovery_policy_put(
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &validated.principal_id)
+        .realm_is_principal_control_for_actor(realm_id.as_str(), validated.principal_id.as_str())
         || request.event.scope_ref
             != (arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -283,7 +283,7 @@ pub(super) async fn recovery_policy_put(
     }
     let existing = state
         .recovery_policies()
-        .active_policy(&validated.principal_id)
+        .active_policy(validated.principal_id.as_str())
         .await
         .map_err(recovery_service_error)?;
 
@@ -306,11 +306,11 @@ pub(super) async fn recovery_policy_put(
                 .with_wire_code("recovery_policy_version_not_monotonic"));
             }
             Some(current)
-                if validated.supersedes.as_deref() != Some(current.policy_id.as_str()) =>
+                if validated.supersedes_id.as_deref() != Some(current.policy_id.as_str()) =>
             {
                 return Err(AppError::conflict(format!(
-                    "supersedes {:?} does not match current policy_id `{}`",
-                    validated.supersedes, current.policy_id
+                    "supersedes_id {:?} does not match current policy_id `{}`",
+                    validated.supersedes_id, current.policy_id
                 ))
                 .with_wire_code("recovery_policy_supersedes_invalid"));
             }
@@ -360,7 +360,7 @@ pub(super) async fn recovery_policy_put(
         acceptance_basis,
         trust_domain: validated.trust_domain.into_string(),
         allowed_proof_kinds: validated.allowed_proof_kinds,
-        supersedes: validated.supersedes,
+        supersedes: validated.supersedes_id,
         expires_at: validated.expires_at,
         issued_at: validated.issued_at,
         raw_payload: validated.raw_payload,

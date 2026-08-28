@@ -184,15 +184,15 @@ async fn resolve_service_identity(
                      {error}. Point this deployment back at its original public base URL, or give a \
                      genuinely new deployment its own database namespace.",
                     stored.identity.service_id,
-                    stored.identity.registration_key.public_base(),
-                    configured_key.public_base(),
+                    stored.identity.registration_key.public_base_url(),
+                    configured_key.public_base_url(),
                 )
             })?;
         if drifted {
             tracing::warn!(
                 service_id = %stored.identity.service_id,
-                stored_public_base = %stored.identity.registration_key.public_base(),
-                configured_public_base = %configured_key.public_base(),
+                stored_public_base = %stored.identity.registration_key.public_base_url(),
+                configured_public_base = %configured_key.public_base_url(),
                 "service registration key drift detected; retaining the durable service DID and forbidding silent re-registration",
             );
         }
@@ -670,8 +670,8 @@ async fn ensure_identity_bundle(
     let bundle = DidCoreIdentityBundle {
         schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
         identity: stored.clone(),
-        webvh_history: vec![inception],
-        receipt_chain: vec![stored.registration_receipt.clone()],
+        webvh_history_entries: vec![inception],
+        receipt_chains: vec![stored.registration_receipt.clone()],
         exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
     };
     backend
@@ -709,7 +709,7 @@ async fn restore_identity_bundle(
     }
     validate_bundle_key_custody(config, key_store, &bundle.identity)?;
     let inception = bundle
-        .webvh_history
+        .webvh_history_entries
         .first()
         .expect("validated non-empty")
         .clone();
@@ -740,7 +740,7 @@ async fn restore_identity_bundle(
             "mode": "service_identity_bundle_restore",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE_V1,
             "service_kind": registration_key.service_kind().as_str(),
-            "public_base": registration_key.public_base().as_str(),
+            "public_base_url": registration_key.public_base_url().as_str(),
             "version_id": outcome.version_id(),
         }),
         fetched_at: now,
@@ -825,9 +825,9 @@ fn validate_registration_receipt_signature(stored: &StoredDidCoreIdentity) -> an
 }
 
 fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey> {
-    let public_base = CanonicalServiceUrl::canonicalize(&config.public_base_url)
+    let public_base_url = CanonicalServiceUrl::canonicalize(&config.public_base_url)
         .map_err(|error| anyhow::anyhow!("invalid SOLAND_PUBLIC_BASE_URL: {error}"))?;
-    ServiceRegistrationKey::new(ServiceKind::PrincipalServer, public_base)
+    ServiceRegistrationKey::new(ServiceKind::PrincipalServer, public_base_url)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -1008,7 +1008,7 @@ async fn mint_local_service_identity(
     registration_key: ServiceRegistrationKey,
 ) -> anyhow::Result<StoredDidCoreIdentity> {
     let key_store = required_key_store(key_store)?;
-    let provider_endpoint = url::Url::parse(registration_key.public_base().as_str())
+    let provider_endpoint = url::Url::parse(registration_key.public_base_url().as_str())
         .map_err(|error| anyhow::anyhow!("invalid service Provider endpoint: {error}"))?;
     let mut rng_seed = [0u8; 32];
     soland_http::state::getrandom_seed(&mut rng_seed);
@@ -1083,7 +1083,7 @@ async fn mint_local_service_identity(
             "mode": "service_registration_provider",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE_V1,
             "service_kind": registration_key.service_kind().as_str(),
-            "public_base": registration_key.public_base().as_str(),
+            "public_base_url": registration_key.public_base_url().as_str(),
             "version_id": outcome.version_id(),
             "self_provisioned": true,
         }),
@@ -1121,8 +1121,8 @@ async fn mint_local_service_identity(
         let bundle = DidCoreIdentityBundle {
             schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
             identity: stored.clone(),
-            webvh_history: vec![request.inception_operation],
-            receipt_chain: vec![stored.registration_receipt.clone()],
+            webvh_history_entries: vec![request.inception_operation],
+            receipt_chains: vec![stored.registration_receipt.clone()],
             exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         };
         backend.store(&bundle).map_err(|error| {
@@ -1573,7 +1573,7 @@ mod tests {
         jws.pop();
         jws.push(replacement);
         forged.identity.registration_receipt.proof.jws = jws;
-        forged.receipt_chain[0] = forged.identity.registration_receipt.clone();
+        forged.receipt_chains[0] = forged.identity.registration_receipt.clone();
         bundle_backend.store(&forged).unwrap();
 
         let empty_database = Arc::new(SolandMemoryPersistenceStore::new());

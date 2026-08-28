@@ -167,7 +167,7 @@ async fn load_detail(
             version_id: entry.version_id.clone(),
             record_sequence: entry.record_sequence,
             record_digest: entry.record_digest.to_string(),
-            base_url: entry.base_uri.clone(),
+            base_url: entry.base_url.clone(),
             current_record_url: entry.current_record_url.clone(),
             describe_digest: entry.describe_digest.to_string(),
             verified_at: entry.verified_at,

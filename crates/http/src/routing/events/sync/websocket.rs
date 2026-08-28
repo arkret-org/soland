@@ -39,7 +39,7 @@ use arkret_wire::websocket_binding::{
     WEBSOCKET_SUBPROTOCOL, WebSocketChallengeRecord, WebSocketCloseCode, WebSocketOperationId,
     WebSocketTransportError, canonical_http_origin, validate_websocket_base_url,
 };
-use arkret_wire::{ErrorCode as WireErrorCode, ServiceOperationId};
+use arkret_wire::{ErrorCode as WireErrorCode, ServiceOperationId, WebOrigin};
 use salvo::websocket::{Message, WebSocket, WebSocketUpgrade};
 use soland_services::sync::{WebsocketChallengeState, WebsocketReplayState};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -198,7 +198,7 @@ pub(crate) fn advertise_websocket_binding(
     };
     description.transport_bindings.push(
         arkret_models_discovery::TransportBinding::Websocket {
-            base_uri: base_url,
+            base_url: base_url,
             extension_profile_required:
                 arkret_models_discovery::websocket_binding::WebSocketBindingProfile::BindingWebsocketV1,
             subprotocol:
@@ -560,6 +560,10 @@ async fn serve_connection(
     origin: String,
     mut socket: WebSocket,
 ) {
+    let Ok(canonical_origin) = WebOrigin::new(origin.clone()) else {
+        close_with(&mut socket, WebSocketCloseCode::PolicyViolation, "origin").await;
+        return;
+    };
     let codec = WebSocketFrameCodec::new(WS_MAX_FRAME_BYTES, None);
     let connection_id = random_opaque_id();
     let nonce = random_opaque_id();
@@ -581,7 +585,7 @@ async fn serve_connection(
         .prepare_challenge(&WebsocketChallengeState {
             connection_id: connection_id.clone(),
             nonce: nonce.clone(),
-            canonical_origin: origin.clone(),
+            canonical_origin,
             canonical_base_url: base_url.clone(),
             issued_at,
             expires_at,
@@ -861,7 +865,7 @@ async fn prepare_reauth_challenge(
         .prepare_challenge(&WebsocketChallengeState {
             connection_id: connection_id.to_owned(),
             nonce: nonce.clone(),
-            canonical_origin: origin.to_owned(),
+            canonical_origin: WebOrigin::new(origin).ok()?,
             canonical_base_url: base_url.to_owned(),
             issued_at,
             expires_at,
@@ -2089,6 +2093,7 @@ mod tests {
     #[test]
     fn actor_device_connection_count_is_bounded_and_released() {
         let session = SessionIdentityState {
+            service_account_id: None,
             token_hash: "lease-test".to_owned(),
             actor: "did:example:websocket-lease-test".to_owned(),
             device_id: "device-websocket-lease-test".to_owned(),

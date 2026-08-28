@@ -236,7 +236,7 @@ fn pin_rejects_active_moderation_decision_head() {
                 "decision_id": "ak:event:AaCSkmkJGCJsdlTB9SXNQ9Ohes5_op9NMMetO0Trkf0q",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "hard_deny",
-                "issuer": "ak:did_core:web:mod.example",
+                "issuer_id": "ak:did_core:web:mod.example",
                 "request_canonical_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                 "realm_id": REALM_ID
             }
@@ -246,7 +246,7 @@ fn pin_rejects_active_moderation_decision_head() {
                 "decision_id": "ak:event:AcOfKRN6NaqA5lqbkGhhOD5HiIfpgFRFDsl7ay0xainV",
                 "target_ref": MESSAGE_EVENT_ID,
                 "decision": "require_review",
-                "issuer": "ak:did_core:web:other.example",
+                "issuer_id": "ak:did_core:web:other.example",
                 "request_canonical_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
                 "realm_id": REALM_ID
             }

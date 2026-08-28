@@ -214,8 +214,13 @@ pub(crate) async fn build_sync_snapshot(
                 invited_member_count: None,
                 hero_ids: (!hero_ids.is_empty()).then_some(hero_ids),
             });
-            entry.member_roster_entries = Some(roster);
-            entry.member_roster_entries_limited = Some(false);
+            entry.member_roster = Some(
+                arkret_models_collaboration::sync_frames::account_sync::MemberRoster {
+                    entries: roster,
+                    limited: false,
+                    next_cursor: None,
+                },
+            );
             entry.unread_notifications = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeUnreadCounts {
                 notification_count: Some(0),
                 highlight_count: Some(0),
@@ -840,7 +845,7 @@ fn handle_claim_visible_to_caller(
         return false;
     }
     match claim.visibility.as_deref().unwrap_or("restricted") {
-        "public" => subject_disclosed_to_caller(context, &claim.subject_id),
+        "public" => subject_disclosed_to_caller(context, claim.subject_id.as_str()),
         "members" | "restricted" => {
             context.caller == Some(claim.subject_id.as_str()) || context.caller_is_realm_member()
         }
@@ -852,7 +857,7 @@ fn trusted_handle_claim_issuer(
     context: &RosterDisclosureContext<'_>,
     claim: &HandleClaimEvidenceRecord,
 ) -> bool {
-    claim.issuer == context.service_id || claim.issuer_id.as_deref() == Some(context.service_id)
+    claim.issuer_id.as_str() == context.service_id
 }
 
 fn inline_handle_claims(claims: &[HandleClaimEvidenceRecord]) -> (Vec<Value>, bool) {

@@ -40,7 +40,7 @@ pub struct PolicyDocumentRecord {
 #[derive(Clone, Debug)]
 pub struct OrganizationRecord {
     pub organization_id: String,
-    pub organization_principal_id: String,
+    pub organization_principal_id: arkret_identifiers::DidCoreId,
     pub handle: Option<String>,
     pub display_name: String,
     pub source_refs: Vec<String>,
@@ -48,7 +48,7 @@ pub struct OrganizationRecord {
     pub verified: bool,
     pub members: BTreeSet<String>,
     pub member_count: usize,
-    pub created_by: String,
+    pub created_by: arkret_identifiers::DidCoreId,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -59,7 +59,7 @@ pub struct OrganizationPolicyRecord {
     pub policy_id: String,
     pub payload: Value,
     pub version: u64,
-    pub updated_by: String,
+    pub updated_by: arkret_identifiers::DidCoreId,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -67,7 +67,7 @@ pub struct OrganizationPolicyRecord {
 pub struct RetentionPolicyRecord {
     pub realm_id: String,
     pub ttl_seconds: i64,
-    pub updated_by: String,
+    pub updated_by: arkret_identifiers::DidCoreId,
     pub updated_at: DateTime<Utc>,
 }
 

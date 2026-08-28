@@ -822,7 +822,7 @@ fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
 fn event_query_bodies(events: &Value) -> Vec<String> {
     events["events"]
         .as_array()
-        .unwrap()
+        .unwrap_or_else(|| panic!("event query response has no events collection: {events:?}"))
         .iter()
         .filter_map(|event| {
             event["payload"]["content"]["body"]
@@ -875,7 +875,7 @@ async fn since_join_hides_pre_join_messages_from_sync_and_events_query_body() {
     );
 
     let events: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
+        .json(&serde_json::json!({"realm_ids": [realm_id], "limit": 20}))
         .add_header("authorization", format!("Bearer {bob}"), true)
         .add_header(
             "Arkret-Operation",
@@ -1077,7 +1077,7 @@ async fn shared_history_allows_late_joiner_to_backfill_prior_messages_body() {
     );
 
     let events: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [realm_id], "limit": 20}))
+        .json(&serde_json::json!({"realm_ids": [realm_id], "limit": 20}))
         .add_header("authorization", format!("Bearer {bob}"), true)
         .add_header(
             "Arkret-Operation",
@@ -1324,7 +1324,7 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
         json!({
             "strand_id": strand_id_for_realm(&realm_id),
             "track_name": "discussion",
-            "reply_to": root_message_ref.clone(),
+            "reply_to_id": root_message_ref.clone(),
             "content": {
                 "kind": "ak.content.text",
                 "body": "reply to root"
@@ -1406,7 +1406,7 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
         .iter()
         .find(|event| event["event_id"] == reply_event_id)
         .unwrap_or_else(|| panic!("reply message missing from sync projection: {timeline:?}"));
-    assert_eq!(reply["payload"]["reply_to"], root_message_ref);
+    assert_eq!(reply["payload"]["reply_to_id"], root_message_ref);
 }
 
 #[test]

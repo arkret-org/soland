@@ -710,7 +710,8 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
                         .checked_add(candidate_stream.compact_receipt_bytes)
                         .ok_or_else(|| {
                             PersistenceError::Internal(
-                                "history requester compact receipt accounting overflow".to_owned(),
+                                "history requester_id compact receipt accounting overflow"
+                                    .to_owned(),
                             )
                         })?;
                 }
@@ -721,7 +722,8 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             .is_none_or(|total| total > HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT)
         {
             return Err(PersistenceError::Conflict(
-                "failed_precondition: history requester compact receipt quota exceeded".to_owned(),
+                "failed_precondition: history requester_id compact receipt quota exceeded"
+                    .to_owned(),
             ));
         }
         if service_total
@@ -1122,8 +1124,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             ));
         }
         if token.write.claims.high_water_cursor != request.high_water_cursor
-            || token.write.claims.ordered_ack_entries.len()
-                != request.history_response_ack_entries.len()
+            || token.write.claims.ordered_ack_entries.len() != request.entries.len()
         {
             return Err(PersistenceError::Conflict(
                 "duplicate_conflict: history ack request differs from token".to_owned(),
@@ -1134,7 +1135,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             .claims
             .ordered_ack_entries
             .iter()
-            .zip(&request.history_response_ack_entries)
+            .zip(&request.entries)
         {
             let ack = ack_binding(ack_entry);
             let kind = match claim.kind {
@@ -1183,7 +1184,7 @@ impl HistoryResponseStreamStore for MemoryHistoryResponseStreamStore {
             ));
         }
         let mut released_bytes = 0_u64;
-        for ack_entry in &request.history_response_ack_entries {
+        for ack_entry in &request.entries {
             let sequence = ack_entry.sequence();
             let row = stream
                 .responses

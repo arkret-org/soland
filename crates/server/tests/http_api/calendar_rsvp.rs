@@ -137,7 +137,7 @@ async fn rsvp_projects_exactly_the_registered_cell_write_body() {
     assert_eq!(writes.len(), 1, "expected one derived write: {event}");
     assert!(
         writes[0]
-            .cell
+            .cell_id
             .as_str()
             .starts_with("ak:cell:ak.component.calendar.rsvp.v1:"),
         "derived write must address the registered cell family: {event}"

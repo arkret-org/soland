@@ -238,7 +238,7 @@ fn fixture_pcr_founding_device_descriptor(
     let authorize = DeviceAuthorizePayload {
         principal_id: principal.clone(),
         device_id: device_id.clone(),
-        device_public_key: device_public_key.clone(),
+        device_public_key_did: device_public_key.clone(),
         hpke_key: hpke_key.clone(),
         algorithms: algorithms.clone(),
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
@@ -260,7 +260,7 @@ fn fixture_pcr_founding_device_descriptor(
             device_public_key.as_bytes(),
         ))
         .unwrap(),
-        device_public_key,
+        device_public_key_did: device_public_key,
         device_key_algorithm: FoundingDeviceKeyAlgorithm::Ed25519,
         device_key_purpose: FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
         hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(

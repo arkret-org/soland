@@ -20,7 +20,7 @@ impl ModerationStore for PgModerationStore {
         let report_id = extract("report_id").ok_or_else(|| {
             PersistenceError::Internal("moderation report missing report_id".to_owned())
         })?;
-        let reporter = extract("reporter");
+        let reporter_id = extract("reporter_id");
         let target_actor = extract("target_actor");
         let target_event_id = extract("target_event_id");
         let realm_id = extract("realm_id");
@@ -45,7 +45,7 @@ impl ModerationStore for PgModerationStore {
              realm_id = EXCLUDED.realm_id, payload = EXCLUDED.payload",
         )
         .bind::<Binary, _>(report_id_token)
-        .bind::<Nullable<Text>, _>(&reporter)
+        .bind::<Nullable<Text>, _>(&reporter_id)
         .bind::<Nullable<Text>, _>(&target_actor)
         .bind::<Nullable<Binary>, _>(target_event_id_token)
         .bind::<Nullable<Text>, _>(realm_id.as_deref())

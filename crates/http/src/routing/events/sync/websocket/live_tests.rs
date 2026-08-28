@@ -194,12 +194,12 @@ async fn run_introspection_mock(
             "one_time_use_consumed": false,
             "grant": {
                 "id": "ak:session_grant:ATLC-gY-xpE0kN3QXVYxo0Kh32EoNCTBQTSFuu_P57e6",
-                "issuer": "ak:did_core:web:coauth.local",
-                "subject": "ak:did_core:web:alice.example",
+                "issuer_id": "ak:did_core:web:coauth.local",
+                "subject_id": "ak:did_core:web:alice.example",
                 "service_account_id": "alice",
                 "device_id": device_binding.device_id.clone(),
                 "device_binding": device_binding.clone(),
-                "audience": audience,
+                "audience_id": audience,
                 "scopes": [
                     "ak.self.account.stream.subscribe.v1",
                     "ak.self.events.stream.subscribe.v1"
@@ -515,7 +515,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     )
     .expect("the live-tested deployment advertises its WebSocket binding");
     let arkret_models_discovery::TransportBinding::Websocket {
-        base_uri: advertised_base_url,
+        base_url: advertised_base_url,
         max_channels,
         ..
     } = advertised

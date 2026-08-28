@@ -773,13 +773,13 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
     session: &SessionRecord,
     envelope: Value,
     realm_id: &str,
-    reporter: &str,
+    reporter_id: &str,
     target_ref: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let admission = InternalEventAdmission::mimi_moderation_report(
         realm_id,
         state.service_id().as_str(),
-        reporter,
+        reporter_id,
         target_ref,
     );
     submit_event_value_with_context(
@@ -1715,7 +1715,7 @@ fn moderation_franking_replay_nonce(
         .franking_proof
         .map(|proof| soland_storage::FrankingReplayNonceCommit {
             realm_id: parsed.realm_id.to_string(),
-            received_by: proof.received_by.to_string(),
+            received_by: proof.received_by,
             replay_nonce: proof.replay_nonce,
             report_event_id: parsed.event_id.to_string(),
             consumed_at,

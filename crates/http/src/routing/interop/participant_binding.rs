@@ -11,7 +11,7 @@
 //! signing_input =
 //!   "ak.media.participant_binding.v1" || 0x00 ||
 //!   canonical_json({ actor_id, call_id, device_id, expires_at,
-//!                    focus_id, participant_identity, realm_id })
+//!                    focus_id, participant_id, realm_id })
 //! ```
 //!
 //! The label is the fixed ASCII `scheme` value (verbatim bytes), followed by a
@@ -143,7 +143,7 @@ fn binding_str<'a>(binding: &'a Value, field: &str) -> Option<&'a str> {
 /// 1. anchor `issuer_kid` to the **current epoch** `ak.realm.media_service` service DID / focus
 ///    issuer_kids set → else `token_issuer_unauthorised`;
 /// 2. confirm the binding's authoritative tuple (`realm_id`, `call_id`, `focus_id`, `actor_id`,
-///    `device_id`, `participant_identity`) matches the participant entry and the event envelope;
+///    `device_id`, `participant_id`) matches the participant entry and the event envelope;
 /// 3. reject an already-expired binding (`expires_at <= event.created_at`);
 /// 4. verify the detached Ed25519 `sig` over the canonical signing input.
 ///
@@ -215,11 +215,11 @@ pub(crate) fn verify_call_state_participant_bindings(
             }
         }
         // The participant entry mirrors actor_id / device_id /
-        // participant_identity; the binding MUST cover the same tuple.
+        // participant_id; the binding MUST cover the same tuple.
         for (field, label) in [
             ("actor_id", "actor_id"),
             ("device_id", "device_id"),
-            ("participant_identity", "participant_identity"),
+            ("participant_id", "participant_id"),
         ] {
             if let Some(entry_value) = participant.get(field).and_then(Value::as_str) {
                 let binding_value = binding_str(binding, field).ok_or(
@@ -291,7 +291,7 @@ fn field_mismatch_reason(field: &str) -> &'static str {
              participant entry"
         }
         _ => {
-            "participant_binding_invalid: participant_binding.participant_identity does not match \
+            "participant_binding_invalid: participant_binding.participant_id does not match \
              the participant entry"
         }
     }

@@ -904,7 +904,7 @@ async fn events_query_impl(
                 };
                 let events = full_events_from_projection_json(state, &events).await;
                 return soland_http::result::json_ok(EventsQueryOutcome {
-                    event_read_rows: events,
+                    events,
                     snapshot_bootstrap: None,
                     prev_cursor: cursor_token.clone(),
                     next_cursor,
@@ -924,7 +924,7 @@ async fn events_query_impl(
             }
         }
         return soland_http::result::json_ok(EventsQueryOutcome {
-            event_read_rows: Vec::new(),
+            events: Vec::new(),
             snapshot_bootstrap: None,
             prev_cursor: cursor_token.clone(),
             next_cursor: None,
@@ -954,7 +954,7 @@ async fn events_query_impl(
     })?;
     let Some(page) = page else {
         return soland_http::result::json_ok(EventsQueryOutcome {
-            event_read_rows: Vec::new(),
+            events: Vec::new(),
             snapshot_bootstrap: None,
             prev_cursor: cursor_token,
             next_cursor: None,
@@ -983,7 +983,7 @@ async fn events_query_impl(
     };
     let events = full_events_from_projection_json(state, &page_events).await;
     soland_http::result::json_ok(EventsQueryOutcome {
-        event_read_rows: events,
+        events,
         snapshot_bootstrap: None,
         prev_cursor: cursor_token.clone(),
         next_cursor,
@@ -1957,7 +1957,7 @@ async fn durable_events_query_from_parts(
         .map(Into::into)
         .collect();
     EventsQueryOutcome {
-        event_read_rows: events,
+        events,
         snapshot_bootstrap: None,
         next_cursor,
         prev_cursor: cursor_token,

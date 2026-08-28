@@ -320,6 +320,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         })?;
     let now = chrono::Utc::now();
     let session = soland_services::identity::SessionIdentityState {
+        service_account_id: None,
         token_hash: format!("mimi-room-binding:{}", event.event_id),
         actor: event.actor_id.to_string(),
         device_id,

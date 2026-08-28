@@ -1,3 +1,7 @@
+use arkret_models_collaboration::governance::erasure::{
+    ErasureFanoutStatus, ErasureOutcome, ErasureReceipt, ErasureStorageBoundary, ErasureSubjectKind,
+};
+
 use super::*;
 
 /// Cell family of the registered Realm authority-root singleton.
@@ -7,6 +11,47 @@ use super::*;
 /// re-spelled.
 const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHORITY_ROOT_V1;
 pub const PRINCIPAL_RESOLUTION_CELL: &str = "ak:cell:ak.component.identity.resolution.v1:null";
+
+fn erasure_subject_kind_name(kind: ErasureSubjectKind) -> &'static str {
+    match kind {
+        ErasureSubjectKind::Principal => "principal",
+        ErasureSubjectKind::Space => "space",
+        ErasureSubjectKind::Event => "event",
+        ErasureSubjectKind::Blob => "blob",
+        ErasureSubjectKind::Device => "device",
+        ErasureSubjectKind::AccountPrivateState => "account_private_state",
+    }
+}
+
+fn erasure_storage_boundary_name(boundary: ErasureStorageBoundary) -> &'static str {
+    match boundary {
+        ErasureStorageBoundary::CanonicalLogMinimization => "canonical_log_minimization",
+        ErasureStorageBoundary::BlobStore => "blob_store",
+        ErasureStorageBoundary::ProjectionStore => "projection_store",
+        ErasureStorageBoundary::AccountPrivateStore => "account_private_store",
+        ErasureStorageBoundary::SearchIndex => "search_index",
+        ErasureStorageBoundary::PushRoutes => "push_routes",
+        ErasureStorageBoundary::DeviceSecretStore => "device_secret_store",
+        ErasureStorageBoundary::MediaDerivatives => "media_derivatives",
+        ErasureStorageBoundary::ServiceDefined => "service_defined",
+    }
+}
+
+fn erasure_outcome_name(outcome: ErasureOutcome) -> &'static str {
+    match outcome {
+        ErasureOutcome::Completed => "completed",
+        ErasureOutcome::PartiallyCompleted => "partially_completed",
+        ErasureOutcome::BlockedByLegalHold => "blocked_by_legal_hold",
+    }
+}
+
+fn erasure_fanout_status_name(status: ErasureFanoutStatus) -> &'static str {
+    match status {
+        ErasureFanoutStatus::Pending => "pending",
+        ErasureFanoutStatus::Complete => "complete",
+        ErasureFanoutStatus::Incomplete => "incomplete",
+    }
+}
 
 fn principal_genesis_resolution_value(
     operation: &Operation,
@@ -1752,91 +1797,41 @@ impl ProjectionState {
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let payload = &operation.payload;
-        // Accept either the inner payload shape (canonical) or a
-        // flat object whose top-level fields are receipt fields.
-        // Spec `realm-and-space.md` §2.5.2 + erasure-receipt.schema.json.
-        let outcome = payload
-            .get("outcome")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let outcome = match outcome {
-            Some(s) => s,
-            None => {
+        // The generic projected-operation envelope intentionally erases its
+        // heterogeneous payload. Restore the event-kind-specific type exactly
+        // once at this reducer boundary so required fields, identifiers, and
+        // enums cannot degrade into optional strings.
+        let receipt = match serde_json::from_value::<ErasureReceipt>(payload.clone()) {
+            Ok(receipt) if receipt.validate_minimal().is_ok() => receipt,
+            _ => {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
             }
         };
-        // The canonical schema enumerates 3 outcomes; the spec brief
-        // adds `scheduled` / `failed` for the receiving-peer feedback
-        // path. We accept all five and let the wire validator enforce
-        // the strict canonical set when the schema version requires.
-        let valid_outcomes = [
-            "completed",
-            "partially_completed",
-            "blocked_by_legal_hold",
-            "scheduled",
-            "failed",
-        ];
-        if !valid_outcomes.contains(&outcome.as_str()) {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        }
-        // `scope` MUST be present per schema; we only require it to
-        // be an object — the wire validator enforces the inner shape.
-        let Some(scope) = payload.get("scope").and_then(Value::as_object) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        let storage_boundary = scope
-            .get("storage_boundary")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        // Stream-F (Wave 2C) — extract the optional scope.realm_id.
-        // Drives the federation peer-set selection downstream. Per
-        // erasure-receipt.schema.json the field is optional; receipts
-        // for account-private erasures (no Realm scope) skip the
-        // federation fanout entirely.
-        let scope_realm_id = scope
-            .get("realm_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
 
-        let receipt_id = payload
-            .get("receipt_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let issuer = payload
-            .get("issuer")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let (subject_kind, subject_ref) = payload
-            .get("subject")
-            .and_then(Value::as_object)
-            .map(|s| {
-                (
-                    s.get("kind").and_then(Value::as_str).map(ToOwned::to_owned),
-                    s.get("subject_ref")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
-                )
-            })
-            .unwrap_or((None, None));
-        let fanout_status = payload
-            .get("fanout_status")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "pending".to_owned());
+        let receipt_id = receipt.receipt_id.clone();
+        let issuer_id = receipt.issuer_id.clone();
+        let subject_kind = erasure_subject_kind_name(receipt.subject.kind).to_owned();
+        let subject_ref = receipt.subject.subject_ref.clone();
+        let outcome = erasure_outcome_name(receipt.outcome).to_owned();
+        let storage_boundary =
+            erasure_storage_boundary_name(receipt.scope.storage_boundary).to_owned();
+        let scope_realm_id = receipt.scope.realm_id.as_ref().map(ToString::to_string);
+        let fanout_status = erasure_fanout_status_name(
+            receipt
+                .fanout_status
+                .unwrap_or(ErasureFanoutStatus::Pending),
+        )
+        .to_owned();
 
         self.erasure_receipts.push(ErasureReceiptRecord {
-            receipt_id: receipt_id.clone(),
-            issuer,
-            subject_kind,
-            subject_ref,
+            receipt_id: Some(receipt_id.clone()),
+            issuer_id: Some(issuer_id),
+            subject_kind: Some(subject_kind),
+            subject_ref: Some(subject_ref),
             outcome: outcome.clone(),
-            storage_boundary,
+            storage_boundary: Some(storage_boundary),
             scope_realm_id,
             fanout_status,
             recorded_at: now,
@@ -1844,7 +1839,7 @@ impl ProjectionState {
         });
 
         tracing::info!(
-            receipt_id = ?receipt_id,
+            receipt_id = %receipt_id,
             outcome = %outcome,
             operation_id = %operation.operation_id.as_str(),
             "stream-F erasure_receipt recorded"

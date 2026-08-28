@@ -432,10 +432,10 @@ struct MediaTokenIssueRequestBody<'a> {
     call_id: &'a str,
     // The backend token deliberately carries no long-term actor identity:
     // `media-service-binding.md` §3 keeps the SFU's view to
-    // `participant_identity`, a per-exchange pseudonym. The `(actor, device)`
+    // `participant_id`, a per-exchange pseudonym. The `(actor, device)`
     // pair is bound by the signed `participant_binding` the Arkret side
     // verifies, not by anything the backend receives.
-    participant_identity: &'a str,
+    participant_id: &'a str,
     /// Publish intent derived from the request `desired_media` (LiveKit
     /// `video.canPublishSources`). `(audio, video, screen)`.
     desired_media: (bool, bool, bool),
@@ -627,13 +627,13 @@ async fn handle_rtc_token(
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
-    // `media-service-binding.md` §3 — participant_identity is an SFU-local
+    // `media-service-binding.md` §3 — participant_id is an SFU-local
     // handle that MUST NOT be a deterministic function of the public principal
     // tuple. Mint a fresh random `ak:rtc_participant:<uuidv7>` per token
     // exchange so the SFU cannot be linked back to (realm, call, actor, device)
     // by recomputing the id, and the wire form matches the schema pattern
     // `^ak:rtc_participant:<uuidv7>$`.
-    let participant_identity = arkret_identifiers::new_prefixed_uuid7("ak:rtc_participant:");
+    let participant_id = arkret_identifiers::new_prefixed_uuid7("ak:rtc_participant:");
     let signing_key = state.notary_signing_key();
     // `bindings/livekit.md` §2/§5 — publish grants are derived from the
     // caller's `desired_media`. Absent the field we default to audio+video
@@ -675,7 +675,7 @@ async fn handle_rtc_token(
         issuer_kid: &issuer_kid,
         realm_id: body.realm_id.as_str(),
         call_id: body.call_id.as_str(),
-        participant_identity: &participant_identity,
+        participant_id: &participant_id,
         desired_media,
         allow_screen_share,
         issued_at,
@@ -702,7 +702,7 @@ async fn handle_rtc_token(
         focus_id: body.focus_id.clone(),
         actor_id,
         device_id,
-        participant_identity: participant_identity.clone(),
+        participant_id: participant_id.clone(),
         issued_at,
         expires_at,
     };
@@ -712,14 +712,14 @@ async fn handle_rtc_token(
     .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
     participant_binding.sig = URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
 
-    let connect_uri = issued_token.connect_url;
+    let connect_url = issued_token.connect_url;
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
         backend_kind: focus.provider.backend_kind(),
-        connect_uri,
+        connect_url,
         backend_token: issued_token.backend_token,
-        participant_identity,
+        participant_id,
         participant_binding,
         expires_at,
     })
@@ -1016,7 +1016,7 @@ fn media_service_epoch_from_descriptor(
             provider,
             focus_id: focus.focus_id.into_string(),
             token_endpoint: focus.token_endpoint,
-            connect_url: focus.connect_uri,
+            connect_url: focus.connect_url,
         });
     }
     Ok(MediaServiceEpoch {
@@ -1069,7 +1069,7 @@ fn media_token_issuer_for(provider: MediaProviderKind) -> Box<dyn MediaTokenIssu
 ///
 /// The wire form is the binding's own object — `{kid, payload, sig,
 /// signature_algorithm}` with the payload carrying exactly `call_id`,
-/// `focus_id`, `participant_identity`, `issued_at`, `expires_at` and `media`.
+/// `focus_id`, `participant_id`, `issued_at`, `expires_at` and `media`.
 /// It is not a private envelope: an arkret-native SFU validates this token
 /// before each SDP negotiation, so a locally invented shape would only be
 /// readable by this deployment's own SFU.
@@ -1083,7 +1083,7 @@ fn issue_arkret_native_backend_token(
             AppError::internal(format!("validated media call_id became invalid: {error}"))
         })?,
         focus_id: request.focus.focus_id.clone(),
-        participant_identity: request.participant_identity.to_owned(),
+        participant_id: request.participant_id.to_owned(),
         issued_at: request.issued_at,
         expires_at: request.expires_at,
         media: ArkretNativeMediaPermissions {
@@ -1170,10 +1170,10 @@ fn issue_livekit_backend_token(
     let exp = request.expires_at.timestamp();
     let token_payload = json!({
         "iss": api_key,
-        "sub": request.participant_identity,
-        // §2: `name` MUST NOT carry actor identity; participant_identity is
+        "sub": request.participant_id,
+        // §2: `name` MUST NOT carry actor identity; participant_id is
         // already a pairwise pseudonym, so reuse it as the display label.
-        "name": request.participant_identity,
+        "name": request.participant_id,
         "nbf": nbf,
         "iat": iat,
         "exp": exp,
@@ -1337,7 +1337,7 @@ mod tests {
             issuer_kid: "did:webvh:z6mkfixture:media.example#media-1",
             realm_id: "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt",
             call_id: "ak:call:AXN8h1ovgRUvcxrjsoB4ffwwej16MPpikhZbvZ6pt_Hj",
-            participant_identity: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",
+            participant_id: "ak:rtc_participant:01904100-0000-7000-8000-000000000009",
             desired_media: (false, true, true),
             allow_screen_share: false,
             issued_at,

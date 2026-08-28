@@ -93,7 +93,7 @@ impl RetentionPolicyStore for PgRetentionPolicyStore {
         )
         .bind::<Text, _>(&record.realm_id)
         .bind::<BigInt, _>(record.ttl_seconds)
-        .bind::<Text, _>(&record.updated_by)
+        .bind::<Text, _>(record.updated_by.as_str())
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -122,7 +122,7 @@ struct RetentionPolicyRow {
     #[diesel(sql_type = BigInt)]
     ttl_seconds: i64,
     #[diesel(sql_type = Text)]
-    updated_by: String,
+    updated_by: arkret_wire::DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -297,7 +297,7 @@ impl OrganizationStore for PgOrganizationStore {
         .bind::<Bool, _>(record.verified)
         .bind::<Jsonb, _>(&members)
         .bind::<BigInt, _>(member_count)
-        .bind::<Text, _>(&record.created_by)
+        .bind::<Text, _>(record.created_by.as_str())
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
@@ -327,7 +327,7 @@ struct OrganizationRow {
     #[diesel(sql_type = Text)]
     organization_id: String,
     #[diesel(sql_type = Text)]
-    organization_principal_id: String,
+    organization_principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     handle: Option<String>,
     #[diesel(sql_type = Text)]
@@ -343,7 +343,7 @@ struct OrganizationRow {
     #[diesel(sql_type = BigInt)]
     member_count: i64,
     #[diesel(sql_type = Text)]
-    created_by: String,
+    created_by: arkret_wire::DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -414,7 +414,7 @@ impl OrganizationPolicyStore for PgOrganizationPolicyStore {
         .bind::<Text, _>(&record.policy_id)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<BigInt, _>(version)
-        .bind::<Text, _>(&record.updated_by)
+        .bind::<Text, _>(record.updated_by.as_str())
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -451,7 +451,7 @@ struct OrganizationPolicyRow {
     #[diesel(sql_type = BigInt)]
     version: i64,
     #[diesel(sql_type = Text)]
-    updated_by: String,
+    updated_by: arkret_wire::DidCoreId,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }

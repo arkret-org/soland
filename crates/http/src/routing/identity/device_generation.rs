@@ -121,8 +121,8 @@ pub async fn active_device_revocation_gate_selector(
         ));
     }
     Ok(soland_storage::DeviceRevocationGateSelector {
-        principal_id: principal_id.to_string(),
-        principal_server_id: principal_server_id.to_string(),
+        principal_id,
+        principal_server_id,
         device_id: device_id.to_string(),
         target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
         target_device_generation_ref,

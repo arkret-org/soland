@@ -9,7 +9,7 @@ struct KeyBackupDeleteChallengeRow {
     #[diesel(sql_type = Text)]
     challenge_id: String,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     backup_id: String,
     #[diesel(sql_type = Text)]

@@ -93,7 +93,7 @@ pub enum JoinApplicationMutation {
 
 #[derive(Clone, Debug)]
 pub struct JoinApplicationCommand {
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub idempotency_key: String,
     pub request_hash: String,
     pub idempotency_expires_at: DateTime<Utc>,
@@ -134,7 +134,7 @@ pub enum JoinApplicationCommandOutcome {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JoinApplicationIdempotencyRecord {
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub idempotency_key: String,
     pub request_hash: String,
     pub response_body: Value,

@@ -13,8 +13,8 @@ use arkret_models_identity::{
 };
 use arkret_state::state::store::ControlProposalIngress;
 use arkret_wire::{
-    AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, HistoryEffectiveScope, NonEmptyString,
-    PayloadProof, ProofContextId, RealmId, ReceiptId, SchemaId, project_did_to_core_id,
+    AccountStatusRecordId, Did, DidCoreId, DidUrl, Hash, HistoryEffectiveScope, PayloadProof,
+    ProofContextId, RealmId, ReceiptId, SchemaId, project_did_to_core_id,
 };
 use chrono::{Duration, Utc};
 
@@ -286,8 +286,11 @@ pub async fn assert_device_message_snapshot_guard_contract(
             devices: vec![(device_a.clone(), now), (device_b.clone(), now)],
         }),
         device_revocation_gate: Some(DeviceRevocationGateSelector {
-            principal_id: actor.clone(),
-            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+            principal_id: arkret_identifiers::DidCoreId::new(actor.clone()).unwrap(),
+            principal_server_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example",
+            )
+            .unwrap(),
             device_id: "sender-device".to_owned(),
             target_device_authorize_event_id: format!("ak:event:A{}", "a".repeat(43)),
             target_device_generation_ref: 1,
@@ -927,7 +930,8 @@ fn registration_challenge(
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
         audience_id: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
-        origin_uri: "https://service.example/".to_owned(),
+        origin: arkret_wire::WebOrigin::new("https://service.example")
+            .expect("valid service origin"),
         trust_domain: arkret_wire::TrustDomainId::new("ak:trust_domain:service.example")
             .expect("valid service trust domain"),
         local_admin_subject_id: local_admin_subject_id.clone(),
@@ -1048,7 +1052,7 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     let consent_id = format!("ak:consent:{namespace}");
     let first = MimiConsentCorrelationRecord {
         consent_id: consent_id.clone(),
-        requester_id: format!("ak:did_core:web:{namespace}-requester.example"),
+        requester_id: format!("ak:did_core:web:{namespace}-requester_id.example"),
         target_kind: "did".to_owned(),
         target_id: format!("ak:did_core:web:{namespace}-target.example"),
         purpose: "direct_message".to_owned(),
@@ -1960,7 +1964,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             pairing_code: "7H2K9M4Q".to_owned(),
             new_device_pubkey: pairing_key,
             device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
-            authorized_by_actor_id: principal_id.clone(),
+            authorized_by_actor_id: arkret_wire::DidCoreId::new(principal_id.clone()).unwrap(),
             authorized_event_ref: pairing_event_id.clone(),
             changed_at: now,
         }),
@@ -2039,17 +2043,19 @@ pub async fn assert_event_commit_unit_of_work_contract(
         now,
     );
     let contact_event_id = contact_event.event_id.clone();
+    let contact_event_ref = arkret_wire::EventId::new(contact_event_id.clone()).unwrap();
     let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
     let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
     let contact_record = ContactRecord {
-        requester: principal_id.clone(),
-        target: format!("did:web:contact-peer-{namespace}.example"),
+        requester_id: DidCoreId::new(principal_id.clone()).unwrap(),
+        target_id: DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example"))
+            .unwrap(),
         contact_round_id: None,
         version: None,
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),
-        request_event_ref: Some(contact_event_id.clone()),
+        request_event_ref: Some(contact_event_ref.clone()),
         request_receipts: Vec::new(),
         request_mirror_receipts: Vec::new(),
         contact_round_evidence: None,
@@ -2058,9 +2064,12 @@ pub async fn assert_event_commit_unit_of_work_contract(
         response_event_ref: None,
         tombstone_event_ref: None,
         message: None,
-        peer_id: Some(format!(
-            "ak:did_core:web:contact-service-{namespace}.example"
-        )),
+        peer_host_id: Some(
+            DidCoreId::new(format!(
+                "ak:did_core:web:contact-service-{namespace}.example"
+            ))
+            .unwrap(),
+        ),
         peer_service_resolution: None,
         created_at: now,
         updated_at: now,
@@ -2098,8 +2107,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         outbox: vec![FederationOutboxRecord::pending(
             contact_outbox_id.clone(),
-            DidCoreId::new(contact_record.peer_id.clone().unwrap())
-                .expect("contact peer service id"),
+            contact_record.peer_host_id.clone().unwrap(),
             "https://contact-peer.example".to_owned(),
             "/_arkret/peer/contacts".to_owned(),
             format!("peer-contact:{contact_event_id}"),
@@ -2121,12 +2129,13 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert_eq!(
         stores
             .contacts
-            .get(&contact_record.requester, &contact_record.target)
+            .get(&contact_record.requester_id, &contact_record.target_id)
             .await
             .unwrap()
             .expect("Contact projection survives restart-equivalent read")
             .request_event_ref
-            .as_deref(),
+            .as_ref()
+            .map(arkret_wire::EventId::as_str),
         Some(contact_event_id.as_str())
     );
     assert!(
@@ -2181,8 +2190,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             idempotency: None,
             outbox: vec![FederationOutboxRecord::pending(
                 failed_contact_outbox_id.clone(),
-                DidCoreId::new(contact_record.peer_id.clone().unwrap())
-                    .expect("contact peer service id"),
+                contact_record.peer_host_id.clone().unwrap(),
                 "https://contact-peer.example".to_owned(),
                 "/_arkret/peer/contacts".to_owned(),
                 format!("peer-contact:{failed_contact_event_id}"),
@@ -3188,6 +3196,8 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         keypackage_ref: format!("ak:mls:keypackage:{namespace}-{suffix}"),
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        owner_account_id: arkret_identifiers::ServiceAccountId::new(format!("{namespace}-account"))
+            .unwrap(),
         actor_id: format!("ak:did_core:web:{namespace}.example"),
         device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
         endpoint_verification_method: None,
@@ -3220,8 +3230,12 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
         device_authorize_event_id: Some("ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"),
         agent_key_authorize_event_id: None,
         device_revocation_gate: Some(DeviceRevocationGateSelector {
-            principal_id: "ak:did_core:web:contract.example".to_owned(),
-            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+            principal_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:contract.example")
+                .unwrap(),
+            principal_server_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example",
+            )
+            .unwrap(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             target_device_authorize_event_id:
                 "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
@@ -3731,7 +3745,8 @@ fn account_status_record(
         schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
         account_authority_id: DidCoreId::new("ak:did_core:web:authority.example")
             .expect("account authority core id"),
-        account_id: NonEmptyString::new(account_id).expect("account id is not empty"),
+        account_id: arkret_identifiers::ServiceAccountId::new(account_id)
+            .expect("account id is valid"),
         principal_authority: AccountStatusPrincipalAuthority {
             principal_id: DidCoreId::new("ak:did_core:web:alice.example")
                 .expect("principal core id"),
@@ -4400,15 +4415,18 @@ pub async fn assert_member_identity_store_contract(
 
     let claim = HandleClaimEvidenceRecord {
         digest: format!("sha256:{}", "c".repeat(64)),
-        subject_id: format!("ak:did_core:web:{namespace}.example"),
-        issuer: format!("did:web:{namespace}-issuer.example"),
-        issuer_id: Some(format!("ak:did_core:web:{namespace}-issuer.example")),
+        subject_id: arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
+            .unwrap(),
+        issuer_id: arkret_wire::DidCoreId::new(format!(
+            "ak:did_core:web:{namespace}-issuer.example"
+        ))
+        .unwrap(),
         audience: Some("ak:service:directory".to_owned()),
         binding_state: "bound".to_owned(),
         visibility: Some("public".to_owned()),
         expires_at: Some(database_timestamp_now() + Duration::hours(1)),
         revoked: false,
-        envelope: serde_json::json!({"subject": format!("ak:did_core:web:{namespace}.example")}),
+        envelope: serde_json::json!({"subject_id": format!("ak:did_core:web:{namespace}.example")}),
     };
     store
         .put_handle_claim(&claim)
@@ -4510,8 +4528,8 @@ fn contract_device_revoke_fixture(
     };
     let control_proposal_ack = contract_control_proposal_ack(&record, &realm_id, created_at);
     let selector = DeviceRevocationGateSelector {
-        principal_id: actor_id.to_string(),
-        principal_server_id: principal_server_id.to_string(),
+        principal_id: actor_id,
+        principal_server_id,
         device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
         target_device_authorize_event_id: "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
             .to_owned(),
@@ -4716,17 +4734,18 @@ pub async fn assert_consent_projection_commit_contract(
 ) {
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
     let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
-    let holder = format!("ak:did_core:web:{namespace}-holder.example");
-    let peer = format!("ak:did_core:web:{namespace}-peer.example");
-    let other_peer = format!("ak:did_core:web:{namespace}-other.example");
-    let cell_id = format!(
+    let holder = DidCoreId::new(format!("ak:did_core:web:{namespace}-holder.example")).unwrap();
+    let peer = DidCoreId::new(format!("ak:did_core:web:{namespace}-peer.example")).unwrap();
+    let other_peer = DidCoreId::new(format!("ak:did_core:web:{namespace}-other.example")).unwrap();
+    let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
         namespace.len()
-    );
+    ))
+    .unwrap();
 
     let grant_event = canonical_wire_event_record(
         arkret_wire::EventKind::ConsentGrant.as_str(),
-        &holder,
+        holder.as_str(),
         &realm_id,
         0,
         now,
@@ -4736,8 +4755,8 @@ pub async fn assert_consent_projection_commit_contract(
     let dot = format!("{grant_event_id}:0");
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
-        holder: holder.clone(),
-        peer: peer.clone(),
+        holder_principal_id: holder.clone(),
+        peer_principal_id: peer.clone(),
         consent_scope: "invite".to_owned(),
         grant_dots: BTreeMap::from([(
             dot.clone(),
@@ -4776,7 +4795,7 @@ pub async fn assert_consent_projection_commit_contract(
     // A second consent_id-identical grant that names another peer is a rebind.
     let rebind_event = canonical_wire_event_record(
         arkret_wire::EventKind::ConsentGrant.as_str(),
-        &holder,
+        holder.as_str(),
         &realm_id,
         1,
         now,
@@ -4784,7 +4803,7 @@ pub async fn assert_consent_projection_commit_contract(
     let rebind_event_id = rebind_event.event_id.clone();
     let rebind_ack = contract_control_proposal_ack(&rebind_event, &realm_id, now);
     let mut rebound = granted.clone();
-    rebound.peer = other_peer;
+    rebound.peer_principal_id = other_peer;
     let rejected = stores
         .unit_of_work
         .commit_event(consent_commit_request(
@@ -4822,7 +4841,7 @@ pub async fn assert_consent_projection_commit_contract(
     // A revoke commits its cell mutation and its quarantine CAS together.
     let quarantine_key = "ak.account.invite_quarantine";
     let seeded = AccountDataRecord {
-        actor: holder.clone(),
+        actor: holder.to_string(),
         account_data_key: quarantine_key.to_owned(),
         revision: 1,
         payload: serde_json::json!({"entries": [{"source_peer_principal_id": peer}]}),
@@ -4843,7 +4862,7 @@ pub async fn assert_consent_projection_commit_contract(
 
     let stale_event = canonical_wire_event_record(
         arkret_wire::EventKind::ConsentRevoke.as_str(),
-        &holder,
+        holder.as_str(),
         &realm_id,
         1,
         now,
@@ -4899,7 +4918,7 @@ pub async fn assert_consent_projection_commit_contract(
 
     let revoke_event = canonical_wire_event_record(
         arkret_wire::EventKind::ConsentRevoke.as_str(),
-        &holder,
+        holder.as_str(),
         &realm_id,
         1,
         now,
@@ -4937,7 +4956,7 @@ pub async fn assert_consent_projection_commit_contract(
     );
     let quarantine = stores
         .account_data
-        .get(&holder, quarantine_key)
+        .get(holder.as_str(), quarantine_key)
         .await
         .expect("read quarantine cell")
         .expect("quarantine cell exists");

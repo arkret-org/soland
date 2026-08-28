@@ -36,7 +36,7 @@ fn fixture_protocol_signature(
 }
 
 fn normal_contact_evidence(
-    requester: arkret_wire::DidCoreId,
+    requester_id: arkret_wire::DidCoreId,
     target: arkret_wire::DidCoreId,
     request_event_ref: arkret_wire::EventId,
     response_event_ref: arkret_wire::EventId,
@@ -48,7 +48,7 @@ fn normal_contact_evidence(
     };
 
     let requester_peer = ContactPeer::Human {
-        principal_id: requester.clone(),
+        principal_id: requester_id.clone(),
     };
     let target_peer = ContactPeer::Human {
         principal_id: target.clone(),
@@ -63,7 +63,7 @@ fn normal_contact_evidence(
             request_event_ref: request_event_ref.clone(),
             source_checkpoint: fixture_hash('2'),
             accepted_at: now,
-            issuer: soland_test_support::fixture_principal_server_id(),
+            issuer_id: soland_test_support::fixture_principal_server_id(),
         },
         receipt_digest: fixture_hash('0'),
         signature: fixture_protocol_signature("did:web:principal-server.example", now),
@@ -72,10 +72,10 @@ fn normal_contact_evidence(
     let request_acceptance_receipt_digest =
         arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&request_receipt).unwrap())
             .unwrap();
-    let mut sorted_pair_members = [requester.clone(), target.clone()];
+    let mut sorted_pair_members = [requester_id.clone(), target.clone()];
     sorted_pair_members.sort();
     let contact_round = ContactRound::Normal {
-        sorted_pair_members,
+        sorted_pair_member_ids: sorted_pair_members,
         request_event_ref: request_event_ref.clone(),
         request_acceptance_receipt_digest,
     };
@@ -87,7 +87,7 @@ fn normal_contact_evidence(
         |issuer: arkret_wire::DidCoreId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
             ContactCurrentProof {
                 contact_round_id: contact_round_id.clone(),
-                issuer,
+                issuer_id: issuer,
                 terminal: false,
                 accepted_frontier: vec![head_event_ref.clone()],
                 head_event_ref,
@@ -107,12 +107,12 @@ fn normal_contact_evidence(
             response_event_ref: response_event_ref.clone(),
             outgoing_slot_absence_digest: fixture_hash('5'),
             accepted_at: now,
-            issuer: target.clone(),
+            issuer_id: target.clone(),
             signature: fixture_protocol_signature("did:web:bob.example", now),
         }),
         glare_concurrency_attestations: None,
         current_proofs: vec![
-            current_proof(requester, "did:web:alice.example", request_event_ref),
+            current_proof(requester_id, "did:web:alice.example", request_event_ref),
             current_proof(target, "did:web:bob.example", response_event_ref),
         ],
         continuity_checkpoint: None,
@@ -158,11 +158,11 @@ async fn seed_accepted_direct_message_contact(
     let response_event_ref =
         arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
             .unwrap();
-    let requester = core_id("did:web:alice.example");
+    let requester_id = core_id("did:web:alice.example");
     let target = core_id(target);
     let now = chrono::Utc::now();
     let evidence = normal_contact_evidence(
-        requester.clone(),
+        requester_id.clone(),
         target.clone(),
         request_event_ref.clone(),
         response_event_ref.clone(),
@@ -172,23 +172,23 @@ async fn seed_accepted_direct_message_contact(
         .test_persistence()
         .contacts()
         .put(&soland_domain::identity::ContactRecord {
-            requester: requester.to_string(),
-            target: target.to_string(),
-            contact_round_id: Some(evidence.contact_round_id.to_string()),
+            requester_id,
+            target_id: target,
+            contact_round_id: Some(evidence.contact_round_id.clone()),
             version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
-            request_event_ref: Some(request_event_ref.to_string()),
+            request_event_ref: Some(request_event_ref),
             request_receipts: evidence.request_receipts.clone(),
             request_mirror_receipts: Vec::new(),
             contact_round_evidence: Some(evidence),
             contact_round_evidence_history: Vec::new(),
             control_outcomes: Vec::new(),
-            response_event_ref: Some(response_event_ref.to_string()),
+            response_event_ref: Some(response_event_ref),
             tombstone_event_ref: None,
             message: None,
-            peer_id: peer_id.map(str::to_owned),
+            peer_host_id: peer_id.map(|value| arkret_wire::DidCoreId::new(value).unwrap()),
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,
@@ -228,7 +228,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix:
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackages: vec![entry],
+        keypackage_upload_entries: vec![entry],
         expires_at: None,
         strand_id: None,
         mls_group_id: None,
@@ -279,11 +279,13 @@ async fn seed_remote_claim_prerequisites(
             .unwrap()
             .to_string();
     state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
-        cell_id:
+        cell_id: arkret_identifiers::CellRef::new(
             "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-0000000000c1"
                 .to_owned(),
-        holder: core_id(BOB_DID).to_string(),
-        peer: core_id(alice).to_string(),
+        )
+        .unwrap(),
+        holder_principal_id: core_id(BOB_DID),
+        peer_principal_id: core_id(alice),
         consent_scope: "direct_message".to_owned(),
         grant_dots: BTreeMap::from([(
             grant_dot.clone(),
@@ -319,11 +321,11 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let (signing_key, authorize_event_id) =
         seed_remote_claim_prerequisites(&state, source_id.as_str()).await;
     let trust_domain = state.config().trust_domain.clone();
-    let requester = core_id("did:web:alice.example");
+    let requester_id = core_id("did:web:alice.example");
     let target = core_id(BOB_DID);
     let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain.clone(),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(requester.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(requester_id.clone()),
         arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(target.clone()),
     )
     .unwrap();
@@ -340,7 +342,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         serde_json::from_value(serde_json::json!({
             "claim_request_id": claim_request_id,
             "target_principal_id": target,
-            "requester": requester,
+            "requester_id": requester_id,
             "intended_realm_id": realm_id,
             "mls_group_id": "mls-group-0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
@@ -389,7 +391,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         serde_json::from_value(serde_json::json!({
             "claim_request_id": unsigned.claim_request_id,
             "target_principal_id": unsigned.target_principal_id,
-            "requester": unsigned.requester,
+            "requester_id": unsigned.requester_id,
             "intended_realm_id": unsigned.intended_realm_id,
             "mls_group_id": unsigned.mls_group_id,
             "claim_purpose": unsigned.claim_purpose,
@@ -563,7 +565,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact_body() {
     assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(
         body["reason_detail"],
-        "no owned active managed-Agent authorization or accepted contact projection: requester=ak:did_core:web:alice.example, peer=ak:did_core:web:bob.example"
+        "no owned active managed-Agent authorization or accepted contact projection: requester_id=ak:did_core:web:alice.example, peer=ak:did_core:web:bob.example"
     );
 }
 
@@ -667,9 +669,11 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
         .test_persistence()
         .contacts()
         .put(&soland_domain::identity::ContactRecord {
-            requester: core_id("did:web:alice.example").to_string(),
-            target: core_id(BOB_DID).to_string(),
-            contact_round_id: Some(format!("sha256:{}", "4".repeat(64))),
+            requester_id: core_id("did:web:alice.example"),
+            target_id: core_id(BOB_DID),
+            contact_round_id: Some(
+                arkret_identifiers::Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap(),
+            ),
             version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
@@ -683,7 +687,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
             response_event_ref: None,
             tombstone_event_ref: None,
             message: None,
-            peer_id: None,
+            peer_host_id: None,
             peer_service_resolution: None,
             created_at: now,
             updated_at: now,
@@ -757,7 +761,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .take_json()
         .await
         .unwrap();
-    let row = &contacts["contacts"][0];
+    let row = &contacts["contact_list_rows"][0];
     assert_eq!(row["peer"]["kind"], "human");
     assert_eq!(row["peer"]["principal_id"], core_id(BOB_DID).as_str());
     assert_eq!(row["state"], "accepted");

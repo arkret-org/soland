@@ -131,7 +131,7 @@ impl FrontierExchangeWorker {
         ) {
             return Err(format!("trust_domain_policy_denied:{reason}"));
         }
-        let peer_url = route.cache_entry.base_uri.trim_end_matches('/');
+        let peer_url = route.cache_entry.base_url.trim_end_matches('/');
         let canonical_target = format!("{}/_arkret/peer/events/frontier", peer_url);
         let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -318,7 +318,7 @@ pub async fn inbound_peer_is_stale(
     peer_id: &str,
 ) -> Result<bool, String> {
     let peer_id = arkret_wire::DidCoreId::new(peer_id.to_owned())
-        .map_err(|error| format!("invalid_peer_service_id:{error}"))?;
+        .map_err(|error| format!("invalid_peer_id:{error}"))?;
     state
         .federation()
         .frontier_exchange(realm_id, &peer_id)
@@ -337,8 +337,8 @@ mod tests {
     fn frontier_response_validation_requires_bound_peer_and_realm() {
         let body = serde_json::json!({
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "heads": [],
-            "issuer": "ak:did_core:webvh:z6mkpeer",
+            "head_ids": [],
+            "issuer_id": "ak:did_core:webvh:z6mkpeer",
             "frontier_root": format!("sha256:{}", "a".repeat(64)),
             "observed_at": "2026-01-01T00:00:00.000Z",
             "signature": {"value": "c2ln"}

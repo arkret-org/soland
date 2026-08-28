@@ -32,6 +32,7 @@ fn dev_proof_envelope() -> serde_json::Map<String, Value> {
 
 fn session() -> SessionRecord {
     SessionRecord {
+        service_account_id: None,
         token_hash: "hash".to_owned(),
         actor: "ak:did_core:web:alice.example".to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
@@ -1389,7 +1390,7 @@ fn historical_data_event_grant_value(
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": DATA_EVENT_REALM,
-        "issuer": issuer,
+        "issuer_id": issuer,
         "issuer_principal_server_id": DATA_EVENT_PRINCIPAL_SERVER,
         "issuer_authority_refs": [{
             "kind": "realm_root",
@@ -1778,7 +1779,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
     with_effects.insert(
         "effects".to_owned(),
         json!([{
-            "cell": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
+            "cell_id": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
             "op": {"kind": "append"}
         }]),
     );

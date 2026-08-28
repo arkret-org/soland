@@ -1,4 +1,5 @@
 use arkret_models_collaboration::http_bodies::DevicePairingState;
+use arkret_wire::DidCoreId;
 use chrono::{DateTime, Utc};
 
 use super::{PersistenceResult, Value, async_trait};
@@ -25,7 +26,7 @@ pub struct DevicePairingRecord {
     /// `#/$defs/device_pairing_state`), persisted as its snake_case wire name.
     pub state: DevicePairingState,
     pub device_id: Option<String>,
-    pub authorized_by_actor_id: Option<String>,
+    pub authorized_by_actor_id: Option<DidCoreId>,
     pub authorized_event_ref: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -75,7 +76,7 @@ pub struct DevicePairingAuthorizationCommit {
     pub pairing_code: String,
     pub new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
     pub device_id: String,
-    pub authorized_by_actor_id: String,
+    pub authorized_by_actor_id: DidCoreId,
     pub authorized_event_ref: String,
     pub changed_at: DateTime<Utc>,
 }

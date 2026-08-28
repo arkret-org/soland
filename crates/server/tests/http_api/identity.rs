@@ -51,7 +51,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     let authorize_payload = DeviceAuthorizePayload {
         principal_id: principal_id.clone(),
         device_id: descriptor.device_id.clone(),
-        device_public_key: descriptor.device_public_key.clone(),
+        device_public_key_did: descriptor.device_public_key_did.clone(),
         hpke_key: descriptor.hpke_key.clone(),
         algorithms: descriptor.algorithms.clone(),
         device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
@@ -196,7 +196,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             "ak:receipt:0196419b-0000-7000-8000-000000000004",
         )
         .unwrap(),
-        issuer: principal_server_id.clone(),
+        issuer_id: principal_server_id.clone(),
         scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
             arkret_wire::event_receipt::PcrGenesisReceiptScope {
                 kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
@@ -210,7 +210,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
                 device_key_digest: descriptor.device_key_digest,
                 hpke_key_digest: descriptor.hpke_key_digest,
                 accepted_at: genesis.created_at,
-                audience: principal_server_id,
+                audience_id: principal_server_id,
             },
         ),
         events: vec![
@@ -716,7 +716,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     );
 
     let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
-        "http://server/_arkret/root/identity/service-registrations?service_kind=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
+        "http://server/_arkret/root/identity/service-registrations?service_kind=auth_server&public_base_url=https%3A%2F%2Fauth.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
     .send(&app_from_state(state.clone()))

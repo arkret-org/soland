@@ -54,7 +54,7 @@ use sha2::Sha256;
 
 use super::events::peer::{
     peer_event_visibility, peer_mls_scope_visibility, peer_realm_visibility,
-    source_service_id_from_request, validate_peer_request,
+    source_id_from_request, validate_peer_request,
 };
 use super::system::extract::AuthArgs;
 use super::{now, realm_has_member};
@@ -186,7 +186,7 @@ async fn resolve_peer_mls_governance_proof(
 ) -> JsonResult<MlsGovernanceProofBundle> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let request = req
         .parse_json::<MlsGovernanceProofRequestBody>()
         .await
@@ -215,7 +215,7 @@ async fn resolve_peer_mls_group_state_material(
 ) -> JsonResult<MlsGroupStateMaterialOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let request = req
         .parse_json::<MlsGroupStateMaterialRequestBody>()
         .await
@@ -395,7 +395,7 @@ async fn resolve_peer_seals(
 ) -> JsonResult<SealResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request = req
@@ -507,7 +507,7 @@ async fn resolve_peer_dependencies(
 ) -> JsonResult<GovernanceDependencyResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let source_service_core_id = arkret_wire::DidCoreId::new(source_id.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let request = req
@@ -569,7 +569,7 @@ async fn create_history_key_request(
         request
             .proof_binding_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        "history request requester",
+        "history request requester_id",
     )
     .await?;
     validate_history_requester_endpoint_authorization(state, &request).await?;
@@ -896,12 +896,12 @@ async fn validate_local_history_release_binding(
         let member = snapshot
             .member(realm_id.as_str(), request.requester_actor_id.as_str())
             .filter(|member| member.state == "join")
-            .ok_or_else(|| AppError::capability_denied("history requester is not active"))?;
+            .ok_or_else(|| AppError::capability_denied("history requester_id is not active"))?;
         if member.delivery_status.as_deref() != Some("routable")
             || member.recipient_id.as_deref() != Some(local_service_id.as_str())
         {
             return Err(AppError::capability_denied(
-                "history requester delivery binding does not name this service",
+                "history requester_id delivery binding does not name this service",
             ));
         }
         arkret_wire::EventId::new(
@@ -929,7 +929,7 @@ async fn validate_local_history_release_binding(
         || recipient_service != Some(local_service_id.as_str())
     {
         return Err(AppError::capability_denied(
-            "history requester delivery binding Event does not match the current projection",
+            "history requester_id delivery binding Event does not match the current projection",
         ));
     }
     Ok((local_service_id, binding_ref))
@@ -1035,7 +1035,7 @@ async fn relay_history_key_response(
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let transport_source = arkret_wire::DidCoreId::new(source_service_id_from_request(req)?)
+    let transport_source = arkret_wire::DidCoreId::new(source_id_from_request(req)?)
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let relay = req
         .parse_json::<HistoryKeySourceRelay>()
@@ -3976,7 +3976,7 @@ async fn build_history_recipient_authority_views(
         })?;
     let status = state
         .persistence()
-        .current_account_status_record(local_service_id.as_str(), &account.account_id)
+        .current_account_status_record(local_service_id.as_str(), account.account_id.as_str())
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| {
@@ -3989,7 +3989,7 @@ async fn build_history_recipient_authority_views(
         .validate_shape()
         .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?;
     if status.account_authority_id != local_service_id
-        || status.account_id.as_str() != account.account_id
+        || status.account_id.as_str() != account.account_id.as_str()
         || status.principal_authority.principal_id != request.requester_actor_id
         || status.principal_authority.principal_server_id != local_service_id
         || status.status
@@ -4072,7 +4072,7 @@ async fn build_history_recipient_authority_views(
     Ok((
         Some(AccountStatusViewLocator {
             account_authority_id: status.account_authority_id,
-            account_id: status.account_id.to_string(),
+            account_id: status.account_id,
             account_status_record_id: status.account_status_record_id.to_string(),
             status_sequence: status.status_seq,
             record_digest: account_record_digest,
@@ -4133,7 +4133,9 @@ async fn validate_manifest_current_gate(
             .member(realm_id.as_str(), request.requester_actor_id.as_str())
             .filter(|member| member.state == "join")
             .cloned()
-            .ok_or_else(|| AppError::capability_denied("history requester is no longer active"))?;
+            .ok_or_else(|| {
+                AppError::capability_denied("history requester_id is no longer active")
+            })?;
         let (circle_membership, circle_membership_ref, circle_history_access) =
             match &request.effective_scope {
                 HistoryEffectiveScope::Realm { .. } => (None, None, None),
@@ -4193,7 +4195,7 @@ async fn validate_manifest_current_gate(
                 != Some(realm_membership_incarnation_ref.as_str())
             {
                 return Err(AppError::capability_denied(
-                    "history requester Realm incarnation changed",
+                    "history requester_id Realm incarnation changed",
                 ));
             }
             let HistoryEffectiveScope::Circle { .. } = &request.effective_scope else {
@@ -4202,18 +4204,18 @@ async fn validate_manifest_current_gate(
                 ));
             };
             circle_membership.as_ref().ok_or_else(|| {
-                AppError::capability_denied("history requester Circle membership is inactive")
+                AppError::capability_denied("history requester_id Circle membership is inactive")
             })?;
             if circle_membership_ref.as_deref() != Some(circle_membership_incarnation_ref.as_str())
             {
                 return Err(AppError::capability_denied(
-                    "history requester Circle incarnation changed",
+                    "history requester_id Circle incarnation changed",
                 ));
             }
         }
         _ => {
             return Err(AppError::capability_denied(
-                "history requester authorization incarnation changed",
+                "history requester_id authorization incarnation changed",
             ));
         }
     }
@@ -4574,7 +4576,7 @@ async fn replicate_history_key_request(
 ) -> JsonResult<HistoryKeyRequestReplicaOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let transport_source = source_service_id_from_request(req)?;
+    let transport_source = source_id_from_request(req)?;
     let source_id = arkret_wire::DidCoreId::new(transport_source.clone())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let replica = req
@@ -4617,7 +4619,7 @@ async fn replicate_history_key_request(
             .request
             .proof_binding_bytes()
             .map_err(|error| AppError::param_invalid(error.to_string()))?,
-        "history request requester",
+        "history request requester_id",
     )
     .await?;
     verify_history_proof(
@@ -4779,7 +4781,7 @@ async fn replicate_organization_recovery_archive(
 ) -> JsonResult<OrganizationRecoveryArchiveReplicaOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let replica = req
         .parse_json::<OrganizationRecoveryArchiveReplica>()
         .await
@@ -4918,7 +4920,7 @@ async fn validate_history_requester_endpoint_authorization(
                 .map(|(_, fragment)| fragment);
             if proof_device != Some(requester_device_id.as_str()) {
                 return Err(AppError::capability_denied(
-                    "history request proof does not use the signed requester device",
+                    "history request proof does not use the signed requester_id device",
                 ));
             }
             let selector =
@@ -4960,13 +4962,13 @@ async fn validate_history_requester_endpoint_authorization(
                     agent.state
                         == arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 })
-                .ok_or_else(|| AppError::capability_denied("history requester Agent is inactive"))?;
+                .ok_or_else(|| AppError::capability_denied("history requester_id Agent is inactive"))?;
             let runtime = agent
                 .runtime_bindings()
                 .map_err(|error| AppError::capability_denied(error.to_string()))?
                 .active_binding
                 .ok_or_else(|| {
-                    AppError::capability_denied("history requester Agent key is inactive")
+                    AppError::capability_denied("history requester_id Agent key is inactive")
                 })?;
             if runtime.verification_method != *requester_agent_verification_method
                 || runtime.authorized_event_ref != *requester_agent_key_authorize_event_id

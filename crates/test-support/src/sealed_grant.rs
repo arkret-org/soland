@@ -100,7 +100,7 @@ pub async fn seal_accepted_capability_grant(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .expect("capability grant cell ref");
-    assert_eq!(direct.cell, expected_cell);
+    assert_eq!(direct.cell_id, expected_cell);
     let projected_op = direct.op.clone();
     assert_eq!(
         projected_op
@@ -113,7 +113,7 @@ pub async fn seal_accepted_capability_grant(
         "canonical registry projection materializes the accepted issuer Principal Server"
     );
     let op = IssuedOp {
-        issuer: event.actor_id.clone(),
+        issuer_id: event.actor_id.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),
     };
     let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op);

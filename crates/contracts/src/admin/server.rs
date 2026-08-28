@@ -4,6 +4,7 @@
 //! (`soland/crates/http/src/routing/admin/server_ops.rs`) and the sodmin
 //! operator console.
 
+use arkret_identifiers::DidCoreId;
 use serde::{Deserialize, Serialize};
 
 /// `GET /_soland/admin/server/info` — node version / build / key config the
@@ -18,7 +19,7 @@ pub struct AdminServerInfo {
     /// Process uptime in seconds. `None` — soland does not track a start
     /// instant, so the field is reported as unknown rather than as `0`.
     pub uptime: Option<u64>,
-    pub service_id: String,
+    pub service_id: DidCoreId,
     pub trust_domain: String,
     pub development_mode: bool,
     /// Whether the deployment accepts public self-registration according to
@@ -65,10 +66,10 @@ pub struct AdminServerStatus {
     /// endpoint runs no component health checks, so this is reachability
     /// only — the console must not present it as a component roll-up.
     pub status: String,
-    pub service_id: String,
+    pub service_id: DidCoreId,
     pub storage: String,
     pub development_mode: bool,
-    pub checked_by: String,
+    pub checked_by: DidCoreId,
     pub generated_at: String,
     pub counts: AdminServerStatusCounts,
 }
@@ -94,7 +95,7 @@ mod tests {
             "service_id": "ak:did_core:web:soland.local",
             "storage": "postgres",
             "development_mode": false,
-            "checked_by": "did:web:alice.example",
+            "checked_by": "ak:did_core:web:alice.example",
             "generated_at": "2026-08-14T00:00:00.000Z",
             "counts": { "accounts": null, "devices": 3, "realms": 7 },
         }))

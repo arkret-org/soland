@@ -758,9 +758,7 @@ pub(super) async fn provision_agent(
                 .min(12 * 60 * 60 * 1000);
             let expires_at =
                 now_utc + chrono::Duration::milliseconds(effective_pairing_ttl_ms as i64);
-            principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
-                &controller_account.account_id,
-            ));
+            principal.controller_account_id = Some(controller_account.account_id.clone());
             principal.recipient_id = Some(state.service_id().clone());
             principal.provision_event_refs = Some(json!({
                 "provision_event_id": provision_event_id,

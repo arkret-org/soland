@@ -1,6 +1,6 @@
 use arkret_identifiers::{Did, DidCoreId, project_did_to_core_id};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::{DidUrl, OpaqueLocalId};
+use arkret_wire::{DidUrl, OpaqueLocalId, ServiceAccountId};
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use serde_json::Value;
@@ -15,9 +15,9 @@ use crate::schema::agent_principals;
 #[diesel(treat_none_as_null = true)]
 pub(crate) struct AgentPrincipalRow {
     #[diesel(skip_update)]
-    pub id: String,
+    pub id: DidCoreId,
     #[diesel(skip_update)]
-    pub controller_id: String,
+    pub controller_id: DidCoreId,
     #[diesel(skip_update)]
     pub principal_control_realm_id: String,
     #[diesel(skip_update)]
@@ -30,15 +30,15 @@ pub(crate) struct AgentPrincipalRow {
     pub requested_scope: Option<Value>,
     pub accountability: Option<Value>,
     pub provision_event_refs: Option<Value>,
-    pub pairing_request_id: Option<String>,
-    pub paired_pairing_request_id: Option<String>,
+    pub pairing_request_id: Option<OpaqueLocalId>,
+    pub paired_pairing_request_id: Option<OpaqueLocalId>,
     pub paired_request_digest: Option<String>,
     pub pending_pairing_commit_intent: Option<Value>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
-    pub approval_request_id: Option<String>,
-    pub controller_account_id: Option<Uuid>,
-    pub recipient_id: Option<String>,
+    pub approval_request_id: Option<OpaqueLocalId>,
+    pub controller_account_id: Option<String>,
+    pub recipient_id: Option<DidCoreId>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
     pub runtime_attestation_digest: Option<String>,
@@ -55,23 +55,31 @@ pub(crate) struct AgentPrincipalRow {
     pub updated_at: DateTime<Utc>,
 }
 
-fn parse_opaque_local_id(
-    value: Option<String>,
-    field: &str,
-) -> Result<Option<OpaqueLocalId>, PersistenceError> {
-    value.map(OpaqueLocalId::new).transpose().map_err(|error| {
-        PersistenceError::SchemaViolation(format!("stored Agent {field} is invalid: {error}"))
-    })
-}
-
 impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
     type Error = PersistenceError;
 
     fn try_from(record: AgentPrincipalRecord) -> Result<Self, Self::Error> {
-        validate_managed_agent_identity_binding(&record.id, &record.controller_authorization_ref)?;
+        let id = DidCoreId::new(record.id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("Agent id is not a did_core_id: {error}"))
+        })?;
+        let controller_id = DidCoreId::new(record.controller_id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "Agent controller_id is not a did_core_id: {error}"
+            ))
+        })?;
+        let recipient_id = record
+            .recipient_id
+            .map(DidCoreId::new)
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "Agent recipient_id is not a did_core_id: {error}"
+                ))
+            })?;
+        validate_managed_agent_identity_binding(&id, &record.controller_authorization_ref)?;
         Ok(Self {
-            id: record.id,
-            controller_id: record.controller_id,
+            id,
+            controller_id,
             principal_control_realm_id: record.principal_control_realm_id,
             controller_authorization_ref: record.controller_authorization_ref.to_string(),
             display_name: record.display_name,
@@ -81,10 +89,8 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
             requested_scope: record.requested_scope,
             accountability: record.accountability,
             provision_event_refs: record.provision_event_refs,
-            pairing_request_id: record.pairing_request_id.map(OpaqueLocalId::into_string),
-            paired_pairing_request_id: record
-                .paired_pairing_request_id
-                .map(OpaqueLocalId::into_string),
+            pairing_request_id: record.pairing_request_id,
+            paired_pairing_request_id: record.paired_pairing_request_id,
             paired_request_digest: record.paired_request_digest,
             pending_pairing_commit_intent: record
                 .pending_pairing_commit_intent
@@ -97,9 +103,11 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
                 })?,
             pairing_code: record.pairing_code,
             pairing_expires_at: record.pairing_expires_at,
-            approval_request_id: record.approval_request_id.map(OpaqueLocalId::into_string),
-            controller_account_id: record.controller_account_id,
-            recipient_id: record.recipient_id,
+            approval_request_id: record.approval_request_id,
+            controller_account_id: record
+                .controller_account_id
+                .map(ServiceAccountId::into_string),
+            recipient_id,
             runtime_key_binding_digest: record.runtime_key_binding_digest,
             runtime_public_key_digest: record.runtime_public_key_digest,
             runtime_attestation_digest: record.runtime_attestation_digest,
@@ -134,12 +142,9 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
 }
 
 fn validate_managed_agent_identity_binding(
-    agent_id: &str,
+    agent_id: &DidCoreId,
     controller_authorization_ref: &DidUrl,
 ) -> Result<(), PersistenceError> {
-    let agent_id = DidCoreId::new(agent_id.to_owned()).map_err(|error| {
-        PersistenceError::SchemaViolation(format!("Agent id is not a did_core_id: {error}"))
-    })?;
     let (agent_did, fragment) = controller_authorization_ref
         .as_str()
         .split_once('#')
@@ -164,7 +169,7 @@ fn validate_managed_agent_identity_binding(
             "Agent controller_authorization_ref DID projection failed: {error}"
         ))
     })?;
-    if projected != agent_id {
+    if projected != *agent_id {
         return Err(PersistenceError::SchemaViolation(
             "Agent controller_authorization_ref does not belong to the Agent id".to_owned(),
         ));
@@ -177,8 +182,8 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
 
     fn try_from(row: AgentPrincipalRow) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: row.id,
-            controller_id: row.controller_id,
+            id: row.id.to_string(),
+            controller_id: row.controller_id.to_string(),
             principal_control_realm_id: row.principal_control_realm_id,
             controller_authorization_ref: DidUrl::new(row.controller_authorization_ref).map_err(
                 |error| {
@@ -199,14 +204,8 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             requested_scope: row.requested_scope,
             accountability: row.accountability,
             provision_event_refs: row.provision_event_refs,
-            pairing_request_id: parse_opaque_local_id(
-                row.pairing_request_id,
-                "pairing_request_id",
-            )?,
-            paired_pairing_request_id: parse_opaque_local_id(
-                row.paired_pairing_request_id,
-                "paired_pairing_request_id",
-            )?,
+            pairing_request_id: row.pairing_request_id,
+            paired_pairing_request_id: row.paired_pairing_request_id,
             paired_request_digest: row.paired_request_digest,
             pending_pairing_commit_intent: row
                 .pending_pairing_commit_intent
@@ -219,12 +218,17 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
                 })?,
             pairing_code: row.pairing_code,
             pairing_expires_at: row.pairing_expires_at,
-            approval_request_id: parse_opaque_local_id(
-                row.approval_request_id,
-                "approval_request_id",
-            )?,
-            controller_account_id: row.controller_account_id,
-            recipient_id: row.recipient_id,
+            approval_request_id: row.approval_request_id,
+            controller_account_id: row
+                .controller_account_id
+                .map(ServiceAccountId::new)
+                .transpose()
+                .map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "stored Agent controller_account_id is invalid: {error}"
+                    ))
+                })?,
+            recipient_id: row.recipient_id.map(|id| id.to_string()),
             runtime_key_binding_digest: row.runtime_key_binding_digest,
             runtime_public_key_digest: row.runtime_public_key_digest,
             runtime_attestation_digest: row.runtime_attestation_digest,
@@ -266,34 +270,23 @@ mod tests {
     fn managed_agent_binding_accepts_did_delegation_for_projected_core() {
         let authorization_ref =
             DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#managed-controller").unwrap();
+        let agent_id = DidCoreId::new("ak:did_core:webvh:z6mkfixtureagent").unwrap();
 
-        validate_managed_agent_identity_binding(
-            "ak:did_core:webvh:z6mkfixtureagent",
-            &authorization_ref,
-        )
-        .expect("the delegation DID projects to the stored Agent core id");
+        validate_managed_agent_identity_binding(&agent_id, &authorization_ref)
+            .expect("the delegation DID projects to the stored Agent core id");
     }
 
     #[test]
     fn managed_agent_binding_rejects_controller_did_or_wrong_fragment() {
         let controller_delegation =
             DidUrl::new("did:web:controller.example#managed-controller").unwrap();
+        let agent_id = DidCoreId::new("ak:did_core:webvh:z6mkfixtureagent").unwrap();
         assert!(
-            validate_managed_agent_identity_binding(
-                "ak:did_core:webvh:z6mkfixtureagent",
-                &controller_delegation,
-            )
-            .is_err()
+            validate_managed_agent_identity_binding(&agent_id, &controller_delegation).is_err()
         );
 
         let wrong_fragment =
             DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#controller").unwrap();
-        assert!(
-            validate_managed_agent_identity_binding(
-                "ak:did_core:webvh:z6mkfixtureagent",
-                &wrong_fragment,
-            )
-            .is_err()
-        );
+        assert!(validate_managed_agent_identity_binding(&agent_id, &wrong_fragment).is_err());
     }
 }

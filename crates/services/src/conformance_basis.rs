@@ -568,7 +568,7 @@ fn grant_body(
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
-        "issuer": subject,
+        "issuer_id": subject,
         "issuer_principal_server_id": principal_server_id,
         "subject": subject,
         "subject_principal_server_id": principal_server_id,
@@ -691,7 +691,7 @@ mod tests {
         let state = CellState::Value(json!([{"value": body}]));
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("content grant must enter the effective capability set");
-        assert_eq!(grant.subject.as_str(), subject);
+        assert_eq!(grant.subject_id.as_str(), subject);
         assert_eq!(grant.actions, vec![action]);
     }
 

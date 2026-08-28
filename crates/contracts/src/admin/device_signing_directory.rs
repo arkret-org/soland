@@ -26,7 +26,7 @@ pub struct DeviceSigningKeyDirectoryQueryRequestBody {
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AuthorizedDeviceSigningKey {
     pub device_id: DeviceId,
-    pub device_signing_key: String,
+    pub device_signing_key_did: String,
     #[cfg_attr(feature = "openapi", salvo(schema(value_type = String)))]
     pub device_status: DeviceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]

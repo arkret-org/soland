@@ -256,7 +256,7 @@ async fn issue_seal_availability_receipts(
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::PolicyViolation,
-            format!("availability requester DID core id is invalid: {error}"),
+            format!("availability requester_id DID core id is invalid: {error}"),
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
@@ -1259,21 +1259,23 @@ async fn verified_contact_mirror_event(
         })?,
     )
     .map_err(|error| AppError::internal(format!("Contact mirror payload decode: {error}")))?;
-    if payload.peer.contact_actor_id().as_str() != session.actor {
+    if payload.peer.contact_actor_id().as_str() != session.actor.as_str() {
         return Ok(None);
     }
+    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("invalid session actor id: {error}")))?;
     let Ok(Some(contact)) = state
         .contacts()
-        .contact_any(event.actor_id.as_str(), &session.actor)
+        .contact_any(&event.actor_id, &session_actor_id)
         .await
     else {
         return Ok(None);
     };
     if contact.status != "pending"
-        || contact.requester != event.actor_id.as_str()
-        || contact.target != session.actor
-        || contact.request_event_ref.as_deref() != Some(event.event_id.as_str())
-        || contact.peer_id.as_deref() != Some(mirror.issuer_id.as_str())
+        || contact.requester_id.as_str() != event.actor_id.as_str()
+        || contact.target_id != session_actor_id
+        || contact.request_event_ref.as_ref() != Some(&event.event_id)
+        || contact.peer_host_id.as_ref().map(|id| id.as_str()) != Some(mirror.issuer_id.as_str())
     {
         return Ok(None);
     }

@@ -15,7 +15,7 @@ use super::{PersistenceResult, Utc, Value, async_trait};
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyBackupDeleteChallengeRecord {
     pub challenge_id: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub backup_id: String,
     pub request_id: String,
     pub challenge: Value,

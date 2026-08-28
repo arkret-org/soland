@@ -762,10 +762,10 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 continue;
                             }
                         };
-                        let public_base = match arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(
+                        let public_base_url = match arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(
                             endpoint.as_str(),
                         ) {
-                            Ok(public_base) => public_base,
+                            Ok(public_base_url) => public_base_url,
                             Err(error) => {
                                 tracing::warn!(%endpoint, %error, "invalid federation peer endpoint");
                                 continue;
@@ -773,7 +773,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         };
                         let registration_key = match arkret_models_identity::service_identity::ServiceRegistrationKey::new(
                             arkret_wire::ServiceKind::PrincipalServer,
-                            public_base,
+                            public_base_url,
                         ) {
                             Ok(key) => key,
                             Err(error) => {
@@ -875,7 +875,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             description.service_id,
                             description.trust_domain,
                         );
-                        let previous_service_id = federation_peer_service_id(&configured);
+                        let previous_service_id = federation_peer_id(&configured);
                         let key_changed = state
                             .federation_peer_verifying_key(description.service_id.as_str())
                             .as_ref()
@@ -936,7 +936,7 @@ fn federation_peer_endpoint(entry: &str) -> Option<String> {
         .map(|endpoint| endpoint.trim_end_matches('/').to_owned())
 }
 
-fn federation_peer_service_id(entry: &str) -> Option<String> {
+fn federation_peer_id(entry: &str) -> Option<String> {
     entry
         .split('|')
         .map(str::trim)
@@ -946,7 +946,7 @@ fn federation_peer_service_id(entry: &str) -> Option<String> {
 
 #[cfg(test)]
 fn unresolved_federation_peer_endpoint(entry: &str) -> Option<String> {
-    if federation_peer_service_id(entry).is_some() {
+    if federation_peer_id(entry).is_some() {
         return None;
     }
     federation_peer_endpoint(entry)

@@ -526,7 +526,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 .expect("PCR genesis audience checked above")
                 .to_string(),
             account_subject: pins.account_subject.to_string(),
-            principal_id: first.actor_id.to_string(),
+            principal_id: first.actor_id.clone(),
             realm_id: first.realm_id.to_string(),
             create_event_id: first.event_id.to_string(),
         })
@@ -1545,7 +1545,7 @@ async fn validate_reanchor_recovery_session(
     if session.state != arkret_models_crypto::SessionState::Verified
         || session.expires_at <= now()
         || session_id != &reanchor.recovery_session_id
-        || session.principal_id != authorize.principal_id.as_str()
+        || session.principal_id != authorize.principal_id
         || session.requesting_device_id != authorize.device_id.as_str()
         || session.policy_id != reanchor.recovery_policy_id.as_str()
         || u64::from(session.policy_version) != reanchor.recovery_policy_version

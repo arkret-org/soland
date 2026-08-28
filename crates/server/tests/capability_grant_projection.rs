@@ -72,7 +72,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
             "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
             "grant": {
                 "realm_id": REALM,
-                "issuer": ISSUER,
+                "issuer_id": ISSUER,
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
@@ -207,7 +207,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                 "event_id": GRANT_ID.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
                     "realm_id": REALM,
-                    "issuer": ISSUER,
+                    "issuer_id": ISSUER,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,

@@ -110,7 +110,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     let alice_attestation = &alice_desktop["device_projection_attestation"]["attestation"];
     assert_eq!(alice_attestation["device_status"], "active");
     assert_eq!(
-        alice_attestation["device_signing_key"],
+        alice_attestation["device_signing_key_did"],
         format!("did:key:{alice_device_public}")
     );
 
@@ -619,7 +619,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
                 "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-                "push_gateway": "https://push.example",
+                "push_gateway_url": "https://push.example",
                 "push_key": "opaque",
                 "platform": "desktop",
                 "app_id": "inkson"
@@ -818,7 +818,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     let entry = &query["device_keys"][alice_core.as_str()][alice_device];
     let attestation = &entry["device_projection_attestation"]["attestation"];
     assert_eq!(
-        attestation["device_signing_key"], expected_principal_id_key,
+        attestation["device_signing_key_did"], expected_principal_id_key,
         "expected authoritative did:key, got {entry}"
     );
     assert_eq!(attestation["device_status"], "active");
@@ -930,7 +930,10 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         attestation["device_status"], "active",
         "query body: {query}"
     );
-    assert_eq!(attestation["device_signing_key"], expected_principal_id_key);
+    assert_eq!(
+        attestation["device_signing_key_did"],
+        expected_principal_id_key
+    );
     assert!(
         query["device_keys"].get(carol_core.as_str()).is_none(),
         "never-member key material must remain hidden: {query}"
@@ -973,7 +976,7 @@ async fn device_authorize_projects_public_key_into_devices_table_body() {
             // spec-complete device.authorize, not a three-field stub.
             "principal_id": alice_core,
             "device_id": alice_device,
-            "device_public_key": multibase,
+            "device_public_key_did": multibase,
             "hpke_key": "z6LSTestPhase1HpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": alice_core,
@@ -1122,7 +1125,7 @@ async fn keys_query_exposes_accepted_device_anchor_body() {
         "entry: {query}"
     );
     assert_eq!(
-        attestation["attestation"]["device_signing_key"],
+        attestation["attestation"]["device_signing_key_did"],
         format!("did:key:{multibase}")
     );
     assert_eq!(

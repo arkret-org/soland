@@ -25,7 +25,7 @@ pub struct GcCandidate {
     /// Canonical `event_digest` of the sealed Control Move.
     pub event_digest: String,
     pub realm_id: String,
-    pub issuer: String,
+    pub issuer_id: arkret_wire::DidCoreId,
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Reason this Control Move is GC-eligible, e.g. "not_in_live_seal_coverage".
     pub reason: String,
@@ -97,7 +97,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
             candidates.push(GcCandidate {
                 event_digest: digest,
                 realm_id: realm_id.to_string(),
-                issuer: record.event.actor_id.to_string(),
+                issuer_id: record.event.actor_id.clone(),
                 created_at: record.event.created_at,
                 reason: "not_in_live_seal_coverage".to_owned(),
             });

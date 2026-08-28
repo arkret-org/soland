@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{BlobRef, Hash};
+use arkret_identifiers::{BlobRef, Hash, ServiceAccountId};
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::{
@@ -26,6 +26,8 @@ pub struct AgentSessionRecord {
 #[derive(Clone, Debug)]
 pub struct SessionRecord {
     pub token_hash: String,
+    /// Exact service-local account binding for this authenticated session.
+    pub service_account_id: ServiceAccountId,
     pub actor: String,
     pub device_id: String,
     pub audience: String,
@@ -53,10 +55,10 @@ pub struct DeviceInventoryRecord {
 
 #[derive(Clone, Debug)]
 pub struct AccountRecord {
-    /// Surrogate row primary key (`ak:account:<uuid7>`), minted by
+    /// Service-local opaque account row primary key, minted by
     /// The composition root mints this identifier at account creation. Stable
     /// internal handle decoupled from the protocol principal identifier.
-    pub id: String,
+    pub id: ServiceAccountId,
     /// Stable protocol principal identifier (DB column `principal_id`).
     ///
     /// An ordinary account projection does not carry a W3C DID. Registration
@@ -104,7 +106,7 @@ pub struct AccountLocalpartRecord {
 pub struct AccountLifecycleRecord {
     pub state: String,
     pub reason: Option<String>,
-    pub changed_by: Option<String>,
+    pub changed_by: Option<DidCoreId>,
     pub changed_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -115,7 +117,7 @@ pub struct AccountLifecycleRecord {
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyRecord {
     pub policy_id: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub version: u32,
     pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
@@ -146,8 +148,8 @@ pub struct RecoverySessionRecord {
     pub recovery_session_id: String,
     pub session_grant_id: String,
     pub session_grant_cnf_jkt: String,
-    pub principal_id: String,
-    pub principal_server_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
+    pub principal_server_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,
@@ -235,7 +237,7 @@ pub struct CursorRevocation {
     /// sha256 hex of the exact revoked `ak:cursor:` token (used by `this_cursor`).
     pub cursor_digest: String,
     /// Authenticated principal that requested the revocation.
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     /// Bound device for `same_device` / `same_session` scope (the caller's
     /// session device); `None` for `this_cursor`.
     pub device_id: Option<String>,
@@ -1029,7 +1031,7 @@ pub struct PolicyDocumentRecord {
 #[derive(Clone, Debug)]
 pub struct OrganizationRecord {
     pub organization_id: String,
-    pub organization_principal_id: String,
+    pub organization_principal_id: arkret_identifiers::DidCoreId,
     pub handle: Option<String>,
     pub display_name: String,
     pub source_refs: Vec<String>,
@@ -1037,7 +1039,7 @@ pub struct OrganizationRecord {
     pub verified: bool,
     pub members: BTreeSet<String>,
     pub member_count: usize,
-    pub created_by: String,
+    pub created_by: arkret_wire::DidCoreId,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -1048,7 +1050,7 @@ pub struct OrganizationPolicyRecord {
     pub policy_id: String,
     pub payload: Value,
     pub version: u64,
-    pub updated_by: String,
+    pub updated_by: arkret_wire::DidCoreId,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -1084,7 +1086,7 @@ pub struct RealmOrganizationStatementRecord {
 pub struct RetentionPolicyRecord {
     pub realm_id: String,
     pub ttl_seconds: i64,
-    pub updated_by: String,
+    pub updated_by: arkret_wire::DidCoreId,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

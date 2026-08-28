@@ -128,7 +128,7 @@ fn welcome_payload() -> Value {
             "request": {
                 "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
                 "target_principal_id": "ak:did_core:web:bob.example",
-                "requester": "ak:did_core:web:alice.example",
+                "requester_id": "ak:did_core:web:alice.example",
                 "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
                 "mls_group_id": "mls-group-abc",
                 "claim_purpose": "realm_membership",
@@ -213,6 +213,7 @@ fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde
         "action": "publish",
         "keypackage_id": id,
         "principal_id": actor,
+        "owner_account_id": "account-alice",
         "device_id": device,
         "lifetime": {"not_before": 1, "not_after": not_after},
         "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",

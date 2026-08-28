@@ -60,7 +60,7 @@ fn directory_product_endpoints_return_demo_projection_shapes() {
 }
 
 async fn directory_product_endpoints_return_demo_projection_shapes_body() {
-    let organizations: Value =
+    let organization_previews: Value =
         TestClient::post("http://server/_arkret/find/directory/search-organizations")
             .json(&serde_json::json!({"query": "arkret", "limit": 10}))
             .send(&app())
@@ -69,19 +69,19 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .await
             .unwrap();
     assert_eq!(
-        organizations["organizations"][0]["organization_principal_id"],
+        organization_previews["organizations"][0]["organization_principal_id"],
         soland_test_support::fixture_principal_server_id().as_str()
     );
     assert_eq!(
-        organizations["organizations"][0]["display_name"],
+        organization_previews["organizations"][0]["display_name"],
         "Arkret Demo Organization"
     );
     assert_eq!(
-        organizations["organizations"][0]["source_refs"][0],
+        organization_previews["organizations"][0]["source_refs"][0],
         "ak:event:AbyMki5ktjJoPFPuzhe-f4rb2rhjWdtfyMrbjIdb4qsO"
     );
     assert_eq!(
-        organizations["organizations"][0]["policy_revision"],
+        organization_previews["organizations"][0]["policy_revision"],
         "local"
     );
 
@@ -164,7 +164,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject": alice_core,
+                "subject_id": alice_core,
                 "intent": "display",
                 "limit": 10
             }))
@@ -173,12 +173,12 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(subject_handles["subject"], alice_core.as_str());
+    assert_eq!(subject_handles["subject_id"], alice_core.as_str());
     assert_eq!(subject_handles["primary_handle"], "alice:server.test");
     assert_eq!(subject_handles["has_more"], false);
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject"], alice_core.as_str());
+    assert_eq!(claims[0]["subject_id"], alice_core.as_str());
     assert_eq!(claims[0]["handle"], "alice:server.test");
 
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
@@ -245,14 +245,14 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
         "registered-handle:local.host"
     );
     assert_eq!(
-        viewer["primary_handle_claim"]["subject"],
+        viewer["primary_handle_claim"]["subject_id"],
         fixture_actor_core_id(did).as_str()
     );
 
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject": fixture_actor_core_id(did),
+                "subject_id": fixture_actor_core_id(did),
                 "intent": "display",
                 "limit": 10
             }))
@@ -262,7 +262,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
             .await
             .unwrap();
     assert_eq!(
-        subject_handles["subject"],
+        subject_handles["subject_id"],
         fixture_actor_core_id(did).as_str()
     );
     assert_eq!(
@@ -271,7 +271,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     );
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject"], fixture_actor_core_id(did).as_str());
+    assert_eq!(claims[0]["subject_id"], fixture_actor_core_id(did).as_str());
     assert_eq!(claims[0]["handle"], "registered-handle:local.host");
 }
 
@@ -287,11 +287,11 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     let state = soland_test_support::app_state(config);
-    let subject = fixture_actor_core_id("did:web:device-only.example");
+    let subject_id = fixture_actor_core_id("did:web:device-only.example");
     let device_id = "ak:device:01904100-0000-7000-8000-00000000d001";
     let now = chrono::Utc::now();
     let device = soland_storage::DeviceInventoryRecord {
-        actor: subject.to_string(),
+        actor: subject_id.to_string(),
         device_id: device_id.to_owned(),
         display_name: Some("Device only".to_owned()),
         verification_state: "unverified".to_owned(),
@@ -314,7 +314,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
     let mut response =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject": subject,
+                "subject_id": subject_id,
                 "intent": "display",
                 "limit": 10
             }))
@@ -323,7 +323,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
 
     assert_eq!(response.status_code.unwrap().as_u16(), 200);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["subject"], subject.as_str());
+    assert_eq!(body["subject_id"], subject_id.as_str());
     assert!(body["claims"].as_array().unwrap().is_empty());
     assert!(body["primary_handle"].is_null());
     assert_eq!(body["has_more"], false);
@@ -408,7 +408,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         .json(&serde_json::json!({
             "handle": "bob-example:local.host",
             "intent": "invite",
-            "requester": fixture_actor_core_id("did:web:alice.example"),
+            "requester_id": fixture_actor_core_id("did:web:alice.example"),
             "realm_id": realm_id,
             "audience": realm_id,
         }))
@@ -452,7 +452,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
             .json(&serde_json::json!({
                 "handle": "bob-example:local.host",
                 "intent": "invite",
-                "requester": fixture_actor_core_id("did:web:alice.example"),
+                "requester_id": fixture_actor_core_id("did:web:alice.example"),
                 "realm_id": realm_id,
                 "audience": realm_id,
             }))
@@ -479,7 +479,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         .json(&serde_json::json!({
             "handle": "bob:remote.example",
             "intent": "invite",
-            "requester": fixture_actor_core_id("did:web:alice.example"),
+            "requester_id": fixture_actor_core_id("did:web:alice.example"),
             "realm_id": realm_id,
             "audience": realm_id,
         }))
@@ -512,7 +512,7 @@ async fn directory_demo_projection_rejects_outside_development_mode_body() {
         ("resolve-handle", serde_json::json!({"handle": "alice"})),
         (
             "list-handles-for-subject",
-            serde_json::json!({"subject": fixture_actor_core_id("did:web:alice.example")}),
+            serde_json::json!({"subject_id": fixture_actor_core_id("did:web:alice.example")}),
         ),
     ];
 
@@ -558,7 +558,7 @@ async fn private_contact_discovery_rejects_plaintext_identifier_matching_body() 
         "http://server/_arkret/find/directory/private-contact-discovery",
     )
     .json(&serde_json::json!({
-        "requester": "did:web:alice.example",
+        "requester_id": "did:web:alice.example",
         "contacts": [
             {"contact_ref": "did", "identifier_kind": "did", "identifier": "did:web:alice.example"},
             {"contact_ref": "handle", "identifier_kind": "handle", "handle": "@alice"},
@@ -822,7 +822,7 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
     let backfill: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "realms": [demo_realm_id()]
+            "realm_ids": [demo_realm_id()]
         }))
         .send(&app_from_state(state.clone()))
         .await

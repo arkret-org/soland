@@ -281,7 +281,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
     let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
     let notary_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
         op: arkret_state::lattice::SealedOp::new(
             move_id.clone(),
             arkret_wire::LatticeOp {
@@ -305,7 +305,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ))
     .unwrap();
     let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+        issuer_id: arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
             .unwrap(),
         op: arkret_state::lattice::SealedOp::new(
             admin_grant_move_id.clone(),
@@ -316,7 +316,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "grant_id": EXTENSION_ADMIN_GRANT_ID,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": demo_realm_id(),
-                    "issuer": "ak:did_core:web:alice.example",
+                    "issuer_id": "ak:did_core:web:alice.example",
                     "issuer_principal_server_id": state.service_id(),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
@@ -962,7 +962,7 @@ async fn signed_ghost_provision_body(
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: now,
-            audience: actor_principal_server_id,
+            audience_id: actor_principal_server_id,
             jws: String::new(),
         },
     };
@@ -1418,11 +1418,11 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
     assert_eq!(grant_event.kind, "ak.identity.accountability_grant");
     assert_eq!(grant_event.actor_id, package.service_id.to_string());
     assert_eq!(
-        grant_event.envelope["payload"]["issuer"],
+        grant_event.envelope["payload"]["issuer_id"],
         json!(package.service_id.to_string())
     );
     assert_eq!(
-        grant_event.envelope["payload"]["subject"],
+        grant_event.envelope["payload"]["subject_id"],
         json!(ghost_actor_id)
     );
     assert_eq!(
@@ -2112,7 +2112,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     .await;
     assert_eq!(transaction["status"], json!("rejected"));
     assert_eq!(
-        transaction["rejected"][0]["reason_code"],
+        transaction["rejections"][0]["reason_code"],
         json!("capability_denied"),
         "an installed Ghost is not a Realm member until the ordinary invite/join FSM accepts it"
     );
@@ -2344,11 +2344,11 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         bot_actor_id,
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
-            actor_namespace_entries: vec![AppletNamespaceEntry::exclusive(format!(
+            actors: vec![AppletNamespaceEntry::exclusive(format!(
                 "did:webvh:*:managed-{}.applet.example:webvh:*",
                 safe_did_token(namespace)
             ))],
-            handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
+            handles: vec![AppletNamespaceEntry::exclusive(namespace.to_owned())],
             ..Default::default()
         },
     );
@@ -2375,7 +2375,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         "ak.profile.applet_service.v1".to_owned(),
     ];
     package.endpoint_policy = AppletEndpointPolicy {
-        endpoint_entries: [
+        endpoints: [
             "/_arkret/edge/applet/transactions",
             "/_arkret/edge/applet/actors/{actor_id}",
             "/_arkret/edge/applet/realms/{realm_id_or_alias}",
@@ -2581,7 +2581,7 @@ async fn signed_install_events(
         let grant = CapabilityGrantCreateBody {
             schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
             realm_id: Some(realm_id.clone()),
-            issuer: actor_core_id.clone(),
+            issuer_id: actor_core_id.clone(),
             subject: CapabilitySubject::CoreDid(package.service_id.clone()),
             subject_principal_server_id: Some(
                 arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
@@ -3026,7 +3026,7 @@ async fn install_applet_package_with_approved_actions(
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: now,
-            audience: target_principal_server_id,
+            audience_id: target_principal_server_id,
             jws: String::new(),
         },
     };

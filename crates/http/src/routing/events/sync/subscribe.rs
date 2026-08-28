@@ -435,7 +435,7 @@ pub(crate) async fn account_subscribe_notification_should_wake(
             .await
             .ok()
             .flatten()
-            .is_some_and(|account| account.id == *account_id);
+            .is_some_and(|account| account.id.as_str() == account_id);
     }
     if realm_id_accessible(state, &notification.realm_id, session).await {
         return true;

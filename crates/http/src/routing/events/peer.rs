@@ -86,7 +86,7 @@ async fn peer_principal_genesis(
 ) -> JsonResult<PcrGenesisSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let source_trust_domain = required_header(req, "source-trust-domain")?;
     let header_idempotency_key = required_header(req, "idempotency-key")?;
     let request = parse_json_body::<PcrGenesisSubmitRequestBody>(
@@ -119,7 +119,8 @@ async fn peer_principal_genesis(
     if let Some(authority_url) = state.config().account_authority_url.as_deref()
         && request
             .identity_creation_control_proof
-            .origin_uri
+            .origin
+            .as_str()
             .trim_end_matches('/')
             != authority_url.trim_end_matches('/')
     {
@@ -195,7 +196,7 @@ async fn peer_account_status_submit(
 ) -> JsonResult<AccountStatusPublicationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let idempotency_key = required_header(req, "idempotency-key")?;
     let request = parse_json_body::<AccountStatusPublicationRequestBody>(
         req,
@@ -683,7 +684,7 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
     request
         .validate()
         .map_err(|error| schema_violation(error.to_string()))?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     for envelope in request.signals {
         if let Err(error) =
             super::sync::signal::accept_peer_signal(state, &source_id, &envelope).await
@@ -799,7 +800,7 @@ async fn peer_events_read_body(
         "invalid ak.peer.events.read.scan.v1 request body",
     )
     .await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let parts = PeerEventsQueryParts::from_body(request)?;
     peer_events_query_response(state, source_id, parts).await
 }
@@ -825,7 +826,7 @@ async fn peer_events_resolve(
             "history traversal requires the complete accepted Event payload",
         ));
     }
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     for digest in &request.event_digests {
         if !is_valid_hash_digest(digest.as_str()) {
             return Err(AppError::param_invalid(format!(
@@ -983,7 +984,7 @@ async fn peer_events_frontier(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let has_body = req.method().as_str() == "QUERY";
     validate_peer_request(state, req, has_body).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let (realm_id, frontier_actor_id) = if has_body {
         let body = parse_json_body::<PeerEventsFrontierRequestBody>(
             req,
@@ -1137,7 +1138,7 @@ async fn peer_seals_frontier(
 ) -> JsonResult<PeerSealFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let request = parse_json_body::<SealFrontierRequestBody>(
         req,
         "invalid ak.peer.seals.read.frontier.v1 request body",
@@ -1814,7 +1815,7 @@ async fn peer_events_query_response(
     };
     if query_realms.is_empty() {
         return json_ok(EventsQueryOutcome {
-            event_read_rows: Vec::new(),
+            events: Vec::new(),
             snapshot_bootstrap: None,
             next_cursor: None,
             prev_cursor: None,
@@ -1886,7 +1887,7 @@ async fn peer_events_query_response(
         .map(|event| event.map(Into::into))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(EventsQueryOutcome {
-        event_read_rows: events,
+        events,
         snapshot_bootstrap: None,
         next_cursor,
         prev_cursor,
@@ -2107,7 +2108,7 @@ pub(in crate::routing) async fn validate_peer_request(
 }
 
 /// Realm-scoped route mirrors reuse the canonical peer policy and additionally
-/// require both requester scope and an effective, requester-visible reference
+/// require both requester_id scope and an effective, requester_id-visible reference
 /// to the target service. The caller deliberately receives only a boolean so
 /// unknown, invisible and not-held targets remain indistinguishable.
 pub(in crate::routing) async fn peer_route_visibility(
@@ -2221,9 +2222,7 @@ fn json_contains_string(value: &Value, expected: &str) -> bool {
     }
 }
 
-pub(in crate::routing) fn source_service_id_from_request(
-    req: &Request,
-) -> Result<String, AppError> {
+pub(in crate::routing) fn source_id_from_request(req: &Request) -> Result<String, AppError> {
     required_header(req, HEADER_SOURCE_SERVICE_ID)
 }
 

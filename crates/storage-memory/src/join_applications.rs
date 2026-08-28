@@ -14,7 +14,7 @@ use soland_storage::{
 #[derive(Default)]
 struct MemoryJoinApplicationState {
     records: BTreeMap<(String, String), JoinApplicationRecord>,
-    idempotency: BTreeMap<(String, String), JoinApplicationIdempotencyRecord>,
+    idempotency: BTreeMap<(DidCoreId, String), JoinApplicationIdempotencyRecord>,
 }
 
 pub(crate) struct MemoryJoinApplicationStore {
@@ -332,7 +332,7 @@ mod tests {
         mutation: JoinApplicationMutation,
     ) -> JoinApplicationCommand {
         JoinApplicationCommand {
-            principal_id: APPLICANT.to_owned(),
+            principal_id: arkret_wire::DidCoreId::new(APPLICANT).unwrap(),
             idempotency_key: key.to_owned(),
             request_hash: request_hash.to_owned(),
             idempotency_expires_at: Utc::now() + Duration::days(30),

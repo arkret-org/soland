@@ -1,4 +1,5 @@
 use arkret_models_collaboration::objects::read_receipts::NotificationSource;
+use arkret_wire::ServiceAccountId;
 use soland_storage::{
     AccountNotificationDeltaWrite, NotificationStore, RecipientNotificationRecord,
     StoredAccountNotificationDelta,
@@ -88,7 +89,7 @@ impl NotificationStore for MemoryNotificationStore {
 
     async fn list_for_account(
         &self,
-        controller_account_id: &str,
+        controller_account_id: &ServiceAccountId,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>> {
@@ -97,7 +98,7 @@ impl NotificationStore for MemoryNotificationStore {
             .lock()
             .iter()
             .filter(|record| {
-                record.record.controller_account_id == controller_account_id
+                record.record.controller_account_id == *controller_account_id
                     && record.record.recipient_id.as_str() == recipient_id
                     && after_position.is_none_or(|after| record.projection_position > after)
             })

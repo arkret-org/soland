@@ -97,7 +97,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
             .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             });
-    let reporter = typed_payload.reporter_id.as_str().to_owned();
+    let reporter_id = typed_payload.reporter_id.as_str().to_owned();
     let target_ref = typed_payload.target_ref.clone();
     // Actor frontier and CBA basis are producer-signed envelope members, so
     // they are resolved before authoring rather than written onto an Event that
@@ -168,6 +168,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
     let event_id = event.event_id().to_string();
     let session = soland_services::identity::SessionIdentityState {
+        service_account_id: None,
         token_hash: "moderation-report-service".to_owned(),
         actor: state.service_id().clone(),
         // Service session: this internal admission authenticates a service
@@ -189,7 +190,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
         &session,
         envelope,
         realm_id.as_str(),
-        &reporter,
+        &reporter_id,
         &target_ref,
     )
     .await
@@ -330,6 +331,7 @@ pub(crate) async fn prepare_franking_proof_event(
     .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "franking-proof-service".to_owned(),
+        service_account_id: None,
         actor: state.service_id().clone(),
         device_id: String::new(),
         audience: state.service_id().clone(),
@@ -391,7 +393,7 @@ pub(super) fn moderation_request_source_service(req: &Request) -> Option<String>
 pub(super) async fn validate_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
-    reporter: &str,
+    reporter_id: &str,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -400,7 +402,7 @@ pub(super) async fn validate_moderation_report_safety(
     source_ip_hash: &str,
 ) -> Result<ModerationReportSafety, AppError> {
     let rate = state.record_moderation_report_attempt(
-        reporter,
+        reporter_id,
         source_service,
         realm_id,
         source_ip_hash,
@@ -424,7 +426,7 @@ pub(super) async fn validate_moderation_report_safety(
     validate_moderation_report_content_safety(
         state,
         realm_id,
-        reporter,
+        reporter_id,
         target_ref,
         effective_scope,
         evidence_package,
@@ -436,7 +438,7 @@ pub(super) async fn validate_moderation_report_safety(
 async fn validate_signed_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
-    reporter: &str,
+    reporter_id: &str,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -445,7 +447,7 @@ async fn validate_signed_moderation_report_safety(
     validate_moderation_report_content_safety(
         state,
         realm_id,
-        reporter,
+        reporter_id,
         target_ref,
         effective_scope,
         evidence_package,
@@ -457,7 +459,7 @@ async fn validate_signed_moderation_report_safety(
 async fn validate_moderation_report_content_safety(
     state: &AppState,
     realm_id: &str,
-    reporter: &str,
+    reporter_id: &str,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -465,7 +467,7 @@ async fn validate_moderation_report_content_safety(
 ) -> Result<ModerationReportSafety, AppError> {
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
     let target_scope =
-        moderation_target_effective_scope_value(state, realm_id, reporter, target_ref)?;
+        moderation_target_effective_scope_value(state, realm_id, reporter_id, target_ref)?;
     if target_scope != effective_scope {
         return Err(moderation_target_not_found());
     }
@@ -526,7 +528,7 @@ fn moderation_target_not_found() -> AppError {
 fn moderation_target_effective_scope_value(
     state: &AppState,
     realm_id: &str,
-    reporter: &str,
+    reporter_id: &str,
     target_ref: &str,
 ) -> Result<Value, AppError> {
     if target_ref == realm_id {
@@ -570,7 +572,7 @@ fn moderation_target_effective_scope_value(
         return Err(moderation_target_not_found());
     };
     if let Some(circle_id) = scope_circle_id {
-        if !projection.circle_scope_visible_to_actor(&circle_id, reporter) {
+        if !projection.circle_scope_visible_to_actor(&circle_id, reporter_id) {
             return Err(moderation_target_not_found());
         }
         return Ok(json!({
@@ -795,11 +797,7 @@ async fn validate_franking_event_time_anchor(
     })?;
     let mut matching = state
         .event_queries()
-        .franking_proofs_for_target(
-            realm_id,
-            proof.received_by.as_str(),
-            proof.event_id.as_str(),
-        )
+        .franking_proofs_for_target(realm_id, &proof.received_by, proof.event_id.as_str())
         .await
         .map_err(|error| {
             AppError::internal(format!("franking proof Event lookup failed: {error}"))
@@ -1199,7 +1197,7 @@ async fn moderation_report(
     if !exact_replay {
         if !realm_has_member(state, event.realm_id.as_str(), &session.actor).await {
             return Err(AppError::capability_denied(
-                "reporter cannot see the target realm",
+                "reporter_id cannot see the target realm",
             ));
         }
         let evidence_package = payload

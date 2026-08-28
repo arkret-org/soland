@@ -16,7 +16,7 @@ impl BlobStore for PgBlobStore {
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
              legal_hold, redacted, visibility, \
-             uploaded_by_id AS uploaded_by, created_at \
+             uploaded_by AS uploaded_by, created_at \
              FROM blobs WHERE id = $1",
         )
         .bind::<Text, _>(blob_ref)
@@ -38,14 +38,14 @@ impl BlobStore for PgBlobStore {
         });
         sql_query(
             "INSERT INTO blobs \
-             (id, sha256, media_type, filename, uploaded_by_id, realm_id, size_bytes, \
+             (id, sha256, media_type, filename, uploaded_by, realm_id, size_bytes, \
               storage_backend, storage_key, payload, legal_hold, redacted, visibility, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
              ON CONFLICT (id) DO UPDATE SET \
              sha256 = EXCLUDED.sha256, \
              media_type = EXCLUDED.media_type, \
              filename = EXCLUDED.filename, \
-             uploaded_by_id = EXCLUDED.uploaded_by_id, \
+             uploaded_by = EXCLUDED.uploaded_by, \
              realm_id = EXCLUDED.realm_id, \
              size_bytes = EXCLUDED.size_bytes, \
              storage_backend = EXCLUDED.storage_backend, \
@@ -96,7 +96,7 @@ impl BlobStore for PgBlobStore {
             "SELECT sha256, size_bytes, storage_backend, storage_key, media_type, filename, \
              realm_id, NULLIF(payload->'encryption', 'null'::jsonb) AS encryption, \
              legal_hold, redacted, visibility, \
-             uploaded_by_id AS uploaded_by, created_at \
+             uploaded_by AS uploaded_by, created_at \
              FROM blobs ORDER BY created_at ASC, id ASC",
         )
         .load::<BlobRow>(&mut *conn)

@@ -600,6 +600,7 @@ fn roster_body(audience: &str) -> SyncRequestBody {
 
 fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
     SessionIdentityState {
+        service_account_id: None,
         token_hash: "token".to_owned(),
         actor: actor.to_owned(),
         device_id: "device-1".to_owned(),
@@ -1114,8 +1115,7 @@ fn handle_claim(
     let mut claim = json!({
         "schema": "ak.schema.handle_claim.v1",
         "handle": "alice:soland.local",
-        "subject": ROSTER_SUBJECT,
-        "issuer": issuer,
+        "subject_id": ROSTER_SUBJECT,
         "issuer_id": issuer,
         "binding_state": binding_state,
         "claim_kind": "handle_binding",
@@ -1340,7 +1340,7 @@ fn roster_hides_handle_claim_from_untrusted_issuer() {
         &state,
         handle_claim(
             &state,
-            "did:web:evil.example",
+            "ak:did_core:web:evil.example",
             state.service_id(),
             now() + chrono::Duration::hours(1),
             "verified",
@@ -1504,7 +1504,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     assert_eq!(
         serde_json::to_value(&initial.device_lists).unwrap(),
-        json!({"changed": [ROSTER_ACTOR, ROSTER_CALLER], "left": []})
+        json!({"changed_ids": [ROSTER_ACTOR, ROSTER_CALLER], "left_ids": []})
     );
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
@@ -1544,7 +1544,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     assert_eq!(
         serde_json::to_value(&after_revocation.device_lists).unwrap(),
-        json!({"changed": [ROSTER_ACTOR], "left": []}),
+        json!({"changed_ids": [ROSTER_ACTOR], "left_ids": []}),
         "device revocation changes the principal device list, not top-level left"
     );
     let incremental_filter_value = sync_filter_value(incremental_body.filter.as_ref());
@@ -1568,7 +1568,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await;
     assert_eq!(
         serde_json::to_value(&after_scope_loss.device_lists).unwrap(),
-        json!({"changed": [], "left": [ROSTER_ACTOR]}),
+        json!({"changed_ids": [], "left_ids": [ROSTER_ACTOR]}),
         "principals no longer visible through any Realm leave the tracked device list set"
     );
 }
@@ -1784,7 +1784,7 @@ async fn membership_only_projection_advances_incremental_roster() {
     let incremental =
         build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     let value = serde_json::to_value(&incremental).unwrap();
-    let members = value["realms"][ROSTER_REALM]["member_roster_entries"]
+    let members = value["realms"][ROSTER_REALM]["member_roster"]["entries"]
         .as_array()
         .expect("membership-only delta must include the current roster projection");
     assert_eq!(
@@ -1793,7 +1793,7 @@ async fn membership_only_projection_advances_incremental_roster() {
         "ak.member.state(join) must wake account sync and expose the joined member without a timeline message"
     );
     assert_eq!(
-        value["realms"][ROSTER_REALM]["member_roster_entries_limited"],
+        value["realms"][ROSTER_REALM]["member_roster"]["limited"],
         json!(false)
     );
 }
@@ -2500,7 +2500,7 @@ async fn revoked_cursor_returns_revoked_error() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: "ak:did_core:web:alice.example".to_owned(),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "compromised".to_owned(),
@@ -2535,7 +2535,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: "ak:did_core:web:alice.example".to_owned(),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "stale".to_owned(),

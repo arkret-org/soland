@@ -80,8 +80,8 @@ impl InheritanceMode {
 /// - `realm_id` echoes the queried Realm.
 /// - `inheritance_mode` is `Explicit` iff the Realm has a `ak.realm.inheritance_policy` projection
 ///   (opt-in per spec §6).
-/// - `inheritance_chain` lists ancestor realm ids in walk order (`source_realm_id` of the projected
-///   inheritance policy, then any transitive parents discovered via `governed_by` /
+/// - `inheritance_chain_ids` lists ancestor realm ids in walk order (`source_realm_id` of the
+///   projected inheritance policy, then any transitive parents discovered via `governed_by` /
 ///   `inherits_policy_from` active links). Capped at [`MAX_INHERITANCE_CHAIN`] to bound traversal
 ///   cost (spec §6.4 caps `max_depth` at 1 today; the cap here is a generous safety net for future
 ///   multi-depth profiles).
@@ -101,7 +101,7 @@ pub const MAX_INHERITANCE_CHAIN: usize = 8;
 /// Compute the SDK effective-policy outcome for `realm_id`.
 ///
 /// Invariants:
-/// - Returns `inheritance_mode = "none"` and an empty `inheritance_chain` when the Realm has no
+/// - Returns `inheritance_mode = "none"` and an empty `inheritance_chain_ids` when the Realm has no
 ///   `ak.realm.inheritance_policy` projection — per spec §5 inheritance MUST be explicit.
 /// - Walks `governed_by` / `inherits_policy_from` `active` links only. Rejected / tombstoned links
 ///   contribute nothing (spec §4 + §6.3).

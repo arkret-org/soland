@@ -291,8 +291,8 @@ fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::V
     json!({
         "schema": "ak.schema.accountability_grant.v1",
         "sender": ALICE_CORE_ID,
-        "issuer": ALICE_CORE_ID,
-        "subject": AGENT_CORE_ID,
+        "issuer_id": ALICE_CORE_ID,
+        "subject_id": AGENT_CORE_ID,
         "accountability_scope": "agent_operator",
         "not_before": "2026-01-01T00:00:00.000Z",
         "expires_at": expires_at,
@@ -1038,8 +1038,8 @@ async fn register_native_agent_membership_context(
         .expect("agent record");
     let accountability_grant_payload = json!({
         "schema": "ak.schema.accountability_grant.v1",
-        "issuer": controller,
-        "subject": agent,
+        "issuer_id": controller,
+        "subject_id": agent,
         "accountability_scope": "agent_operator",
         "grant_status": "active",
         "not_before": "2026-01-01T00:00:00.000Z",
@@ -1205,6 +1205,7 @@ async fn register_native_agent_membership_context(
             id: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_digest: format!("sha256:{}", "1".repeat(64)),
+            owner_account_id: arkret_wire::ServiceAccountId::new("account-agent").unwrap(),
             actor_id: agent.to_owned(),
             device_id: None,
             endpoint_verification_method: Some(format!("{agent}#runtime-key")),
@@ -2150,8 +2151,8 @@ async fn profile_accountable_principal_rejects_batch_grant_signed_by_other_actor
         "ak.identity.accountability_grant",
         json!({
             "sender": "ak:did_core:web:mallory.example",
-            "issuer": "ak:did_core:web:alice.example",
-            "subject": "did:web:agent.example",
+            "issuer_id": "ak:did_core:web:alice.example",
+            "subject_id": "did:web:agent.example",
             "grant_status": "active",
             "not_before": "2026-01-01T00:00:00.000Z",
             "expires_at": "2099-01-01T00:00:00.000Z"
@@ -2280,8 +2281,8 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
         "kind": "ak.identity.accountability_grant",
         "realm_id": realm_id.to_string(),
         "payload": {
-            "issuer": "ak:did_core:web:alice.example",
-            "subject": "did:web:agent.example",
+            "issuer_id": "ak:did_core:web:alice.example",
+            "subject_id": "did:web:agent.example",
             "grant_status": "active",
             "not_before": "2026-01-01T00:00:00.000Z",
             "expires_at": "2099-01-01T00:00:00.000Z"
@@ -2654,7 +2655,7 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
         arkret_wire::EventKind::ModerationDecision,
         json!({
             "sender": "ak:did_core:web:moderator.example",
-            "issuer": "did:web:impostor.example",
+            "issuer_id": "did:web:impostor.example",
             "target_ref": "ak:message:AXvyk2cSPhfYUHVSaDoVqdjSO3t5IXRAqpG-6hQjjUAx",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
@@ -2685,7 +2686,7 @@ async fn moderation_decision_allows_authorized_issuer() {
         json!({
             "actor_id": MODERATOR,
             "sender": MODERATOR,
-            "issuer": MODERATOR,
+            "issuer_id": MODERATOR,
             "target_ref": "ak:message:AR9_0Dn3PqKpHpxvh0C4oIGwx_MZWw6y7PjVc300c93v",
             "decision": "quarantine",
             "request_canonical_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
@@ -2746,7 +2747,7 @@ async fn call_recording_start_defaults_to_record_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AVy0_LisG9qoB26NeUHZ9StFVOl5nqsG2uOx425ecJtu",
             "recording_id": "recording-904",
-            "recording_agent": "ak:did_core:web:recorder.example",
+            "recording_agent_id": "ak:did_core:web:recorder.example",
             "capture_kind": "recording",
             "mode": "audio_video",
             "visible_notice": true,
@@ -2782,7 +2783,7 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:AbxEzmCDUuUSMHiCmmGdUzGwHpMTRY2ziLp69rH4QcVj",
             "recording_id": "transcript-905",
-            "recording_agent": "ak:did_core:web:recorder.example",
+            "recording_agent_id": "ak:did_core:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
@@ -2828,7 +2829,7 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
             "sender": "ak:did_core:web:recorder.example",
             "call_id": "ak:call:ARUNG7uEIx_HZYhSqahMLGksSz4H88SpeRoxS9E5pnWO",
             "recording_id": "transcript-906",
-            "recording_agent": "ak:did_core:web:recorder.example",
+            "recording_agent_id": "ak:did_core:web:recorder.example",
             "capture_kind": "transcript",
             "mode": "audio",
             "visible_notice": true,
@@ -2860,7 +2861,7 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         "sender": "ak:did_core:web:recorder.example",
         "call_id": "ak:call:ATruBVw3F7e6GxSCTOAQ52Yh0RbzPwJS39bQb-Jz3JJt",
         "recording_id": "recording-907",
-        "recording_agent": "ak:did_core:web:recorder.example",
+        "recording_agent_id": "ak:did_core:web:recorder.example",
         "capture_kind": "recording",
         "visible_notice": true,
         "result": {

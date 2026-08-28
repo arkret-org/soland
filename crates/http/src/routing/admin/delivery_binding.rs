@@ -75,7 +75,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
 /// read the projected delivery_binding_policy cell for a Realm.
 ///
 /// Authn: any authenticated session in development_mode, otherwise the
-/// caller DID MUST appear in `admin_principal_dids` (gated via
+/// caller principal ID MUST appear in `admin_principal_ids` (gated via
 /// `super::require_admin_principal`).
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.admin.realms.delivery_binding_policy.get",
@@ -182,7 +182,7 @@ pub(super) async fn admin_list_member_routability(
             // Keep the first live route per principal; revoked
             // routes only register if no live route was seen.
             let entry = routes_by_actor
-                .entry(subject.principal_id.clone())
+                .entry(subject.principal_id.to_string())
                 .or_insert_with(|| (subject.recipient_id.clone(), false));
             if !cell.revoked {
                 *entry = (subject.recipient_id.clone(), true);

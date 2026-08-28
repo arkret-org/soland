@@ -80,6 +80,7 @@ pub struct MlsKeyPackagePublishProjection {
     pub keypackage_id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
+    pub owner_account_id: arkret_identifiers::ServiceAccountId,
     pub actor_id: String,
     pub device_id: Option<String>,
     pub lifetime: KeyPackageLifetimeProjection,
@@ -150,6 +151,7 @@ pub fn apply_keypackage_upload_projection(
         id: projection.keypackage_id.clone(),
         keypackage_ref: projection.keypackage_ref.clone(),
         keypackage_digest: projection.keypackage_digest.clone(),
+        owner_account_id: projection.owner_account_id.clone(),
         actor_id: projection.actor_id.clone(),
         device_id: projection.device_id.clone(),
         endpoint_verification_method,
@@ -196,6 +198,13 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
     };
     let Some(actor_id) = payload.get("principal_id").and_then(Value::as_str) else {
         return reject("mls_keypackage_actor_missing");
+    };
+    let Some(owner_account_id) = payload
+        .get("owner_account_id")
+        .and_then(Value::as_str)
+        .and_then(|value| arkret_identifiers::ServiceAccountId::new(value.to_owned()).ok())
+    else {
+        return reject("mls_keypackage_owner_account_invalid");
     };
     let device_id = payload
         .get("device_id")
@@ -299,6 +308,7 @@ pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> 
         id: id.to_owned(),
         keypackage_ref,
         keypackage_digest,
+        owner_account_id,
         actor_id: actor_id.to_owned(),
         device_id: device_id.clone(),
         endpoint_verification_method,

@@ -525,19 +525,14 @@ pub(super) fn applet_actor_matches_exact_namespace(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     actor_id: &str,
 ) -> bool {
-    record
-        .package
-        .namespaces
-        .actor_namespace_entries
-        .iter()
-        .any(|entry| {
-            !applet_namespace_pattern_is_wildcard(&entry.pattern)
-                && arkret_models_integration::namespace_pattern_matches(
-                    arkret_models_integration::AppletNamespaceDomain::Actors,
-                    &entry.pattern,
-                    actor_id,
-                )
-        })
+    record.package.namespaces.actors.iter().any(|entry| {
+        !applet_namespace_pattern_is_wildcard(&entry.pattern)
+            && arkret_models_integration::namespace_pattern_matches(
+                arkret_models_integration::AppletNamespaceDomain::Actors,
+                &entry.pattern,
+                actor_id,
+            )
+    })
 }
 
 pub(super) fn applet_namespace_pattern_is_wildcard(pattern: &str) -> bool {

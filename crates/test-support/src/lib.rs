@@ -520,7 +520,7 @@ fn fixture_stored_service_identity(
                 id: format!("{}#service", identity.did),
                 endpoint_type: "ArkretService".to_owned(),
                 service_kind: ServiceKind::PrincipalServer,
-                service_endpoint: identity.registration_key.public_base().clone(),
+                service_endpoint: identity.registration_key.public_base_url().clone(),
             }],
         }
     };
@@ -847,7 +847,7 @@ pub async fn project_authorized_principal_device(
         serde_json::json!({
             "principal_id": principal_id,
             "device_id": device_id,
-            "device_public_key": device_public_key,
+            "device_public_key_did": device_public_key,
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": principal_id,
@@ -921,6 +921,24 @@ pub async fn project_authorized_principal_device(
         ));
     }
     soland_http::project_accepted_operations(state, principal_id.as_str(), &[operation]).await;
+    let mut projected_device = state
+        .test_persistence()
+        .devices()
+        .get(principal_id.as_str(), device_id)
+        .await
+        .unwrap()
+        .expect("projected authorized device");
+    projected_device
+        .payload
+        .as_object_mut()
+        .expect("projected authorized device payload")
+        .insert("authorized_generation_ref".to_owned(), serde_json::json!(1));
+    state
+        .test_persistence()
+        .devices()
+        .put(&projected_device)
+        .await
+        .unwrap();
     authorize_event_id
 }
 

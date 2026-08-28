@@ -12,6 +12,7 @@
 //! without updating this contract fails the consumer at the boundary
 //! instead of silently dropping it.
 
+use arkret_identifiers::DidCoreId;
 use arkret_wire::{Discoverability, EventKind, JoinRule, OperationId, OperationKind, RealmId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -75,7 +76,7 @@ pub struct AdminRealmItem {
     pub public: bool,
     pub member_count: usize,
     pub members: Vec<String>,
-    pub created_by: Option<String>,
+    pub created_by: Option<DidCoreId>,
     pub history_access: Option<String>,
     pub is_encrypted: bool,
     /// Mirrors `deleted`; kept because the console renders a blocked badge.
@@ -180,7 +181,7 @@ pub struct AdminMediaRow {
     pub filename: Option<String>,
     pub realm_id: Option<String>,
     pub encrypted: bool,
-    pub uploaded_by: String,
+    pub uploaded_by: DidCoreId,
     pub size_bytes: u64,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub created_at: DateTime<Utc>,
@@ -233,7 +234,7 @@ mod tests {
             "filename": null,
             "realm_id": null,
             "encrypted": true,
-            "uploaded_by": "did:web:alice.example",
+            "uploaded_by": "ak:did_core:web:alice.example",
             "size_bytes": 42,
             "created_at": "2026-08-14T00:00:00.000Z",
         }))

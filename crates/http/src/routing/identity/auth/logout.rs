@@ -300,7 +300,7 @@ fn invalid_logout_introspection(status: crate::wire::SessionGrantIntrospectStatu
 }
 
 /// Auth-side trigger of the single hard logout: call the Auth Server's S2S
-/// `POST {gate_account_base}/auth-sessions/logout` sub-operation so the grant
+/// `POST {gate_account_base_url}/auth-sessions/logout` sub-operation so the grant
 /// rotation chain + browser session are terminated (account-lifecycle §4.1
 /// step 2). When introspection returned grant metadata, the client DPoP proof
 /// is validated by soland before this call and is not forwarded to the Auth

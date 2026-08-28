@@ -78,7 +78,7 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
                 json!({
                     "tombstone": true,
                     "preconditions": [{
-                        "cell": CELL_ID,
+                        "cell_id": CELL_ID,
                         "predicate": {"op": "head_eq", "value": {
                             "policy_server_id": "ak:did_core:web:child-policy.example",
                             "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
@@ -117,14 +117,14 @@ fn same_basis_replace_and_delete_siblings_join_bottom_in_either_order() {
         "policy_server_id": "ak:did_core:web:next-policy.example",
         "policy_server_url": "https://next-policy.example/_arkret/self/policy/check",
         "preconditions": [{
-            "cell": CELL_ID,
+            "cell_id": CELL_ID,
             "predicate": {"op": "head_eq", "value": declaration.clone()},
         }],
     });
     let delete = json!({
         "tombstone": true,
         "preconditions": [{
-            "cell": CELL_ID,
+            "cell_id": CELL_ID,
             "predicate": {"op": "head_eq", "value": declaration.clone()},
         }],
     });

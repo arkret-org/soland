@@ -130,7 +130,7 @@ pub(super) async fn issue_key_backup_delete_challenge(
 
     let record = soland_services::identity::KeyBackupDeleteChallengeRecord {
         challenge_id: challenge.challenge_id.as_str().to_owned(),
-        principal_id: challenge.principal_id.as_str().to_owned(),
+        principal_id: challenge.principal_id.clone(),
         backup_id: challenge.backup_id.as_str().to_owned(),
         request_id: challenge.request_id.as_str().to_owned(),
         challenge: serde_json::to_value(&challenge).map_err(|error| {
@@ -598,7 +598,7 @@ async fn verify_trusted_recovery_service_delete(
         .ok_or_else(|| {
             AppError::capability_denied("key backup delete recovery session is unknown")
         })?;
-    if session.principal_id != challenge.principal_id.as_str() {
+    if session.principal_id != challenge.principal_id {
         return Err(AppError::capability_denied(
             "key backup delete recovery session belongs to another principal",
         ));

@@ -128,7 +128,7 @@ pub trait EventStore: Send + Sync {
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<CanonicalEventRecord>>;
@@ -165,7 +165,7 @@ pub struct IdentityAnchorFrontierCas {
 pub struct IdentityAnchorAccountSlot {
     pub account_authority_id: String,
     pub account_subject: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub realm_id: String,
     pub create_event_id: String,
 }

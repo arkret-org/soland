@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arkret_wire::ServiceAccountId;
 use serde_json::Value;
 use soland_storage::*;
 
@@ -80,7 +81,7 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
 
     async fn list_for_account(
         &self,
-        controller_account_id: &str,
+        controller_account_id: &ServiceAccountId,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> crate::ServiceResult<Vec<StoredAccountNotificationDelta>> {

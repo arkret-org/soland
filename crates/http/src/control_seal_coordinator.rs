@@ -305,7 +305,7 @@ async fn run_device_revocation_material_cleanup(
     let sessions_revoked = state
         .sessions()
         .revoke_actor_device_sessions(
-            &intent.selector.principal_id,
+            intent.selector.principal_id.as_str(),
             &intent.selector.device_id,
             completed_at,
         )
@@ -313,20 +313,23 @@ async fn run_device_revocation_material_cleanup(
         .map_err(|error| format!("session cleanup failed: {error}"))?;
     let keypackages_retired = crate::routing::mls::retire_device_keypackages(
         state,
-        &intent.selector.principal_id,
+        intent.selector.principal_id.as_str(),
         &intent.selector.device_id,
     )
     .await
     .map_err(|error| format!("KeyPackage cleanup failed: {error}"))?;
     let delivery = state
         .deliveries()
-        .purge_device_delivery(&intent.selector.principal_id, &intent.selector.device_id)
+        .purge_device_delivery(
+            intent.selector.principal_id.as_str(),
+            &intent.selector.device_id,
+        )
         .await
         .map_err(|error| format!("to-device/push cleanup failed: {error}"))?;
 
     crate::routing::append_audit_log(
         state,
-        Some(&intent.selector.principal_id),
+        Some(intent.selector.principal_id.as_str()),
         "device.revoke.sealed_cleanup",
         serde_json::json!({
             "proposal_digest": intent.proposal_digest,
@@ -357,7 +360,7 @@ async fn run_device_revocation_mls_cleanup(
 ) {
     crate::routing::mls::enqueue_device_revoke_mls_removals(
         state,
-        &intent.selector.principal_id,
+        intent.selector.principal_id.as_str(),
         &intent.selector.device_id,
         &intent.proposal_event_id,
     );

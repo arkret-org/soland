@@ -401,7 +401,7 @@ async fn send_delete_policy_server(
 async fn policy_server_events(state: &AppState, token: &str, realm_id: &str) -> Vec<Value> {
     let events: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.read.scan.v1", true)
-        .json(&serde_json::json!({"realms": [realm_id], "limit": 200}))
+        .json(&serde_json::json!({"realm_ids": [realm_id], "limit": 200}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -1021,7 +1021,7 @@ async fn policy_server_declaration_survives_restart() {
     );
     assert_eq!(view["from_organization_fallback"], false);
 
-    let restored_policy_server_service_id = {
+    let restored_policy_server_id = {
         let projection = restarted.test_projection().lock();
         projection
             .realm_null_subject_cells
@@ -1035,7 +1035,7 @@ async fn policy_server_declaration_survives_restart() {
             .map(ToOwned::to_owned)
     };
     assert_eq!(
-        restored_policy_server_service_id.as_deref(),
+        restored_policy_server_id.as_deref(),
         Some("ak:did_core:web:org-policy.example"),
         "the declaration cell must survive restart"
     );
@@ -1162,7 +1162,7 @@ async fn policy_server_same_basis_sibling_fails_closed() {
     };
     let sibling_move = |payload: Value| {
         let preconditions = serde_json::from_value(json!([{
-            "cell": POLICY_CELL,
+            "cell_id": POLICY_CELL,
             "predicate": {"op": "head_eq", "value": settled_basis.clone()},
         }]))
         .expect("typed policy-server precondition");

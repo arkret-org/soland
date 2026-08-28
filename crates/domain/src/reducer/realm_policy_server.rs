@@ -567,7 +567,7 @@ mod tests {
         let tombstone_move = json!({
             "tombstone": true,
             "preconditions": [{
-                "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+                "cell_id": "ak:cell:ak.component.realm.policy_server.v1:null",
                 "predicate": {"op": "head_eq", "value": {
                     "policy_server_id": "ak:did_core:web:child.example.com",
                     "policy_server_url": "https://child.example.com/_arkret/self/policy/check",
@@ -623,7 +623,7 @@ mod tests {
             }),
         );
         replacement.context.preconditions = serde_json::from_value(json!([{
-            "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+            "cell_id": "ak:cell:ak.component.realm.policy_server.v1:null",
             "predicate": {"op": "head_eq", "value": first_value},
         }]))
         .unwrap();
@@ -635,7 +635,7 @@ mod tests {
             json!({
                 "tombstone": true,
                 "preconditions": [{
-                    "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+                    "cell_id": "ak:cell:ak.component.realm.policy_server.v1:null",
                     "predicate": {
                         "op": "head_eq",
                         "value": {

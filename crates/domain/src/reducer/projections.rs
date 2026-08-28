@@ -19,7 +19,7 @@ use serde_json::Value;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PushRouteSubject {
     pub recipient_id: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub device_id: String,
     pub push_route: String,
 }
@@ -75,7 +75,7 @@ pub struct StrandWatchProjection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ErasureReceiptRecord {
     pub receipt_id: Option<String>,
-    pub issuer: Option<String>,
+    pub issuer_id: Option<arkret_wire::DidCoreId>,
     pub subject_kind: Option<String>,
     pub subject_ref: Option<String>,
     pub outcome: String,
@@ -303,6 +303,7 @@ pub struct MlsKeyPackageProjection {
     pub id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
+    pub owner_account_id: arkret_identifiers::ServiceAccountId,
     pub actor_id: String,
     pub device_id: Option<String>,
     /// Exact did:key/Native-Agent verification method used by non-device endpoints.
@@ -806,7 +807,7 @@ pub struct DocumentVersionProjection {
 pub struct AppletProjection {
     pub applet_id: AppletId,
     /// Service authority that hosts this Applet. It is not the Applet identity.
-    pub service_id: String,
+    pub service_id: arkret_identifiers::DidCoreId,
     /// Optional capability list from the latest `ak.applet.registration`.
     pub capabilities: Option<Value>,
     /// Durable profile claims from the accepted registration Event.

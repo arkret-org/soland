@@ -1778,7 +1778,7 @@ async fn direct_conversation_resolve(
                 "direct conversation is unavailable",
             )
             .with_private_detail(format!(
-                "no owned active managed-Agent authorization or accepted contact projection: requester={}, peer={peer}",
+                "no owned active managed-Agent authorization or accepted contact projection: requester_id={}, peer={peer}",
                 session.actor
             )));
         }
@@ -1883,7 +1883,11 @@ async fn direct_conversation_resolve(
                         bundle.current_proofs.len() == 2
                             && bundle.current_proofs.iter().all(|proof| {
                                 proof.contact_round_id.as_str()
-                                    == contact.contact_round_id.as_deref().unwrap_or_default()
+                                    == contact
+                                        .contact_round_id
+                                        .as_ref()
+                                        .map(|value| value.as_str())
+                                        .unwrap_or_default()
                                     && !proof.terminal
                                     && proof.complete_through > 0
                                     && proof.fresh_until > now()
@@ -2012,10 +2016,10 @@ async fn direct_contact_for_pair(
     peer: &str,
 ) -> Result<Option<ContactRecord>, AppError> {
     let mut records = Vec::new();
-    for (requester, target) in [(actor, peer), (peer, actor)] {
+    for (requester_id, target) in [(actor, peer), (peer, actor)] {
         if let Some(contact) = state
             .contacts()
-            .contact_any(requester, target)
+            .contact_any(requester_id, target)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         {
@@ -2162,8 +2166,12 @@ async fn account_device_summary(
         (authorized_event_ref.as_ref(), authorized_generation_ref)
     {
         let selector = soland_storage::DeviceRevocationGateSelector {
-            principal_id: actor.to_owned(),
-            principal_server_id: state.service_id().clone(),
+            principal_id: DidCoreId::new(actor).map_err(|error| {
+                AppError::internal(format!("authenticated principal_id is invalid: {error}"))
+            })?,
+            principal_server_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("service principal_server_id is invalid: {error}"))
+            })?,
             device_id: device_id.to_string(),
             target_device_authorize_event_id: event_id.to_string(),
             target_device_generation_ref: generation_ref,
@@ -2263,16 +2271,8 @@ fn device_revocation_gate_record(
     let common = (|| -> Result<_, AppError> {
         Ok((
             PrincipalAuthorityKey {
-                principal_id: DidCoreId::new(selector.principal_id.clone()).map_err(|error| {
-                    AppError::internal(format!("stored revocation principal invalid: {error}"))
-                })?,
-                principal_server_id: DidCoreId::new(selector.principal_server_id.clone()).map_err(
-                    |error| {
-                        AppError::internal(format!(
-                            "stored revocation Principal Server invalid: {error}"
-                        ))
-                    },
-                )?,
+                principal_id: selector.principal_id.clone(),
+                principal_server_id: selector.principal_server_id.clone(),
             },
             DeviceId::new(selector.device_id.clone()).map_err(|error| {
                 AppError::internal(format!("stored revocation device invalid: {error}"))

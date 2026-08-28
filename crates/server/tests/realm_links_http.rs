@@ -358,16 +358,16 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
     project_inheritance_policy(&state, &realm_a, &realm_a, &["a.policy"]);
 
     // 3. GET effective-policy on B. Body shape pinned by the task spec: `{realm_id,
-    //    effective_policy, inheritance_chain, inheritance_mode}`.
+    //    effective_policy, inheritance_chain_ids, inheritance_mode}`.
     let ep = effective_policy(&state, &token, &realm_b).await;
     assert_eq!(ep["realm_id"], realm_b);
     assert_eq!(ep["inheritance_mode"], "explicit");
-    let chain = ep["inheritance_chain"]
+    let chain = ep["inheritance_chain_ids"]
         .as_array()
-        .expect("inheritance_chain array");
+        .expect("inheritance_chain_ids array");
     assert!(
         chain.iter().any(|v| v.as_str() == Some(realm_a.as_str())),
-        "inheritance_chain MUST include realm A (declared parent), got {chain:?}"
+        "inheritance_chain_ids MUST include realm A (declared parent), got {chain:?}"
     );
     // B's own declared `b.policy` is in the merged set. A's `a.policy`
     // is also included because the walk reaches A via the governed_by
@@ -503,7 +503,7 @@ async fn effective_policy_returns_none_mode_without_explicit_optin() {
     assert_eq!(body["realm_id"], realm_a);
     assert_eq!(body["inheritance_mode"], "none");
     assert!(
-        body["inheritance_chain"].as_array().unwrap().is_empty(),
+        body["inheritance_chain_ids"].as_array().unwrap().is_empty(),
         "chain must be empty without explicit opt-in: {body}"
     );
 }

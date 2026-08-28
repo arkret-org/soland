@@ -79,6 +79,29 @@ pub(crate) mod payload_fields;
 
 const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
+async fn ensure_keypackage_owner_account_active(
+    state: &AppState,
+    owner_account_id: &str,
+) -> Result<(), AppError> {
+    if owner_account_id.is_empty() || owner_account_id.starts_with("ak:") {
+        return Err(AppError::capability_denied(
+            "session has an invalid service account binding",
+        ));
+    }
+    let account = state
+        .identities()
+        .account_by_id(owner_account_id)
+        .await
+        .map_err(|error| AppError::internal(format!("owner account lookup failed: {error}")))?
+        .ok_or_else(|| AppError::capability_denied("owner account is unavailable"))?;
+    if state.account_lifecycle_status(account.principal_id.as_str())
+        != arkret_models_collaboration::objects::account_status::AccountStatus::Active
+    {
+        return Err(AppError::capability_denied("owner account is not active"));
+    }
+    Ok(())
+}
+
 fn welcome_recipient_device_id(
     welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
 ) -> Option<&arkret_wire::DeviceId> {
@@ -241,6 +264,10 @@ async fn upload_keypackage(
 ) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let owner_account_id = session.service_account_id.as_ref().ok_or_else(|| {
+        AppError::capability_denied("KeyPackage upload requires an account-bound session")
+    })?;
+    ensure_keypackage_owner_account_active(state, owner_account_id.as_str()).await?;
 
     let body = body.into_inner();
     body.validate_shape().map_err(AppError::param_invalid)?;
@@ -251,8 +278,10 @@ async fn upload_keypackage(
             "actor_id must match the calling session",
         ));
     }
-    if body.keypackages.is_empty() {
-        return Err(AppError::param_missing("keypackages is required"));
+    if body.keypackage_upload_entries.is_empty() {
+        return Err(AppError::param_missing(
+            "keypackage_upload_entries is required",
+        ));
     }
     let (device_id, trust_binding, publish_trust_anchor) = if let Some(device_id) = &body.device_id
     {
@@ -361,7 +390,7 @@ async fn upload_keypackage(
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
-    for entry in body.keypackages {
+    for entry in body.keypackage_upload_entries {
         if entry.keypackage_id.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,
@@ -466,6 +495,7 @@ async fn upload_keypackage(
             keypackage_id: keypackage_id.clone(),
             keypackage_ref: keypackage_ref.clone(),
             keypackage_digest,
+            owner_account_id: owner_account_id.clone(),
             actor_id: actor_id.clone(),
             device_id: device_id.clone(),
             lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
@@ -512,7 +542,7 @@ async fn upload_keypackage(
 
     json_ok(KeyPackagesUploadOutcome {
         accepted,
-        rejected,
+        rejections: rejected,
         key_package_refs,
     })
 }
@@ -596,7 +626,7 @@ async fn claim_keypackage_at_destination(
     if !policy_authorized || !participant_authorized {
         tracing::warn!(
             %source_id,
-            requester = %body.requester_id,
+            requester_id = %body.requester_id,
             target_principal_id = %body.target_principal_id,
             policy_authorized,
             participant_authorized,
@@ -692,6 +722,12 @@ async fn claim_keypackage_at_destination(
         else {
             continue;
         };
+        if ensure_keypackage_owner_account_active(state, predicted.owner_account_id.as_str())
+            .await
+            .is_err()
+        {
+            continue;
+        }
         if target_keypackage_ref
             .is_some_and(|expected| predicted.keypackage_ref.as_str() != expected)
         {
@@ -1023,7 +1059,7 @@ async fn verify_peer_claim_participant_authorization(
     let authorization = &body.requester_authorization;
     let reject = |reason: &'static str| {
         tracing::warn!(
-            requester = %body.requester_id,
+            requester_id = %body.requester_id,
             target_principal_id = %body.target_principal_id,
             reason,
             "peer KeyPackage participant authorization rejected"
@@ -1169,7 +1205,9 @@ async fn verify_peer_claim_participant_authorization(
                 device_id.as_str(),
             )
             .await
-            .map_err(|error| AppError::internal(format!("requester device directory: {error}")))?;
+            .map_err(|error| {
+                AppError::internal(format!("requester_id device directory: {error}"))
+            })?;
         if !matches!(
             facet.status,
             arkret_models_crypto::keys::DeviceStatus::Active
@@ -1298,7 +1336,12 @@ async fn peer_claim_policy_authorized(
             let Some(contact) = contact else {
                 return Ok(false);
             };
-            if contact.peer_id.as_deref() != Some(source_id) {
+            if contact
+                .peer_host_id
+                .as_ref()
+                .map(arkret_wire::DidCoreId::as_str)
+                != Some(source_id)
+            {
                 return Ok(false);
             }
             let trust_domain = state.config().trust_domain.clone();
@@ -1840,7 +1883,7 @@ async fn claim_keypackage(
     ) && body.requester_id.as_str() != session.actor
     {
         return Err(AppError::capability_denied(
-            "requester must match the calling session",
+            "requester_id must match the calling session",
         ));
     }
     body.validate_shape()
@@ -1864,13 +1907,13 @@ async fn claim_keypackage(
         PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => {}
         _ => {
             return Err(AppError::capability_denied(
-                "requester authorization must match the authenticated session",
+                "requester_id authorization must match the authenticated session",
             ));
         }
     }
     if !verify_peer_claim_participant_authorization(state, &peer_body).await? {
         return Err(AppError::capability_denied(
-            "requester authorization is not current at the source service",
+            "requester_id authorization is not current at the source service",
         ));
     }
     if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
@@ -1883,7 +1926,7 @@ async fn claim_keypackage(
             });
         if !requester_is_current_member {
             return Err(AppError::capability_denied(
-                "requester has no current source-side Realm membership",
+                "requester_id has no current source-side Realm membership",
             ));
         }
     }
@@ -3502,11 +3545,15 @@ async fn revoke_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.owner_account_id.as_str() != session.actor {
+    let session_owner_account_id = session.service_account_id.as_ref().ok_or_else(|| {
+        AppError::capability_denied("KeyPackage revoke requires an account-bound session")
+    })?;
+    if &body.owner_account_id != session_owner_account_id {
         return Err(AppError::capability_denied(
-            "owner_account_id must match the calling principal",
+            "owner_account_id must match the calling service account",
         ));
     }
+    ensure_keypackage_owner_account_active(state, session_owner_account_id.as_str()).await?;
     let device_id = body.device_id.to_string();
     if device_id != session.device_id {
         return Err(AppError::capability_denied(
@@ -3538,7 +3585,10 @@ async fn revoke_keypackages(
             .key_package_by_ref(&keypackage_ref)
             .await
         {
-            Ok(Some(record)) if record.actor_id != session.actor => {
+            Ok(Some(record))
+                if &record.owner_account_id != session_owner_account_id
+                    || record.actor_id != session.actor =>
+            {
                 failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));
             }
             Ok(Some(record))

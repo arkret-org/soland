@@ -30,7 +30,7 @@ fn projected_cell_targets(envelope: &Value) -> std::collections::BTreeSet<String
     arkret_schema::project_registered_cell_writes(&event, arkret_canonical::DigestSuite::Sha256)
         .expect("registered cell contract must be evaluable")
         .into_iter()
-        .map(|write| write.cell.as_str().to_owned())
+        .map(|write| write.cell_id.as_str().to_owned())
         .collect()
 }
 
@@ -245,7 +245,8 @@ async fn seed_agent_grant_session(
         .unwrap(),
         approval_notification_id: new_prefixed_uuid7("ak:notification:"),
         approval_requested_at: now,
-        controller_account_id: new_prefixed_uuid7("ak:account:"),
+        controller_account_id: arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string())
+            .unwrap(),
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: request
@@ -422,10 +423,10 @@ async fn seed_agent_grant_session(
                 Sha256::digest(format!("agent-session-grant-{slug}").as_bytes()).into(),
             )
             .as_str(),
-            "issuer": "ak:did_core:web:coauth.local",
-            "subject": outcome.agent_id.as_str(),
+            "issuer_id": "ak:did_core:web:coauth.local",
+            "subject_id": outcome.agent_id.as_str(),
             "service_account_id": format!("agent-{slug}"),
-            "audience": state.service_id(),
+            "audience_id": state.service_id(),
             "scopes": granted_scopes,
             "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(5))
                 .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -593,7 +594,7 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
 
     // Same 401 discriminator as the subscribe test: grant without DPoP.
     let unauthenticated = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [demo_realm_id()]}))
+        .json(&serde_json::json!({"realm_ids": [demo_realm_id()]}))
         .add_header(
             "authorization",
             format!("Bearer {}", presentation.grant_jwt),
@@ -606,7 +607,7 @@ async fn agent_session_without_query_scope_cannot_scan_events_body() {
     let (authorization, dpop) =
         agent_grant_headers(&state, &presentation, "QUERY", "/_arkret/self/events");
     let mut response = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [demo_realm_id()]}))
+        .json(&serde_json::json!({"realm_ids": [demo_realm_id()]}))
         .add_header("authorization", authorization, true)
         .add_header("dpop", dpop, true)
         .send(&app_from_state(state))
@@ -1002,7 +1003,7 @@ async fn events_describe_and_single_event_submit_work_body() {
 
     let listed: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({
-            "actors": [fixture_actor_core_id("did:web:alice.example")],
+            "actor_ids": [fixture_actor_core_id("did:web:alice.example")],
             "limit": 20
         }))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1044,9 +1045,9 @@ async fn events_describe_and_single_event_submit_work_body() {
         frontier.actor_id,
         fixture_actor_core_id("did:web:alice.example")
     );
-    assert_eq!(frontier.realms.len(), 2);
+    assert_eq!(frontier.realm_actor_frontier_views.len(), 2);
     let demo_frontier = frontier
-        .realms
+        .realm_actor_frontier_views
         .iter()
         .find(|frontier| frontier.realm_id.as_str() == demo_realm_id())
         .expect("actor aggregate includes demo Realm frontier");
@@ -1556,7 +1557,7 @@ async fn sync_cursor_rejects_facets_and_renderer_changes_body() {
     // an empty filter, which would bypass this case.
     let mut changed_url =
         reqwest::Url::parse("http://server/_arkret/self/account/subscribe").unwrap();
-    let changed_filter = serde_json::json!({"realms": [demo_realm_id()]}).to_string();
+    let changed_filter = serde_json::json!({"realm_ids": [demo_realm_id()]}).to_string();
     changed_url.query_pairs_mut().extend_pairs([
         ("catchup", "true"),
         ("after", cursor),
@@ -1591,7 +1592,7 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
     let mut rejected = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "actors": [actor_core],
+            "actor_ids": [actor_core],
             "after": "ak:cursor:!!!not-base64url"
         }))
         .send(&app_from_state(state.clone()))
@@ -1649,7 +1650,7 @@ async fn account_subscribe_realms_filter_excludes_out_of_scope_realms_body() {
     let frame = account_subscribe_frame(
         state,
         Some(&alice),
-        &format!("catchup=true&filter=%7B%22realms%22%3A%5B%22{encoded_included_id}%22%5D%7D"),
+        &format!("catchup=true&filter=%7B%22realm_ids%22%3A%5B%22{encoded_included_id}%22%5D%7D"),
     )
     .await;
 
@@ -1708,7 +1709,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
         assert!(sent["operation_id"].as_str().is_some());
     }
 
-    let read_body = serde_json::json!({"limit": 1, "actors": [actor_core]});
+    let read_body = serde_json::json!({"limit": 1, "actor_ids": [actor_core]});
     let query_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&read_body)
@@ -1730,7 +1731,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
 
     let second_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"limit": 1, "actors": [actor_core], "after": next_cursor}))
+        .json(&serde_json::json!({"limit": 1, "actor_ids": [actor_core], "after": next_cursor}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1742,7 +1743,7 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
     let mut invalid_cursor = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "actors": [actor],
+            "actor_ids": [actor],
             "after": "ak:event:AWNDYdZJJKnSYHxTY2Yye1ERF3ydKwe5EXA6UzTu5DAc"
         }))
         .send(&app_from_state(state.clone()))

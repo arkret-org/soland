@@ -19,7 +19,7 @@ impl ProjectionState {
             .payload
             .get("service_id")
             .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+            .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())
         else {
             return ProjectionEffect::Rejected {
                 reason: "applet_registration_missing_service_id".to_owned(),

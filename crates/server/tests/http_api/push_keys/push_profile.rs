@@ -457,7 +457,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&serde_json::json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "push_gateway": "https://push.example",
+            "push_gateway_url": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
             "app_id": "inkson"
@@ -554,7 +554,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
         Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
     );
 
-    let reporter = fixture_actor_core_id(ALICE);
+    let reporter_id = fixture_actor_core_id(ALICE);
     let actor_records = state
         .test_persistence()
         .events()
@@ -562,7 +562,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
         .await
         .unwrap()
         .into_iter()
-        .filter(|record| record.actor_id == reporter.as_str())
+        .filter(|record| record.actor_id == reporter_id.as_str())
         .collect::<Vec<_>>();
     let actor_seq = actor_records
         .iter()
@@ -586,7 +586,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
             "realm_id": demo_realm_id(),
             "target_ref": demo_realm_id(),
             "report_reason_code": "spam",
-            "reporter": reporter,
+            "reporter_id": reporter_id,
             "provenance": "self"
         }),
     ))
@@ -1297,7 +1297,7 @@ async fn push_reregistration_is_object_idempotent_and_replaces_the_provider_toke
             .add_header("content-type", "application/json", true)
             .body(canonical_body(&serde_json::json!({
                 "device_id": device_id,
-                "push_gateway": "https://push.example/_arkret/edge/push/notify",
+                "push_gateway_url": "https://push.example/_arkret/edge/push/notify",
                 "push_key": push_key,
                 "platform": "desktop",
                 "app_id": "inkson"
@@ -1376,7 +1376,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
         .add_header("content-type", "application/json", true)
         .body(canonical_body(&serde_json::json!({
             "device_id": device_id,
-            "push_gateway": push_gateway,
+            "push_gateway_url": push_gateway,
             "push_key": "opaque-token",
             "platform": "desktop",
             "app_id": "inkson"

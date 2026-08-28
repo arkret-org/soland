@@ -359,9 +359,7 @@ impl AgentStore for MemoryAgentStore {
         record
             .approval_requested_at
             .get_or_insert(write.approval_requested_at);
-        record.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
-            &write.controller_account_id,
-        ));
+        record.controller_account_id = Some(write.controller_account_id.clone());
         record.recipient_id = Some(write.recipient_id.clone());
         record.runtime_key_binding_digest = Some(write.runtime_key_binding_digest.clone());
         record.runtime_public_key_digest = Some(write.runtime_public_key_digest.clone());

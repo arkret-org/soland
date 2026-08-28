@@ -100,7 +100,7 @@ pub fn document_declares_registration_key(
                     && entry.get("serviceKind").and_then(Value::as_str)
                         == Some(key.service_kind().as_str())
                     && entry.get("serviceEndpoint").and_then(Value::as_str)
-                        == Some(key.public_base().as_str())
+                        == Some(key.public_base_url().as_str())
             })
         })
 }

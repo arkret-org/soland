@@ -9,7 +9,7 @@ fn malformed_direct_conversation_unit_cannot_fall_through_to_ordinary_batch() {
         "founding_authority_evidence": {
             "kind": "human",
             "contact_round_evidence": {},
-            "contact_round_continuity_chain": []
+            "contact_round_continuity_chains": []
         }
     }));
     assert!(parsed.is_err());

@@ -2,11 +2,11 @@ use super::*;
 
 pub(super) struct ValidatedRecoveryPolicy {
     pub policy_id: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub version: u32,
     pub trust_domain: TrustDomainId,
     pub allowed_proof_kinds: Vec<String>,
-    pub supersedes: Option<String>,
+    pub supersedes_id: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub issued_at: chrono::DateTime<chrono::Utc>,
     pub raw_payload: Value,
@@ -29,7 +29,7 @@ pub(super) fn validate_recovery_policy(
     require_const_string(payload, "schema", arkret_wire::SchemaId::RECOVERY_POLICY_V1)?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
-    let principal_id = typed.principal_id.to_string();
+    let principal_id = typed.principal_id.clone();
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = typed.trust_domain.clone();
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
@@ -41,7 +41,7 @@ pub(super) fn validate_recovery_policy(
             .with_wire_code("recovery_proof_kind_unknown"));
         }
     }
-    let supersedes = match payload.get("supersedes") {
+    let supersedes_id = match payload.get("supersedes_id") {
         Some(Value::Null) | None => None,
         Some(Value::String(s)) => {
             require_policy_id_pattern(s)?;
@@ -49,18 +49,18 @@ pub(super) fn validate_recovery_policy(
         }
         _ => {
             return Err(AppError::param_invalid(
-                "supersedes must be null or a ak:policy:<uuidv7> string",
+                "supersedes_id must be null or a ak:policy:<uuidv7> string",
             ));
         }
     };
-    if version == 1 && supersedes.is_some() {
+    if version == 1 && supersedes_id.is_some() {
         return Err(AppError::param_invalid(
-            "genesis policy (version=1) MUST have supersedes=null",
+            "genesis policy (version=1) MUST have supersedes_id=null",
         ));
     }
-    if version > 1 && supersedes.is_none() {
+    if version > 1 && supersedes_id.is_none() {
         return Err(AppError::param_invalid(
-            "non-genesis policy MUST name a predecessor in supersedes",
+            "non-genesis policy MUST name a predecessor in supersedes_id",
         ));
     }
     let issued_at = require_rfc3339(payload, "issued_at")?;
@@ -116,7 +116,7 @@ pub(super) fn validate_recovery_policy(
         version,
         trust_domain,
         allowed_proof_kinds,
-        supersedes,
+        supersedes_id,
         expires_at,
         issued_at,
         verification_method: verification_method.to_owned(),

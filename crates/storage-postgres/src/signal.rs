@@ -28,7 +28,7 @@ struct SignalRelayRow {
     #[diesel(sql_type = Jsonb)]
     scope_ref: Value,
     #[diesel(sql_type = Text)]
-    sender_actor_id: String,
+    sender_actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     sender_device_id: String,
     #[diesel(sql_type = Text)]
@@ -54,7 +54,7 @@ impl TryFrom<SignalRelayRow> for SignalRelayRecord {
                     "stored signal scope_ref is invalid: {error}"
                 ))
             })?,
-            sender_actor_id: row.sender_actor_id,
+            sender_actor_id: row.sender_actor_id.to_string(),
             sender_device_id: row.sender_device_id,
             signal_class: serde_json::from_value(Value::String(row.signal_class)).map_err(
                 |error| {

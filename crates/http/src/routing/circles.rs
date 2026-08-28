@@ -136,7 +136,7 @@ fn circle_view_from(
         member_count: include_member_details
             .then(|| u32::try_from(c.members.len()).unwrap_or(u32::MAX)),
         viewer_membership,
-        members: if include_member_details {
+        member_ids: if include_member_details {
             c.members
                 .iter()
                 .map(|member| parse_sdk_field::<DidCoreId>("member", member))

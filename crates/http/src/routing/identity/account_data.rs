@@ -678,6 +678,13 @@ mod tests {
             Ok(None)
         }
 
+        async fn account_by_id(
+            &self,
+            _account_id: &str,
+        ) -> ServiceResult<Option<AccountProfileState>> {
+            Ok(None)
+        }
+
         async fn register_account(
             &self,
             _command: soland_services::identity::RegisterAccountCommand,

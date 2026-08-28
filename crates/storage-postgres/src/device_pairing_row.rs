@@ -1,4 +1,5 @@
 use arkret_models_collaboration::http_bodies::DevicePairingState;
+use arkret_wire::DidCoreId;
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use serde_json::Value;
@@ -22,7 +23,7 @@ pub(crate) struct DevicePairingRow {
     pub device_metadata: Option<Value>,
     pub state: String,
     pub device_id: Option<String>,
-    pub authorized_by_actor_id: Option<String>,
+    pub authorized_by_actor_id: Option<DidCoreId>,
     pub authorized_event_ref: Option<String>,
     pub expires_at: DateTime<Utc>,
     #[diesel(skip_update)]

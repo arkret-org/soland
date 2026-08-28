@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleRecord {
     pub id: String,
     pub canonical_uri: String,
     pub aliases: Vec<String>,
-    pub issuer_did: Option<String>,
-    pub subject_id: Option<String>,
+    pub issuer_id: arkret_identifiers::DidCoreId,
+    pub subject_id: arkret_identifiers::DidCoreId,
     pub assigned_at: Option<String>,
     pub expires_at: Option<String>,
     pub last_reassignment_at: Option<String>,
@@ -42,10 +42,10 @@ pub struct AdminHandleAuditListOutcome {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleReassignBody {
-    pub new_subject_id: String,
+    pub new_subject_id: arkret_identifiers::DidCoreId,
     pub reason: String,
 }
 

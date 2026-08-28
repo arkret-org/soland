@@ -150,7 +150,7 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
     let authorize_payload = serde_json::json!({
         "principal_id": actor_core,
         "device_id": new_device_id,
-        "device_public_key": target_attestation.device_public_key,
+        "device_public_key_did": target_attestation.device_public_key_did,
         "hpke_key": hpke_key,
         "algorithms": algorithms,
         "device_key_algorithm": "Ed25519",
@@ -708,25 +708,23 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
         "the outcome MUST NOT carry a redundant second signature over the same bytes"
     );
 
-    // §3 — participant_identity is a random `ak:rtc_participant:<uuidv7>` SFU
+    // §3 — participant_id is a random `ak:rtc_participant:<uuidv7>` SFU
     // handle, NOT a deterministic hash of the principal tuple.
-    let participant_identity = token_response["participant_identity"].as_str().unwrap();
+    let participant_id = token_response["participant_id"].as_str().unwrap();
     assert!(
-        participant_identity.starts_with("ak:rtc_participant:"),
-        "participant_identity must be a typed ak:rtc_participant id"
+        participant_id.starts_with("ak:rtc_participant:"),
+        "participant_id must be a typed ak:rtc_participant id"
     );
     assert!(
         arkret_identifiers::is_lowercase_typed_uuid(
-            participant_identity
-                .strip_prefix("ak:rtc_participant:")
-                .unwrap(),
+            participant_id.strip_prefix("ak:rtc_participant:").unwrap(),
             arkret_identifiers::UUID_VERSION_PRODUCER_ALLOCATED,
         ),
-        "participant_identity payload must be a canonical lowercase uuidv7"
+        "participant_id payload must be a canonical lowercase uuidv7"
     );
     assert_eq!(
-        token_response["participant_binding"]["participant_identity"],
-        participant_identity
+        token_response["participant_binding"]["participant_id"],
+        participant_id
     );
 
     let issued_at = chrono::DateTime::parse_from_rfc3339(
@@ -756,7 +754,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
 
     // `bindings/arkret-native.md` §2 — the backend token is that binding's own
     // object, and its payload carries no long-term actor identity: the SFU sees
-    // only the per-exchange `participant_identity` pseudonym.
+    // only the per-exchange `participant_id` pseudonym.
     let backend_token = &token_response["backend_token"];
     assert_eq!(backend_token["kid"], test_media_issuer_kid(&state));
     assert_eq!(backend_token["signature_algorithm"], "Ed25519");
@@ -768,10 +766,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     let backend_payload = &backend_token["payload"];
     assert_eq!(backend_payload["call_id"], session_id);
     assert_eq!(backend_payload["focus_id"], "arkret_native_blue");
-    assert_eq!(
-        backend_payload["participant_identity"],
-        participant_identity
-    );
+    assert_eq!(backend_payload["participant_id"], participant_id);
     for forbidden in ["actor_id", "device_id", "realm_id", "aud", "provider"] {
         assert!(
             backend_payload.get(forbidden).is_none(),
@@ -870,11 +865,11 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
     assert_eq!(issued["focus_id"], "livekit_green", "{issued}");
     assert_eq!(issued["connect_url"], "wss://media.example/livekit");
     assert!(
-        issued["participant_identity"]
+        issued["participant_id"]
             .as_str()
             .unwrap()
             .starts_with("ak:rtc_participant:"),
-        "a token MUST be minted with a fresh participant_identity"
+        "a token MUST be minted with a fresh participant_id"
     );
     assert_eq!(issued["participant_binding"]["call_id"], call_id);
     assert!(
@@ -1061,7 +1056,7 @@ async fn rtc_media_token_requires_call_join_capability_body() {
         .unwrap();
     assert_eq!(granted["focus_id"], "livekit_green", "{granted}");
     assert!(
-        granted["participant_identity"]
+        granted["participant_id"]
             .as_str()
             .unwrap()
             .starts_with("ak:rtc_participant:")
@@ -1174,9 +1169,9 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
     let claims = verify_livekit_jwt(backend_token, TEST_LIVEKIT_API_SECRET.as_bytes());
     // §2: `iss` = LiveKit API Key.
     assert_eq!(claims["iss"], TEST_LIVEKIT_API_KEY);
-    assert_eq!(claims["sub"], token_response["participant_identity"]);
-    // §2: `name` MUST NOT leak actor identity — equals participant_identity.
-    assert_eq!(claims["name"], token_response["participant_identity"]);
+    assert_eq!(claims["sub"], token_response["participant_id"]);
+    // §2: `name` MUST NOT leak actor identity — equals participant_id.
+    assert_eq!(claims["name"], token_response["participant_id"]);
     assert_eq!(claims["video"]["roomJoin"], true);
     assert_eq!(claims["video"]["canPublish"], true);
     assert_eq!(claims["video"]["canSubscribe"], true);

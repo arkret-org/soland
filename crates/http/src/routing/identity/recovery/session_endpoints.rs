@@ -131,10 +131,8 @@ fn typed_recovery_transcript_context(
             .map_err(|error| stored_recovery_type_error("session_grant_id", error))?,
         session_grant_cnf_jkt: record.session_grant_cnf_jkt.clone(),
         principal_authority: PrincipalAuthorityKey::new(
-            DidCoreId::new(record.principal_id.clone())
-                .map_err(|error| stored_recovery_type_error("principal_id", error))?,
-            DidCoreId::new(record.principal_server_id.clone())
-                .map_err(|error| stored_recovery_type_error("principal_server_id", error))?,
+            record.principal_id.clone(),
+            record.principal_server_id.clone(),
         ),
         requesting_device_id: DeviceId::new(record.requesting_device_id.clone())
             .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
@@ -240,7 +238,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
                 .with_wire_code("recovery_publication_authority_invalid")
         })?;
     let expected_methods = quorum
-        .members
+        .member_ids
         .iter()
         .map(|device_id| format!("{}#{}", active.principal_id, device_id))
         .collect::<BTreeSet<_>>();
@@ -272,10 +270,10 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .collect::<BTreeSet<_>>();
     let events = state
         .event_queries()
-        .accepted_events_for_actor(&active.principal_id)
+        .accepted_events_for_actor(active.principal_id.as_str())
         .await
         .map_err(recovery_service_error)?;
-    for member in &quorum.members {
+    for member in &quorum.member_ids {
         let member = member.as_str();
         let latest_authorize = events
             .iter()
@@ -398,8 +396,8 @@ pub(super) async fn load_owned_recovery_session(
                 "recovery session `{recovery_session_id}` not found"
             ))
         })?;
-    if record.principal_id != principal
-        || record.principal_server_id != session.audience
+    if record.principal_id.as_str() != principal
+        || record.principal_server_id.as_str() != session.audience
         || record.requesting_device_id != candidate_device_id
         || record.session_grant_id != grant_id
         || record.session_grant_cnf_jkt != grant_jkt
@@ -573,7 +571,7 @@ pub(super) async fn recovery_session_create(
     }
     if active.allowed_proof_kinds.is_empty() {
         // An explicit-revocation policy (allowed_proof_kinds == []) cannot back a
-        // recovery session — there is no proof the requester could ever satisfy.
+        // recovery session — there is no proof the requester_id could ever satisfy.
         return Err(AppError::conflict(format!(
             "active recovery policy `{}` permits no proof kinds (recovery disabled)",
             active.policy_id
@@ -682,8 +680,8 @@ pub(super) async fn recovery_session_create(
         recovery_session_id: crate::ids::generate("recovery_session"),
         session_grant_id,
         session_grant_cnf_jkt,
-        principal_id: principal.clone(),
-        principal_server_id: principal_authority.principal_server_id.to_string(),
+        principal_id: principal_authority.principal_id.clone(),
+        principal_server_id: principal_authority.principal_server_id.clone(),
         requesting_device_id,
         trust_domain,
         policy_id: active.policy_id.clone(),
@@ -897,7 +895,7 @@ pub(super) async fn recovery_session_proof_submit(
     let proof_summary = recovery_proof_summary(&updated);
     append_audit_log(
         state,
-        Some(&updated.principal_id),
+        Some(updated.principal_id.as_str()),
         arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_SUBMIT_PROOF_V1,
         json!({
             "recovery_session_id": updated.recovery_session_id.clone(),
@@ -959,7 +957,7 @@ pub(super) async fn verify_did_root_proof(
     let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
         recovery_signature_error(format!("did-root method DID cannot be projected: {error}"))
     })?;
-    if method_principal.as_str() != record.principal_id {
+    if method_principal != record.principal_id {
         return Err(recovery_signature_error(
             "did-root method does not belong to the recovery session authority pair",
         ));
@@ -969,16 +967,8 @@ pub(super) async fn verify_did_root_proof(
             recovery_signature_error(format!("did-root device fragment is invalid: {error}"))
         })?;
     let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-        arkret_identifiers::DidCoreId::new(record.principal_id.clone()).map_err(|error| {
-            AppError::internal(format!("stored recovery principal id is invalid: {error}"))
-        })?,
-        arkret_identifiers::DidCoreId::new(record.principal_server_id.clone()).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "stored recovery Principal Server id is invalid: {error}"
-                ))
-            },
-        )?,
+        record.principal_id.clone(),
+        record.principal_server_id.clone(),
     );
     let authority = state
         .persistence()
@@ -995,7 +985,7 @@ pub(super) async fn verify_did_root_proof(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: record.principal_id.clone(),
+            actor_id: record.principal_id.to_string(),
             device_id: device_id.to_string(),
         })
         .await
@@ -1031,7 +1021,7 @@ pub(super) async fn verify_did_root_proof(
         .ok_or_else(|| {
             recovery_signature_error("recovery device authorization Event is unavailable")
         })?;
-    if authorize_event.actor_id != record.principal_id
+    if authorize_event.actor_id != record.principal_id.as_str()
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
     {

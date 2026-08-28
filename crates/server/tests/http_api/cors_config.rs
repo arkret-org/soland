@@ -437,16 +437,16 @@ async fn server_describe_advertises_account_authority_and_oidc_method_when_confi
         .unwrap();
 
     assert_eq!(
-        describe["auth_metadata"]["account_authority"]["gate_account_base"],
+        describe["auth_metadata"]["account_authority"]["gate_account_base_url"],
         "https://auth.local.host/_arkret/gate/account"
     );
     assert_eq!(describe["auth_metadata"]["methods"][0]["method"], "oidc");
     assert_eq!(
-        describe["auth_metadata"]["methods"][0]["issuer"],
+        describe["auth_metadata"]["methods"][0]["issuer_uri"],
         "https://auth.local.host"
     );
     assert_eq!(
-        describe["auth_metadata"]["methods"][0]["openid_configuration"],
+        describe["auth_metadata"]["methods"][0]["openid_configuration_url"],
         "https://auth.local.host/.well-known/openid-configuration"
     );
     assert_eq!(

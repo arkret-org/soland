@@ -834,7 +834,7 @@ mod tests {
                 "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
             ],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
-                base_uri: "https://soland.example/".to_owned(),
+                base_url: "https://soland.example/".to_owned(),
                 extension_profile_required: (),
             }],
         );
@@ -894,7 +894,7 @@ mod tests {
                 "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
             ],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
-                base_uri: "https://soland.example/".to_owned(),
+                base_url: "https://soland.example/".to_owned(),
                 extension_profile_required: (),
             }],
         );

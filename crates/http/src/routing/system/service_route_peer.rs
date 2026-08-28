@@ -385,7 +385,7 @@ fn validate_notice_candidate(
     }
     let base = notice
         .notice
-        .candidate_base_uri
+        .candidate_base_url
         .as_deref()
         .ok_or_else(|| protocol_violation("scheduled notice omits candidate_base_url"))?;
     let base = arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(base)

@@ -149,7 +149,7 @@ async fn list_realm_organizations_impl(
 
     json_ok(RealmOrganizationRelationshipList {
         realm_id: de_str::<RealmId>("realm_id", &realm_id)?,
-        relationships,
-        declared_organization_hints,
+        realm_organization_relationship_rows: relationships,
+        declared_organization_hint_ids: declared_organization_hints,
     })
 }

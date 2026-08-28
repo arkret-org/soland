@@ -1046,6 +1046,7 @@ pub async fn hydrate_projections_from_persistence(
                     id: row.id,
                     keypackage_ref: row.keypackage_ref,
                     keypackage_digest: row.keypackage_digest,
+                    owner_account_id: row.owner_account_id,
                     actor_id: row.actor_id,
                     device_id: row.device_id,
                     endpoint_verification_method: row.endpoint_verification_method,

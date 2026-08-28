@@ -10,11 +10,12 @@
 //!   `issuer` / `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check
 //!   can reverse-resolve the original decision issuer from the cell.
 //! - `ak.moderation.decision.lift` -> `or_set_remove_dots` on the same target cell, removing
-//!   exactly the dots enumerated in `payload.observed_dots[]` (content-moderation.md §2.6). It is
-//!   deliberately NOT a bulk remove keyed by `decision_id`: §2.6 forbids `or_set_remove_observed`
-//!   here by name, because lifting one review must not implicitly lift another issuer's decision. A
-//!   replacement decision issued in the same batch is a new dot on the same cell and coexists with
-//!   what survived (§2.6 last paragraph), so an add is never pre-tombstoned.
+//!   exactly the dots enumerated in `payload.observed_dot_ids[]` (content-moderation.md §2.6). It
+//!   is deliberately NOT a bulk remove keyed by `decision_id`: §2.6 forbids
+//!   `or_set_remove_observed` here by name, because lifting one review must not implicitly lift
+//!   another issuer's decision. A replacement decision issued in the same batch is a new dot on the
+//!   same cell and coexists with what survived (§2.6 last paragraph), so an add is never
+//!   pre-tombstoned.
 //! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
 //!   (fsm, one cell per appeal id). Submit derives that id by retyping its Event id; later events
 //!   carry `payload.appeal_id`. Deterministic state machine (none) → submitted → under_review →
@@ -76,10 +77,10 @@ fn payload_ref(operation: &Operation, field: &str) -> Option<String> {
 }
 
 /// The issuer of a moderation decision. The wire payload may name it
-/// `issuer` (canonical) or `decided_by` (admin-era snapshot); accept either
+/// Canonical stable issuer identifier.
 /// so a decision projected by either path reverse-resolves consistently.
 fn decision_issuer(operation: &Operation) -> Option<String> {
-    payload_str(operation, "issuer").or_else(|| payload_str(operation, "decided_by"))
+    payload_str(operation, "issuer_id")
 }
 
 fn moderation_decision_id(operation: &Operation) -> String {
@@ -113,7 +114,7 @@ const MODERATION_DECISION_WRITE_INDEX: usize = 0;
 /// `<decision_kind>:<issuer>:<request_digest>`, which no peer folding the same
 /// Event would reproduce, and which `ak.moderation.decision.lift` cannot name:
 /// `content-moderation.md` §5.5.1 makes lift remove producer-enumerated
-/// `observed_dots[]`, and those dots are this value.
+/// `observed_dot_ids[]`, and those dots are this value.
 fn moderation_add_tag(operation: &Operation) -> Option<String> {
     let event_id = operation.context.event_id.as_str();
     Some(arkret_schema::or_set_dot(
@@ -124,7 +125,7 @@ fn moderation_add_tag(operation: &Operation) -> Option<String> {
 
 /// The removal set of `ak.moderation.decision.lift`.
 ///
-/// `content-moderation.md` §2.6: the payload MUST carry `observed_dots[]`, the
+/// `content-moderation.md` §2.6: the payload MUST carry `observed_dot_ids[]`, the
 /// removal set is byte-equal to it, and every dot's `event_id` segment MUST
 /// equal the full `decision_ref` Event token. A dot appends `:<write_index>`
 /// to that token; §2.4.2 provides no `event_ref -> dot`
@@ -132,7 +133,7 @@ fn moderation_add_tag(operation: &Operation) -> Option<String> {
 /// computed from the other. Returns `None` — fail closed — when the field is
 /// absent, empty, malformed, or names a dot belonging to another decision.
 fn moderation_lift_observed_dots(operation: &Operation, decision_ref: &str) -> Option<Vec<String>> {
-    let dots = operation.payload.get("observed_dots")?.as_array()?;
+    let dots = operation.payload.get("observed_dot_ids")?.as_array()?;
     if dots.is_empty() {
         return None;
     }
@@ -287,7 +288,7 @@ impl ProjectionState {
         items.iter().rev().find_map(|item| {
             let value = item.get("value").unwrap_or(item);
             value
-                .get("issuer")
+                .get("issuer_id")
                 .and_then(Value::as_str)
                 .filter(|s| !s.trim().is_empty())
                 .map(ToOwned::to_owned)
@@ -314,7 +315,7 @@ impl ProjectionState {
         let cell_ref = Self::moderation_appeal_cell_ref(appeal_id)?;
         match self.cells.get(&cell_ref) {
             Some(CellState::Value(value)) => value
-                .get("appellant")
+                .get("appellant_id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned),
             _ => None,
@@ -387,7 +388,7 @@ impl ProjectionState {
             map.insert("decision_id".to_owned(), Value::String(decision_id.clone()));
             map.insert("target_ref".to_owned(), Value::String(target_ref));
             map.insert("decision".to_owned(), Value::String(decision_kind));
-            map.insert("issuer".to_owned(), Value::String(issuer));
+            map.insert("issuer_id".to_owned(), Value::String(issuer));
             map.insert(
                 "request_canonical_digest".to_owned(),
                 Value::String(request_digest),
@@ -413,7 +414,7 @@ impl ProjectionState {
     /// `payload.target_ref`.
     ///
     /// `content-moderation.md` §2.6 makes the removal set **byte-equal** to
-    /// `payload.observed_dots[]`, and requires each dot's `event_id` segment to
+    /// `payload.observed_dot_ids[]`, and requires each dot's `event_id` segment to
     /// equal the `decision_ref` uuid — that pair is the machine-readable form of
     /// "lifting one review must not implicitly lift another issuer's decision". This used to
     /// select by `decision_id` and mark every matching add lifted, which is the
@@ -436,7 +437,7 @@ impl ProjectionState {
                 reason: "moderation_lift_target_ref_missing".to_owned(),
             };
         };
-        let Some(observed_dots) = moderation_lift_observed_dots(operation, &decision_id) else {
+        let Some(observed_dot_ids) = moderation_lift_observed_dots(operation, &decision_id) else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_lift_observed_dots_invalid".to_owned(),
             };
@@ -450,7 +451,7 @@ impl ProjectionState {
 
         let mut items = self.moderation_cell_items(&cell_ref);
         let lifted_at = arkret_canonical::format_timestamp_canonical(now);
-        for dot in &observed_dots {
+        for dot in &observed_dot_ids {
             let existing = items
                 .iter_mut()
                 .find(|item| item.get("tag").and_then(Value::as_str) == Some(dot.as_str()));
@@ -579,7 +580,7 @@ impl ProjectionState {
         }
 
         // Build / patch the fsm cell value. Carry forward submit-time
-        // identity fields (appellant / decision_ref) needed by later
+        // identity fields (appellant_id / decision_ref) needed by later
         // transitions' constraint checks.
         let mut value = match self.cells.get(&cell_ref) {
             Some(CellState::Value(Value::Object(map))) => Value::Object(map.clone()),
@@ -591,8 +592,8 @@ impl ProjectionState {
             map.insert("state".to_owned(), Value::String(target_state.to_owned()));
             // On submit, anchor the identity fields used by SoD / atomicity.
             if target_state == "submitted" {
-                if let Some(appellant) = payload_str(operation, "appellant") {
-                    map.insert("appellant".to_owned(), Value::String(appellant));
+                if let Some(appellant_id) = payload_str(operation, "appellant_id") {
+                    map.insert("appellant_id".to_owned(), Value::String(appellant_id));
                 }
                 if let Some(decision_ref) = payload_str(operation, "decision_ref") {
                     map.insert("decision_ref".to_owned(), Value::String(decision_ref));
@@ -685,10 +686,10 @@ impl ProjectionState {
         if payload_str(operation, "close_reason").as_deref() != Some("appellant_withdrawn") {
             return false;
         }
-        let Some(closer) = payload_str(operation, "closer") else {
+        let Some(closer_id) = payload_str(operation, "closer_id") else {
             return false;
         };
-        self.moderation_appeal_appellant(appeal_id).as_deref() == Some(closer.as_str())
+        self.moderation_appeal_appellant(appeal_id).as_deref() == Some(closer_id.as_str())
     }
 
     fn enforce_no_active_duplicate_appeal(
@@ -699,7 +700,7 @@ impl ProjectionState {
         let Some(decision_ref) = payload_str(operation, "decision_ref") else {
             return Ok(());
         };
-        let Some(appellant) = payload_str(operation, "appellant") else {
+        let Some(appellant_id) = payload_str(operation, "appellant_id") else {
             return Ok(());
         };
         for cell in self.cells.values() {
@@ -713,7 +714,7 @@ impl ProjectionState {
                 continue;
             }
             if value.get("decision_ref").and_then(Value::as_str) != Some(decision_ref.as_str())
-                || value.get("appellant").and_then(Value::as_str) != Some(appellant.as_str())
+                || value.get("appellant_id").and_then(Value::as_str) != Some(appellant_id.as_str())
             {
                 continue;
             }
@@ -737,7 +738,7 @@ impl ProjectionState {
         }
     }
 
-    /// separation-of-duties: the review/decision `reviewer` MUST NOT equal the
+    /// separation-of-duties: the review/decision `reviewer_id` MUST NOT equal the
     /// issuer of the appealed decision. The appealed decision is resolved via
     /// the appeal cell's `decision_ref` → moderation_state cell issuer. When
     /// the original decision was never projected here we cannot enforce (causal
@@ -747,7 +748,7 @@ impl ProjectionState {
         appeal_id: &str,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        let Some(reviewer) = payload_str(operation, "reviewer") else {
+        let Some(reviewer_id) = payload_str(operation, "reviewer_id") else {
             // No reviewer named — schema validator catches this; reducer
             // tolerates absence (constraint is reviewer-relative).
             return Ok(());
@@ -758,7 +759,7 @@ impl ProjectionState {
         let Some(issuer) = self.moderation_decision_issuer(&decision_ref) else {
             return Ok(());
         };
-        if reviewer == issuer {
+        if reviewer_id == issuer {
             return Err("appeal_self_review_forbidden");
         }
         Ok(())

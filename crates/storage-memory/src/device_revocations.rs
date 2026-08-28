@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use arkret_wire::DidCoreId;
 use soland_storage::{
     ControlProposalDecisionCommitOutcome, DeviceInventoryRecord, DeviceRevocationCleanupIntent,
     DeviceRevocationGateLinearization, DeviceRevocationGateLinearizationRequest,
@@ -10,7 +11,7 @@ use soland_storage::{
 
 use crate::{Arc, Mutex, Utc, async_trait};
 
-type GateSubjectKey = (String, String, String);
+type GateSubjectKey = (DidCoreId, DidCoreId, String);
 type GateIntentKey = (GateSubjectKey, String, String);
 
 #[derive(Clone, Default)]
@@ -204,7 +205,11 @@ impl MemoryDeviceRevocationStore {
                             material_cleanup_completed_at: None,
                             mls_obligation_completed_at: None,
                         });
-                    sealed_devices.push((selector.principal_id, selector.device_id, sealed_at));
+                    sealed_devices.push((
+                        selector.principal_id.to_string(),
+                        selector.device_id,
+                        sealed_at,
+                    ));
                 } else if let Some(terminal_decision) = snapshot
                     .decisions
                     .iter()
@@ -461,7 +466,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         if let Some(device) = self
             .inventory
             .lock()
-            .get_mut(&(selector.principal_id, selector.device_id))
+            .get_mut(&(selector.principal_id.to_string(), selector.device_id))
         {
             device.revoked_at.get_or_insert(sealed_at);
             device.updated_at = device.updated_at.max(sealed_at);

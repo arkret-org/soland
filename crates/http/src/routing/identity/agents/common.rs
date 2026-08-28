@@ -14,6 +14,7 @@ pub(super) fn controller_service_session(
 ) -> SessionRecord {
     SessionRecord {
         token_hash: format!("agent-pair-commit:{controller_id}"),
+        service_account_id: None,
         actor: controller_id.to_owned(),
         device_id: device_id.to_owned(),
         audience: state.service_id().clone(),

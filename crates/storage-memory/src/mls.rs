@@ -698,6 +698,7 @@ mod tests {
             keypackage_ref: format!("ak:mls:keypackage:{id}"),
             keypackage_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
             actor_id: "ak:did_core:web:bob.example".to_owned(),
             device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
             endpoint_verification_method: None,

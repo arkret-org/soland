@@ -521,7 +521,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "value": {
                     "resource_kind": "applet",
                     "discoverability": "listed",
-                    "directory_services": ["ak:did_core:web:directory.example"]
+                    "directory_ids": ["ak:did_core:web:directory.example"]
                 },
             }),
             valid: true,

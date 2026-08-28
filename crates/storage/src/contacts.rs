@@ -1,3 +1,4 @@
+use arkret_identifiers::{CellRef, DidCoreId};
 use arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt;
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
@@ -39,7 +40,11 @@ pub trait ContactVerifiedMirrorStore: Send + Sync {
 /// Trait for contact storage operations.
 #[async_trait]
 pub trait ContactStore: Send + Sync {
-    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
+    async fn get(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<Option<ContactRecord>>;
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
     /// Replace one existing Contact row only when its durable revision still
     /// matches the revision the caller read. Callers must advance
@@ -50,8 +55,12 @@ pub trait ContactStore: Send + Sync {
         expected_updated_at: chrono::DateTime<chrono::Utc>,
         record: &ContactRecord,
     ) -> PersistenceResult<bool>;
-    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
-    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>>;
+    async fn delete(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<()>;
 }
 /// Durable backing for per-subject private `invite_receive_policy` overrides
 /// (spec `sync/invite-addressing.md` §5). The in-memory
@@ -91,8 +100,8 @@ pub trait InviteReceivePolicyStore: Send + Sync {
 pub trait ConsentCellStore: Send + Sync {
     async fn get(
         &self,
-        holder: &str,
-        cell_id: &str,
+        holder_principal_id: &DidCoreId,
+        cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
 }
@@ -101,7 +110,7 @@ pub trait ConsentCellStore: Send + Sync {
 ///
 /// This is deliberately not a consent cell or a protocol Event. It only binds
 /// the opaque `consent_id` returned by `request_consent` to the authenticated
-/// requester, target, scope, transport source, and optional expiry so a later
+/// requester_id, target, scope, transport source, and optional expiry so a later
 /// caller-authored Event can be checked without disclosing holder-private
 /// state.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,7 +135,7 @@ pub trait MimiConsentCorrelationStore: Send + Sync {
     async fn put(&self, record: &MimiConsentCorrelationRecord) -> PersistenceResult<()>;
 }
 #[doc(hidden)]
-pub type ContactKey = (String, String);
+pub type ContactKey = (DidCoreId, DidCoreId);
 /// Decode a persisted `grant_dots` JSONB object back into the in-memory
 /// `BTreeMap<String, ConsentGrantDot>`.
 pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {

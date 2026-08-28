@@ -59,7 +59,7 @@ fn revoked(expected_revision: u64) -> Value {
 fn subject(service: &str, route: &str) -> PushRouteSubject {
     PushRouteSubject {
         recipient_id: service.to_owned(),
-        principal_id: PRINCIPAL.to_owned(),
+        principal_id: arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
         device_id: DEVICE.to_owned(),
         push_route: route.to_owned(),
     }
@@ -121,7 +121,7 @@ fn push_route_rejects_wrong_recipient_and_closed_shape_violations() {
     let mut wrong_recipient = active(0, TARGET_1);
     wrong_recipient["recipient_id"] = json!(OTHER_SERVICE);
     assert!(
-        matches!(state.apply(&op(wrong_recipient), &hlc), ProjectionEffect::Rejected { ref reason } if reason == "recipient_service_id_mismatch")
+        matches!(state.apply(&op(wrong_recipient), &hlc), ProjectionEffect::Rejected { ref reason } if reason == "recipient_id_mismatch")
     );
 
     let invalid = [

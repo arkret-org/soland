@@ -1361,7 +1361,7 @@ pub(super) fn registration_payload_from_package(
         "applet_id": package.applet_id,
         "service_id": package.service_id,
         "controller_id": package.controller_id,
-        "base_uri": package.base_uri,
+        "base_url": package.base_url,
         "bot_actor_id": package.bot_actor_id,
         "claimed_profiles": package.claimed_profiles,
         "protocols": package.protocols,
@@ -1680,14 +1680,12 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(
-                    "bridge.test".to_owned(),
-                )],
+                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
         );
         package.requested_scopes = vec!["ak.message.create".to_owned()];
-        package.endpoint_policy.endpoint_entries = vec![AppletEndpointEntry {
+        package.endpoint_policy.endpoints = vec![AppletEndpointEntry {
             method: AppletEndpointMethod::Post,
             path: "/events".to_owned(),
             auth: Some(AppletEndpointAuth::WebhookSignature),
@@ -1807,9 +1805,7 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(
-                    "bridge.test".to_owned(),
-                )],
+                handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
                 ..Default::default()
             },
         )

@@ -350,9 +350,9 @@ pub(crate) fn seed_seal_with_direct_event_effects(
                 .as_direct()
                 .expect("bootstrap Event projection must not depend on pre-state");
             ops.push((
-                effect.cell,
+                effect.cell_id,
                 arkret_state::lattice::ordered_log::IssuedOp {
-                    issuer: event.actor_id.clone(),
+                    issuer_id: event.actor_id.clone(),
                     op: arkret_state::lattice::SealedOp::new(digest.clone(), effect.op),
                 },
             ));
@@ -1734,7 +1734,7 @@ pub(crate) async fn project_test_authorized_device(
         serde_json::json!({
             "principal_id": actor_core,
             "device_id": device_id,
-            "device_public_key": test_ed25519_multibase_public(signing_key),
+            "device_public_key_did": test_ed25519_multibase_public(signing_key),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": actor_core,
@@ -1809,13 +1809,24 @@ pub(crate) async fn project_test_authorized_device(
     }
     soland_test_support::project_accepted_operations(state, actor_core.as_str(), &[operation])
         .await;
-    let projected_device = state
+    let mut projected_device = state
         .test_persistence()
         .devices()
         .get(actor_core.as_str(), device_id)
         .await
         .expect("read projected authorized device")
         .expect("projected authorized device");
+    projected_device
+        .payload
+        .as_object_mut()
+        .expect("projected authorized device payload")
+        .insert("authorized_generation_ref".to_owned(), serde_json::json!(1));
+    state
+        .test_persistence()
+        .devices()
+        .put(&projected_device)
+        .await
+        .expect("persist fixture authorized device generation");
     assert_eq!(
         projected_device.payload["device_public_key"],
         test_ed25519_multibase_public(signing_key),
@@ -2061,7 +2072,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
         .unwrap_or_else(|| {
             panic!("fixture grant must be reconstructible at the head Seal: {cell_state:?}")
         });
-        assert_eq!(projected.subject, subject_core);
+        assert_eq!(projected.subject_id, subject_core);
         assert_eq!(projected.realm_id, realm_id);
         assert!(
             !projected.actions.is_empty(),
@@ -2529,8 +2540,8 @@ fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
             arkret_models_collaboration::object_lifecycle::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
-                replacement_space: optional_space_id(&payload, "replacement_space"),
-                replacement_event: optional_event_ref(&payload, "replacement_event"),
+                replacement_space_id: optional_space_id(&payload, "replacement_space_id"),
+                replacement_event_id: optional_event_ref(&payload, "replacement_event_id"),
                 effective_at: None,
             },
         )

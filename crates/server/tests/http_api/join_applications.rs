@@ -67,7 +67,7 @@ async fn seed_applications(state: &AppState, applicant_core: &str, fills: &[char
             .test_persistence()
             .join_applications()
             .execute(JoinApplicationCommand {
-                principal_id: applicant_core.to_owned(),
+                principal_id: arkret_wire::DidCoreId::new(applicant_core).unwrap(),
                 idempotency_key: format!("seed-{fill}"),
                 request_hash: format!("seed-request-{fill}"),
                 idempotency_expires_at: chrono::Utc::now() + chrono::Duration::days(1),
@@ -115,7 +115,7 @@ async fn join_application_list_paginates_with_opaque_canonical_cursor_body() {
     let (status, first) = list_page(state.clone(), &token, "?limit=2").await;
     assert_eq!(status, Some(StatusCode::OK), "{first}");
     assert_eq!(
-        first["applications"].as_array().unwrap().len(),
+        first["application_entries"].as_array().unwrap().len(),
         2,
         "{first}"
     );
@@ -141,7 +141,7 @@ async fn join_application_list_paginates_with_opaque_canonical_cursor_body() {
     )
     .await;
     assert_eq!(status, Some(StatusCode::OK), "{second}");
-    let second_refs: Vec<&str> = second["applications"]
+    let second_refs: Vec<&str> = second["application_entries"]
         .as_array()
         .unwrap()
         .iter()

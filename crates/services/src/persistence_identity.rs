@@ -41,6 +41,18 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
             }))
     }
 
+    async fn account_by_id(
+        &self,
+        account_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::AccountProfileState>> {
+        Ok(self
+            .0
+            .accounts()
+            .get_by_id(account_id)
+            .await?
+            .map(application_account_profile))
+    }
+
     async fn register_account(
         &self,
         command: crate::identity::RegisterAccountCommand,
@@ -427,20 +439,20 @@ fn application_mimi_consent_correlation(
 impl crate::identity::ContactPort for PersistenceContacts {
     async fn contact_any(
         &self,
-        requester: &str,
-        target: &str,
+        requester_id: &arkret_wire::DidCoreId,
+        target_id: &arkret_wire::DidCoreId,
     ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
         Ok(self
             .0
             .contacts()
-            .get(requester, target)
+            .get(requester_id, target_id)
             .await?
             .map(application_contact))
     }
 
     async fn contacts_for_actor(
         &self,
-        actor_id: &str,
+        actor_id: &arkret_wire::DidCoreId,
     ) -> crate::ServiceResult<Vec<crate::identity::ContactRecord>> {
         Ok(self
             .0
@@ -497,7 +509,7 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
 
 fn application_consent_key(key: soland_storage::ConsentCellKey) -> crate::identity::ConsentCellKey {
     crate::identity::ConsentCellKey {
-        holder: key.holder,
+        holder_principal_id: key.holder_principal_id,
         cell_id: key.cell_id,
     }
 }
@@ -507,8 +519,8 @@ fn application_consent_cell(
 ) -> crate::identity::ConsentCellRecord {
     crate::identity::ConsentCellRecord {
         cell_id: cell.cell_id,
-        holder: cell.holder,
-        peer: cell.peer,
+        holder_principal_id: cell.holder_principal_id,
+        peer_principal_id: cell.peer_principal_id,
         consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
@@ -535,8 +547,8 @@ pub(crate) fn storage_consent_cell(
 ) -> soland_storage::ConsentCellRecord {
     soland_storage::ConsentCellRecord {
         cell_id: cell.cell_id,
-        holder: cell.holder,
-        peer: cell.peer,
+        holder_principal_id: cell.holder_principal_id,
+        peer_principal_id: cell.peer_principal_id,
         consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
@@ -560,8 +572,8 @@ pub(crate) fn storage_consent_cell(
 
 fn application_contact(record: soland_storage::ContactRecord) -> crate::identity::ContactRecord {
     crate::identity::ContactRecord {
-        requester: record.requester,
-        target: record.target,
+        requester_id: record.requester_id,
+        target_id: record.target_id,
         contact_round_id: record.contact_round_id,
         version: record.version,
         granted_to_target_scopes: record.granted_to_target_scopes,
@@ -576,7 +588,7 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
-        peer_id: record.peer_id,
+        peer_host_id: record.peer_host_id,
         peer_service_resolution: record.peer_service_resolution,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -585,8 +597,8 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
 
 fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::ContactRecord {
     soland_storage::ContactRecord {
-        requester: record.requester,
-        target: record.target,
+        requester_id: record.requester_id,
+        target_id: record.target_id,
         contact_round_id: record.contact_round_id,
         version: record.version,
         granted_to_target_scopes: record.granted_to_target_scopes,
@@ -601,7 +613,7 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         response_event_ref: record.response_event_ref,
         tombstone_event_ref: record.tombstone_event_ref,
         message: record.message,
-        peer_id: record.peer_id,
+        peer_host_id: record.peer_host_id,
         peer_service_resolution: record.peer_service_resolution,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -1452,6 +1464,7 @@ fn application_session_identity(
 ) -> crate::identity::SessionIdentityState {
     crate::identity::SessionIdentityState {
         token_hash: session.token_hash,
+        service_account_id: Some(session.service_account_id),
         actor: session.actor,
         device_id: session.device_id,
         audience: session.audience,
@@ -1479,6 +1492,9 @@ fn persistence_session_identity(
     );
     soland_storage::SessionRecord {
         token_hash: session.token_hash,
+        service_account_id: session
+            .service_account_id
+            .expect("only account-bound sessions may be persisted"),
         actor: session.actor,
         device_id: session.device_id,
         audience: session.audience,

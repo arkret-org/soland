@@ -1114,7 +1114,7 @@ async fn dynamic_peer_event_targets(
                 tracing::info!(
                     event_id = %parsed.event_id,
                     realm_id = %parsed.realm_id,
-                    revoked_peer_service_id = %service_id,
+                    revoked_peer_id = %service_id,
                     "skipping outbound federation push to peer with revoked service delegation (federation.md §4.4)"
                 );
                 continue;

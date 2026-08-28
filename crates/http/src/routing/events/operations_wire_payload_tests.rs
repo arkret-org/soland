@@ -26,7 +26,7 @@ fn wire_operation(kind: arkret_wire::EventKind, payload: Value) -> Operation {
 fn consent_revoke_empty_observed_dots_rejected() {
     let err = validate_consent_revoke_payload(&json!({
         "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "observed_dots": [],
+        "observed_dot_ids": [],
     }))
     .unwrap_err();
     assert_eq!(err.0, arkret_wire::ErrorCode::SCHEMA_VIOLATION);
@@ -36,7 +36,7 @@ fn consent_revoke_empty_observed_dots_rejected() {
 fn consent_revoke_accepts_non_empty_observed_dots() {
     validate_consent_revoke_payload(&json!({
         "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
-        "observed_dots": [
+        "observed_dot_ids": [
             "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1:1"
         ],
     }))
@@ -47,7 +47,7 @@ fn consent_revoke_accepts_non_empty_observed_dots() {
 fn consent_revoke_rejects_untyped_consent_id() {
     let err = validate_consent_revoke_payload(&json!({
         "consent_id": "cid",
-        "observed_dots": [
+        "observed_dot_ids": [
             "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1:1"
         ],
     }))
@@ -114,7 +114,7 @@ fn capability_grant_payload() -> Value {
     let grant = json!({
         "schema": "ak.schema.capability.v1",
         "realm_id": TEST_REALM,
-        "issuer": TEST_ISSUER,
+        "issuer_id": TEST_ISSUER,
         "subject": TEST_SUBJECT,
         "subject_principal_server_id": TEST_PRINCIPAL_SERVER,
         "actions": ["ak.strand.read"],

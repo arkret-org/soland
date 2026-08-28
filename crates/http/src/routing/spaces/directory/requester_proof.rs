@@ -1,4 +1,4 @@
-//! Per-object-family requester proof verification for the five Directory
+//! Per-object-family requester_id proof verification for the five Directory
 //! resolve surfaces (`discovery-directory.md` §9.0.1).
 //!
 //! `directory-operations.schema.json` is a DTO container, not an object family,
@@ -24,10 +24,10 @@ use super::*;
 /// window MUST re-issue; deployments MUST NOT relax this constant.
 const DIRECTORY_REQUESTER_PROOF_WINDOW_SECONDS: i64 = 300;
 
-/// Verify every requester proof carried by one Directory resolve request.
+/// Verify every requester_id proof carried by one Directory resolve request.
 ///
 /// `issuer` is the family's originator wire field projected to its DID core id
-/// (`requester` for `resolve_target` / `resolve_handle` /
+/// (`requester_id` for `resolve_target` / `resolve_handle` /
 /// `resolve_agent_selector` / `list_handles_for_subject`).
 /// `resolve_organization` has no originator wire field, so it passes `None` and
 /// the signer identity is borne only by `verification_method`.
@@ -123,7 +123,7 @@ mod tests {
         AppState::new(config, soland_storage_postgres::Db { pool: None })
     }
 
-    fn requester() -> DidCoreId {
+    fn requester_id() -> DidCoreId {
         let did = Did::new("did:web:directory-proof-test.invalid".to_owned()).unwrap();
         project_did_to_core_id(&did).unwrap()
     }
@@ -132,7 +132,7 @@ mod tests {
         PayloadProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(
-                "did:web:directory-proof-test.invalid#ak:key:directory-requester".to_owned(),
+                "did:web:directory-proof-test.invalid#ak:key:directory-requester_id".to_owned(),
             )
             .unwrap(),
             payload_digest,
@@ -147,7 +147,7 @@ mod tests {
     fn target_body(proofs: Vec<PayloadProof>) -> DirectoryResolveTargetRequestBody {
         DirectoryResolveTargetRequestBody {
             address: "ak://realm/release".to_owned(),
-            requester_id: Some(requester()),
+            requester_id: Some(requester_id()),
             proof_challenge: None,
             claim_presentations: Vec::new(),
             proofs,
@@ -162,7 +162,7 @@ mod tests {
             proof_challenge: None,
             claim_presentations: Vec::new(),
             intent: None,
-            requester_id: Some(requester()),
+            requester_id: Some(requester_id()),
             audience: None,
             realm_id: None,
             proofs,

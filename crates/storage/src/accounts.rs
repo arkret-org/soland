@@ -6,6 +6,7 @@ use super::{
 #[async_trait]
 pub trait AccountStore: Send + Sync {
     async fn get(&self, principal_id: &str) -> PersistenceResult<Option<AccountRecord>>;
+    async fn get_by_id(&self, account_id: &str) -> PersistenceResult<Option<AccountRecord>>;
     async fn put(&self, record: &AccountRecord) -> PersistenceResult<()>;
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>>;
     async fn delete(&self, principal_id: &str) -> PersistenceResult<()>;

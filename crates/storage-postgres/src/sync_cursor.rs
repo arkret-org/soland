@@ -35,7 +35,7 @@ impl From<SyncCursorRow> for SyncCursorRecord {
             handle: row.handle,
             binding_subject: row.binding_subject,
             device_id: row.device_id,
-            service_id: row.service_id.into_string(),
+            service_id: row.service_id,
             filter_digest: row.filter_digest,
             purpose: row.purpose,
             positions: row.positions,
@@ -194,7 +194,7 @@ struct CursorRevocationRow {
     #[diesel(sql_type = Text)]
     cursor_digest: String,
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
     #[diesel(sql_type = Text)]

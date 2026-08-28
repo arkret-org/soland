@@ -586,10 +586,10 @@ fn peer_event_partial_retry(
     let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
         serde_json::from_str(response_body).ok()?;
     if outcome.status != arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial
-        || outcome.rejected.is_empty()
+        || outcome.events_submit_rejected_rows.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome
-            .rejected
+            .events_submit_rejected_rows
             .iter()
             .any(|item| item.reason_code != arkret_wire::ReasonCode::DependencyMissing)
     {
@@ -597,7 +597,7 @@ fn peer_event_partial_retry(
     }
 
     let pending_ids = outcome
-        .rejected
+        .events_submit_rejected_rows
         .iter()
         .map(|item| item.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
@@ -1538,20 +1538,18 @@ impl FederationDispatcher {
                 .map_err(|error| error.to_string())?;
                 let holder_actor_id = request_receipt.core.holder.contact_actor_id();
                 let peer_actor_id = request_receipt.core.peer.contact_actor_id();
-                let holder = holder_actor_id.as_str();
-                let peer = peer_actor_id.as_str();
                 crate::routing::identity::contact_federation::persist_request_mirror_receipt(
                     &self.state,
-                    holder,
-                    peer,
+                    &holder_actor_id,
+                    &peer_actor_id,
                     &event_outcome.mirror_receipt,
                 )
                 .await
                 .map_err(|error| error.to_string())?;
                 crate::routing::identity::contact_federation::enqueue_glare_finalize_if_ready(
                     &self.state,
-                    holder,
-                    peer,
+                    &holder_actor_id,
+                    &peer_actor_id,
                 )
                 .await
                 .map_err(|error| error.to_string())?;
@@ -2720,7 +2718,7 @@ mod tests {
             "status":"partial",
             "accepted":["{}"],
             "pending_delivery_count":0,
-            "rejected":[{{
+            "events_submit_rejected_rows":[{{
                 "id":"{pending_event_id}",
                 "reason_code":"dependency_missing",
                 "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]

@@ -44,9 +44,8 @@ pub struct MemberIdentityEventRecord {
 #[derive(Clone, Debug, PartialEq)]
 pub struct HandleClaimEvidenceRecord {
     pub digest: String,
-    pub subject_id: String,
-    pub issuer: String,
-    pub issuer_id: Option<String>,
+    pub subject_id: arkret_wire::DidCoreId,
+    pub issuer_id: arkret_wire::DidCoreId,
     pub audience: Option<String>,
     pub binding_state: String,
     pub visibility: Option<String>,
@@ -72,7 +71,10 @@ pub trait MemberIdentityStore: Send + Sync {
     /// Idempotent upsert keyed by `(subject_id, digest)`.
     async fn put_handle_claim(&self, record: &HandleClaimEvidenceRecord) -> PersistenceResult<()>;
     /// Drop every cached claim for one subject; returns the number removed.
-    async fn delete_handle_claims_for_subject(&self, subject_id: &str) -> PersistenceResult<usize>;
+    async fn delete_handle_claims_for_subject(
+        &self,
+        subject_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<usize>;
     /// Full handle-claim snapshot for startup hydration.
     async fn snapshot_handle_claims(&self) -> PersistenceResult<Vec<HandleClaimEvidenceRecord>>;
 }

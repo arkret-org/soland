@@ -468,7 +468,7 @@ mod caller_signed_policy_server_tests {
 
     fn with_head_eq(mut event: arkret_wire::Event, value: Value) -> arkret_wire::Event {
         event.preconditions = serde_json::from_value(json!([{
-            "cell": POLICY_SERVER_CELL,
+            "cell_id": POLICY_SERVER_CELL,
             "predicate": { "op": "head_eq", "value": value },
         }]))
         .expect("head_eq precondition");

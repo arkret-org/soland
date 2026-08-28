@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use arkret_wire::ServiceAccountId;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
@@ -40,7 +41,7 @@ pub struct StoreAccountNotificationDeltaCommand {
 
 #[derive(Clone, Debug)]
 pub struct ListAccountNotificationDeltasQuery {
-    pub controller_account_id: String,
+    pub controller_account_id: ServiceAccountId,
     pub recipient_id: String,
     pub after_position: Option<i64>,
 }
@@ -57,7 +58,7 @@ pub trait NotificationWritePort: Send + Sync {
     -> ServiceResult<()>;
     async fn list_for_account(
         &self,
-        controller_account_id: &str,
+        controller_account_id: &ServiceAccountId,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> ServiceResult<Vec<StoredAccountNotificationDelta>>;
@@ -864,8 +865,8 @@ mod tests {
 
         async fn list_for_account(
             &self,
-            _controller_account_id: &str,
-            _recipient_service_id: &str,
+            _controller_account_id: &ServiceAccountId,
+            _recipient_id: &str,
             _after_position: Option<i64>,
         ) -> ServiceResult<Vec<StoredAccountNotificationDelta>> {
             Ok(Vec::new())

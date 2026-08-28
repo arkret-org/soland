@@ -1,3 +1,4 @@
+use arkret_wire::WebOrigin;
 use diesel::sql_types::Bool;
 use diesel_async::AsyncConnection;
 use soland_storage::{WebsocketAuthChallengeRecord, WebsocketAuthReplayRecord, WebsocketAuthStore};
@@ -41,18 +42,24 @@ struct WebsocketChallengeRow {
     retain_until: chrono::DateTime<Utc>,
 }
 
-impl From<WebsocketChallengeRow> for WebsocketAuthChallengeRecord {
-    fn from(row: WebsocketChallengeRow) -> Self {
-        Self {
+impl TryFrom<WebsocketChallengeRow> for WebsocketAuthChallengeRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: WebsocketChallengeRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             connection_id: row.connection_id,
             nonce: row.nonce,
-            canonical_origin: row.canonical_origin,
+            canonical_origin: WebOrigin::new(row.canonical_origin).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "stored websocket canonical_origin is invalid: {error}"
+                ))
+            })?,
             canonical_base_url: row.canonical_base_url,
             issued_at: row.issued_at,
             expires_at: row.expires_at,
             consumed: row.consumed,
             retain_until: row.retain_until,
-        }
+        })
     }
 }
 
@@ -72,7 +79,7 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
         )
         .bind::<Text, _>(&record.connection_id)
         .bind::<Text, _>(&record.nonce)
-        .bind::<Text, _>(&record.canonical_origin)
+        .bind::<Text, _>(record.canonical_origin.as_str())
         .bind::<Text, _>(&record.canonical_base_url)
         .bind::<Timestamptz, _>(record.issued_at)
         .bind::<Timestamptz, _>(record.expires_at)
@@ -106,8 +113,9 @@ impl WebsocketAuthStore for PgWebsocketAuthStore {
         .get_result::<WebsocketChallengeRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(WebsocketAuthChallengeRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(WebsocketAuthChallengeRecord::try_from)
+        .transpose()
     }
 
     async fn replay_ledger_contains(

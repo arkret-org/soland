@@ -44,7 +44,7 @@ pub struct MemberIdentityRegistry {
     /// Local handle-claim evidence cache keyed by claim `subject`.
     /// Sources are deliberately local-only: directory-issued signed claims
     /// and handle-claim envelopes carried by accepted identity events.
-    handle_claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>>,
+    handle_claims_by_subject: BTreeMap<arkret_wire::DidCoreId, Vec<HandleClaimEvidenceRecord>>,
 }
 
 #[derive(Clone, Debug)]
@@ -120,14 +120,20 @@ impl MemberIdentityRegistry {
         }
     }
 
-    pub fn handle_claims_for_subject(&self, subject_id: &str) -> Vec<HandleClaimEvidenceRecord> {
+    pub fn handle_claims_for_subject(
+        &self,
+        subject_id: &arkret_wire::DidCoreId,
+    ) -> Vec<HandleClaimEvidenceRecord> {
         self.handle_claims_by_subject
             .get(subject_id)
             .cloned()
             .unwrap_or_default()
     }
 
-    pub fn invalidate_handle_claims_for_subject(&mut self, subject_id: &str) -> usize {
+    pub fn invalidate_handle_claims_for_subject(
+        &mut self,
+        subject_id: &arkret_wire::DidCoreId,
+    ) -> usize {
         self.handle_claims_by_subject
             .remove(subject_id)
             .map(|claims| claims.len())
@@ -142,7 +148,7 @@ impl MemberIdentityRegistry {
     /// authoritative read source until it lands.
     pub fn snapshot_handle_claims(
         &self,
-    ) -> std::collections::BTreeMap<String, Vec<HandleClaimEvidenceRecord>> {
+    ) -> std::collections::BTreeMap<arkret_wire::DidCoreId, Vec<HandleClaimEvidenceRecord>> {
         self.handle_claims_by_subject.clone()
     }
 
@@ -305,8 +311,10 @@ impl MemberIdentityRegistry {
 pub(crate) fn handle_claim_record_from_envelope(
     envelope: &Value,
 ) -> Option<HandleClaimEvidenceRecord> {
-    let subject_id = envelope.get("subject")?.as_str()?.to_owned();
-    let issuer = envelope.get("issuer")?.as_str()?.to_owned();
+    let subject_id =
+        arkret_wire::DidCoreId::new(envelope.get("subject_id")?.as_str()?.to_owned()).ok()?;
+    let issuer_id =
+        arkret_wire::DidCoreId::new(envelope.get("issuer_id")?.as_str()?.to_owned()).ok()?;
     let digest = canonical_digest(envelope, "", subject_id.as_str(), "handle_claim_digest")?;
     let binding_state = envelope
         .get("binding_state")
@@ -315,10 +323,6 @@ pub(crate) fn handle_claim_record_from_envelope(
         .to_owned();
     let audience = envelope
         .get("audience")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    let issuer_id = envelope
-        .get("issuer_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
     let visibility = envelope
@@ -339,7 +343,6 @@ pub(crate) fn handle_claim_record_from_envelope(
     Some(HandleClaimEvidenceRecord {
         digest,
         subject_id,
-        issuer,
         issuer_id,
         audience,
         binding_state,

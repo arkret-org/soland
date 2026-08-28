@@ -585,8 +585,6 @@ impl AgentStore for PgAgentStore {
             .map_err(PersistenceError::database)?;
         let approval_notification_id =
             ids::typed_uuid_part_expect_internal(&write.approval_notification_id);
-        let controller_account_id =
-            ids::typed_uuid_part_expect_internal(&write.controller_account_id);
         let runtime_key_request =
             serde_json::to_value(&write.runtime_key_request).map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -629,7 +627,7 @@ impl AgentStore for PgAgentStore {
                 Some(write.approval_requested_at),
             )
             .otherwise(agent_principals::approval_requested_at)),
-            agent_principals::controller_account_id.eq(controller_account_id),
+            agent_principals::controller_account_id.eq(write.controller_account_id.as_str()),
             agent_principals::recipient_id.eq(&write.recipient_id),
             agent_principals::runtime_key_binding_digest.eq(&write.runtime_key_binding_digest),
             agent_principals::runtime_public_key_digest.eq(&write.runtime_public_key_digest),

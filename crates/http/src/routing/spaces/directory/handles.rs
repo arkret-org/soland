@@ -141,7 +141,7 @@ pub(super) async fn membership_builder_resolve_allowed(
         return false;
     }
     match request.requester_id.as_ref().map(DidCoreId::as_str) {
-        Some(requester) if requester == session.actor => {}
+        Some(requester_id) if requester_id == session.actor => {}
         _ => return false,
     }
     let Some(realm_id) = request.realm_id.as_ref().map(RealmId::as_str) else {
@@ -162,7 +162,7 @@ pub(super) async fn contact_request_resolve_allowed(
     }
     matches!(
         request.requester_id.as_ref().map(DidCoreId::as_str),
-        Some(requester) if requester == session.actor
+        Some(requester_id) if requester_id == session.actor
     )
 }
 
@@ -299,9 +299,9 @@ async fn fetch_remote_handle_from_peer(
 ) -> Result<Option<DirectoryHandleResolutionOutcome>, AppError> {
     let mut remote_body = body.clone();
     // `handle` is a bound target member and `audience` is inside the proofs
-    // -stripped `payload_digest`, so rewriting either detaches the requester's
+    // -stripped `payload_digest`, so rewriting either detaches the requester_id's
     // signature from the bytes it covers (`discovery-directory.md` §9.0.1).
-    // Only the requester can re-sign for the peer's audience, so the forwarded
+    // Only the requester_id can re-sign for the peer's audience, so the forwarded
     // request drops the proofs rather than carrying material that is
     // guaranteed not to verify.
     remote_body.proofs.clear();
@@ -548,9 +548,9 @@ pub(super) async fn resolve_handle(
     match actor {
         Some(actor) => {
             // Spec 0a5ab85: audience-bearing response. The directory MUST
-            // bind the claim to the requester's invocation context. We
+            // bind the claim to the requester_id's invocation context. We
             // default to the explicit `audience` param, falling back to
-            // `realm_id` for membership-builder resolves, then `requester`.
+            // `realm_id` for membership-builder resolves, then `requester_id`.
             let audience = resolve_handle_audience(&body, state.service_id());
             let principal_id = actor["actor_id"].as_str().unwrap_or_default().to_owned();
             let handle_claim =
@@ -643,7 +643,7 @@ pub(super) async fn signed_handle_claim(
     cache: bool,
 ) -> Result<SdkHandleClaim, AppError> {
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
-        &json!({ "subject": principal_id }),
+        &json!({ "subject_id": principal_id }),
     ) {
         return Err(AppError::new(
             soland_http::error::ErrorCode::SchemaViolation,
@@ -780,7 +780,7 @@ pub(super) async fn list_handles_for_subject(
         return Err(AppError::param_missing("subject is required"));
     }
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
-        &json!({ "subject": subject.as_str() }),
+        &json!({ "subject_id": subject.as_str() }),
     ) {
         return Err(AppError::new(
             soland_http::error::ErrorCode::SchemaViolation,
@@ -962,7 +962,7 @@ async fn mint_list_handles_cursor(
             handle: record.handle,
             binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id.to_string(),
+            service_id: record.context.service_id.clone(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),
@@ -1019,7 +1019,7 @@ pub(super) fn subject_handle_claim_visible(
     as_of: DateTime<Utc>,
     claim: &Value,
 ) -> bool {
-    if claim.get("subject").and_then(Value::as_str) != Some(subject) {
+    if claim.get("subject_id").and_then(Value::as_str) != Some(subject) {
         return false;
     }
     if subject_handle_claim_handle(claim).is_none() {
@@ -1054,10 +1054,8 @@ pub(super) fn subject_handle_claim_visible(
     if expires_at <= as_of {
         return false;
     }
-    let issuer = claim.get("issuer").and_then(Value::as_str);
     let issuer_id = claim.get("issuer_id").and_then(Value::as_str);
-    if issuer != Some(state.service_id().as_str()) && issuer_id != Some(state.service_id().as_str())
-    {
+    if issuer_id != Some(state.service_id().as_str()) {
         return false;
     }
     let Some(audience) = claim.get("audience").and_then(Value::as_str) else {
@@ -1068,8 +1066,8 @@ pub(super) fn subject_handle_claim_visible(
     if let Some(realm_id) = request.realm_id.as_ref() {
         allowed_audiences.insert(realm_id.as_str());
     }
-    if let Some(requester) = request.requester_id.as_ref() {
-        allowed_audiences.insert(requester.as_str());
+    if let Some(requester_id) = request.requester_id.as_ref() {
+        allowed_audiences.insert(requester_id.as_str());
     }
     allowed_audiences.contains(audience)
 }
@@ -1090,9 +1088,9 @@ pub(super) fn subject_handle_claim_dedupe_key(claim: &Value) -> Option<String> {
     Some(format!(
         "{}|{}|{}|{}",
         subject_handle_claim_handle(claim)?,
-        claim.get("subject").and_then(Value::as_str)?,
+        claim.get("subject_id").and_then(Value::as_str)?,
         claim
-            .get("issuer")
+            .get("issuer_id")
             .and_then(Value::as_str)
             .unwrap_or_default(),
         claim
@@ -1108,7 +1106,7 @@ pub(super) fn subject_handle_claim_sort_key(claim: &Value) -> (String, String, S
             .unwrap_or_default()
             .to_owned(),
         claim
-            .get("issuer")
+            .get("issuer_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),

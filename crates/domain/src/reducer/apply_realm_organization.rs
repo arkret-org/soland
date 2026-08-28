@@ -358,7 +358,7 @@ mod tests {
             "control_scopes": scopes,
             "issued_at": "2026-06-25T00:00:00.000Z",
             "authorization": {
-                "issuer": org,
+                "issuer_id": org,
                 "issuer_role": "organization_principal_id",
                 "verification_method": format!("{did}#k1"),
                 "signed_at": "2026-06-25T00:00:00.000Z",

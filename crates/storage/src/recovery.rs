@@ -263,7 +263,7 @@ pub fn recovery_active_policy_locked(
     principal_id: &str,
 ) -> Option<RecoveryPolicyRecord> {
     data.values()
-        .filter(|record| record.principal_id == principal_id)
+        .filter(|record| record.principal_id.as_str() == principal_id)
         .max_by_key(|record| record.version)
         .cloned()
 }

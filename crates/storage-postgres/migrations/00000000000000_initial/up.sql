@@ -72,7 +72,11 @@ ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
 CREATE TABLE public.accounts (
-    id uuid PRIMARY KEY,
+    id text PRIMARY KEY CHECK (
+        length(id) BETWEEN 1 AND 255
+        AND id NOT LIKE 'ak:%'
+        AND id NOT LIKE 'did:%'
+    ),
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -86,7 +90,7 @@ ALTER TABLE ONLY public.accounts
 
 CREATE TABLE public.account_localparts (
     id uuid PRIMARY KEY,
-    account_id uuid NOT NULL,
+    account_id text NOT NULL,
     localpart text NOT NULL,
     is_primary boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -104,10 +108,10 @@ ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
 
 CREATE TABLE public.account_lifecycle (
-    principal_id text PRIMARY KEY,
+    principal_id text PRIMARY KEY CHECK (principal_id LIKE 'ak:did_core:%'),
     state text NOT NULL,
     reason text,
-    changed_by text,
+    changed_by text CHECK (changed_by LIKE 'ak:did_core:%'),
     changed_at timestamp with time zone NOT NULL,
     CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
 );
@@ -189,7 +193,7 @@ CREATE TABLE public.agent_principals (
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
-    controller_account_id uuid,
+    controller_account_id text,
     recipient_id text,
     runtime_key_binding_digest text,
     runtime_public_key_digest text,
@@ -390,7 +394,7 @@ CREATE TABLE public.blobs (
     sha256 text NOT NULL,
     media_type text NOT NULL,
     filename text,
-    uploaded_by_id text NOT NULL,
+    uploaded_by text NOT NULL,
     realm_id text,
     size_bytes bigint NOT NULL,
     storage_backend text NOT NULL,
@@ -563,7 +567,7 @@ CREATE TABLE public.event_batch_receipts (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     schema text NOT NULL,
     id uuid NOT NULL UNIQUE,
-    issuer text NOT NULL,
+    issuer_id text NOT NULL CHECK (issuer_id LIKE 'ak:did_core:%'),
     scope jsonb NOT NULL,
     events jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
@@ -1071,7 +1075,7 @@ CREATE TABLE public.pending_rrk_acquisitions (
     mls_group_id text NOT NULL,
     epoch bigint NOT NULL,
     recovery_key_id text NOT NULL,
-    holder_principal_id text NOT NULL,
+    holder_principal_id text NOT NULL CHECK (holder_principal_id LIKE 'ak:did_core:%'),
     holder_id text NOT NULL,
     container_event_ref text NOT NULL,
     archive_tuple_digest text NOT NULL,
@@ -1284,7 +1288,7 @@ ALTER TABLE ONLY public.devices
 CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, updated_at DESC);
 
 CREATE TABLE public.device_revocation_linearization_heads (
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     device_id text NOT NULL,
     last_seq bigint DEFAULT 0 NOT NULL CHECK (last_seq >= 0),
@@ -1294,7 +1298,7 @@ CREATE TABLE public.device_revocation_linearization_heads (
 
 CREATE TABLE public.device_revocation_targets (
     proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
@@ -1313,7 +1317,7 @@ CREATE INDEX device_revocation_targets_selector_idx
      target_device_authorize_event_id, target_device_generation_ref, acceptance_seq);
 
 CREATE TABLE public.device_revocation_gate_receipts (
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
@@ -1335,7 +1339,7 @@ CREATE TABLE public.device_revocation_cleanup_intents (
     proposal_digest text PRIMARY KEY REFERENCES public.device_revocation_targets(proposal_digest) ON DELETE RESTRICT,
     proposal_event_id text NOT NULL,
     covering_seal_id text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
@@ -1551,7 +1555,7 @@ CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_fronti
 CREATE TABLE public.invite_receive_policies (
     subject_id text PRIMARY KEY,
     policy_payload jsonb NOT NULL,
-    denied_subjects text[] DEFAULT '{}'::text[] NOT NULL,
+    denied_subject_ids text[] DEFAULT '{}'::text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -1582,7 +1586,7 @@ CREATE INDEX join_applications_realm_updated_idx
     ON public.join_applications (realm_id, updated_at, application_ref);
 
 CREATE TABLE public.join_application_idempotency (
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     idempotency_key text NOT NULL,
     request_hash text NOT NULL,
     response_body jsonb NOT NULL,
@@ -1669,7 +1673,7 @@ CREATE INDEX key_backups_device_idx ON public.key_backups USING btree (device_id
 -- `WHERE consumed_at IS NULL`, so two concurrent DELETEs consume exactly once.
 CREATE TABLE public.key_backup_delete_challenges (
     challenge_id text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     backup_id text NOT NULL,
     request_id text NOT NULL,
     challenge jsonb NOT NULL,
@@ -1714,6 +1718,11 @@ CREATE TABLE public.mls_key_packages (
     id text PRIMARY KEY,
     keypackage_ref text NOT NULL,
     keypackage_digest text NOT NULL,
+    owner_account_id text NOT NULL CHECK (
+        length(owner_account_id) BETWEEN 1 AND 255
+        AND owner_account_id NOT LIKE 'ak:%'
+        AND owner_account_id NOT LIKE 'did:%'
+    ),
     actor_id text NOT NULL,
     device_id text,
     endpoint_verification_method text,
@@ -1754,7 +1763,11 @@ CREATE TABLE public.mls_key_packages (
 ALTER TABLE ONLY public.mls_key_packages
     ADD CONSTRAINT mls_key_packages_keypackage_ref_key UNIQUE (keypackage_ref);
 
-CREATE INDEX mls_key_packages_by_actor_endpoint ON public.mls_key_packages USING btree (actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
+ALTER TABLE ONLY public.mls_key_packages
+    ADD CONSTRAINT mls_key_packages_owner_account_id_fkey
+    FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id);
+
+CREATE INDEX mls_key_packages_by_owner_endpoint ON public.mls_key_packages USING btree (owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
 
 CREATE TABLE public.peer_keypackage_claims (
     source_id text NOT NULL,
@@ -1851,7 +1864,7 @@ CREATE INDEX moderation_appeal_events_appeal_idx ON public.moderation_appeal_eve
 
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY,
-    organization_principal_id text NOT NULL,
+    organization_principal_id text NOT NULL CHECK (organization_principal_id LIKE 'ak:did_core:%'),
     handle text,
     display_name text NOT NULL,
     source_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -2061,7 +2074,7 @@ CREATE TABLE public.notifications (
     -- backs a UNIQUE dedup key, so the fallback has to be removed before the
     -- column can become a 33-octet Event identity.
     source_event_id text,
-    controller_account_id uuid,
+    controller_account_id text,
     recipient_id text,
     source_account_artifact_kind text,
     source_account_artifact_id text,
@@ -2103,7 +2116,7 @@ DECLARE
     delta_action text;
     terminal_reason text;
     notification_id uuid;
-    account_id uuid;
+    account_id text;
     service_id text;
     recipient_id text;
     artifact_id text;
@@ -2190,7 +2203,7 @@ CREATE TABLE public.policy_documents (
     policy_kind text NOT NULL,
     document jsonb NOT NULL,
     version integer DEFAULT 0 NOT NULL,
-    signed_by_id text,
+    signed_by text,
     active boolean DEFAULT true NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -2234,8 +2247,8 @@ CREATE TABLE public.projection_circles (
     durability_policy text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by_id text NOT NULL,
-    updated_by_id text,
+    created_by text NOT NULL,
+    updated_by text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_circles_content_encryption_floor_check CHECK ((content_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
@@ -2319,9 +2332,9 @@ CREATE TABLE public.projection_strands (
     encrypted_content jsonb,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by_id text NOT NULL,
+    created_by text NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by_id text,
+    updated_by text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     -- common-fields.md 5.2: an active object carries exactly one content slot,
@@ -2354,9 +2367,9 @@ CREATE TABLE public.projection_morphs (
     title text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by_id text NOT NULL,
+    created_by text NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by_id text,
+    updated_by text,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -2399,9 +2412,9 @@ CREATE TABLE public.projection_spaces (
     rank text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by_id text NOT NULL,
+    created_by text NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by_id text,
+    updated_by text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_spaces_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['allow_any'::text, 'require_e2ee'::text, 'require_same_scope'::text, 'require_scope_circle_id'::text]))),
@@ -2481,7 +2494,7 @@ CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_
 
 CREATE TABLE public.recovery_policies (
     id uuid PRIMARY KEY,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     version integer NOT NULL,
     acceptance_basis jsonb NOT NULL,
     trust_domain text NOT NULL,
@@ -2510,7 +2523,7 @@ CREATE TABLE public.recovery_sessions (
     create_intent_digest text NOT NULL,
     session_grant_id text NOT NULL,
     session_grant_cnf_jkt text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     requesting_device_id text NOT NULL,
     trust_domain text NOT NULL,
@@ -2547,7 +2560,7 @@ CREATE INDEX recovery_sessions_principal_idx ON public.recovery_sessions USING b
 CREATE TABLE public.security_transactions (
     id uuid NOT NULL,
     kind text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     coordinator_id text NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
@@ -2595,6 +2608,11 @@ CREATE TABLE public.security_transaction_step_attempts (
 
 CREATE TABLE public.sessions (
     id text PRIMARY KEY,
+    service_account_id text NOT NULL CHECK (
+        length(service_account_id) BETWEEN 1 AND 255
+        AND service_account_id NOT LIKE 'ak:%'
+        AND service_account_id NOT LIKE 'did:%'
+    ),
     actor_id text NOT NULL,
     device_id text NOT NULL,
     audience text NOT NULL,
@@ -2607,6 +2625,10 @@ CREATE TABLE public.sessions (
 );
 
 CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id, device_id, expires_at) WHERE (revoked_at IS NULL);
+
+ALTER TABLE ONLY public.sessions
+    ADD CONSTRAINT sessions_service_account_id_fkey
+    FOREIGN KEY (service_account_id) REFERENCES public.accounts(id);
 
 CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,
@@ -2629,7 +2651,7 @@ CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING 
 CREATE TABLE public.sync_cursor_revocations (
     id uuid PRIMARY KEY,
     cursor_digest text NOT NULL,
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     device_id text,
     scope text NOT NULL,
     reason_code text NOT NULL,
@@ -2681,7 +2703,7 @@ CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree 
 
 CREATE TABLE public.moderation_franking_replay_nonces (
     realm_id text NOT NULL,
-    received_by text NOT NULL,
+    received_by text NOT NULL CHECK (received_by LIKE 'ak:did_core:%'),
     replay_nonce text NOT NULL,
     report_event_id text NOT NULL UNIQUE,
     consumed_at timestamp with time zone NOT NULL,
@@ -2749,7 +2771,7 @@ CREATE TABLE public.principal_resolutions (
 );
 
 CREATE TABLE public.principal_resolution_events (
-    principal_id text NOT NULL,
+    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
     principal_server_id text NOT NULL,
     event_id text NOT NULL,
     previous_event_id text,
@@ -2823,14 +2845,14 @@ CREATE INDEX service_route_cache_expiry_idx ON public.service_route_cache (cache
 
 CREATE TABLE public.service_identity_registrations (
     service_kind text NOT NULL,
-    public_base text NOT NULL,
+    public_base_url text NOT NULL,
     service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     version_id text NOT NULL,
     inception_digest text NOT NULL,
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT service_identity_registrations_pkey PRIMARY KEY (service_kind, public_base),
+    CONSTRAINT service_identity_registrations_pkey PRIMARY KEY (service_kind, public_base_url),
     CONSTRAINT service_identity_registrations_service_id_key UNIQUE (service_id)
 );
 
@@ -2967,9 +2989,8 @@ CREATE INDEX member_identity_events_subject_idx ON public.member_identity_events
 -- Local handle-claim evidence cache behind the member identity registry.
 CREATE TABLE public.member_identity_handle_claims (
     digest text NOT NULL,
-    subject_id text NOT NULL,
-    issuer text NOT NULL,
-    issuer_id text,
+    subject_id text NOT NULL CHECK (subject_id LIKE 'ak:did_core:%'),
+    issuer_id text NOT NULL CHECK (issuer_id LIKE 'ak:did_core:%'),
     audience text,
     binding_state text NOT NULL,
     visibility text,

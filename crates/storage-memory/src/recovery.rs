@@ -41,7 +41,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         let data = self.data.lock();
         let mut out: Vec<RecoveryPolicyRecord> = data
             .values()
-            .filter(|record| record.principal_id == principal_id)
+            .filter(|record| record.principal_id.as_str() == principal_id)
             .cloned()
             .collect();
         out.sort_by_key(|p| std::cmp::Reverse(p.version));
@@ -67,7 +67,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
                 record.version
             )));
         }
-        if let Some(active) = recovery_active_policy_locked(&data, &record.principal_id) {
+        if let Some(active) = recovery_active_policy_locked(&data, record.principal_id.as_str()) {
             if record.version <= active.version {
                 return Err(PersistenceError::Conflict(format!(
                     "{}: recovery policy version {} is not greater than active {}",
@@ -243,7 +243,7 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             let session = sessions.get_mut(session_id).ok_or_else(|| {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
-            if session.principal_id != record.resource.principal_id.as_str()
+            if session.principal_id != record.resource.principal_id
                 || session.state != SessionState::Verified
                 || session.expires_at <= chrono::Utc::now()
             {
@@ -789,7 +789,10 @@ mod tests {
         let mut advanced = initial;
         advanced.resource.accepted_steps.push(AcceptedStep {
             prepared_material_digest: hash('4'),
-            acceptor_id: "did:web:principal.example".to_owned(),
+            acceptor: arkret_wire::SecurityTransactionAcceptor::Principal {
+                principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:principal.example")
+                    .unwrap(),
+            },
             output_ref: "ak:event:AaAkIzblCDjqaSCE04n-JnjSzLVYVVT9LyvaLdLiTJrW".to_owned(),
             output_digest: hash('5'),
             accepted_at: Utc::now(),
@@ -838,7 +841,10 @@ mod tests {
         for index in 0..4 {
             transaction.accepted_steps.push(AcceptedStep {
                 prepared_material_digest: hash(char::from(b'a' + index)),
-                acceptor_id: "did:web:principal.example".to_owned(),
+                acceptor: arkret_wire::SecurityTransactionAcceptor::Principal {
+                    principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:principal.example")
+                        .unwrap(),
+                },
                 output_ref: format!("ak:receipt:019a7360-0000-7000-8000-00000000010{index}"),
                 output_digest: hash(char::from(b'1' + index)),
                 accepted_at: Utc::now(),
@@ -862,7 +868,10 @@ mod tests {
         for index in 0..5 {
             transaction.accepted_steps.push(AcceptedStep {
                 prepared_material_digest: hash(char::from(b'a' + index)),
-                acceptor_id: "did:web:principal.example".to_owned(),
+                acceptor: arkret_wire::SecurityTransactionAcceptor::Principal {
+                    principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:principal.example")
+                        .unwrap(),
+                },
                 output_ref: format!("ak:receipt:019a7360-0000-7000-8000-00000000020{index}"),
                 output_digest: hash(char::from(b'1' + index)),
                 accepted_at: Utc::now(),

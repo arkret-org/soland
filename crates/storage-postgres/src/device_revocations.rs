@@ -220,8 +220,8 @@ pub(crate) async fn gate_status_in_transaction(
 ) -> PersistenceResult<DeviceRevocationGateStatus> {
     ensure_head_locked(
         conn,
-        &selector.principal_id,
-        &selector.principal_server_id,
+        selector.principal_id.as_str(),
+        selector.principal_server_id.as_str(),
         &selector.device_id,
     )
     .await?;
@@ -246,8 +246,8 @@ pub(crate) async fn insert_transition_in_transaction(
 ) -> PersistenceResult<bool> {
     ensure_head_locked(
         conn,
-        &transition.selector.principal_id,
-        &transition.selector.principal_server_id,
+        transition.selector.principal_id.as_str(),
+        transition.selector.principal_server_id.as_str(),
         &transition.selector.device_id,
     )
     .await?;
@@ -311,8 +311,8 @@ pub(crate) async fn insert_transition_in_transaction(
     }
     let acceptance_seq = allocate_seq(
         conn,
-        &transition.selector.principal_id,
-        &transition.selector.principal_server_id,
+        transition.selector.principal_id.as_str(),
+        transition.selector.principal_server_id.as_str(),
         &transition.selector.device_id,
     )
     .await?;
@@ -427,8 +427,8 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             ensure_head_locked(
                 conn,
-                &request.principal_id,
-                &request.principal_server_id,
+                request.principal_id.as_str(),
+                request.principal_server_id.as_str(),
                 &request.device_id,
             )
             .await?;
@@ -465,8 +465,8 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                     }),
                 linearization_seq: allocate_seq(
                     conn,
-                    &request.principal_id,
-                    &request.principal_server_id,
+                    request.principal_id.as_str(),
+                    request.principal_server_id.as_str(),
                     &request.device_id,
                 )
                 .await?,
@@ -630,8 +630,8 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                 proposal_event_id: row.proposal_event_id,
                 covering_seal_id: row.covering_seal_id,
                 selector: DeviceRevocationGateSelector {
-                    principal_id: row.principal_id.into_string(),
-                    principal_server_id: row.principal_server_id.into_string(),
+                    principal_id: row.principal_id,
+                    principal_server_id: row.principal_server_id,
                     device_id: row.device_id,
                     target_device_authorize_event_id: row.target_device_authorize_event_id,
                     target_device_generation_ref: u64::try_from(row.target_device_generation_ref)

@@ -64,7 +64,7 @@ pub(crate) async fn ensure(
             "mode": "service_registration_provider",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE_V1,
             "service_kind": key.service_kind().as_str(),
-            "public_base": key.public_base().as_str(),
+            "public_base_url": key.public_base_url().as_str(),
             "version_id": outcome.version_id(),
         }),
         fetched_at: issued_at,
@@ -104,16 +104,16 @@ pub(crate) async fn get(
     depot: &mut Depot,
     req: &mut Request,
     service_kind: QueryParam<String, true>,
-    public_base: QueryParam<String, true>,
+    public_base_url: QueryParam<String, true>,
 ) -> JsonResult<ServiceRegistrationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_embedded_webvh_registration_bearer(state, req)?;
     let service_kind =
         serde_json::from_value::<ServiceKind>(Value::String(service_kind.into_inner()))
             .map_err(|error| AppError::param_invalid(format!("invalid service_kind: {error}")))?;
-    let public_base = CanonicalServiceUrl::new(public_base.into_inner())
+    let public_base_url = CanonicalServiceUrl::new(public_base_url.into_inner())
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let key = ServiceRegistrationKey::new(service_kind, public_base)
+    let key = ServiceRegistrationKey::new(service_kind, public_base_url)
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let outcome = state
         .dids()

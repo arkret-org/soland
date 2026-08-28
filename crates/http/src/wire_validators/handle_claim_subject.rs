@@ -1,6 +1,6 @@
 //! Handle-claim subject validation.
 //!
-//! The claim `subject` MUST be a holder/principal `DidCoreId`, not a
+//! The claim `subject_id` MUST be a holder/principal `DidCoreId`, not a
 //! server-local `account_id` (`ak:account:`), a DID, or a generic
 //!   resource id. We delegate to the SDK `validate_handle_claim_subject` so soland / coauth /
 //!   cotest agree on the exact rejection surface.
@@ -9,11 +9,11 @@ use serde_json::Value;
 
 use super::WireRejection;
 
-/// Reject a non-principal-core `subject`. Delegates to the SDK
+/// Reject a non-principal-core `subject_id`. Delegates to the SDK
 /// `validate_handle_claim_subject` (the authoritative rejection rule).
 pub fn validate_subject(claim: &Value) -> Result<(), WireRejection> {
-    let Some(subject) = claim.get("subject").and_then(Value::as_str) else {
-        // `subject` is optional on the carrier; absence is not a subject
+    let Some(subject) = claim.get("subject_id").and_then(Value::as_str) else {
+        // `subject_id` is optional on the carrier; absence is not a subject
         // violation (other schema layers enforce presence where required).
         return Ok(());
     };
@@ -35,7 +35,7 @@ mod tests {
     #[test]
     fn accepts_principal_core_subject() {
         let claim = json!({
-            "subject": "ak:did_core:web:alice-principal.example",
+            "subject_id": "ak:did_core:web:alice-principal.example",
         });
         assert!(validate_subject(&claim).is_ok());
     }
@@ -44,20 +44,20 @@ mod tests {
     fn rejects_non_core_typed_subject() {
         let claim = json!({
             "claim_kind": "handle_binding",
-            "subject": "ak:member:01904100-0000-7000-8000-000000000001"
+            "subject_id": "ak:member:01904100-0000-7000-8000-000000000001"
         });
         assert!(validate_subject(&claim).is_err());
     }
 
     #[test]
     fn rejects_account_id_subject() {
-        let claim = json!({"subject": "ak:account:01904100-0000-7000-8000-000000000001"});
+        let claim = json!({"subject_id": "ak:account:01904100-0000-7000-8000-000000000001"});
         assert!(validate_subject(&claim).is_err());
     }
 
     #[test]
     fn rejects_non_did_subject() {
-        let claim = json!({"subject": "alice:acme.example"});
+        let claim = json!({"subject_id": "alice:acme.example"});
         assert!(validate_subject(&claim).is_err());
     }
 }

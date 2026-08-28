@@ -158,7 +158,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         "holder_allowed_introduction_kinds": ["consent_grant"],
         "explicit_address_behavior": "drop",
         "unknown_invites": "drop",
-        "denied_subjects": [mallory],
+        "denied_subject_ids": [mallory],
     });
     let stored: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
@@ -174,7 +174,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         .await
         .unwrap();
     assert_eq!(stored["explicit_address_behavior"], "drop");
-    assert_eq!(stored["denied_subjects"][0], mallory);
+    assert_eq!(stored["denied_subject_ids"][0], mallory);
 
     let reread: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
@@ -189,7 +189,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         .await
         .unwrap();
     assert_eq!(reread["explicit_address_behavior"], "drop");
-    assert_eq!(reread["denied_subjects"][0], mallory);
+    assert_eq!(reread["denied_subject_ids"][0], mallory);
 
     let mismatched = serde_json::json!({
         "schema": default_policy["schema"],

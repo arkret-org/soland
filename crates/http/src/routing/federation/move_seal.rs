@@ -13,7 +13,7 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
-use arkret_wire::{Event, NotarySig, Seal};
+use arkret_wire::{DidCoreId, Event, NotarySig, Seal};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -25,7 +25,7 @@ use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 struct DeviceGenerationEventSealContext {
-    principal_id: String,
+    principal_id: DidCoreId,
     current_generation_ref: Option<u64>,
     records: Vec<soland_services::events::AcceptedEvent>,
     accepted_frontier_refs: Vec<SealId>,
@@ -330,11 +330,15 @@ async fn device_generation_event_seal_context(
         ));
     }
     let bootstrap = bootstrap[0];
-    let principal_id = bootstrap.actor_id.clone();
+    let principal_id = DidCoreId::new(bootstrap.actor_id.clone()).map_err(|error| {
+        seal_admission_error(format!(
+            "principal-control bootstrap actor_id is invalid: {error}"
+        ))
+    })?;
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &principal_id)
+        .realm_is_principal_control_for_actor(realm_id.as_str(), principal_id.as_str())
     {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored outside the accepted actor PCR",
@@ -342,7 +346,7 @@ async fn device_generation_event_seal_context(
     }
     let generation = crate::routing::identity::device_generation::current_device_generation(
         state,
-        &principal_id,
+        principal_id.as_str(),
     )
     .await
     .map_err(|error| {
@@ -363,7 +367,7 @@ async fn device_generation_event_seal_context(
     let bootstrap_authorizes = records
         .iter()
         .filter(|record| {
-            record.actor_id == principal_id
+            record.actor_id == principal_id.as_str()
                 && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
                 && record
                     .envelope
@@ -394,7 +398,7 @@ async fn device_generation_event_seal_context(
             "stored bootstrap device authorization payload is invalid: {error}"
         ))
     })?;
-    if bootstrap_payload.principal_id.as_str() != principal_id {
+    if bootstrap_payload.principal_id != principal_id {
         return Err(seal_admission_error(
             "bootstrap device authorization principal differs from the Realm principal",
         ));
@@ -611,7 +615,7 @@ async fn try_apply_device_generation_event_seal(
     };
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(
-            &initial_context.principal_id,
+            initial_context.principal_id.as_str(),
         );
     let _guard = generation_lock.lock().await;
     if let Some(existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
@@ -822,7 +826,7 @@ async fn try_apply_device_generation_event_seal(
     };
     let devices = state
         .identities()
-        .devices_for_actor(&context.principal_id)
+        .devices_for_actor(context.principal_id.as_str())
         .await
         .map_err(|error| {
             AppError::new(
@@ -841,7 +845,7 @@ async fn try_apply_device_generation_event_seal(
                 return false;
             };
             device_verification_method_matches(
-                &context.principal_id,
+                context.principal_id.as_str(),
                 &device.device_id,
                 public_key,
                 &signature.verification_method,
@@ -905,7 +909,7 @@ async fn try_apply_device_generation_event_seal(
     let quarantined =
         crate::routing::identity::device_generation::quarantined_generation_event_digests(
             state,
-            &context.principal_id,
+            context.principal_id.as_str(),
         )
         .await
         .map_err(|error| {
@@ -1014,7 +1018,7 @@ async fn try_apply_device_generation_event_seal(
                 "B-model Event Seal delta contains a non-control Event",
             ));
         }
-        if record.actor_id == context.principal_id
+        if record.actor_id == context.principal_id.as_str()
             && !anchor_event_ids.contains(&record.event_id)
             && record.envelope.get("executed_by").is_none()
         {
@@ -1828,7 +1832,7 @@ mod seal_delta_tests {
                 "grant": {
                     "schema": "ak.schema.capability.v1",
                     "realm_id": realm_id,
-                    "issuer": issuer,
+                    "issuer_id": issuer,
                     "subject": subject,
                     "subject_principal_server_id": state.service_id(),
                     "actions": ["ak.strand.read"],

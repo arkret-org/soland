@@ -282,18 +282,15 @@ impl NotaryWorker {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } if signer == local => {
                 Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
-            arkret_wire::notary::NotaryValue::OpenSet {
-                notary_signer_descriptors,
-            } if notary_signer_descriptors.contains(&local) => {
+            arkret_wire::notary::NotaryValue::OpenSet { signers } if signers.contains(&local) => {
                 Ok(SigningLeaseSlotResolution::Ready(self.service_id.clone()))
             }
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } if signer == local => {
                 Ok(SigningLeaseSlotResolution::Ready("single_chain".to_owned()))
             }
             arkret_wire::notary::NotaryValue::Mixed {
-                recovery_notary_signer_descriptors,
-                ..
-            } if recovery_notary_signer_descriptors.contains(&local) => {
+                recovery_signers, ..
+            } if recovery_signers.contains(&local) => {
                 let recovery_window_ms = envelope
                     .get("revocation_freshness_window_ms")
                     .and_then(serde_json::Value::as_u64);
@@ -335,9 +332,7 @@ impl NotaryWorker {
         let local = local_notary_signer_descriptor(state)?;
         let locally_signable = match &profile {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => signer == &local,
-            arkret_wire::notary::NotaryValue::OpenSet {
-                notary_signer_descriptors,
-            } => notary_signer_descriptors.contains(&local),
+            arkret_wire::notary::NotaryValue::OpenSet { signers } => signers.contains(&local),
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } => signer == &local,
             arkret_wire::notary::NotaryValue::Threshold { .. } => false,
         };
@@ -1214,9 +1209,7 @@ impl NotaryWorker {
         match notary_value {
             arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => Ok(signer == local),
             arkret_wire::notary::NotaryValue::Threshold { .. } => Ok(false),
-            arkret_wire::notary::NotaryValue::OpenSet {
-                notary_signer_descriptors,
-            } => Ok(notary_signer_descriptors.contains(&local)),
+            arkret_wire::notary::NotaryValue::OpenSet { signers } => Ok(signers.contains(&local)),
             arkret_wire::notary::NotaryValue::Mixed { signer, .. } => Ok(signer == local),
         }
     }
@@ -2156,7 +2149,7 @@ pub struct FirstGenerationEventSealRequirement {
     pub predecessor_refs: Vec<SealId>,
     pub accepted_frontier_refs: Vec<SealId>,
     pub required_delta: Vec<Hash>,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub replacement_device_id: String,
     pub replacement_device_public_key: String,
 }
@@ -2399,7 +2392,7 @@ mod tests {
         // before the strict (`deny_unknown_fields`) `NotaryValue` parse.
         let mut v = serde_json::to_value(arkret_wire::NotaryValue::Threshold {
             threshold: 2,
-            notary_signer_descriptors: vec![
+            signers: vec![
                 test_signer_descriptor("did:web:a.example", 1),
                 test_signer_descriptor("did:web:b.example", 2),
                 test_signer_descriptor("did:web:c.example", 3),
@@ -2417,12 +2410,10 @@ mod tests {
             serde_json::from_value(notary_value_wire(&v)).unwrap();
         match parsed {
             arkret_wire::notary::NotaryValue::Threshold {
-                threshold,
-                notary_signer_descriptors,
-                ..
+                threshold, signers, ..
             } => {
                 assert_eq!(threshold, 2);
-                assert_eq!(notary_signer_descriptors.len(), 3);
+                assert_eq!(signers.len(), 3);
             }
             other => panic!("expected Threshold, got {other:?}"),
         }
@@ -2534,7 +2525,7 @@ mod tests {
                 Hash::new(reanchor.as_str().to_owned()).unwrap(),
                 Hash::new(replacement.as_str().to_owned()).unwrap(),
             ],
-            principal_id: principal_id.to_string(),
+            principal_id,
             replacement_device_id: "ak:device:recovery".to_owned(),
             replacement_device_public_key: "z6MkjHNtpwuhc2QSXzkf4DWoWp7eSMKB9PzfdnvaLB7kb3dG"
                 .to_owned(),

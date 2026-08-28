@@ -1,3 +1,4 @@
+use arkret_identifiers::DidCoreId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -10,9 +11,9 @@ pub struct AdminInviteTokenItem {
     pub invite_id: String,
     pub token: String,
     pub realm_id: String,
-    pub inviter_id: String,
-    pub created_by: String,
-    pub invitee_id: Option<String>,
+    pub inviter_id: DidCoreId,
+    pub created_by: DidCoreId,
+    pub invitee_id: Option<DidCoreId>,
     pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub token_hash: String,

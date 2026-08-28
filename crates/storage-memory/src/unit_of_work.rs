@@ -444,8 +444,8 @@ fn stage_contact_projection(
         return Ok(());
     };
     let key = (
-        commit.record.requester.clone(),
-        commit.record.target.clone(),
+        commit.record.requester_id.clone(),
+        commit.record.target_id.clone(),
     );
     let reverse_key = (key.1.clone(), key.0.clone());
     let current_key = if staged.contains_key(&key) {
@@ -517,11 +517,12 @@ fn stage_consent_projection(
         return Ok(());
     };
     let key = soland_storage::ConsentCellKey {
-        holder: commit.cell.holder.clone(),
+        holder_principal_id: commit.cell.holder_principal_id.clone(),
         cell_id: commit.cell.cell_id.clone(),
     };
     if let Some(current) = staged_cells.get(&key)
-        && (current.peer != commit.cell.peer || current.consent_scope != commit.cell.consent_scope)
+        && (current.peer_principal_id != commit.cell.peer_principal_id
+            || current.consent_scope != commit.cell.consent_scope)
     {
         return Err(PersistenceError::Conflict(
             "consent_intent_rebind".to_owned(),
@@ -1548,8 +1549,8 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         let selector = DeviceRevocationGateSelector {
-            principal_id: actor_id.to_string(),
-            principal_server_id: principal_server_id.to_string(),
+            principal_id: actor_id.clone(),
+            principal_server_id,
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             target_device_authorize_event_id:
                 "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
@@ -1699,7 +1700,7 @@ mod tests {
         let mut first = event_request(
             typed_id("ak:event:"),
             realm_id.clone(),
-            "ak:did_core:web:reporter-one.example",
+            "ak:did_core:web:reporter_id-one.example",
             None,
         );
         first.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
@@ -1716,7 +1717,7 @@ mod tests {
                 agent_approval_nonce: None,
                 franking_replay_nonce: Some(FrankingReplayNonceCommit {
                     realm_id: realm_id.clone(),
-                    received_by: received_by.to_owned(),
+                    received_by: arkret_wire::DidCoreId::new(received_by.to_owned()).unwrap(),
                     replay_nonce: replay_nonce.to_owned(),
                     report_event_id: first_id.clone(),
                     consumed_at: Utc::now(),
@@ -1731,7 +1732,7 @@ mod tests {
         let mut competing = event_request(
             typed_id("ak:event:"),
             realm_id.clone(),
-            "ak:did_core:web:reporter-two.example",
+            "ak:did_core:web:reporter_id-two.example",
             None,
         );
         competing.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
@@ -1748,7 +1749,7 @@ mod tests {
                 agent_approval_nonce: None,
                 franking_replay_nonce: Some(FrankingReplayNonceCommit {
                     realm_id,
-                    received_by: received_by.to_owned(),
+                    received_by: arkret_wire::DidCoreId::new(received_by.to_owned()).unwrap(),
                     replay_nonce: replay_nonce.to_owned(),
                     report_event_id: competing_id.clone(),
                     consumed_at: Utc::now(),
@@ -1964,8 +1965,8 @@ mod tests {
                     Some(&selector),
                     DeviceMessageRecord {
                         idempotency_key: "revocation-pending-message".to_owned(),
-                        sender: selector.principal_id.clone(),
-                        recipient: selector.principal_id.clone(),
+                        sender: selector.principal_id.to_string(),
+                        recipient: selector.principal_id.to_string(),
                         device_id: selector.device_id.clone(),
                         position: 1,
                         content: serde_json::json!({"kind": "fixture"}),
@@ -2091,7 +2092,7 @@ mod tests {
             event_kind: arkret_wire::EventKind::DeviceRevoke.to_string(),
             operation_kind: "revoke".to_owned(),
             operation_id: None,
-            sender: Some(selector.principal_id.clone()),
+            sender: Some(selector.principal_id.to_string()),
             payload: serde_json::json!({}),
             created_at: Utc::now(),
             received_at: Utc::now(),
@@ -2434,9 +2435,9 @@ mod tests {
             principal_server_id: "ak:did_core:web:soland.example".to_owned(),
         };
         let namespaces = arkret_models_integration::AppletWireNamespaces {
-            realm_namespace_entries: vec![
-                arkret_models_integration::AppletNamespaceEntry::exclusive("bridge:workspace:*"),
-            ],
+            realms: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
+                "bridge:workspace:*",
+            )],
             ..Default::default()
         };
         let build = |suffix: &str| {

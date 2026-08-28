@@ -44,7 +44,7 @@ pub struct AdminActor {
     /// Canonical actor identifier.
     pub id: String,
     pub principal_id: DidCoreId,
-    /// Durable surrogate account row id (`ak:account:<uuid7>`), stable across
+    /// Durable service-local opaque account row id, stable across
     /// principal identifier changes. Account-lifecycle admin endpoints address
     /// accounts by principal identifier, not by this id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -210,8 +210,8 @@ pub struct CapabilitySummary {
     pub grant_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub realm_id: Option<String>,
-    pub issuer: String,
-    pub subject: String,
+    pub issuer_id: arkret_identifiers::DidCoreId,
+    pub subject_id: arkret_identifiers::DidCoreId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
     #[serde(default)]
@@ -390,8 +390,8 @@ mod tests {
         let wire = serde_json::json!({
             "grant_id": "ak:grant:AYTeR35PxnHtaUMXFLoHqGA1yiou3pai07-tzQyViJnt",
             "realm_id": "ak:realm:AWEs1cV4Rn1CVWdYoOUZ1yiMPe9Ze6ZYmP0ChDr89cPl",
-            "issuer": "did:web:owner.example",
-            "subject": "did:web:member.example",
+            "issuer_id": "ak:did_core:web:owner.example",
+            "subject_id": "ak:did_core:web:member.example",
             "resource": "realm",
             "actions": ["ak.realm.read"],
             "revoked": false,

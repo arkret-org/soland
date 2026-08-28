@@ -204,7 +204,7 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         )
         .expect("fixture producer proof digest"),
         producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key: arkret_wire::DidKey::new(format!(
+        producer_signing_key_did: arkret_wire::DidKey::new(format!(
             "did:key:{}",
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                 producer_signing_key.verifying_key().as_bytes()
@@ -313,7 +313,7 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
 
     let read_body = serde_json::json!({
         "filters": {"kind": "ak.message.create"},
-        "realms": [test_realm_id()]
+        "realm_ids": [test_realm_id()]
     });
     let query_target = "https://server.test/_arkret/peer/events";
     let mut query = TestClient::query(query_target).json(&read_body);
@@ -372,7 +372,7 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
     );
     assert_eq!(frontier["realm_id"], test_realm_id(), "{frontier}");
     assert!(
-        frontier["heads"]
+        frontier["head_ids"]
             .as_array()
             .unwrap()
             .iter()
@@ -384,7 +384,7 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
             .unwrap()
             .starts_with("sha256:")
     );
-    assert_eq!(frontier["issuer"], service_id());
+    assert_eq!(frontier["issuer_id"], service_id());
     assert_eq!(frontier["signature"]["scheme"], "ed25519-detached-jws");
     assert_eq!(
         frontier["signature"]["signed_payload"]["frontier_root"],
@@ -409,7 +409,7 @@ async fn peer_events_query_rejects_malformed_cursor_with_invalid_cursor_reason_b
     seed_peer_read_authorization(&state, PEER_SOURCE_ID, "did:web:alice.example").await;
 
     let read_body = serde_json::json!({
-        "realms": [test_realm_id()],
+        "realm_ids": [test_realm_id()],
         "after": "ak:cursor:!!!not-base64url"
     });
     let query_target = "https://server.test/_arkret/peer/events";
@@ -485,7 +485,11 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow_body() {
         serde_json::json!([overflow_id]),
         "{outcome:?}"
     );
-    assert!(outcome["rejected"].as_array().is_none_or(Vec::is_empty));
+    assert!(
+        outcome["events_submit_rejected_rows"]
+            .as_array()
+            .is_none_or(Vec::is_empty)
+    );
     assert!(
         state
             .test_persistence()
@@ -634,7 +638,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads_body() {
         .take_json()
         .await
         .unwrap();
-    let heads = frontier["heads"].as_array().unwrap();
+    let heads = frontier["head_ids"].as_array().unwrap();
     for expected_head in expected_heads {
         assert!(
             heads.iter().any(|head| head == expected_head.as_str()),
@@ -738,7 +742,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
         .unwrap();
     assert_eq!(outcome["status"], "partial");
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
-    let rejected = outcome["rejected"].as_array().unwrap();
+    let rejected = outcome["events_submit_rejected_rows"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["reason_code"], "capability_denied");
     assert!(
@@ -928,7 +932,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     let outcome = submit_peer_event(state.clone(), &welcome_event).await;
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
-    let rejected = outcome["rejected"].as_array().unwrap();
+    let rejected = outcome["events_submit_rejected_rows"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["id"], authored_event_id(&welcome_event));
     assert_eq!(rejected[0]["reason_code"], "unsupported_profile");
@@ -998,7 +1002,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_bo
     let query_target = "https://server.test/_arkret/peer/events";
     let query_body = serde_json::json!({
         "filters": {"kind": "ak.message.create"},
-        "realms": [test_realm_id()]
+        "realm_ids": [test_realm_id()]
     });
     let mut query = TestClient::query(query_target).json(&query_body);
     for (name, value) in signed_federation_query_headers(
@@ -1512,7 +1516,7 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: "did:web:admin.example".to_owned(),
+            created_by: "ak:did_core:web:admin.example".to_owned(),
             created_at: Utc::now() - ChronoDuration::seconds(30),
             updated_by: None,
             updated_at: None,

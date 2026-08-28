@@ -426,7 +426,7 @@ pub struct EventBatchCommitRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FrankingReplayNonceCommit {
     pub realm_id: String,
-    pub received_by: String,
+    pub received_by: arkret_identifiers::DidCoreId,
     pub replay_nonce: String,
     pub report_event_id: String,
     pub consumed_at: DateTime<Utc>,

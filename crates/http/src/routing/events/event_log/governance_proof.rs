@@ -1528,7 +1528,9 @@ pub(crate) async fn first_generation_event_seal_requirement(
             predecessor_refs,
             accepted_frontier_refs,
             required_delta,
-            principal_id: actor.to_owned(),
+            principal_id: arkret_wire::DidCoreId::new(actor).map_err(|error| {
+                AppError::internal(format!("first-generation principal_id is invalid: {error}"))
+            })?,
             replacement_device_id: authorize_payload.device_id.as_str().to_owned(),
             replacement_device_public_key: authorize_payload.device_public_key_did.to_string(),
         });

@@ -14,7 +14,7 @@
 //!
 //! In `development_mode` (no introspection URL configured) the helpers
 //! return a synthetic introspection asserting every well-known admin
-//! scope for any DID in `admin_principal_dids` — keeps local smoke
+//! scope for any stable ID in `admin_principal_ids` — keeps local smoke
 //! tests working without an IdP dependency.
 
 use std::collections::HashMap;
@@ -148,7 +148,7 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 
 /// Synthetic introspection used in development mode when no upstream IdP
 /// is configured. Grants every well-known admin scope to any DID listed
-/// in `admin_principal_dids` (or any DID in development_mode).
+/// in `admin_principal_ids` (or any principal in development_mode).
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
     use arkret_models_identity::admin_grant::admin_scopes::*;
     let scopes = vec![

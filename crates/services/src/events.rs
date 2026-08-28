@@ -866,7 +866,7 @@ pub struct CommitDevicePairingAuthorization {
     pub pairing_code: String,
     pub new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
     pub device_id: String,
-    pub authorized_by_actor_id: String,
+    pub authorized_by_actor_id: arkret_wire::DidCoreId,
     pub authorized_event_ref: String,
     pub changed_at: DateTime<Utc>,
 }
@@ -993,7 +993,7 @@ pub trait EventReadPort: Send + Sync {
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_batch_receipts_for_event(
@@ -1365,7 +1365,7 @@ impl EventQueryService {
     pub async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events
@@ -1888,9 +1888,9 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         &self,
         mls_group_id: &str,
     ) -> ServiceResult<Vec<MlsKeyPackageState>>;
-    async fn retire_actor_keypackages(
+    async fn retire_owner_account_keypackages(
         &self,
-        actor_id: &str,
+        owner_account_id: &str,
         retired_at: i64,
     ) -> ServiceResult<usize>;
     async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()>;
@@ -1923,13 +1923,13 @@ impl MlsKeyPackageService {
         Self { key_packages }
     }
 
-    pub async fn retire_actor_keypackages(
+    pub async fn retire_owner_account_keypackages(
         &self,
-        actor_id: &str,
+        owner_account_id: &str,
         retired_at: i64,
     ) -> ServiceResult<usize> {
         self.key_packages
-            .retire_actor_keypackages(actor_id, retired_at)
+            .retire_owner_account_keypackages(owner_account_id, retired_at)
             .await
     }
 
@@ -2611,8 +2611,8 @@ mod tests {
                 "executed_by": "ak:did_core:web:controller.example",
                 "payload": {
                     "schema": "ak.schema.accountability_grant.v1",
-                    "issuer": "ak:did_core:web:controller.example",
-                    "subject": "ak:did_core:web:agent.example",
+                    "issuer_id": "ak:did_core:web:controller.example",
+                    "subject_id": "ak:did_core:web:agent.example",
                     "accountability_scope": accountability_scope,
                     "not_before": "2026-01-01T00:00:00.000Z",
                     "expires_at": "2099-01-01T00:00:00.000Z",

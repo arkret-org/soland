@@ -20,8 +20,8 @@ pub(super) fn realm_create_actor_is_creator(
 }
 
 /// True when a `ak.invite.create` event is signed by its own inviter_id. The
-/// inviter_id is the payload `inviter_id`/`sender`/`issuer` when present; otherwise
-/// the top-level `actor_id` (the signer) is authoritative. Used to admit a
+/// inviter_id is the payload `inviter_id`; the top-level `actor_id` is the
+/// signer. Used to admit a
 /// cross-PS invite delivery on a recipient PS that does not host the realm.
 pub(super) fn invite_create_actor_is_inviter(
     object: &serde_json::Map<String, Value>,
@@ -29,14 +29,7 @@ pub(super) fn invite_create_actor_is_inviter(
 ) -> bool {
     let inviter_id = object
         .get("payload")
-        .and_then(|payload| {
-            payload
-                .get("inviter_id")
-                .or_else(|| payload.get("sender"))
-                .or_else(|| payload.get("issuer"))
-                .and_then(Value::as_str)
-        })
-        .or_else(|| object.get("actor_id").and_then(Value::as_str));
+        .and_then(|payload| payload.get("inviter_id").and_then(Value::as_str));
     inviter_id.is_some_and(|inviter_id| inviter_id == actor)
 }
 

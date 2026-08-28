@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
@@ -12,8 +13,8 @@ use chrono::{DateTime, Utc};
 /// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
-    pub holder: String,
-    pub cell_id: String,
+    pub holder_principal_id: DidCoreId,
+    pub cell_id: CellRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -31,9 +32,9 @@ pub struct ConsentGrantDot {
 /// same intent (`consent-model.md` sections 3.1 and 3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
-    pub cell_id: String,
-    pub holder: String,
-    pub peer: String,
+    pub cell_id: CellRef,
+    pub holder_principal_id: DidCoreId,
+    pub peer_principal_id: DidCoreId,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
@@ -42,23 +43,23 @@ pub struct ConsentCellRecord {
 
 #[derive(Clone, Debug)]
 pub struct ContactRecord {
-    pub requester: String,
-    pub target: String,
-    pub contact_round_id: Option<String>,
+    pub requester_id: DidCoreId,
+    pub target_id: DidCoreId,
+    pub contact_round_id: Option<Hash>,
     pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
-    pub request_event_ref: Option<String>,
+    pub request_event_ref: Option<EventId>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
     pub contact_round_evidence_history: Vec<ContactRoundEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
-    pub response_event_ref: Option<String>,
-    pub tombstone_event_ref: Option<String>,
+    pub response_event_ref: Option<EventId>,
+    pub tombstone_event_ref: Option<EventId>,
     pub message: Option<String>,
-    pub peer_id: Option<String>,
+    pub peer_host_id: Option<DidCoreId>,
     /// Exact carrier retained from the verified introduction or shared-Realm
     /// delivery binding. It is re-verified before routing and is not a cached
     /// endpoint authority.

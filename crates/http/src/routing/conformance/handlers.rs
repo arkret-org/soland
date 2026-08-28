@@ -473,14 +473,14 @@ pub async fn realm_basis(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.conformance.device_signing_key",
+    operation_id = "org.arkret.soland.conformance.device_signing_key_did",
     tags("conformance")
 )]
 #[tracing::instrument(
     skip_all,
-    fields(op = "org.arkret.soland.conformance.device_signing_key")
+    fields(op = "org.arkret.soland.conformance.device_signing_key_did")
 )]
-pub async fn device_signing_key(
+pub async fn device_signing_key_did(
     depot: &mut Depot,
     body: JsonBody<DeviceSigningKeyRequest>,
 ) -> JsonResult<DeviceSigningKeyOutcome> {
@@ -1445,7 +1445,7 @@ async fn mint_query_cursor(
             handle: record.handle,
             binding_subject: Some(record.context.binding_subject),
             device_id: record.context.device_id,
-            service_id: record.context.service_id.to_string(),
+            service_id: record.context.service_id.clone(),
             filter_digest: Some(record.context.filter_digest),
             purpose: "stream".to_owned(),
             positions: Some(record.positions),
@@ -1476,7 +1476,7 @@ async fn mint_query_barrier_cursor(
             handle: minted.h.clone(),
             binding_subject: Some(context.binding_subject),
             device_id: context.device_id,
-            service_id: context.service_id.to_string(),
+            service_id: context.service_id.clone(),
             filter_digest: Some(context.filter_digest),
             purpose: "barrier".to_owned(),
             positions: None,

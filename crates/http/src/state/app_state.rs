@@ -1465,8 +1465,8 @@ impl AppState {
     pub fn admin_auth_mode(&self) -> &'static str {
         if self.config.development_mode {
             "development"
-        } else if !self.settings().admin_principal_dids.is_empty() {
-            "did_allowlist"
+        } else if !self.settings().admin_principal_ids.is_empty() {
+            "principal_id_allowlist"
         } else {
             "closed"
         }
@@ -1683,7 +1683,7 @@ impl AppState {
 
     pub(crate) fn handle_claims_snapshot(
         &self,
-    ) -> BTreeMap<String, Vec<super::HandleClaimEvidenceRecord>> {
+    ) -> BTreeMap<arkret_wire::DidCoreId, Vec<super::HandleClaimEvidenceRecord>> {
         self.member_identity.lock().snapshot_handle_claims()
     }
 
@@ -1755,26 +1755,32 @@ impl AppState {
         &self,
         subject_id: &str,
     ) -> Vec<super::HandleClaimEvidenceRecord> {
+        let Ok(subject_id) = arkret_wire::DidCoreId::new(subject_id.to_owned()) else {
+            return Vec::new();
+        };
         self.member_identity
             .lock()
-            .handle_claims_for_subject(subject_id)
+            .handle_claims_for_subject(&subject_id)
     }
 
     pub(crate) async fn invalidate_cached_handle_claims_for_subject(
         &self,
         subject_id: &str,
     ) -> usize {
+        let Ok(subject_id) = arkret_wire::DidCoreId::new(subject_id.to_owned()) else {
+            return 0;
+        };
         if let Err(error) = self
             .persistence
             .member_identity_store()
-            .delete_handle_claims_for_subject(subject_id)
+            .delete_handle_claims_for_subject(&subject_id)
             .await
         {
-            tracing::error!(%error, %subject_id, "failed to persist handle claim invalidation");
+            tracing::error!(%error, subject_id = %subject_id, "failed to persist handle claim invalidation");
         }
         self.member_identity
             .lock()
-            .invalidate_handle_claims_for_subject(subject_id)
+            .invalidate_handle_claims_for_subject(&subject_id)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1871,18 +1877,18 @@ impl AppState {
 
     /// Record one moderation report attempt across the entrypoint's layered
     /// anti-abuse buckets. The generic HTTP rate limiter remains the broad
-    /// transport guard; this protocol-level limiter adds reporter, source
+    /// transport guard; this protocol-level limiter adds reporter_id, source
     /// service, Realm, source IP, and duplicate-target pressure.
     pub fn record_moderation_report_attempt(
         &self,
-        reporter: &str,
+        reporter_id: &str,
         source_service: Option<&str>,
         realm_id: &str,
         source_ip_hash: &str,
         target_ref: &str,
     ) -> ModerationReportRateOutcome {
         self.runtime_guards.record_moderation_report_attempt(
-            reporter,
+            reporter_id,
             source_service,
             realm_id,
             source_ip_hash,
@@ -2449,6 +2455,7 @@ mod membership_hydration_tests {
                 id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
+                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2478,6 +2485,7 @@ mod membership_hydration_tests {
                 id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
+                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,

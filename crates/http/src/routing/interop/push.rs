@@ -154,7 +154,7 @@ pub(super) async fn push_register(
     let device_id = body.device_id.as_str().to_owned();
     let platform = body.platform.clone();
     let app_id = body.app_id.clone();
-    let push_gateway = body.push_gateway_uri.clone();
+    let push_gateway = body.push_gateway_url.clone();
     let push_key = body.push_key.clone();
     let recipient_id = body
         .recipient_id
@@ -263,7 +263,7 @@ fn push_route_id_for_registration(body: &PushRegisterDeviceRequestBody) -> Strin
         })
         .unwrap_or_else(|| {
             let route_digest =
-                sha256_hex(format!("{}|{}", body.push_gateway_uri, body.push_key).as_bytes());
+                sha256_hex(format!("{}|{}", body.push_gateway_url, body.push_key).as_bytes());
             format!("gateway:{route_digest}")
         })
 }

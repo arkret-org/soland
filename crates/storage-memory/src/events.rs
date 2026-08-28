@@ -783,7 +783,7 @@ impl EventStore for MemoryEventStore {
             .identity_anchor_account_slots
             .lock()
             .values()
-            .filter(|slot| slot.principal_id == principal_id)
+            .filter(|slot| slot.principal_id.as_str() == principal_id)
             .cloned()
             .collect::<Vec<_>>();
         match matches.as_slice() {
@@ -889,7 +889,7 @@ impl EventStore for MemoryEventStore {
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_wire::DidCoreId,
         target_event_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
         let mut records = self
@@ -898,7 +898,7 @@ impl EventStore for MemoryEventStore {
             .values()
             .filter(|record| {
                 record.realm_id.as_deref() == Some(realm_id)
-                    && record.actor_id == received_by
+                    && record.actor_id == received_by.as_str()
                     && record.kind == arkret_wire::EventKind::ModerationFrankingProof.as_str()
                     && record
                         .envelope

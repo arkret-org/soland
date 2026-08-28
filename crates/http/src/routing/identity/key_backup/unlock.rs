@@ -275,7 +275,9 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         }
         return Ok(());
     };
-    if record.principal_id != session.actor || record.requesting_device_id != session.device_id {
+    if record.principal_id.as_str() != session.actor
+        || record.requesting_device_id != session.device_id
+    {
         return Err(AppError::capability_denied(
             "key backup unlock proof recovery session binding does not match caller",
         ));

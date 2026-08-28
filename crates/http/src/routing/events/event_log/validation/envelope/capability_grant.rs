@@ -44,7 +44,7 @@ mod tests {
                 "grant": {
                     "schema": "ak.schema.capability.v1",
                     "realm_id": "ak:realm:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
-                    "issuer": actor,
+                    "issuer_id": actor,
                     "subject": actor,
                     "subject_principal_server_id": "ak:did_core:web:principal.example",
                     "actions": ["ak.realm.configure"],

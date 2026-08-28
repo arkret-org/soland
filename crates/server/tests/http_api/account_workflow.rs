@@ -385,7 +385,7 @@ async fn erasure_pending_account_refuses_self_reads_with_account_erased_body() {
             &soland_storage::AccountLifecycleRecord {
                 state: "erasure_pending".to_owned(),
                 reason: Some("account_authority_erasure_record".to_owned()),
-                changed_by: Some(state.service_id().clone()),
+                changed_by: Some(arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap()),
                 changed_at: chrono::Utc::now(),
             },
         )
@@ -443,7 +443,9 @@ async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_
                     &soland_storage::AccountLifecycleRecord {
                         state: status,
                         reason: Some("account_authority_status_record".to_owned()),
-                        changed_by: Some(state.service_id().clone()),
+                        changed_by: Some(
+                            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+                        ),
                         changed_at: chrono::Utc::now(),
                     },
                 )
@@ -1083,7 +1085,10 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(bob_contacts["contacts"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        bob_contacts["contact_list_rows"].as_array().unwrap().len(),
+        1
+    );
 
     let visible_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -1188,7 +1193,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .await
         .expect("Bob invite-delivery cell read")
         .expect("Bob invite-delivery cell exists");
-    let invite_token = invite_delivery.payload["entries"][0]["invite_token"]
+    let invite_token = invite_delivery.payload["delivery_entries"][0]["invite_token"]
         .as_str()
         .expect("private invite token")
         .to_owned();
@@ -1483,7 +1488,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
 
     let sync_with_message =
         account_subscribe_frame(state.clone(), Some(&alice), "catchup=true").await;
-    let synced_members = sync_with_message["realms"][&realm_id]["member_roster_entries"]
+    let synced_members = sync_with_message["realms"][&realm_id]["member_roster"]["entries"]
         .as_array()
         .unwrap();
     assert!(

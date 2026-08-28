@@ -16,7 +16,7 @@ const MOD_REQUEST_DIGEST: &str =
 /// The registered add dot of the seeded decision: `ak.moderation.decision`
 /// declares one `cell_writes[]` entry, so `event-and-patch.md` §2.4.2 makes it
 /// `<decision event id>:0`. `content-moderation.md` §2.6 requires the lift to
-/// name exactly this value in `observed_dots[]`.
+/// name exactly this value in `observed_dot_ids[]`.
 const MOD_DECISION_DOT: &str = "ak:event:AaE8e4n3nA8AyIlk8Sh9_DhbS-5fInpC8DrDoA81pxI-:0";
 
 fn mod_decision_cell_ref() -> CellRef {
@@ -37,7 +37,7 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
             "event_id": MOD_DECISION_ID,
             "decision_id": MOD_DECISION_ID,
             "realm_id": MOD_REALM,
-            "issuer": issuer,
+            "issuer_id": issuer,
             "target_ref": MOD_TARGET_REF,
             "decision": "quarantine",
             "action": "quarantine_message",
@@ -60,8 +60,9 @@ fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) 
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
-            "appellant": appellant,
+            "appellant_id": appellant,
             "reason_text_ref": "appeal text",
+            "created_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     let effect = state.apply(&op, hlc);
@@ -91,7 +92,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
         other => panic!("moderation target cell should contain an or_set array, got {other:?}"),
     };
     // The add tag is the registered dot, not a decision/issuer/digest triple:
-    // it is what the lift's `observed_dots[]` has to name byte for byte
+    // it is what the lift's `observed_dot_ids[]` has to name byte for byte
     // (`content-moderation.md` §2.6).
     assert_eq!(
         items[0].get("tag").and_then(Value::as_str),
@@ -103,7 +104,7 @@ fn moderation_decision_then_lift_converges_on_cell() {
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
-            "observed_dots": [MOD_DECISION_DOT],
+            "observed_dot_ids": [MOD_DECISION_DOT],
             "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),
@@ -142,7 +143,8 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -160,7 +162,7 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
             "decision": "uphold",
             "reason_text_ref": "appeal denied",
             "decided_at": "2026-06-20T00:00:00.000Z",
@@ -187,7 +189,8 @@ fn moderation_appeal_invalid_transition_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -209,7 +212,8 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -223,7 +227,8 @@ fn moderation_appeal_reviewer_close_before_decision_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "closer": "ak:did_core:web:reviewer.example",
+            "closer_id": "ak:did_core:web:reviewer.example",
+            "closed_at": "2026-06-20T00:00:00.000Z",
             "close_reason": "reviewer_closed",
         }),
     );
@@ -247,7 +252,8 @@ fn moderation_appeal_appellant_withdrawal_before_decision_allowed() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "closer": "ak:did_core:web:appellant.example",
+            "closer_id": "ak:did_core:web:appellant.example",
+            "closed_at": "2026-06-20T00:00:00.000Z",
             "close_reason": "appellant_withdrawn",
         }),
     );
@@ -271,7 +277,8 @@ fn moderation_appeal_self_review_forbidden() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:mod.example",
+            "reviewer_id": "ak:did_core:web:mod.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -293,7 +300,8 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
         }),
     );
     assert!(matches!(
@@ -307,7 +315,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         serde_json::json!({
             "appeal_id": MOD_APPEAL_ID,
             "realm_id": MOD_REALM,
-            "reviewer": "ak:did_core:web:reviewer.example",
+            "reviewer_id": "ak:did_core:web:reviewer.example",
             "decision": "overturn",
             "reason_text_ref": "appeal upheld",
             "decided_at": "2026-06-20T00:00:00.000Z",
@@ -326,7 +334,7 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
         MOD_REALM,
         serde_json::json!({
             "decision_ref": MOD_DECISION_ID,
-            "observed_dots": [MOD_DECISION_DOT],
+            "observed_dot_ids": [MOD_DECISION_DOT],
             "target_ref": MOD_TARGET_REF,
             "realm_id": MOD_REALM,
         }),
@@ -357,7 +365,7 @@ fn moderation_appeal_duplicate_active_rejected() {
             "realm_id": MOD_REALM,
             "decision_ref": MOD_DECISION_ID,
             "target_ref": MOD_TARGET_REF,
-            "appellant": "ak:did_core:web:appellant.example",
+            "appellant_id": "ak:did_core:web:appellant.example",
             "reason_text_ref": "duplicate appeal text",
         }),
     );

@@ -122,7 +122,7 @@ fn validate_push_gateway_description(
     ) else {
         return Err("canonical HTTP push notify operation is not advertised".to_owned());
     };
-    let advertised_base = derive_push_gateway_service_base_url(binding.base_uri())
+    let advertised_base = derive_push_gateway_service_base_url(binding.base_url())
         .ok_or_else(|| "push gateway HTTP binding is not an absolute URL".to_owned())?;
     if advertised_base != service_base_url {
         return Err("push gateway HTTP binding origin does not match requested gateway".to_owned());

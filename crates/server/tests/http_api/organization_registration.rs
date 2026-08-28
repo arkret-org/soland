@@ -140,7 +140,7 @@ fn organization_registration_http_round_trip_and_get_are_non_enumerable() {
 
 async fn organization_registration_http_round_trip_and_get_are_non_enumerable_body() {
     let mut config = test_config();
-    config.admin_principal_dids = vec![fixture_actor_core_id("did:web:alice.example").to_string()];
+    config.admin_principal_ids = vec![fixture_actor_core_id("did:web:alice.example")];
     let mut state = soland_test_support::app_state(config);
     let persistence = state.test_persistence();
     let (organization_id, did, admin_id, pinned, control_signer) = organization_fixture();
@@ -224,7 +224,7 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
         "https://arkret.org/problems/unsupported_organization_registration_scope"
     );
 
-    let challenge: OrganizationRegistrationChallenge =
+    let mut challenge_response =
         TestClient::post("http://server/_arkret/root/identity/organization-registrations:prepare")
             .add_header("authorization", format!("Bearer {alice_token}"), true)
             .add_header("content-type", "application/json", true)
@@ -235,10 +235,11 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
                 "requested_scopes": ["organization_profile_manage"],
             })))
             .send(&app)
-            .await
-            .take_json()
-            .await
-            .unwrap();
+            .await;
+    let challenge_status = challenge_response.status_code;
+    let challenge_body: serde_json::Value = challenge_response.take_json().await.unwrap();
+    let challenge: OrganizationRegistrationChallenge = serde_json::from_value(challenge_body.clone())
+        .unwrap_or_else(|error| panic!("challenge status {challenge_status:?}: {challenge_body}: {error}"));
     let ensure = OrganizationRegistrationEnsureRequestBody {
         organization_id: organization_id.clone(),
         did: did.clone(),

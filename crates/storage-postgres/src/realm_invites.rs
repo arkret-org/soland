@@ -15,7 +15,7 @@ struct RealmInviteRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    inviter_id: String,
+    inviter_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
     invitee_id: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -62,7 +62,7 @@ impl RealmInviteRow {
                 ids::format_event_token("invite", &token)
             },
             realm_id: self.realm_id,
-            inviter_id: self.inviter_id,
+            inviter_id: self.inviter_id.to_string(),
             invitee_id: self.invitee_id,
             invite_delivery_target: self.invite_delivery_target,
             introduction_evidence_digest: self.introduction_evidence_digest,
@@ -226,7 +226,7 @@ mod tests {
         RealmInviteRow {
             id: vec![0u8; ids::EVENT_ID_BYTES],
             realm_id: "ak:realm:test".to_owned(),
-            inviter_id: "ak:did_core:web:alice.example".to_owned(),
+            inviter_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             invitee_id: None,
             invite_delivery_target: None,
             introduction_evidence_digest: None,

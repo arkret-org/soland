@@ -162,6 +162,7 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
     let now = chrono::Utc::now();
     SessionRecord {
         token_hash: "applet-transaction-source-signature".to_owned(),
+        service_account_id: None,
         actor: event.actor_id.to_string(),
         // An applet service is not a device. This session authenticates the
         // source service signature, so it names no device rather than a
@@ -217,19 +218,10 @@ fn validate_transaction_event_binding(
     {
         return Ok(());
     }
-    let matched = install
-        .package
-        .namespaces
-        .actor_namespace_entries
-        .iter()
-        .any(|entry| {
-            !namespace_pattern_is_wildcard(&entry.pattern)
-                && namespace_pattern_matches(
-                    AppletNamespaceDomain::Actors,
-                    &entry.pattern,
-                    actor_id,
-                )
-        });
+    let matched = install.package.namespaces.actors.iter().any(|entry| {
+        !namespace_pattern_is_wildcard(&entry.pattern)
+            && namespace_pattern_matches(AppletNamespaceDomain::Actors, &entry.pattern, actor_id)
+    });
     if matched {
         Ok(())
     } else {

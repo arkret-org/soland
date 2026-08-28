@@ -90,7 +90,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
     .await
     .unwrap();
     assert_eq!(body["realm_id"], realm_id);
-    let spaces = body["spaces"].as_array().unwrap();
+    let spaces = body["projection_space_rows"].as_array().unwrap();
     let row = spaces
         .iter()
         .find(|p| p["space_id"] == container_space_id)
@@ -128,7 +128,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["spaces"]
+    let row = body["projection_space_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -219,7 +219,7 @@ async fn current_board_and_strand_projection_survives_since_join_history_cut_bod
     .take_json()
     .await
     .unwrap();
-    let board = spaces["spaces"]
+    let board = spaces["projection_space_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -236,7 +236,7 @@ async fn current_board_and_strand_projection_survives_since_join_history_cut_bod
     .take_json()
     .await
     .unwrap();
-    let strand = strands["strands"]
+    let strand = strands["projection_strand_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -322,7 +322,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["strands"]
+    let row = body["projection_strand_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -386,7 +386,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["morphs"]
+    let row = body["projection_morph_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -422,7 +422,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["morphs"]
+    let row = body["projection_morph_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -573,7 +573,7 @@ async fn projection_morphs_endpoint_filters_circle_scope_body() {
     .take_json()
     .await
     .unwrap();
-    let bob_morphs = bob_body["morphs"].as_array().unwrap();
+    let bob_morphs = bob_body["projection_morph_rows"].as_array().unwrap();
     assert!(bob_morphs.iter().any(|m| m["morph_id"] == public_morph_id));
     assert!(!bob_morphs.iter().any(|m| m["morph_id"] == scoped_morph_id));
 
@@ -586,7 +586,7 @@ async fn projection_morphs_endpoint_filters_circle_scope_body() {
     .take_json()
     .await
     .unwrap();
-    let alice_morphs = alice_body["morphs"].as_array().unwrap();
+    let alice_morphs = alice_body["projection_morph_rows"].as_array().unwrap();
     assert!(
         alice_morphs
             .iter()
@@ -827,7 +827,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     assert_eq!(comment["anchor_range"]["start"], 2);
     assert_eq!(comment["anchor_range"]["end"], 9);
     assert_eq!(comment["state"], "orphaned");
-    assert_eq!(body["cursor_presence"].as_array().unwrap().len(), 0);
+    assert_eq!(body["cursor_presence_entries"].as_array().unwrap().len(), 0);
 }
 
 #[test]
@@ -1110,7 +1110,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
     .await
     .unwrap();
     assert!(
-        body["spaces"]
+        body["projection_space_rows"]
             .as_array()
             .unwrap()
             .iter()
@@ -1128,7 +1128,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["spaces"]
+    let row = body["projection_space_rows"]
         .as_array()
         .unwrap()
         .iter()
@@ -1191,7 +1191,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
     .await
     .unwrap();
     assert!(
-        body["strands"]
+        body["projection_strand_rows"]
             .as_array()
             .unwrap()
             .iter()
@@ -1209,7 +1209,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
     .take_json()
     .await
     .unwrap();
-    let row = body["strands"]
+    let row = body["projection_strand_rows"]
         .as_array()
         .unwrap()
         .iter()

@@ -152,6 +152,8 @@ impl OrganizationRegistrationService {
             .map_err(|error| schema(error.to_string()))?;
         let trust_domain = TrustDomainId::new(trust_domain)
             .map_err(|error| schema(format!("invalid trust_domain: {error}")))?;
+        let origin = arkret_wire::WebOrigin::new(origin)
+            .map_err(|error| schema(format!("invalid origin: {error}")))?;
         let pinned = self
             .resolver
             .resolve_current_webvh_state(&request.did)
@@ -187,7 +189,7 @@ impl OrganizationRegistrationService {
             purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
             nonce,
             audience_id: issuer_id.clone(),
-            origin_uri: origin.to_owned(),
+            origin,
             trust_domain,
             local_admin_subject_id: request.local_admin_subject_id,
             requested_scopes: request.requested_scopes,

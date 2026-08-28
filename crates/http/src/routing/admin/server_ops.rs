@@ -9,6 +9,7 @@
 //! (see [`super::collection`]); salvo router fallthrough keeps the three
 //! sub-trees from colliding.
 
+use arkret_identifiers::DidCoreId;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -48,8 +49,8 @@ struct AdminAccountLifecycleOutcome {
     status: String,
     management_status: String,
     reason: Option<String>,
-    updated_by: String,
-    changed_by: String,
+    updated_by: DidCoreId,
+    changed_by: DidCoreId,
     updated_at: String,
     changed_at: String,
     sessions_revoked: usize,
@@ -115,10 +116,12 @@ async fn get_server_status(
         .len();
     json_ok(AdminServerStatus {
         status: AdminServerStatus::OK.to_owned(),
-        service_id: state.service_id().clone(),
+        service_id: DidCoreId::new(state.service_id().clone())
+            .expect("AppState service_id must be a validated DID core id"),
         storage: state.jobs().storage_mode().to_owned(),
         development_mode: state.config().development_mode,
-        checked_by: session.actor,
+        checked_by: DidCoreId::new(session.actor)
+            .expect("authenticated session actor must be a validated DID core id"),
         generated_at: arkret_canonical::format_timestamp_canonical(super::now()),
         counts: AdminServerStatusCounts {
             accounts: account_count,
@@ -146,7 +149,8 @@ async fn get_server_info(
         protocol_version: Some(arkret_wire::constants::PROTOCOL_VERSION.to_owned()),
         server_name: Some(state.service_id().clone()),
         uptime: None,
-        service_id: state.service_id().clone(),
+        service_id: DidCoreId::new(state.service_id().clone())
+            .expect("AppState service_id must be a validated DID core id"),
         trust_domain: state.config().trust_domain.to_string(),
         development_mode: state.config().development_mode,
         allow_public_registration: state.account_registration_policy().enabled,

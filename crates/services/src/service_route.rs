@@ -330,7 +330,7 @@ impl ServiceRouteResolver {
             version_id: record.record.version_id,
             record_sequence: record.record.record_sequence,
             record_digest: digest,
-            base_uri: record.record.base_uri,
+            base_url: record.record.base_url,
             current_record_url: record.record.current_record_url,
             describe_digest: record.record.describe_digest,
             verified_at: now,
@@ -369,7 +369,7 @@ fn validate_describe_metadata(
         || description.service_resolution.did != record.record.did
         || description.service_resolution.method_history_head != record.record.method_history_head
         || description.service_resolution.version_id != record.record.version_id
-        || description.http_json_base_url != record.record.base_uri
+        || description.http_json_base_url != record.record.base_url
         || description.route_binding_digest != record.record.describe_digest
     {
         return Err(ServiceError::SchemaViolation(

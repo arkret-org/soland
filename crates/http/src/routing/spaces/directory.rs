@@ -177,7 +177,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
             .collect(),
         transport_bindings: vec![
             arkret_models_discovery::TransportBinding::HttpJson {
-                base_uri: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
+                base_url: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
                 extension_profile_required: (),
             },
         ],

@@ -11,7 +11,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
 /// AKP-0007 §8 — pulling *another* actor into a Circle (none/left → active by
-/// an actor other than the target) requires the requester to hold
+/// an actor other than the target) requires the requester_id to hold
 /// `ak.circle.member.manage` (narrowed by `allowed_circle_ids`) on this Circle.
 /// The HTTP surface runs the authoritative `SolandAuthzEngine::check` and stamps a
 /// verdict into the operation payload; the reducer fails closed when that
@@ -309,9 +309,9 @@ pub(crate) fn validate_principal_admission_gate(
 ) -> Result<(), &'static str> {
     validate_auto_resolve(gate, true)?;
     let has_allowed_methods = validate_did_method_list(gate, "allowed_did_methods")?;
-    let has_allowed_dids = validate_did_list(gate, "allowed_principal_dids")?;
-    let has_denied_dids = validate_did_list(gate, "denied_principal_dids")?;
-    if !(has_allowed_methods || has_allowed_dids || has_denied_dids) {
+    let has_allowed_ids = validate_did_list(gate, "allowed_principal_ids")?;
+    let has_denied_ids = validate_did_list(gate, "denied_principal_ids")?;
+    if !(has_allowed_methods || has_allowed_ids || has_denied_ids) {
         return Err("principal_admission_requires_selector");
     }
     Ok(())
@@ -521,11 +521,11 @@ pub(crate) fn principal_admission_gate_allows(
     let Ok(member_id) = arkret_identifiers::DidCoreId::new(member.to_owned()) else {
         return false;
     };
-    if did_list_contains(gate, "denied_principal_dids", member) {
+    if did_list_contains(gate, "denied_principal_ids", member) {
         return false;
     }
-    if did_list_non_empty(gate, "allowed_principal_dids")
-        && !did_list_contains(gate, "allowed_principal_dids", member)
+    if did_list_non_empty(gate, "allowed_principal_ids")
+        && !did_list_contains(gate, "allowed_principal_ids", member)
     {
         return false;
     }
@@ -551,8 +551,8 @@ pub(crate) fn principal_admission_gate_allows(
 }
 
 pub(crate) fn principal_admission_gate_has_selector(gate: &serde_json::Map<String, Value>) -> bool {
-    did_list_non_empty(gate, "allowed_principal_dids")
-        || did_list_non_empty(gate, "denied_principal_dids")
+    did_list_non_empty(gate, "allowed_principal_ids")
+        || did_list_non_empty(gate, "denied_principal_ids")
         || gate
             .get("allowed_did_methods")
             .and_then(Value::as_array)

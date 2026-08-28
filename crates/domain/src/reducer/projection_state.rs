@@ -499,7 +499,7 @@ impl ProjectionState {
             && local_service_id != recipient_id
         {
             return ProjectionEffect::Rejected {
-                reason: "recipient_service_id_mismatch".to_owned(),
+                reason: "recipient_id_mismatch".to_owned(),
             };
         }
         let principal_id = scope.principal_id.as_str();
@@ -508,7 +508,7 @@ impl ProjectionState {
 
         let subject = PushRouteSubject {
             recipient_id: recipient_id.to_owned(),
-            principal_id: principal_id.to_owned(),
+            principal_id: scope.principal_id.clone(),
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
         };
@@ -732,7 +732,7 @@ impl ProjectionState {
     /// any predicate does not hold.
     ///
     /// This evaluates the generic `head_eq` compare-and-swap predicate:
-    /// each entry is `{ "cell": "<cell_ref>", "predicate": { "op": "head_eq",
+    /// each entry is `{ "cell_id": "<cell_ref>", "predicate": { "op": "head_eq",
     /// "value": { "<field-path>": <expected> } } }`. For a strand-fields cell
     /// (`ak.component.strand.fields.v1:<strand_id>`) the `fields.<key>` paths
     /// resolve against the materialized strand `fields`; for any other cell

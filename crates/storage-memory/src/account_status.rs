@@ -148,7 +148,7 @@ mod tests {
     use arkret_signatures::account_status::{
         sign_account_status_receipt, sign_account_status_record,
     };
-    use arkret_wire::{DidCoreId, DidUrl, NonEmptyString, RealmId, ReceiptId, SchemaId};
+    use arkret_wire::{DidCoreId, DidUrl, RealmId, ReceiptId, SchemaId};
     use ed25519_dalek::SigningKey;
     use soland_storage::AccountStatusReplicaConflictKind;
 
@@ -165,7 +165,7 @@ mod tests {
             UnsignedAccountStatusRecord {
                 schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
                 account_authority_id: DidCoreId::new("ak:did_core:web:authority.example").unwrap(),
-                account_id: NonEmptyString::new("account-1").unwrap(),
+                account_id: arkret_wire::ServiceAccountId::new("account-1").unwrap(),
                 principal_authority: AccountStatusPrincipalAuthority {
                     principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
                     principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")

@@ -39,7 +39,7 @@ pub(crate) async fn identity_describe(
         .map(|bundle| (*bundle).to_owned())
         .collect();
     description.transport_bindings = vec![arkret_models_discovery::TransportBinding::HttpJson {
-        base_uri: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
+        base_url: format!("{}/", state.config().public_base_url.trim_end_matches('/')),
         extension_profile_required: (),
     }];
     description.supported_features.clear();
@@ -654,7 +654,7 @@ pub(crate) async fn identity_resolve(
             method_evidence,
         ));
     }
-    if let Some(document) = super::document::federation_peer_service_id_document(state, did) {
+    if let Some(document) = super::document::federation_peer_id_document(state, did) {
         require_requested_webvh_evidence(requires_webvh_evidence, None)?;
         return json_ok(identity_resolve_outcome(
             body.did, document, None, None, None,

@@ -331,10 +331,10 @@ impl WebvhStore for PgWebvhStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT outcome FROM service_identity_registrations \
-             WHERE service_kind = $1 AND public_base = $2",
+             WHERE service_kind = $1 AND public_base_url = $2",
         )
         .bind::<Text, _>(key.service_kind().as_str())
-        .bind::<Text, _>(key.public_base().as_str())
+        .bind::<Text, _>(key.public_base_url().as_str())
         .get_result::<ServiceRegistrationRow>(&mut *conn)
         .await
         .optional()
@@ -359,8 +359,8 @@ impl WebvhStore for PgWebvhStore {
         conn.transaction::<ServiceRegistrationCommitOutcome, PgTransactionError, _>(
             async move |conn| {
                 let service_kind = key.service_kind().as_str();
-                let public_base = key.public_base().as_str();
-                let lock_key = format!("service-registration:{service_kind}:{public_base}");
+                let public_base_url = key.public_base_url().as_str();
+                let lock_key = format!("service-registration:{service_kind}:{public_base_url}");
                 let lock = sql_query(
                     "SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtextextended($1, 0))) AS held",
                 )
@@ -385,10 +385,10 @@ impl WebvhStore for PgWebvhStore {
 
                 let existing = sql_query(
                     "SELECT outcome FROM service_identity_registrations \
-                     WHERE service_kind = $1 AND public_base = $2 FOR UPDATE",
+                     WHERE service_kind = $1 AND public_base_url = $2 FOR UPDATE",
                 )
                 .bind::<Text, _>(service_kind)
-                .bind::<Text, _>(public_base)
+                .bind::<Text, _>(public_base_url)
                 .get_result::<ServiceRegistrationRow>(&mut *conn)
                 .await
                 .optional().map_err(PersistenceError::database)?;
@@ -416,7 +416,7 @@ impl WebvhStore for PgWebvhStore {
                      ) LIMIT 1 FOR UPDATE",
                 )
                 .bind::<Text, _>(service_kind)
-                .bind::<Text, _>(public_base)
+                .bind::<Text, _>(public_base_url)
                 .get_result::<ExistingDidRow>(&mut *conn)
                 .await
                 .optional().map_err(PersistenceError::database)?;
@@ -424,7 +424,7 @@ impl WebvhStore for PgWebvhStore {
                     tracing::warn!(
                         existing_did = %hosted_binding.did,
                         service_kind,
-                        public_base,
+                        public_base_url,
                         "refusing service registration because a hosted document already declares the key",
                     );
                     return Ok(ServiceRegistrationCommitOutcome::Conflict);
@@ -478,11 +478,11 @@ impl WebvhStore for PgWebvhStore {
                 })?;
                 sql_query(
                     "INSERT INTO service_identity_registrations \
-                     (service_kind, public_base, service_id, version_id, inception_digest, outcome, created_at, updated_at) \
+                     (service_kind, public_base_url, service_id, version_id, inception_digest, outcome, created_at, updated_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $7)",
                 )
                 .bind::<Text, _>(service_kind)
-                .bind::<Text, _>(public_base)
+                .bind::<Text, _>(public_base_url)
                 .bind::<Text, _>(outcome.registration_receipt.service_id.as_str())
                 .bind::<Text, _>(&outcome.registration_receipt.version_id)
                 .bind::<Text, _>(&outcome.registration_receipt.log_head_digest)

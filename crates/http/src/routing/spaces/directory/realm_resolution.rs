@@ -119,7 +119,7 @@ pub(super) async fn resolve_realm(
                     &realm,
                     effective_alias,
                 ),
-                stripped_state: Vec::new(),
+                stripped_state_entries: Vec::new(),
                 join_rule: Some(join_rule_enum(&join_rule)),
                 join_candidates: join_candidates_for_resolved_realm(
                     state,
@@ -814,8 +814,8 @@ pub(super) async fn join_candidates_for_resolved_realm(
                         .map(|service_id| service_id.to_string())
                         .collect()
                 }
-                arkret_wire::notary::NotaryValue::Threshold { members, .. }
-                | arkret_wire::notary::NotaryValue::OpenSet { members } => members
+                arkret_wire::notary::NotaryValue::Threshold { signers, .. }
+                | arkret_wire::notary::NotaryValue::OpenSet { signers } => signers
                     .into_iter()
                     .filter_map(|member| {
                         normalize_join_candidate_service_id(member.actor_id.as_str())
@@ -824,11 +824,11 @@ pub(super) async fn join_candidates_for_resolved_realm(
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
                     signer,
-                    recovery_members,
+                    recovery_signers,
                     ..
                 } => normalize_join_candidate_service_id(signer.actor_id.as_str())
                     .into_iter()
-                    .chain(recovery_members.into_iter().filter_map(|member| {
+                    .chain(recovery_signers.into_iter().filter_map(|member| {
                         normalize_join_candidate_service_id(member.actor_id.as_str())
                     }))
                     .map(|service_id| service_id.to_string())

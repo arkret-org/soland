@@ -161,7 +161,7 @@ pub(super) async fn mimi_room_update(
     json_ok(MimiRoomUpdateOutcome {
         accepted: true,
         room_state_ref,
-        rejected: Vec::new(),
+        rejections: Vec::new(),
     })
 }
 
@@ -343,7 +343,7 @@ pub(super) async fn mimi_room_message(
             status: MimiDeliveryStatus::Accepted,
             delivered_to_ids: Vec::new(),
         },
-        rejected: Vec::new(),
+        rejections: Vec::new(),
     })
 }
 
@@ -628,7 +628,7 @@ async fn verify_mimi_operation_proof(
 ///
 /// `proofs` is `#[serde(default)]` on the wire, so an empty vector is a valid
 /// request and this is a no-op for it. The originator is the mandatory
-/// `requester` field.
+/// `requester_id` field.
 async fn verify_mimi_key_material_request_proofs(
     state: &AppState,
     body: &MimiKeyMaterialRequestBody,
@@ -684,7 +684,7 @@ async fn verify_mimi_request_consent_proofs(
 /// Verify every proof carried by a MIMI identifier query.
 ///
 /// `proofs` is `#[serde(default)]` on the wire; an empty vector stays valid.
-/// This family's `requester` is optional and the SDK transcript then omits
+/// This family's `requester_id` is optional and the SDK transcript then omits
 /// `issuer` entirely, so when it is absent the only originator the request
 /// carries is the transport-authenticated source service and the proof must
 /// be signed by that service.
@@ -752,6 +752,7 @@ async fn verify_mimi_consent_update_authority(
             })?;
         (
             soland_services::identity::SessionIdentityState {
+                service_account_id: None,
                 token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
                 actor: body.actor_id.to_string(),
                 device_id,
@@ -830,11 +831,11 @@ async fn verify_mimi_consent_correlation(
         }
         arkret_models_collaboration::http_bodies::MimiConsentDecision::Deny
         | arkret_models_collaboration::http_bodies::MimiConsentDecision::Revoke => {
-            let observed_dots = body
+            let observed_dot_ids = body
                 .consent_event
                 .event
                 .payload
-                .get("observed_dots")
+                .get("observed_dot_ids")
                 .and_then(Value::as_array)
                 .filter(|dots| !dots.is_empty())
                 .ok_or_else(mimi_consent_correlation_unavailable)?;
@@ -842,11 +843,11 @@ async fn verify_mimi_consent_correlation(
                 .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
             let cell = state
                 .consents()
-                .holder_cell(body.actor_id.as_str(), cell_id.as_str())
+                .holder_cell(&body.actor_id, &cell_id)
                 .filter(|cell| {
-                    cell.peer == correlation.requester_id
+                    cell.peer_principal_id.as_str() == correlation.requester_id
                         && cell.consent_scope == correlation.purpose
-                        && observed_dots.iter().all(|observed_dot| {
+                        && observed_dot_ids.iter().all(|observed_dot| {
                             observed_dot.as_str().is_some_and(|observed_dot| {
                                 cell.grant_dots.get(observed_dot).is_some_and(|dot| {
                                     !cell.revoked_dots.contains(&dot.dot)
@@ -1027,12 +1028,12 @@ pub(super) async fn mimi_report_abuse(
         )
         .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
     };
-    let reporter = body
+    let reporter_id = body
         .get("reporter_did")
-        .or_else(|| body.get("reporter"))
+        .or_else(|| body.get("reporter_id"))
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::param_invalid("mimi report requires reporter"))?;
-    enforce_mimi_reporter_resolution(state, reporter, &body).await?;
+        .ok_or_else(|| AppError::param_invalid("mimi report requires reporter_id"))?;
+    enforce_mimi_reporter_resolution(state, reporter_id, &body).await?;
     let target_ref = body
         .get("target_event_digest")
         .or_else(|| body.get("target_ref"))
@@ -1048,7 +1049,7 @@ pub(super) async fn mimi_report_abuse(
     let safety = validate_moderation_report_safety(
         state,
         &realm_id,
-        reporter,
+        reporter_id,
         target_ref,
         None,
         evidence_package,
@@ -1106,8 +1107,8 @@ pub(super) async fn mimi_report_abuse(
         target_ref: target_ref.to_owned(),
         report_reason_code: canonical_reason.to_owned(),
         description,
-        reporter_id: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
-            AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
+        reporter_id: arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
+            AppError::param_invalid(format!("mimi report reporter_id invalid: {error}"))
         })?,
         provenance: Some(ModerationReportProvenance::MimiFacade),
         source_provider_id: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
@@ -1151,14 +1152,14 @@ pub(super) async fn mimi_report_abuse(
 
 pub(super) async fn enforce_mimi_reporter_resolution(
     state: &AppState,
-    reporter: &str,
+    reporter_id: &str,
     body: &Value,
 ) -> Result<(), AppError> {
-    Did::new(reporter.to_owned())
-        .map_err(|error| AppError::param_invalid(format!("invalid reporter DID: {error}")))?;
+    Did::new(reporter_id.to_owned())
+        .map_err(|error| AppError::param_invalid(format!("invalid reporter_id DID: {error}")))?;
     if state
         .identities()
-        .account(reporter)
+        .account(reporter_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
@@ -1180,7 +1181,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
         return Ok(());
     }
     Err(AppError::capability_denied(
-        "MIMI abuse reporter requires local account, holder claim, or consent proof",
+        "MIMI abuse reporter_id requires local account, holder claim, or consent proof",
     )
     .with_wire_code("mimi_reporter_resolution_required"))
 }
@@ -1440,7 +1441,7 @@ mod consent_proof_tests {
             json!({
                 "principal_id": request.actor_id,
                 "device_id": device_id,
-                "device_public_key": device_public_key,
+                "device_public_key_did": device_public_key,
                 "hpke_key": "z6LSTestMimiConsentDeviceHpkeKey",
                 "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
                 "authorized_by": request.actor_id,
@@ -1709,11 +1710,11 @@ mod consent_proof_tests {
 
     fn key_material_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
     ) -> MimiKeyMaterialRequestBody {
         MimiKeyMaterialRequestBody {
-            requester_id: requester.clone(),
+            requester_id: requester_id.clone(),
             strand_id: fixture_strand_id(),
             device_id: DeviceId::new("ak:device:01964137-0000-7000-8000-000000000901".to_owned())
                 .unwrap(),
@@ -1727,11 +1728,11 @@ mod consent_proof_tests {
 
     fn signed_key_material_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> MimiKeyMaterialRequestBody {
-        let mut body = key_material_request(state, requester, method);
+        let mut body = key_material_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
         let binding = body.proof_binding_bytes(&proof).unwrap();
@@ -1742,11 +1743,11 @@ mod consent_proof_tests {
 
     fn request_consent_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
     ) -> MimiRequestConsentRequestBody {
         MimiRequestConsentRequestBody {
-            requester_id: requester.clone(),
+            requester_id: requester_id.clone(),
             target: MimiConsentTarget {
                 kind: MimiConsentTargetKind::Did,
                 id: arkret_wire::NonEmptyString::new("did:web:mimi-peer-test.invalid").unwrap(),
@@ -1760,11 +1761,11 @@ mod consent_proof_tests {
 
     fn signed_request_consent_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> MimiRequestConsentRequestBody {
-        let mut body = request_consent_request(state, requester, method);
+        let mut body = request_consent_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
         let binding = body.proof_binding_bytes(&proof).unwrap();
@@ -1775,7 +1776,7 @@ mod consent_proof_tests {
 
     fn identifier_query_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
     ) -> MimiIdentifierQueryRequestBody {
         MimiIdentifierQueryRequestBody {
@@ -1783,7 +1784,7 @@ mod consent_proof_tests {
                 kind: MimiIdentifierKind::Handle,
                 identifier_commitment: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
             }],
-            requester_id: Some(requester.clone()),
+            requester_id: Some(requester_id.clone()),
             privacy_profile: None,
             proofs: vec![unsigned_request_proof(state, method)],
         }
@@ -1791,11 +1792,11 @@ mod consent_proof_tests {
 
     fn signed_identifier_query_request(
         state: &AppState,
-        requester: &DidCoreId,
+        requester_id: &DidCoreId,
         method: &arkret_wire::DidUrl,
         signing_key: &ed25519_dalek::SigningKey,
     ) -> MimiIdentifierQueryRequestBody {
-        let mut body = identifier_query_request(state, requester, method);
+        let mut body = identifier_query_request(state, requester_id, method);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
         let proof = body.proofs[0].clone();
         let binding = body.proof_binding_bytes(&proof).unwrap();
@@ -1821,24 +1822,25 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn request_family_proofs_verify_under_their_own_context() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-request-family-positive");
+        let (signing_key, requester_id, method) =
+            did_key_originator("mimi-request-family-positive");
 
         verify_mimi_key_material_request_proofs(
             &state,
-            &signed_key_material_request(&state, &requester, &method, &signing_key),
+            &signed_key_material_request(&state, &requester_id, &method, &signing_key),
         )
         .await
         .expect("key material request proof");
         verify_mimi_request_consent_proofs(
             &state,
-            &signed_request_consent_request(&state, &requester, &method, &signing_key),
+            &signed_request_consent_request(&state, &requester_id, &method, &signing_key),
         )
         .await
         .expect("consent request proof");
         verify_mimi_identifier_query_proofs(
             &state,
-            &signed_identifier_query_request(&state, &requester, &method, &signing_key),
-            requester.as_str(),
+            &signed_identifier_query_request(&state, &requester_id, &method, &signing_key),
+            requester_id.as_str(),
         )
         .await
         .expect("identifier query proof");
@@ -1847,10 +1849,11 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn request_families_bind_distinct_proof_contexts() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-context-separation");
-        let key_material = signed_key_material_request(&state, &requester, &method, &signing_key);
-        let consent = signed_request_consent_request(&state, &requester, &method, &signing_key);
-        let query = signed_identifier_query_request(&state, &requester, &method, &signing_key);
+        let (signing_key, requester_id, method) = did_key_originator("mimi-context-separation");
+        let key_material =
+            signed_key_material_request(&state, &requester_id, &method, &signing_key);
+        let consent = signed_request_consent_request(&state, &requester_id, &method, &signing_key);
+        let query = signed_identifier_query_request(&state, &requester_id, &method, &signing_key);
 
         let contexts = [
             binding_context(
@@ -1877,10 +1880,10 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn key_material_rejects_a_consent_request_context_proof() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-cross-family-consent");
-        let consent = signed_request_consent_request(&state, &requester, &method, &signing_key);
+        let (signing_key, requester_id, method) = did_key_originator("mimi-cross-family-consent");
+        let consent = signed_request_consent_request(&state, &requester_id, &method, &signing_key);
 
-        let mut key_material = key_material_request(&state, &requester, &method);
+        let mut key_material = key_material_request(&state, &requester_id, &method);
         let mut replayed = consent.proofs[0].clone();
         replayed.payload_digest = key_material.payload_digest().unwrap();
         key_material.proofs = vec![replayed];
@@ -1894,10 +1897,10 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn request_consent_rejects_an_identifier_query_context_proof() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-cross-family-query");
-        let query = signed_identifier_query_request(&state, &requester, &method, &signing_key);
+        let (signing_key, requester_id, method) = did_key_originator("mimi-cross-family-query");
+        let query = signed_identifier_query_request(&state, &requester_id, &method, &signing_key);
 
-        let mut consent = request_consent_request(&state, &requester, &method);
+        let mut consent = request_consent_request(&state, &requester_id, &method);
         let mut replayed = query.proofs[0].clone();
         replayed.payload_digest = consent.payload_digest().unwrap();
         consent.proofs = vec![replayed];
@@ -1911,15 +1914,17 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn identifier_query_rejects_a_key_material_context_proof() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-cross-family-key-material");
-        let key_material = signed_key_material_request(&state, &requester, &method, &signing_key);
+        let (signing_key, requester_id, method) =
+            did_key_originator("mimi-cross-family-key-material");
+        let key_material =
+            signed_key_material_request(&state, &requester_id, &method, &signing_key);
 
-        let mut query = identifier_query_request(&state, &requester, &method);
+        let mut query = identifier_query_request(&state, &requester_id, &method);
         let mut replayed = key_material.proofs[0].clone();
         replayed.payload_digest = query.payload_digest().unwrap();
         query.proofs = vec![replayed];
 
-        let error = verify_mimi_identifier_query_proofs(&state, &query, requester.as_str())
+        let error = verify_mimi_identifier_query_proofs(&state, &query, requester_id.as_str())
             .await
             .expect_err("a key-material context proof must not verify as an identifier query");
         assert_rejected_proof(&error);
@@ -1928,8 +1933,8 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn key_material_rejects_a_proof_outside_the_replay_window() {
         let state = state();
-        let (signing_key, requester, method) = did_key_originator("mimi-replay-window");
-        let mut body = key_material_request(&state, &requester, &method);
+        let (signing_key, requester_id, method) = did_key_originator("mimi-replay-window");
+        let mut body = key_material_request(&state, &requester_id, &method);
         body.proofs[0].created_at =
             now() - Duration::seconds(MIMI_OPERATION_PROOF_WINDOW_SECONDS + 1);
         body.proofs[0].payload_digest = body.payload_digest().unwrap();
@@ -1947,16 +1952,16 @@ mod consent_proof_tests {
     #[tokio::test]
     async fn request_family_proofs_stay_optional_on_the_wire() {
         let state = state();
-        let (_signing_key, requester, method) = did_key_originator("mimi-optional-proofs");
-        let mut key_material = key_material_request(&state, &requester, &method);
+        let (_signing_key, requester_id, method) = did_key_originator("mimi-optional-proofs");
+        let mut key_material = key_material_request(&state, &requester_id, &method);
         key_material.proofs.clear();
-        let mut query = identifier_query_request(&state, &requester, &method);
+        let mut query = identifier_query_request(&state, &requester_id, &method);
         query.proofs.clear();
 
         verify_mimi_key_material_request_proofs(&state, &key_material)
             .await
             .expect("key material proofs are serde-default and may be absent");
-        verify_mimi_identifier_query_proofs(&state, &query, requester.as_str())
+        verify_mimi_identifier_query_proofs(&state, &query, requester_id.as_str())
             .await
             .expect("identifier query proofs are serde-default and may be absent");
     }

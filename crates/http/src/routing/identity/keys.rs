@@ -251,7 +251,7 @@ async fn attested_device_record(
     else {
         return Ok(None);
     };
-    let device_signing_key = arkret_wire::DidKey::new(signing_key_did).map_err(|error| {
+    let device_signing_key_did = arkret_wire::DidKey::new(signing_key_did).map_err(|error| {
         AppError::internal(format!("stored device signing key is invalid: {error}"))
     })?;
     let hpke_key = arkret_wire::NonEmptyString::new(hpke_key)
@@ -276,7 +276,7 @@ async fn attested_device_record(
                 |error| AppError::internal(format!("service id is not a did_core_id: {error}")),
             )?,
             device_id: device_id.clone(),
-            device_signing_key_did: device_signing_key.clone(),
+            device_signing_key_did: device_signing_key_did.clone(),
             hpke_key: hpke_key.clone(),
             device_authorize_event_id: device_authorize_event_id.clone(),
             authorized_generation_ref,
@@ -410,11 +410,15 @@ async fn keys_query(
     })
 }
 
-fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, actor: &str) -> bool {
-    if requester == actor {
+fn keys_query_actor_visible_to_requester(
+    state: &AppState,
+    requester_id: &str,
+    actor: &str,
+) -> bool {
+    if requester_id == actor {
         return true;
     }
-    let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester.to_owned()) else {
+    let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester_id.to_owned()) else {
         return false;
     };
     let Ok(actor_id) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
@@ -659,7 +663,7 @@ async fn device_signing_keys_query(
         if !matches!(facet.status, DeviceStatus::Active) {
             continue;
         }
-        let Some(device_signing_key) = facet.signing_key_did else {
+        let Some(device_signing_key_did) = facet.signing_key_did else {
             continue;
         };
         let Ok(typed_device_id) = arkret_identifiers::DeviceId::new(device_id.clone()) else {
@@ -667,7 +671,7 @@ async fn device_signing_keys_query(
         };
         devices.push(AuthorizedDeviceSigningKey {
             device_id: typed_device_id,
-            device_signing_key,
+            device_signing_key_did,
             device_status: DeviceStatus::Active,
             device_authorize_event_id: facet.device_authorize_event_id,
         });

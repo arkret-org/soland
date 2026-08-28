@@ -981,6 +981,7 @@ fn federation_session(
 ) -> Result<SessionRecord, SubmitOneError> {
     Ok(SessionRecord {
         token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
+        service_account_id: None,
         actor: event
             .executed_by
             .as_ref()
@@ -1282,6 +1283,7 @@ async fn submit_federated_cascade_after_transport_validation(
     }
     let audit_session = SessionRecord {
         token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
+        service_account_id: None,
         actor: submission
             .controller_transition
             .event

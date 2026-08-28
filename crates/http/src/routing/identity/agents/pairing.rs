@@ -46,7 +46,7 @@ pub(super) async fn resolve_agent_pairing(
     let agent_id = record.id.as_str();
     let pairing_expires_at = required_pairing_expires_at(&record)?;
     let bootstrap = AgentPairingBootstrap {
-        arkret_base_uri: state
+        arkret_base_url: state
             .config()
             .public_base_url
             .trim_end_matches('/')
@@ -266,7 +266,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        account.account_id,
+        account.account_id.to_string(),
         state.service_id().clone(),
     ));
     json_ok(AgentRuntimeApprovalOutcome {
@@ -1256,7 +1256,7 @@ fn ensure_current_runtime_key_request_matches(
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
     recipient_actor_id: arkret_wire::DidCoreId,
-    controller_account_id: String,
+    controller_account_id: arkret_wire::ServiceAccountId,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
 }
@@ -1272,10 +1272,7 @@ pub(super) fn account_notification_context(
         .ok()?,
         recipient_actor_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
             .ok()?,
-        controller_account_id: ids::format_typed_uuid(
-            "account",
-            &agent_record.controller_account_id?,
-        ),
+        controller_account_id: agent_record.controller_account_id.clone()?,
         recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
             .ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
@@ -1322,7 +1319,7 @@ pub(super) async fn persist_terminal_account_notification(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        context.controller_account_id,
+        context.controller_account_id.to_string(),
         context.recipient_id.to_string(),
     ));
     Ok(())
@@ -2035,10 +2032,8 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8528")
                 .expect("valid notification uuid"),
         );
-        record.controller_account_id = Some(
-            uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8529")
-                .expect("valid account uuid"),
-        );
+        record.controller_account_id =
+            Some(arkret_wire::ServiceAccountId::new("account-test-controller".to_owned()).unwrap());
         record.recipient_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
             Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
@@ -2050,8 +2045,8 @@ mod requested_scope_tests {
             "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
         );
         assert_eq!(
-            context.controller_account_id,
-            "ak:account:019f6131-3dc4-76f1-ade6-00f4225a8529"
+            context.controller_account_id.as_str(),
+            "account-test-controller"
         );
     }
 

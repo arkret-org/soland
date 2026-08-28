@@ -11,8 +11,8 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceErrorKind;
 
 use super::peer::{
-    cross_domain_replay, schema_violation, source_service_id_from_request,
-    trusted_account_authority_id, validate_peer_request,
+    cross_domain_replay, schema_violation, source_id_from_request, trusted_account_authority_id,
+    validate_peer_request,
 };
 use crate::state::AppState;
 
@@ -119,7 +119,7 @@ pub(super) async fn check_device_revocation_gate(
     // Authentication and transport binding precede every principal/device
     // lookup. A caller must not use this operation as an account oracle.
     validate_peer_request(state, req, true).await?;
-    let source_id = source_service_id_from_request(req)?;
+    let source_id = source_id_from_request(req)?;
     let configured_authority = trusted_account_authority_id(state).await?;
     if source_id != configured_authority.as_str() {
         return Err(AppError::capability_denied(
@@ -264,8 +264,8 @@ pub(super) async fn check_device_revocation_gate(
         .persistence()
         .linearize_device_revocation_gate(
             soland_storage::DeviceRevocationGateLinearizationRequest {
-                principal_id: request.principal_authority.principal_id.to_string(),
-                principal_server_id: request.principal_authority.principal_server_id.to_string(),
+                principal_id: request.principal_authority.principal_id.clone(),
+                principal_server_id: request.principal_authority.principal_server_id.clone(),
                 device_id: request.device_id.to_string(),
                 expected_device_authorize_event_id: request
                     .expected_device_authorize_event_id
@@ -406,8 +406,8 @@ mod tests {
 
     fn selector() -> DeviceRevocationGateSelector {
         DeviceRevocationGateSelector {
-            principal_id: PRINCIPAL.to_owned(),
-            principal_server_id: PRINCIPAL_SERVER.to_owned(),
+            principal_id: arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
+            principal_server_id: arkret_wire::DidCoreId::new(PRINCIPAL_SERVER).unwrap(),
             device_id: DEVICE.to_owned(),
             target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
             target_device_generation_ref: 1,

@@ -1,7 +1,7 @@
 use arkret_models_collaboration::objects::read_receipts::Notification;
 use arkret_models_collaboration::sync_frames::account_sync::NotificationDelta;
-use arkret_wire::DidCoreId;
 use arkret_wire::events::EventKind;
+use arkret_wire::{DidCoreId, ServiceAccountId};
 
 use super::{PersistenceResult, async_trait};
 
@@ -16,7 +16,7 @@ pub struct RecipientNotificationRecord {
 pub struct AccountNotificationDeltaWrite {
     pub delta: NotificationDelta,
     pub recipient_actor_id: DidCoreId,
-    pub controller_account_id: String,
+    pub controller_account_id: ServiceAccountId,
     pub recipient_id: DidCoreId,
     pub source_account_artifact_id: String,
 }
@@ -43,7 +43,7 @@ pub trait NotificationStore: Send + Sync {
     ) -> PersistenceResult<Vec<RecipientNotificationRecord>>;
     async fn list_for_account(
         &self,
-        controller_account_id: &str,
+        controller_account_id: &ServiceAccountId,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>>;

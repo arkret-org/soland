@@ -3,6 +3,8 @@
 //! dropped/resync frame helper. Shared with sibling routing modules through
 //! `sync.rs` re-exports.
 
+use arkret_identifiers::DidCoreId;
+
 use super::*;
 
 #[derive(Debug, Default)]
@@ -128,7 +130,8 @@ pub async fn sync_token_for_client_sync_frontiers(
             handle: handle.clone(),
             binding_subject: Some(principal_id),
             device_id: Some(device_id),
-            service_id: state.service_id().clone(),
+            service_id: DidCoreId::new(state.service_id().clone())
+                .expect("AppState service_id must be a validated DID core id"),
             filter_digest: Some(filter_digest),
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(positions),
@@ -169,7 +172,8 @@ pub(crate) async fn sync_token_for_events_query(
             handle: handle.clone(),
             binding_subject: Some(principal_id),
             device_id: Some(device_id),
-            service_id: state.service_id().clone(),
+            service_id: DidCoreId::new(state.service_id().clone())
+                .expect("AppState service_id must be a validated DID core id"),
             filter_digest: Some(filter_digest.to_owned()),
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: None,
@@ -208,7 +212,8 @@ pub(crate) async fn sync_barrier_token_for_event(
             handle,
             binding_subject: Some(session.actor.clone()),
             device_id: Some(session.device_id.clone()),
-            service_id: state.service_id().clone(),
+            service_id: DidCoreId::new(state.service_id().clone())
+                .expect("AppState service_id must be a validated DID core id"),
             filter_digest: None,
             purpose: BARRIER_CURSOR_PURPOSE.to_owned(),
             positions: None,
@@ -243,7 +248,8 @@ async fn sync_token_for_state_positions(
             handle: handle.clone(),
             binding_subject: None,
             device_id: None,
-            service_id: state.service_id().clone(),
+            service_id: DidCoreId::new(state.service_id().clone())
+                .expect("AppState service_id must be a validated DID core id"),
             filter_digest: None,
             purpose: STREAM_CURSOR_PURPOSE.to_owned(),
             positions: Some(json!({
@@ -478,7 +484,10 @@ fn stored_value_from_sync_cursor_record(record: CursorState) -> Value {
     if let Some(device_id) = record.device_id {
         ctx.insert("device_id".to_owned(), Value::String(device_id));
     }
-    ctx.insert("service_id".to_owned(), Value::String(record.service_id));
+    ctx.insert(
+        "service_id".to_owned(),
+        Value::String(record.service_id.into_string()),
+    );
     ctx.insert("purpose".to_owned(), Value::String(record.purpose));
     if let Some(filter_digest) = record.filter_digest {
         ctx.insert("filter_digest".to_owned(), Value::String(filter_digest));
@@ -747,7 +756,7 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
             "barrier cursor device does not match request device",
         ));
     }
-    if record.service_id != *state.service_id() {
+    if record.service_id.as_str() != state.service_id() {
         return Err(SyncCursorError::Mismatch(
             "barrier cursor service does not match this service DID",
         ));
@@ -919,7 +928,9 @@ pub(super) async fn account_cursor_revoke(
     };
     let application_record = soland_services::sync::CursorRevocationState {
         cursor_digest: sha256_hex(cursor.as_bytes()),
-        principal_id: session.actor.clone(),
+        principal_id: arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::internal(format!("authenticated principal_id is invalid: {error}"))
+        })?,
         device_id,
         scope: scope_value.to_owned(),
         reason_code: reason_code.to_owned(),

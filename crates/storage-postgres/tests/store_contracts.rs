@@ -919,8 +919,9 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let notification_uuid = uuid::Uuid::now_v7();
     let notification_id =
         arkret_wire::NotificationId::new(format!("ak:notification:{notification_uuid}")).unwrap();
-    let controller_account_id = format!("ak:account:{run_id}");
-    let recipient_id =
+    let controller_account_id =
+        arkret_wire::ServiceAccountId::new(format!("account-{run_id}")).unwrap();
+    let recipient_actor_id =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:notification-{run_id}.example"))
             .unwrap();
     let recipient_id =
@@ -955,7 +956,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     };
     let write = |delta| AccountNotificationDeltaWrite {
         delta,
-        recipient_actor_id: recipient_id.clone(),
+        recipient_actor_id: recipient_actor_id.clone(),
         controller_account_id: controller_account_id.clone(),
         recipient_id: recipient_id.clone(),
         source_account_artifact_id: artifact_id.clone(),

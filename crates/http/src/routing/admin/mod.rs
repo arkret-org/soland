@@ -75,8 +75,8 @@ impl Handler for RequireAdmin {
 /// Gate a write-side admin handler on the caller's authorization.
 ///
 /// In `development_mode` any authenticated session is allowed. In production
-/// mode the session actor MUST appear in `AppConfig::admin_principal_dids`
-/// (env `SOLAND_ADMIN_PRINCIPAL_DIDS`). Returns the original session on
+/// mode the session actor MUST appear in `AppConfig::admin_principal_ids`
+/// (env `SOLAND_ADMIN_PRINCIPAL_IDS`). Returns the original session on
 /// success or an `AppError` with `capability_denied` on failure.
 pub(super) fn require_admin_principal(
     state: &AppState,
@@ -87,7 +87,7 @@ pub(super) fn require_admin_principal(
     } else {
         Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "admin API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS"
+            "admin API requires the caller principal ID to be listed in SOLAND_ADMIN_PRINCIPAL_IDS"
                 .to_owned(),
         )
         .with_status(salvo::http::StatusCode::FORBIDDEN))

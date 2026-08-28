@@ -214,13 +214,17 @@ async fn authorize_account_device_pair(
         &target_attestation,
     )
     .map_err(device_pairing_proof_failed)?;
+    let authorized_by_actor_id =
+        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::internal(format!("authenticated actor id is invalid: {error}"))
+        })?;
     let pairing_commit = body.device_pairing_request_id.as_ref().map(|request_id| {
         soland_services::events::CommitDevicePairingAuthorization {
             device_pairing_request_id: request_id.to_string(),
             pairing_code: pairing_code.to_owned(),
             new_device_pubkey: body.new_device_pubkey.clone(),
             device_id: device_id.clone(),
-            authorized_by_actor_id: session.actor.clone(),
+            authorized_by_actor_id: authorized_by_actor_id.clone(),
             authorized_event_ref: body.authorize_event.event.event_id.to_string(),
             changed_at: authorized_at,
         }

@@ -42,7 +42,7 @@ impl TryFrom<JoinApplicationRow> for JoinApplicationRecord {
 #[derive(QueryableByName)]
 struct JoinApplicationIdempotencyRow {
     #[diesel(sql_type = Text)]
-    principal_id: String,
+    principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
     #[diesel(sql_type = Text)]

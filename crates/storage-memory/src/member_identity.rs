@@ -7,7 +7,8 @@ use super::{
 /// durability lives in `PgMemberIdentityStore`.
 pub(crate) struct MemoryMemberIdentityStore {
     events: Arc<Mutex<BTreeMap<String, MemberIdentityEventRecord>>>,
-    handle_claims: Arc<Mutex<BTreeMap<(String, String), HandleClaimEvidenceRecord>>>,
+    handle_claims:
+        Arc<Mutex<BTreeMap<(arkret_wire::DidCoreId, String), HandleClaimEvidenceRecord>>>,
 }
 
 impl MemoryMemberIdentityStore {
@@ -40,7 +41,10 @@ impl MemberIdentityStore for MemoryMemberIdentityStore {
         Ok(())
     }
 
-    async fn delete_handle_claims_for_subject(&self, subject_id: &str) -> PersistenceResult<usize> {
+    async fn delete_handle_claims_for_subject(
+        &self,
+        subject_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<usize> {
         let mut claims = self.handle_claims.lock();
         let before = claims.len();
         claims.retain(|(subject, _), _| subject != subject_id);

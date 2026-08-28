@@ -15,7 +15,7 @@ pub struct SyncCursorRecord {
     pub handle: String,
     pub binding_subject: Option<String>,
     pub device_id: Option<String>,
-    pub service_id: String,
+    pub service_id: arkret_identifiers::DidCoreId,
     pub filter_digest: Option<String>,
     pub purpose: String,
     pub positions: Option<Value>,

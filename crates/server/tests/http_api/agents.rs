@@ -35,7 +35,7 @@ fn controller_founding_authorize_payload(
     let mut payload = DeviceAuthorizePayload {
         principal_id: arkret_wire::project_did_to_core_id(actor).unwrap(),
         device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
-        device_public_key: arkret_wire::NonEmptyString::new(format!(
+        device_public_key_did: arkret_wire::NonEmptyString::new(format!(
             "did:key:{}",
             test_ed25519_multibase_public(signing_key),
         ))
@@ -79,10 +79,10 @@ fn controller_founding_device_descriptor(
         descriptor_version: 1,
         device_id: payload.device_id.clone(),
         device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-            payload.device_public_key.as_bytes(),
+            payload.device_public_key_did.as_bytes(),
         ))
         .unwrap(),
-        device_public_key: payload.device_public_key.clone(),
+        device_public_key_did: payload.device_public_key_did.clone(),
         device_key_algorithm: FoundingDeviceKeyAlgorithm::Ed25519,
         device_key_purpose: FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
         hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
@@ -130,7 +130,7 @@ fn attach_fixture_service_admission(
         )
         .unwrap(),
         producer_verification_method: producer.verification_method.clone(),
-        producer_signing_key: arkret_wire::DidKey::new(format!(
+        producer_signing_key_did: arkret_wire::DidKey::new(format!(
             "did:key:{producer_public_key_multibase}"
         ))
         .unwrap(),
@@ -166,10 +166,14 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     .into_string();
     let persistence = state.test_persistence();
     let accounts = persistence.accounts();
-    if accounts.get(&actor_id).await.unwrap().is_none() {
+    let service_account_id = if let Some(account) = accounts.get(&actor_id).await.unwrap() {
+        account.id
+    } else {
+        let account_id =
+            arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string()).unwrap();
         accounts
             .put(&soland_storage::AccountRecord {
-                id: format!("ak:account:{}", uuid::Uuid::now_v7()),
+                id: account_id.clone(),
                 principal_id: arkret_wire::DidCoreId::new(actor_id.clone()).unwrap(),
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice".to_owned()),
@@ -179,12 +183,14 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
             })
             .await
             .unwrap();
-    }
+        account_id
+    };
     state
         .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
+            service_account_id,
             actor: actor_id.clone(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             audience: state.service_id().clone(),
@@ -543,7 +549,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .recovery_policies()
         .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: controller_id.to_string(),
+            principal_id: controller_id.clone(),
             version: 1,
             acceptance_basis: arkret_wire::LeaseBasisRef::Seal(
                 arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64)))
@@ -1247,7 +1253,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .take_json()
         .await
         .unwrap();
-    assert_eq!(hidden_list["agents"], serde_json::json!([]));
+    assert_eq!(hidden_list["agent_projections"], serde_json::json!([]));
     let hidden_get = TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
@@ -1371,7 +1377,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
     // account query replay -> SDK model/digest/proof verifier.
     let app = app_from_state(state.clone());
     let mut replay_response = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"actors": [controller_id], "limit": 100}))
+        .json(&serde_json::json!({"actor_ids": [controller_id], "limit": 100}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1776,8 +1782,8 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
     let list_body: arkret_models_collaboration::agent_operations::AgentList =
         listed.take_json().await.unwrap();
     assert!(!list_body.has_more);
-    assert_eq!(list_body.agents.len(), 1);
-    let listed_agent = &list_body.agents[0];
+    assert_eq!(list_body.agent_projections.len(), 1);
+    let listed_agent = &list_body.agent_projections[0];
     assert_eq!(listed_agent.agent_id.as_str(), agent_id);
     assert_eq!(listed_agent.display_name, None);
     assert_eq!(listed_agent.slug, "summary");

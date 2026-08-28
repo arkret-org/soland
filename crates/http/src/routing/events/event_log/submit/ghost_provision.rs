@@ -432,6 +432,7 @@ async fn submit_applet_record_event_batch(
     let provision_time = now();
     let session = |actor: &str| SessionRecord {
         token_hash: "applet-ghost-provision".to_owned(),
+        service_account_id: None,
         actor: actor.to_owned(),
         // Service session: an applet owns no device (see `applet_event_session`).
         device_id: String::new(),

@@ -1,7 +1,7 @@
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_wire::{
-    AcceptedStep, RecoveryPreparedPlan, SchemaId, SecurityTransactionPreparedPlan,
-    SecurityTransactionStep,
+    AcceptedStep, RecoveryPreparedPlan, SchemaId, SecurityTransactionAcceptor,
+    SecurityTransactionPreparedPlan, SecurityTransactionStep,
 };
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
@@ -51,8 +51,8 @@ async fn enforce_recovery_grant_transaction_binding(
         .await
         .map_err(recovery_service_error)?
         .ok_or_else(|| AppError::not_found("recovery session not found"))?;
-    if recovery.principal_id != session.actor
-        || recovery.principal_server_id != session.audience
+    if recovery.principal_id.as_str() != session.actor
+        || recovery.principal_server_id.as_str() != session.audience
         || recovery.requesting_device_id != session.device_id
         || recovery.session_grant_id != grant.grant_id.as_str()
         || recovery.session_grant_cnf_jkt != grant.cnf_jkt
@@ -319,7 +319,9 @@ async fn accept_rotation_step(
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     transaction.resource.accepted_steps.push(AcceptedStep {
         prepared_material_digest,
-        acceptor_id: state.service_id().clone(),
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
         output_ref,
         output_digest,
         accepted_at: chrono::Utc::now(),
@@ -389,7 +391,7 @@ async fn submit_rotation_event_unit(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
-    if !outcome.rejected.is_empty()
+    if !outcome.events_submit_rejected_rows.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome.accepted.len() != expected_event_ids.len()
         || outcome
@@ -400,7 +402,7 @@ async fn submit_rotation_event_unit(
     {
         return Err(AppError::conflict(format!(
             "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
-            outcome.accepted, outcome.rejected, outcome.quarantine
+            outcome.accepted, outcome.events_submit_rejected_rows, outcome.quarantine
         ))
         .with_wire_code("security_transaction_failed_precondition"));
     }
@@ -1077,7 +1079,9 @@ pub(crate) async fn backup_series_erase_command(
 
     transaction.resource.accepted_steps.push(AcceptedStep {
         prepared_material_digest: plan.erase_confirmation_digest.clone(),
-        acceptor_id: state.service_id().clone(),
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
         output_ref: plan.erase_confirmation_digest.as_str().to_owned(),
         output_digest: plan.erase_confirmation_digest,
         accepted_at: chrono::Utc::now(),
@@ -1266,7 +1270,7 @@ async fn continue_issue_terminal_receipt(
     if recovery_session.state != SessionState::Verified
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
-        || recovery_session.principal_id != transaction.resource.principal_id.as_str()
+        || recovery_session.principal_id != transaction.resource.principal_id
         || recovery_session.principal_server_id.as_str() != state.service_id()
         || recovery_session.requesting_device_id != expected_device_id.as_str()
         || recovery_session.policy_id != receipt.policy_id.as_str()
@@ -1566,7 +1570,9 @@ async fn continue_issue_terminal_receipt(
         .map_err(security_transaction_service_error)?;
     transaction.resource.accepted_steps.push(AcceptedStep {
         prepared_material_digest: attestation.attestation_digest.clone(),
-        acceptor_id: state.service_id().clone(),
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
         output_ref: receipt.receipt_id.as_str().to_owned(),
         output_digest: receipt_digest,
         accepted_at: completed_at,
@@ -1704,7 +1710,7 @@ async fn continue_submit_reanchor_unit(
         binding.reanchor_event_id.as_str(),
         binding.authorize_event_id.as_str(),
     ];
-    if !outcome.rejected.is_empty()
+    if !outcome.events_submit_rejected_rows.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome.ingress_receipts.len() != 2
         || outcome.accepted.len() != 2
@@ -1749,7 +1755,9 @@ async fn continue_submit_reanchor_unit(
     let output_digest = canonical_digest(&outcome)?;
     transaction.resource.accepted_steps.push(AcceptedStep {
         prepared_material_digest,
-        acceptor_id: state.service_id().clone(),
+        acceptor: SecurityTransactionAcceptor::Principal {
+            principal_id: state.service_core_id(),
+        },
         output_ref: batch_receipt.receipt_id.as_str().to_owned(),
         output_digest,
         accepted_at: batch_receipt.created_at,

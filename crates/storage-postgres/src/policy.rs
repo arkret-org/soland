@@ -73,7 +73,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO policy_documents \
-             (id, owner_id, scope, subject_ref, policy_kind, document, version, signed_by_id, active, updated_at) \
+             (id, owner_id, scope, subject_ref, policy_kind, document, version, signed_by, active, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET \
                 owner_id = EXCLUDED.owner_id, \
@@ -82,7 +82,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
                 policy_kind = EXCLUDED.policy_kind, \
                 document = EXCLUDED.document, \
                 version = EXCLUDED.version, \
-                signed_by_id = EXCLUDED.signed_by_id, \
+                signed_by = EXCLUDED.signed_by, \
                 active = EXCLUDED.active, \
                 updated_at = EXCLUDED.updated_at",
         )

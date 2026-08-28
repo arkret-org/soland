@@ -1,3 +1,5 @@
+use arkret_wire::WebOrigin;
+
 use super::{PersistenceResult, Utc, async_trait};
 
 /// One single-use `challenge_dpop_session_v1` challenge
@@ -14,7 +16,7 @@ use super::{PersistenceResult, Utc, async_trait};
 pub struct WebsocketAuthChallengeRecord {
     pub connection_id: String,
     pub nonce: String,
-    pub canonical_origin: String,
+    pub canonical_origin: WebOrigin,
     pub canonical_base_url: String,
     pub issued_at: chrono::DateTime<Utc>,
     pub expires_at: chrono::DateTime<Utc>,

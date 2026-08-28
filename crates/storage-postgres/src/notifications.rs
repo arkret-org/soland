@@ -4,7 +4,7 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_models_collaboration::sync_frames::account_sync::{NotificationData, NotificationDelta};
 use arkret_wire::events::EventKind;
-use arkret_wire::{DidCoreId, EventId, NotificationId, RealmId, StrandId};
+use arkret_wire::{DidCoreId, EventId, NotificationId, RealmId, ServiceAccountId, StrandId};
 use soland_storage::{
     AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
 };
@@ -24,8 +24,8 @@ struct NotificationRow {
     realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     source_event_id: Option<String>,
-    #[diesel(sql_type = Nullable<sql_types::Uuid>)]
-    controller_account_id: Option<Uuid>,
+    #[diesel(sql_type = Nullable<Text>)]
+    controller_account_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     recipient_id: Option<DidCoreId>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -208,6 +208,12 @@ impl NotificationRow {
                 "account notification is missing controller_account_id".to_owned(),
             )
         })?;
+        let controller_account_id =
+            ServiceAccountId::new(controller_account_id).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "account notification controller_account_id is invalid: {error}"
+                ))
+            })?;
         let recipient_id = self.recipient_id.ok_or_else(|| {
             PersistenceError::Internal("account notification is missing recipient_id".to_owned())
         })?;
@@ -220,7 +226,7 @@ impl NotificationRow {
             record: AccountNotificationDeltaWrite {
                 delta,
                 recipient_actor_id: self.recipient_actor_id,
-                controller_account_id: ids::format_typed_uuid("account", &controller_account_id),
+                controller_account_id,
                 recipient_id,
                 source_account_artifact_id,
             },
@@ -364,9 +370,7 @@ impl NotificationStore for PgNotificationStore {
             record.delta.id.as_str(),
         ))
         .bind::<Text, _>(record.recipient_actor_id.as_str())
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
-            &record.controller_account_id,
-        ))
+        .bind::<Text, _>(record.controller_account_id.as_str())
         .bind::<Text, _>(record.recipient_id.as_str())
         .bind::<Text, _>(&record.source_account_artifact_id)
         .bind::<Text, _>(&action)
@@ -406,7 +410,7 @@ impl NotificationStore for PgNotificationStore {
 
     async fn list_for_account(
         &self,
-        controller_account_id: &str,
+        controller_account_id: &ServiceAccountId,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>> {
@@ -424,7 +428,7 @@ impl NotificationStore for PgNotificationStore {
                AND ($3 IS NULL OR projection_position > $3) \
              ORDER BY projection_position",
         )
-        .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(controller_account_id))
+        .bind::<Text, _>(controller_account_id.as_str())
         .bind::<Text, _>(recipient_id)
         .bind::<Nullable<BigInt>, _>(after_position)
         .load::<NotificationRow>(&mut *conn)

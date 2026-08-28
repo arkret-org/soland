@@ -81,7 +81,7 @@ fn sha256_json(value: &Value) -> String {
 )]
 fn signed_keypackage_claim_request(
     authority_id: &str,
-    requester: &str,
+    requester_id: &str,
     requester_device: &str,
     requester_device_authorize_event_id: &str,
     target_principal_id: &str,
@@ -97,7 +97,7 @@ fn signed_keypackage_claim_request(
         "self KeyPackage claim request id must carry at least 128 bits"
     );
     let created_at = Utc::now();
-    let requester_did = arkret_identifiers::Did::new(requester.to_owned()).unwrap();
+    let requester_did = arkret_identifiers::Did::new(requester_id.to_owned()).unwrap();
     let requester_id = arkret_wire::project_did_to_core_id(&requester_did).unwrap();
     let target_did = arkret_identifiers::Did::new(target_principal_id.to_owned()).unwrap();
     let target_principal_id = arkret_wire::project_did_to_core_id(&target_did).unwrap();
@@ -109,7 +109,7 @@ fn signed_keypackage_claim_request(
             "target_principal_id": target_principal_id,
             "target_device_ids": target_device_ids,
             "intended_realm_id": intended_realm_id,
-            "requester": requester_id,
+            "requester_id": requester_id,
             "claim_purpose": "realm_membership",
             "required_capabilities": required_capabilities,
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
@@ -376,7 +376,7 @@ async fn project_authorized_principal_device(
         json!({
             "principal_id": principal_id,
             "device_id": device_id,
-            "device_public_key": ed25519_public_multibase(signing_key),
+            "device_public_key_did": ed25519_public_multibase(signing_key),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
             "authorized_by": principal_id,
@@ -517,7 +517,7 @@ async fn mls_lifecycle_end_to_end_body() {
     // ── 0. the Realm has to exist before anything cites it ──────────────
     //
     // `peer_claim_policy_authorized`'s `RealmMembership` branch requires both
-    // requester and target to be a joined member (or the owner) of
+    // requester_id and target to be a joined member (or the owner) of
     // `intended_realm_id`. A KeyPackage claim naming a Realm the projection has
     // never seen is not a claim into that Realm, so the bootstrap unit is
     // submitted first rather than after the claim.
@@ -577,7 +577,7 @@ async fn mls_lifecycle_end_to_end_body() {
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackages: vec![
+        keypackage_upload_entries: vec![
             valid_entry,
             mismatched_capabilities_entry,
             noncanonical_capabilities_entry,
@@ -616,7 +616,7 @@ async fn mls_lifecycle_end_to_end_body() {
         publish_json["keypackage_refs"],
         json!([uploaded_keypackage_ref])
     );
-    let rejected = publish_json["rejected"]
+    let rejected = publish_json["rejections"]
         .as_array()
         .expect("invalid capability projections must be rejected");
     assert_eq!(rejected.len(), 2);
@@ -782,7 +782,7 @@ async fn mls_lifecycle_end_to_end_body() {
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackages: vec![
+        keypackage_upload_entries: vec![
             arkret_models_crypto::mls_key_package_record_upload_entry(&lifecycle_keypackage_record)
                 .unwrap(),
         ],

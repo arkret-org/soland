@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use arkret_wire::WebOrigin;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -13,7 +14,7 @@ pub struct CursorState {
     pub handle: String,
     pub binding_subject: Option<String>,
     pub device_id: Option<String>,
-    pub service_id: String,
+    pub service_id: arkret_identifiers::DidCoreId,
     pub filter_digest: Option<String>,
     pub purpose: String,
     pub positions: Option<Value>,
@@ -25,7 +26,7 @@ pub struct CursorState {
 #[derive(Clone, Debug)]
 pub struct CursorRevocationState {
     pub cursor_digest: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub device_id: Option<String>,
     pub scope: String,
     pub reason_code: String,
@@ -59,7 +60,7 @@ pub trait CursorStorePort: Send + Sync {
 pub struct WebsocketChallengeState {
     pub connection_id: String,
     pub nonce: String,
-    pub canonical_origin: String,
+    pub canonical_origin: WebOrigin,
     pub canonical_base_url: String,
     pub issued_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -174,7 +175,8 @@ impl SyncService {
         revocations.iter().any(|entry| match entry.scope.as_str() {
             "this_cursor" => entry.cursor_digest == cursor_digest,
             "same_device" | "same_session" => principal_id.is_some_and(|principal_id| {
-                entry.principal_id == principal_id && entry.device_id.as_deref() == device_id
+                entry.principal_id.as_str() == principal_id
+                    && entry.device_id.as_deref() == device_id
             }),
             _ => false,
         })
@@ -345,7 +347,10 @@ mod tests {
             handle: "cursor-handle".to_owned(),
             binding_subject: None,
             device_id: None,
-            service_id: "ak:did_core:web:service.example".to_owned(),
+            service_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:service.example".to_owned(),
+            )
+            .unwrap(),
             filter_digest: None,
             purpose: "stream".to_owned(),
             positions: None,

@@ -194,7 +194,7 @@ pub(super) async fn resolve_device_pairing(
         .map_err(|error| AppError::internal(format!("stored device_metadata invalid: {error}")))?;
 
     json_ok(DevicePairingBootstrap {
-        arkret_base_uri: state
+        arkret_base_url: state
             .config()
             .public_base_url
             .trim_end_matches('/')

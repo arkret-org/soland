@@ -13,15 +13,16 @@ impl SessionStore for PgSessionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, service_account_id, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
              FROM sessions WHERE id = $1",
         )
         .bind::<Text, _>(token)
         .get_result::<SessionRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(SessionRecord::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(SessionRecord::try_from)
+        .transpose()
     }
 
     async fn put(&self, record: &SessionRecord) -> PersistenceResult<()> {
@@ -30,13 +31,14 @@ impl SessionStore for PgSessionStore {
             .map_err(PersistenceError::database)?;
         let payload = encode_session_payload(record);
         sql_query(
-            "INSERT INTO sessions (id, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
+            "INSERT INTO sessions (id, service_account_id, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \
+             ON CONFLICT (id) DO UPDATE SET service_account_id = EXCLUDED.service_account_id, actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
              audience = EXCLUDED.audience, session_public_key = EXCLUDED.session_public_key, \
              payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, updated_at = NOW()",
         )
         .bind::<Text, _>(&record.token_hash)
+        .bind::<Text, _>(record.service_account_id.as_str())
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.device_id)
         .bind::<Text, _>(&record.audience)
@@ -77,19 +79,23 @@ impl SessionStore for PgSessionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS token_hash, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, service_account_id, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
              FROM sessions",
         )
         .load::<SessionRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(SessionRecord::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(SessionRecord::try_from)
+        .collect()
     }
 }
 #[derive(QueryableByName)]
 struct SessionRow {
     #[diesel(sql_type = Text)]
     token_hash: String,
+    #[diesel(sql_type = Text)]
+    service_account_id: String,
     #[diesel(sql_type = Text)]
     actor: String,
     #[diesel(sql_type = Text)]
@@ -107,10 +113,16 @@ struct SessionRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
-impl From<SessionRow> for SessionRecord {
-    fn from(row: SessionRow) -> Self {
-        Self {
+impl TryFrom<SessionRow> for SessionRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: SessionRow) -> Result<Self, Self::Error> {
+        Ok(Self {
             token_hash: row.token_hash,
+            service_account_id: arkret_identifiers::ServiceAccountId::new(row.service_account_id)
+                .map_err(|error| {
+                PersistenceError::SchemaViolation(error.to_string())
+            })?,
             actor: row.actor,
             device_id: row.device_id,
             audience: row.audience,
@@ -119,6 +131,6 @@ impl From<SessionRow> for SessionRecord {
             expires_at: row.expires_at,
             created_at: row.created_at,
             revoked_at: row.revoked_at,
-        }
+        })
     }
 }

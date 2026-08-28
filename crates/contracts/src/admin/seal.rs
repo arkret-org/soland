@@ -53,23 +53,19 @@ impl AdminNotaryValue {
                 format!("single_signer({})", signer.actor_id)
             }
             arkret_wire::NotaryValue::Threshold {
-                threshold,
-                notary_signer_descriptors,
-                ..
-            } => format!("threshold({threshold}/{})", notary_signer_descriptors.len()),
-            arkret_wire::NotaryValue::OpenSet {
-                notary_signer_descriptors,
-            } => {
-                format!("open_set(n={})", notary_signer_descriptors.len())
+                threshold, signers, ..
+            } => format!("threshold({threshold}/{})", signers.len()),
+            arkret_wire::NotaryValue::OpenSet { signers } => {
+                format!("open_set(n={})", signers.len())
             }
             arkret_wire::NotaryValue::Mixed {
                 signer,
-                recovery_notary_signer_descriptors,
+                recovery_signers,
                 ..
             } => format!(
                 "mixed(primary={}, recovery_n={})",
                 signer.actor_id,
-                recovery_notary_signer_descriptors.len()
+                recovery_signers.len()
             ),
         }
     }
@@ -96,7 +92,7 @@ pub struct SubmitControlMoveOutcome {
 pub struct BottomCandidateHead {
     pub event_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub issuer: Option<String>,
+    pub issuer_id: Option<arkret_wire::DidCoreId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hlc: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

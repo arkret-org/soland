@@ -446,7 +446,7 @@ enum InternalEventBinding {
         key: String,
     },
     MimiModerationReport {
-        reporter: String,
+        reporter_id: String,
         target_ref: String,
     },
     ServiceFrankingProof {
@@ -524,7 +524,7 @@ impl InternalEventAdmission {
     pub(in crate::routing) fn mimi_moderation_report(
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
-        reporter: impl Into<String>,
+        reporter_id: impl Into<String>,
         target_ref: impl Into<String>,
     ) -> Self {
         let actor_id = actor_id.into();
@@ -537,7 +537,7 @@ impl InternalEventAdmission {
                 .to_owned(),
             device_id: String::new(),
             binding: InternalEventBinding::MimiModerationReport {
-                reporter: reporter.into(),
+                reporter_id: reporter_id.into(),
                 target_ref: target_ref.into(),
             },
         }
@@ -703,10 +703,10 @@ impl InternalEventAdmission {
                     })
                 }
                 InternalEventBinding::MimiModerationReport {
-                    reporter,
+                    reporter_id,
                     target_ref,
                 } => object.get("payload").is_some_and(|payload| {
-                    payload.get("reporter").and_then(Value::as_str) == Some(reporter.as_str())
+                    payload.get("reporter_id").and_then(Value::as_str) == Some(reporter_id.as_str())
                         && payload.get("target_ref").and_then(Value::as_str)
                             == Some(target_ref.as_str())
                 }),
@@ -1305,8 +1305,8 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 )
             })?;
             let current_heads = [
-                current.request_event_ref.as_deref(),
-                current.response_event_ref.as_deref(),
+                current.request_event_ref.as_ref().map(arkret_wire::EventId::as_str),
+                current.response_event_ref.as_ref().map(arkret_wire::EventId::as_str),
             ]
             .into_iter()
             .flatten()
@@ -1316,7 +1316,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 .iter()
                 .map(|proof| proof.head_event_ref.as_str())
                 .collect::<std::collections::BTreeSet<_>>();
-            if current.contact_round_id.as_deref() != Some(contact_round_evidence.contact_round_id.as_str())
+            if current.contact_round_id.as_ref() != Some(&contact_round_evidence.contact_round_id)
                 || current_heads != evidence_heads
                 || contact_round_evidence
                     .current_proofs
@@ -1833,6 +1833,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
     let now = Utc::now();
     let session = SessionRecord {
         token_hash: format!("principal-genesis:{}", request.idempotency_key),
+        service_account_id: None,
         actor: request.principal_id.to_string(),
         device_id: accepted_device_id.to_string(),
         audience: state.service_id().clone(),
@@ -2038,6 +2039,12 @@ async fn direct_bootstrap_source_is_contact_authority(
     let Some(peer) = peer else {
         return false;
     };
+    let Ok(creator) = arkret_wire::DidCoreId::new(creator) else {
+        return false;
+    };
+    let Ok(peer) = arkret_wire::DidCoreId::new(peer) else {
+        return false;
+    };
     state
         .contacts()
         .contact_any(&creator, &peer)
@@ -2045,7 +2052,11 @@ async fn direct_bootstrap_source_is_contact_authority(
         .ok()
         .flatten()
         .is_some_and(|contact| {
-            contact.status == "accepted" && contact.peer_id.as_deref() == Some(source_id)
+            contact.status == "accepted"
+                && contact
+                    .peer_host_id
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == source_id)
         })
 }
 
@@ -2804,6 +2815,7 @@ pub(crate) async fn submit_federation_events(
             .unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
+            service_account_id: None,
             actor: actor.clone(),
             device_id: device_id.clone(),
             audience: state.service_id().clone(),
@@ -3003,6 +3015,7 @@ pub(crate) async fn submit_federation_events(
         let device_id = event_string_field_from_value(&envelope, "device_id").unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
+            service_account_id: None,
             actor: actor.clone(),
             device_id: device_id.clone(),
             audience: state.service_id().clone(),
@@ -3523,6 +3536,7 @@ async fn submit_direct_conversation_federation(
     let created_at = now();
     let session = SessionRecord {
         token_hash: format!("federation:direct-conversation:{request_hash}"),
+        service_account_id: None,
         actor: receipt.founder_id.to_string(),
         device_id: submission.events[0]
             .event

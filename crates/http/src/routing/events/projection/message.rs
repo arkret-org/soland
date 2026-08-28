@@ -71,7 +71,7 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
         .cloned()
         .unwrap_or_else(|| payload.clone());
     if let Some(object) = content.as_object_mut() {
-        for key in ["reply_to", "in_reply_to", "mentions"] {
+        for key in ["reply_to_id"] {
             if !object.contains_key(key)
                 && let Some(value) = payload.get(key)
             {

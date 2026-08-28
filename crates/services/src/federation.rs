@@ -511,14 +511,14 @@ mod tests {
         async fn frontier_exchange(
             &self,
             _realm_id: &str,
-            _peer_service_id: &DidCoreId,
+            _peer_id: &DidCoreId,
         ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
             Ok(None)
         }
         async fn record_frontier_success(
             &self,
             _realm_id: &str,
-            _peer_service_id: &DidCoreId,
+            _peer_id: &DidCoreId,
             _frontier_root: &str,
             _observed_at: i64,
         ) -> ServiceResult<FederationFrontierExchangeRecord> {
@@ -527,7 +527,7 @@ mod tests {
         async fn record_frontier_failure(
             &self,
             _realm_id: &str,
-            _peer_service_id: &DidCoreId,
+            _peer_id: &DidCoreId,
             _reason: &str,
             _observed_at: i64,
         ) -> ServiceResult<FederationFrontierExchangeRecord> {

@@ -627,9 +627,9 @@ fn direct_binding_endorsement_digest(
 /// Normal branch: the founder is the **responder**, i.e. the participant that is not the request
 /// issuer. This is normative, not a coin flip. The authority is lit up by the responder's
 /// `normal_response_acceptance_receipt`, which proves the responder was online at the moment the
-/// authority came into existence; the requester may have gone offline days earlier. Base v1 defines
-/// no fallback, so naming the possibly-absent party would leave the pair unable to ever create the
-/// conversation.
+/// authority came into existence; the requester_id may have gone offline days earlier. Base v1
+/// defines no fallback, so naming the possibly-absent party would leave the pair unable to ever
+/// create the conversation.
 pub(crate) fn direct_founding_authority_from_contact(
     record: &ContactRecord,
 ) -> Result<
@@ -637,12 +637,12 @@ pub(crate) fn direct_founding_authority_from_contact(
     &'static str,
 > {
     if let Some(bundle) = record.contact_round_evidence.as_ref() {
-        if record.contact_round_id.as_deref() != Some(bundle.contact_round_id.as_str()) {
+        if record.contact_round_id.as_ref() != Some(&bundle.contact_round_id) {
             return Err("direct_conversation_founding_authority_unavailable");
         }
         arkret_models_collaboration::direct_conversation_ops::DirectConversationFoundingAuthorityEvidence::Human {
             contact_round_evidence: bundle.clone(),
-            contact_round_continuity_chain: record.contact_round_evidence_history.clone(),
+            contact_round_continuity_chains: record.contact_round_evidence_history.clone(),
         }
         .participants_and_founder()
         .map_err(|_| "direct_conversation_founding_authority_unavailable")?;

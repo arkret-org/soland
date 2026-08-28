@@ -1023,7 +1023,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         )
         .json(&json!({
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "push_gateway": "https://push.example",
+            "push_gateway_url": "https://push.example",
             "push_key": "opaque",
             "platform": "desktop",
             "app_id": "inkson"

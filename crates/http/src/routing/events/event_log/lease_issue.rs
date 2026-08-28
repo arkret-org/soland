@@ -792,7 +792,7 @@ mod tests {
         );
         creator_member.preconditions = vec![
             serde_json::from_value(json!({
-                "cell": format!("ak:cell:ak.component.member.state.v1:{ACTOR_CORE}"),
+                "cell_id": format!("ak:cell:ak.component.member.state.v1:{ACTOR_CORE}"),
                 "predicate": { "op": "head_eq", "value": null }
             }))
             .expect("creator member head_eq precondition"),

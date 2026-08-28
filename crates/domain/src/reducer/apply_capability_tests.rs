@@ -33,7 +33,7 @@ mod cba_capability_cell_tests {
                 "grant": {
                     "id": grant_id,
                     "realm_id": realm_id,
-                    "issuer": "ak:did_core:web:owner.example",
+                    "issuer_id": "ak:did_core:web:owner.example",
                     "issuer_principal_server_id": "ak:did_core:web:owner.example",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
@@ -72,7 +72,7 @@ mod cba_capability_cell_tests {
     fn engine_grant_retains_field_and_track_constraints_without_alias_conversion() {
         let body = json!({
             "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
-            "issuer": "ak:did_core:web:owner.example",
+            "issuer_id": "ak:did_core:web:owner.example",
             "issuer_principal_server_id": "ak:did_core:web:owner.example",
             "subject": "ak:did_core:web:writer.example",
             "subject_principal_server_id": "ak:did_core:web:writer.example",
@@ -155,7 +155,7 @@ mod agent_key_tests {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000ff";
         let issuer = payload
             .get("grant")
-            .and_then(|grant| grant.get("issuer"))
+            .and_then(|grant| grant.get("issuer_id"))
             .and_then(serde_json::Value::as_str)
             .unwrap_or(REALM_OWNER)
             .to_owned();
@@ -200,7 +200,7 @@ mod agent_key_tests {
             "grant": {
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
-                "issuer": issuer,
+                "issuer_id": issuer,
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
@@ -984,7 +984,7 @@ mod authority_cycle_tests {
                 .to_string(),
                 "sender": "ak:did_core:web:alice.example",
                 "grant": {
-                    "issuer": "ak:did_core:web:alice.example",
+                    "issuer_id": "ak:did_core:web:alice.example",
                     "subject": "ak:did_core:web:alice.example",
                     "subject_principal_server_id": "ak:did_core:web:alice.example",
                     "issuer_authority_refs": [
@@ -1013,7 +1013,7 @@ mod authority_cycle_tests {
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "sender": issuer,
                 "grant": {
-                    "issuer": issuer,
+                    "issuer_id": issuer,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1458,7 +1458,7 @@ mod federation_revoke_fanout_tests {
                 "grant": {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
-                    "issuer": OWNER,
+                    "issuer_id": OWNER,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1484,7 +1484,7 @@ mod federation_revoke_fanout_tests {
             "grant": {
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
-                "issuer": OWNER,
+                "issuer_id": OWNER,
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
@@ -1592,7 +1592,7 @@ mod realm_owner_authority_tests {
                 "grant": {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
-                    "issuer": issuer,
+                    "issuer_id": issuer,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,

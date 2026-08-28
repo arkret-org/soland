@@ -24,7 +24,7 @@ pub(crate) struct AccountLifecycleChange {
     pub principal_id: arkret_wire::DidCoreId,
     pub previous_state: String,
     pub state: String,
-    pub changed_by: String,
+    pub changed_by: arkret_wire::DidCoreId,
     pub reason: Option<String>,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     pub changed_at: chrono::DateTime<chrono::Utc>,
@@ -50,18 +50,17 @@ pub(crate) async fn set_account_lifecycle_state(
     let changed_by = arkret_wire::DidCoreId::new(changed_by.to_owned())
         .map_err(|_| AppError::param_invalid("invalid state-change actor identity core"))?;
     let principal_id_value = principal_id.as_str();
-    let changed_by = changed_by.as_str();
+    let changed_by_id_value = changed_by.as_str();
     let next_status = parse_account_lifecycle_target_state(next_state)?;
     let next_state = next_status.as_str();
-    if state
+    let account = state
         .identities()
         .account(principal_id_value)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_none()
-    {
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(account) = account else {
         return Err(AppError::not_found("account not found"));
-    }
+    };
 
     let previous_state = state.account_lifecycle_state(principal_id_value);
     if previous_state == "erasure_pending" {
@@ -90,12 +89,14 @@ pub(crate) async fn set_account_lifecycle_state(
         let record = AccountLifecycleState {
             state: next_state.to_owned(),
             reason: reason.clone(),
-            changed_by: Some(changed_by.to_owned()),
+            changed_by: Some(changed_by.clone()),
             changed_at,
         };
         persist_account_lifecycle_record(state, principal_id_value, &record).await?;
         if next_state == "deactivated" {
-            let fanout = run_account_deactivation_fanout(state, principal_id_value).await?;
+            let fanout =
+                run_account_deactivation_fanout(state, principal_id_value, account.id.as_str())
+                    .await?;
             sessions_revoked = fanout.sessions_revoked;
             devices_revoked = fanout.devices_revoked;
             applet_delegated_sessions_revoked = fanout.applet_delegated_sessions_revoked;
@@ -115,7 +116,7 @@ pub(crate) async fn set_account_lifecycle_state(
         append_account_state_change_audit(
             state,
             principal_id_value,
-            changed_by,
+            changed_by_id_value,
             &previous_state,
             next_state,
             reason.clone(),
@@ -134,7 +135,7 @@ pub(crate) async fn set_account_lifecycle_state(
             append_account_deactivation_propagation_state(
                 state,
                 principal_id_value,
-                changed_by,
+                changed_by_id_value,
                 reason.clone(),
                 changed_at,
                 sessions_revoked,
@@ -154,7 +155,7 @@ pub(crate) async fn set_account_lifecycle_state(
         principal_id,
         previous_state,
         state: next_state.to_owned(),
-        changed_by: changed_by.to_owned(),
+        changed_by,
         reason,
         changed_at,
         sessions_revoked,
@@ -197,6 +198,7 @@ struct AccountDeactivationFanout {
 async fn run_account_deactivation_fanout(
     state: &AppState,
     principal_id: &str,
+    owner_account_id: &str,
 ) -> Result<AccountDeactivationFanout, AppError> {
     let applet_delegated_sessions_revoked =
         active_delegated_sessions_for_actor(state, principal_id)
@@ -210,7 +212,7 @@ async fn run_account_deactivation_fanout(
         .map_err(AppError::internal)?;
     let (to_device_messages_dropped, push_routes_revoked) =
         purge_delivery_state_for_actor(state, principal_id).await?;
-    let keypackages_retired = retire_actor_keypackages(state, principal_id).await?;
+    let keypackages_retired = retire_owner_account_keypackages(state, owner_account_id).await?;
     let identity_link_cache_invalidated = state
         .invalidate_cached_handle_claims_for_subject(principal_id)
         .await;
@@ -255,10 +257,13 @@ async fn purge_delivery_state_for_actor(
     Ok((to_device_messages_dropped, push_routes_revoked))
 }
 
-async fn retire_actor_keypackages(state: &AppState, principal_id: &str) -> Result<usize, AppError> {
+async fn retire_owner_account_keypackages(
+    state: &AppState,
+    owner_account_id: &str,
+) -> Result<usize, AppError> {
     state
         .mls_key_packages()
-        .retire_actor_keypackages(principal_id, now().timestamp())
+        .retire_owner_account_keypackages(owner_account_id, now().timestamp())
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage retirement failed: {error}")))
 }
@@ -346,7 +351,7 @@ async fn append_account_deactivation_propagation_state(
     capability_cache_invalidated: usize,
 ) {
     let peer_targets = deactivation_peer_service_targets_for_actor(state, principal_id);
-    let peer_ids = peer_targets
+    let target_ids = peer_targets
         .iter()
         .filter_map(|target| target.get("service_id").and_then(Value::as_str))
         .map(ToOwned::to_owned)
@@ -387,7 +392,7 @@ async fn append_account_deactivation_propagation_state(
         "propagation": {
             "mode": "eager",
             "requires_peer_ack": true,
-            "target_service_ids": peer_ids,
+            "target_ids": target_ids,
             "targets": peer_targets,
         },
     });
@@ -523,7 +528,7 @@ pub(crate) async fn execute_account_status_erasure(
                 .map_err(|error| AppError::internal(error.to_string()))?;
         }
     }
-    let fanout = run_account_deactivation_fanout(state, actor).await?;
+    let fanout = run_account_deactivation_fanout(state, actor, account_id).await?;
     let memberships_removed = remove_realm_memberships_for_actor(state, actor);
     let changed_at = now();
     persist_account_lifecycle_record(

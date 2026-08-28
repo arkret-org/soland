@@ -217,8 +217,8 @@ fn principal_admission_denylist_wins_over_allowlist() {
                 "kind": "principal_admission",
                 "auto_resolve": true,
                 "allowed_did_methods": ["did:web"],
-                "allowed_principal_dids": [blocked],
-                "denied_principal_dids": [blocked]
+                "allowed_principal_ids": [blocked],
+                "denied_principal_ids": [blocked]
             }],
             "combinator": "all"
         }),

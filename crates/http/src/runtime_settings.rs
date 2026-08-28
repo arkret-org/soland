@@ -17,6 +17,7 @@
 //! request observes a consistent snapshot and a `PUT /_soland/admin/settings`
 //! takes effect on the very next request with no lock contention.
 
+use arkret_identifiers::DidCoreId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use soland_http::ratelimit::RateLimiterConfig;
@@ -72,9 +73,9 @@ impl RateLimitSettings {
 /// against [`AppConfig`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RuntimeSettings {
-    /// Principal DIDs allowed to call the production-gated admin surfaces
+    /// Stable principal IDs allowed to call the production-gated admin surfaces
     /// when `development_mode` is false.
-    pub admin_principal_dids: Vec<String>,
+    pub admin_principal_ids: Vec<DidCoreId>,
     /// Federation broadcast / hub-upstream target set. Boot config may contain
     /// endpoints only; runtime discovery replaces them with
     /// `base_url|service_id` entries before use.
@@ -96,7 +97,7 @@ impl RuntimeSettings {
     /// dynamic settings existed.
     pub fn from_config(config: &AppConfig) -> Self {
         Self {
-            admin_principal_dids: config.admin_principal_dids.clone(),
+            admin_principal_ids: config.admin_principal_ids.clone(),
             federation_peers: config.federation_peers.clone(),
             federation_fanout_topology: config.federation_fanout_topology,
             push_bridge_trusted_ids: config.push_bridge_trusted_ids.clone(),
@@ -107,7 +108,9 @@ impl RuntimeSettings {
 
     /// Whether `actor` is in the runtime admin allowlist.
     pub fn is_admin_principal(&self, actor: &str) -> bool {
-        self.admin_principal_dids.iter().any(|d| d == actor)
+        self.admin_principal_ids
+            .iter()
+            .any(|principal_id| principal_id.as_str() == actor)
     }
 
     /// Floor the rate-limit knobs so a stored override can never disable the
@@ -128,7 +131,7 @@ impl RuntimeSettings {
     /// and skips instead of bricking startup (see [`Self::apply_override_rows`]).
     pub fn apply_key(&mut self, key: &str, value: Value) -> anyhow::Result<()> {
         match key {
-            keys::ADMIN_PRINCIPAL_DIDS => self.admin_principal_dids = decode(key, value)?,
+            keys::ADMIN_PRINCIPAL_IDS => self.admin_principal_ids = decode(key, value)?,
             keys::FEDERATION_PEERS => self.federation_peers = decode(key, value)?,
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 self.federation_fanout_topology = decode(key, value)?
@@ -153,7 +156,7 @@ impl RuntimeSettings {
     /// stored row always matches the enforced value.
     pub fn key_value(&self, key: &str) -> anyhow::Result<Value> {
         let value = match key {
-            keys::ADMIN_PRINCIPAL_DIDS => serde_json::to_value(&self.admin_principal_dids),
+            keys::ADMIN_PRINCIPAL_IDS => serde_json::to_value(&self.admin_principal_ids),
             keys::FEDERATION_PEERS => serde_json::to_value(&self.federation_peers),
             keys::FEDERATION_FANOUT_TOPOLOGY => {
                 serde_json::to_value(self.federation_fanout_topology)
@@ -185,7 +188,7 @@ impl RuntimeSettings {
 /// Stable setting keys. One row per key in `server_settings`; the string is the
 /// primary key and the admin wire contract, so these are append-only.
 pub mod keys {
-    pub const ADMIN_PRINCIPAL_DIDS: &str = "admin_principal_dids";
+    pub const ADMIN_PRINCIPAL_IDS: &str = "admin_principal_ids";
     pub const FEDERATION_PEERS: &str = "federation_peers";
     pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
     pub const PUSH_BRIDGE_TRUSTED_SERVICE_IDS: &str = "push_bridge_trusted_ids";
@@ -194,7 +197,7 @@ pub mod keys {
 
     /// Every recognized key, for validation / documentation.
     pub const ALL: &[&str] = &[
-        ADMIN_PRINCIPAL_DIDS,
+        ADMIN_PRINCIPAL_IDS,
         FEDERATION_PEERS,
         FEDERATION_FANOUT_TOPOLOGY,
         PUSH_BRIDGE_TRUSTED_SERVICE_IDS,
@@ -214,7 +217,7 @@ mod tests {
 
     fn sample() -> RuntimeSettings {
         RuntimeSettings {
-            admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+            admin_principal_ids: vec![DidCoreId::new("ak:did_core:web:ops.example").unwrap()],
             federation_peers: vec!["https://peer.example|did:web:peer.example".to_owned()],
             federation_fanout_topology: FederationFanoutTopology::Hub,
             push_bridge_trusted_ids: vec!["did:web:push.example".to_owned()],
@@ -255,14 +258,17 @@ mod tests {
         let mut settings = sample();
         settings
             .apply_key(
-                keys::ADMIN_PRINCIPAL_DIDS,
-                serde_json::json!(["did:web:a", "did:web:b"]),
+                keys::ADMIN_PRINCIPAL_IDS,
+                serde_json::json!(["ak:did_core:web:a", "ak:did_core:web:b"]),
             )
-            .expect("apply admin dids");
+            .expect("apply admin principal ids");
         // Only the targeted field changed.
         assert_eq!(
-            settings.admin_principal_dids,
-            vec!["did:web:a", "did:web:b"]
+            settings.admin_principal_ids,
+            vec![
+                DidCoreId::new("ak:did_core:web:a").unwrap(),
+                DidCoreId::new("ak:did_core:web:b").unwrap(),
+            ]
         );
         assert_eq!(
             settings.federation_fanout_topology,
@@ -311,7 +317,7 @@ mod tests {
         for key in keys::ALL {
             let value = settings.key_value(key).expect("encode key");
             let mut fresh = RuntimeSettings {
-                admin_principal_dids: vec![],
+                admin_principal_ids: vec![],
                 federation_peers: vec![],
                 federation_fanout_topology: FederationFanoutTopology::Mesh,
                 push_bridge_trusted_ids: vec![],

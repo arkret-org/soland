@@ -499,7 +499,9 @@ async fn describe_returns_development_mode_field_body() {
     let prod_config = AppConfig {
         development_mode: false,
         public_base_url: "https://server.example.com".to_owned(),
-        admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+        admin_principal_ids: vec![
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:ops.example").unwrap(),
+        ],
         to_device_queue_capacity: 10_000,
         ..test_config()
     };
@@ -514,7 +516,7 @@ async fn describe_returns_development_mode_field_body() {
         .unwrap();
     assert_eq!(prod_health["development_mode"], false);
     assert_eq!(prod_health["proof_verifier_mode"], "production");
-    assert_eq!(prod_health["admin_auth_mode"], "did_allowlist");
+    assert_eq!(prod_health["admin_auth_mode"], "principal_id_allowlist");
 
     let prod_describe: Value = TestClient::get("http://server/_arkret/describe")
         .send(&prod_app)
@@ -536,7 +538,10 @@ async fn describe_returns_development_mode_field_body() {
         .await
         .unwrap();
     assert_eq!(prod_operator_describe["proof_verifier_mode"], "production");
-    assert_eq!(prod_operator_describe["admin_auth_mode"], "did_allowlist");
+    assert_eq!(
+        prod_operator_describe["admin_auth_mode"],
+        "principal_id_allowlist"
+    );
 }
 
 #[test]
@@ -588,7 +593,9 @@ async fn healthz_exposes_hardening_status_body() {
     let prod_config = AppConfig {
         development_mode: false,
         public_base_url: "https://server.example.com".to_owned(),
-        admin_principal_dids: vec!["did:web:ops.example".to_owned()],
+        admin_principal_ids: vec![
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:ops.example").unwrap(),
+        ],
         to_device_queue_capacity: 10_000,
         tls_cert_path: Some(std::path::PathBuf::from("/etc/soland/tls.crt")),
         tls_key_path: Some(std::path::PathBuf::from("/etc/soland/tls.key")),
@@ -609,7 +616,7 @@ async fn healthz_exposes_hardening_status_body() {
     let prod_hardening = &prod_health["hardening"];
     assert_eq!(prod_hardening["development_mode"], false);
     assert_eq!(prod_hardening["tls_enabled"], true);
-    assert_eq!(prod_hardening["admin_auth_mode"], "did_allowlist");
+    assert_eq!(prod_hardening["admin_auth_mode"], "principal_id_allowlist");
     assert_eq!(prod_hardening["csp_header_configured"], true);
     assert_eq!(prod_hardening["cors_strict"], true);
     assert_eq!(prod_hardening["secret_manager_in_use"], true);

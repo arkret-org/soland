@@ -433,7 +433,7 @@ impl ProjectionState {
                 reason: "circle_member_state_missing_membership".to_owned(),
             };
         };
-        // The requester (`sender`) is distinct from the membership target
+        // The requester_id (`sender`) is distinct from the membership target
         // (`actor`). When they differ, the operation is "admin pulls another
         // actor into the Circle"; when they match, it is a self-service join.
         let sender = operation.context.sender.to_string();
@@ -482,7 +482,7 @@ impl ProjectionState {
                     }
                 } else if !payload_asserts_circle_manage(payload, &circle_id) {
                     // Pulling *another* actor in is a one-way add that needs no
-                    // consent from the target, but the requester MUST hold
+                    // consent from the target, but the requester_id MUST hold
                     // `ak.circle.member.manage` (narrowed by
                     // `allowed_circle_ids`) on this Circle. The authoritative
                     // capability decision runs in the HTTP surface

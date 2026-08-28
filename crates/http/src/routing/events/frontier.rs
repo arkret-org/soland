@@ -117,7 +117,7 @@ pub(crate) fn frontier_signature_payload(
         "policy_frontier_root": policy_frontier_root.map(Hash::as_str),
         "membership_frontier_root": membership_frontier_root.map(Hash::as_str),
         "realm_id": realm_id.map(RealmId::as_str),
-        "issuer": issuer_id.as_str(),
+        "issuer_id": issuer_id.as_str(),
         "observed_at": arkret_canonical::format_timestamp_canonical(observed_at),
     })
 }

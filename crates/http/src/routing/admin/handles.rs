@@ -23,8 +23,6 @@
 //! the generic `/_soland/admin/{resource}` snapshot — both share
 //! [`admin_handle_items`].
 
-use std::collections::BTreeMap;
-
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -35,7 +33,7 @@ use soland_contracts::admin::handles::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use crate::state::{AppState, HandleClaimEvidenceRecord};
+use crate::state::AppState;
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;
 use crate::{JsonResult, json_ok};
@@ -91,8 +89,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     // Index handle-claim evidence by subject DID so account rows can pick
     // up issuer / binding-state metadata when a directory-issued claim is
     // cached locally.
-    let claims = state.handle_claims_snapshot();
-    let claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>> = claims;
+    let claims_by_subject = state.handle_claims_snapshot();
 
     let accounts = state.identities().accounts().await.unwrap_or_default();
 
@@ -104,7 +101,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
             .await
             .unwrap_or_default();
         for localpart in localparts {
-            let evidence = claims_by_subject.get(account.principal_id.as_str());
+            let evidence = claims_by_subject.get(&account.principal_id);
             let primary_claim = evidence.and_then(|records| records.first());
             let status = match primary_claim {
                 Some(record) if record.revoked => "revoked".to_owned(),
@@ -116,10 +113,13 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                 id: localpart.localpart.clone(),
                 canonical_uri: format!("ak:handle:{handle}"),
                 aliases: vec![handle],
-                issuer_did: primary_claim
-                    .and_then(|record| record.issuer_id.clone())
-                    .or_else(|| Some(state.service_id().clone())),
-                subject_id: Some(account.principal_id.to_string()),
+                issuer_id: primary_claim
+                    .map(|record| record.issuer_id.clone())
+                    .unwrap_or_else(|| {
+                        arkret_wire::DidCoreId::new(state.service_id().clone())
+                            .expect("runtime service_id must be a DidCoreId")
+                    }),
+                subject_id: account.principal_id.clone(),
                 assigned_at: Some(arkret_canonical::format_timestamp_canonical(
                     localpart.created_at,
                 )),
@@ -175,10 +175,7 @@ async fn list_handles(
         rows.retain(|row| {
             row.id.to_lowercase().contains(&needle)
                 || row.canonical_uri.to_lowercase().contains(&needle)
-                || row
-                    .subject_id
-                    .as_deref()
-                    .is_some_and(|did| did.to_lowercase().contains(&needle))
+                || row.subject_id.as_str().to_lowercase().contains(&needle)
                 || row
                     .aliases
                     .iter()
@@ -326,17 +323,14 @@ async fn revoke_handle(
     let reason = body.into_inner().reason;
 
     let record = handle_record_by_id(state, &handle_id).await?;
-    let subject_did = record
-        .subject_id
-        .clone()
-        .ok_or_else(|| AppError::not_found("handle has no bound subject"))?;
+    let subject_id = record.subject_id.clone();
 
     // Operator revocation releases the durable account-localpart binding and
     // records the release in the post-release grace ledger.
     let released = handle_id.clone();
     state
         .identities()
-        .remove_localpart(&subject_did, &released)
+        .remove_localpart(subject_id.as_str(), &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     crate::routing::identity::account::record_handle_release(state, &released)
@@ -350,7 +344,7 @@ async fn revoke_handle(
         json!({
             "handle_id": handle_id,
             "handle": format!("@{released}"),
-            "previous_subject_id": subject_did,
+            "previous_subject_id": subject_id,
             "reason": reason,
         }),
         "accepted",
@@ -379,10 +373,7 @@ async fn reassign_handle(
     let session = require_admin_principal(state, session)?;
     let handle_id = handle_id.into_inner();
     let body = body.into_inner();
-    let new_subject_id = body.new_subject_id.trim().to_owned();
-    if new_subject_id.is_empty() {
-        return Err(AppError::param_invalid("new_subject_id is required"));
-    }
+    let new_subject_id = body.new_subject_id;
     let reason = validate_destructive_reason(&body.reason)?;
 
     let record = handle_record_by_id(state, &handle_id).await?;
@@ -398,19 +389,17 @@ async fn reassign_handle(
     // Target account must exist before we re-bind onto it.
     let target = state
         .identities()
-        .account(&new_subject_id)
+        .account(new_subject_id.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("target subject account not found"))?;
 
     // Detach the handle from its current holder, if a different account
     // still carries the localpart.
-    if let Some(previous) = previous_subject_id.as_deref()
-        && previous != new_subject_id
-    {
+    if previous_subject_id != new_subject_id {
         state
             .identities()
-            .remove_localpart(previous, &localpart)
+            .remove_localpart(previous_subject_id.as_str(), &localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
@@ -438,7 +427,7 @@ async fn reassign_handle(
     .await;
 
     let mut reassigned = record;
-    reassigned.subject_id = Some(new_subject_id);
+    reassigned.subject_id = new_subject_id;
     reassigned.last_reassignment_at = Some(arkret_canonical::format_timestamp_canonical(now));
     reassigned.status = Some("active".to_owned());
     json_ok(reassigned)

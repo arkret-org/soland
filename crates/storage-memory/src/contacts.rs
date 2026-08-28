@@ -1,3 +1,5 @@
+use arkret_wire::{CellRef, DidCoreId};
+
 use super::{
     Arc, BTreeMap, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey, ContactRecord,
     ContactStore, ContactVerifiedMirrorRecord, ContactVerifiedMirrorStore,
@@ -16,18 +18,22 @@ impl MemoryContactStore {
 }
 #[async_trait]
 impl ContactStore for MemoryContactStore {
-    async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
+    async fn get(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<Option<ContactRecord>> {
         Ok(self
             .data
             .lock()
-            .get(&(requester.to_owned(), target.to_owned()))
+            .get(&(requester_id.clone(), target_id.clone()))
             .cloned())
     }
 
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.insert(
-            (record.requester.clone(), record.target.clone()),
+            (record.requester_id.clone(), record.target_id.clone()),
             record.clone(),
         );
         Ok(())
@@ -39,8 +45,8 @@ impl ContactStore for MemoryContactStore {
         record: &ContactRecord,
     ) -> PersistenceResult<bool> {
         let mut data = self.data.lock();
-        let key = (record.requester.clone(), record.target.clone());
-        let reverse_key = (record.target.clone(), record.requester.clone());
+        let key = (record.requester_id.clone(), record.target_id.clone());
+        let reverse_key = (record.target_id.clone(), record.requester_id.clone());
         let current_key = if data.contains_key(&key) {
             key.clone()
         } else {
@@ -59,19 +65,23 @@ impl ContactStore for MemoryContactStore {
         Ok(true)
     }
 
-    async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>> {
+    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>> {
         let data = self.data.lock();
         Ok(data
             .values()
-            .filter(|c| c.requester == actor || c.target == actor)
+            .filter(|c| &c.requester_id == actor_id || &c.target_id == actor_id)
             .cloned()
             .collect())
     }
 
-    async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
+    async fn delete(
+        &self,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
+    ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.retain(|(row_requester, row_target), _| {
-            row_requester != requester || row_target != target
+            row_requester != requester_id || row_target != target_id
         });
         Ok(())
     }
@@ -208,12 +218,12 @@ impl MemoryConsentCellStore {
 impl ConsentCellStore for MemoryConsentCellStore {
     async fn get(
         &self,
-        holder: &str,
-        cell_id: &str,
+        holder_principal_id: &DidCoreId,
+        cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let key = ConsentCellKey {
-            holder: holder.to_owned(),
-            cell_id: cell_id.to_owned(),
+            holder_principal_id: holder_principal_id.clone(),
+            cell_id: cell_id.clone(),
         };
         Ok(self.data.lock().get(&key).cloned())
     }
@@ -278,7 +288,7 @@ mod tests {
                     "request_event_ref": "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
                     "source_checkpoint": format!("sha256:{}", "b".repeat(64)),
                     "accepted_at": "2026-08-09T00:00:00.000Z",
-                    "issuer": "ak:did_core:web:issuer.example"
+                    "issuer_id": "ak:did_core:web:issuer.example"
                 },
                 "receipt_digest": format!("sha256:{}", "c".repeat(64)),
                 "signature": {
@@ -288,7 +298,7 @@ mod tests {
                 }
             }))
             .expect("typed Contact receipt fixture"),
-            issuer_id: "ak:did_core:web:requester.example".to_owned(),
+            issuer_id: "ak:did_core:web:requester_id.example".to_owned(),
             verified_at: chrono::Utc
                 .timestamp_opt(1_700_000_000, 0)
                 .single()

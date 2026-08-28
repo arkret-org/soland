@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, Did, DidCoreId, EventId, Hash};
+use arkret_identifiers::{BlobRef, CellRef, Did, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
@@ -17,7 +17,7 @@ use arkret_models_identity::service_identity::{
 };
 use arkret_wire::{
     DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NotaryJoseAlgorithm, NotaryKeyKind,
-    NotarySignerDescriptor, OpaqueLocalId,
+    NotarySignerDescriptor, OpaqueLocalId, ServiceAccountId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -146,8 +146,8 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
 /// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
-    pub holder: String,
-    pub cell_id: String,
+    pub holder_principal_id: DidCoreId,
+    pub cell_id: CellRef,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,9 +165,9 @@ pub struct ConsentGrantDot {
 /// same intent (`consent-model.md` sections 3.1 and 3.2).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
-    pub cell_id: String,
-    pub holder: String,
-    pub peer: String,
+    pub cell_id: CellRef,
+    pub holder_principal_id: DidCoreId,
+    pub peer_principal_id: DidCoreId,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
@@ -189,14 +189,14 @@ pub struct MimiConsentCorrelation {
 
 #[derive(Clone, Debug)]
 pub struct ContactRecord {
-    pub requester: String,
-    pub target: String,
-    pub contact_round_id: Option<String>,
+    pub requester_id: DidCoreId,
+    pub target_id: DidCoreId,
+    pub contact_round_id: Option<Hash>,
     pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
-    pub request_event_ref: Option<String>,
+    pub request_event_ref: Option<EventId>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
@@ -206,10 +206,10 @@ pub struct ContactRecord {
     /// chain without reconstructing signed evidence from Event references.
     pub contact_round_evidence_history: Vec<ContactRoundEvidenceBundle>,
     pub control_outcomes: Vec<PeerContactSubmitOutcome>,
-    pub response_event_ref: Option<String>,
-    pub tombstone_event_ref: Option<String>,
+    pub response_event_ref: Option<EventId>,
+    pub tombstone_event_ref: Option<EventId>,
     pub message: Option<String>,
-    pub peer_id: Option<String>,
+    pub peer_host_id: Option<DidCoreId>,
     pub peer_service_resolution: Option<Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -363,12 +363,12 @@ pub struct FindAccountByActorQuery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountIdentity {
-    pub account_id: String,
+    pub account_id: arkret_identifiers::ServiceAccountId,
 }
 
 #[derive(Clone, Debug)]
 pub struct AccountProfileState {
-    pub id: String,
+    pub id: arkret_identifiers::ServiceAccountId,
     pub principal_id: DidCoreId,
     pub localpart: String,
     pub display_name: Option<String>,
@@ -401,13 +401,13 @@ pub struct AccountLocalpartState {
 pub struct AccountLifecycleState {
     pub state: String,
     pub reason: Option<String>,
-    pub changed_by: Option<String>,
+    pub changed_by: Option<DidCoreId>,
     pub changed_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
 pub struct RegisterAccountCommand {
-    pub account_id: String,
+    pub account_id: arkret_identifiers::ServiceAccountId,
     pub principal_id: DidCoreId,
     pub localpart: String,
     pub display_name: Option<String>,
@@ -478,10 +478,10 @@ pub struct ConsentService {
 pub trait ContactPort: Send + Sync {
     async fn contact_any(
         &self,
-        requester: &str,
-        target: &str,
+        requester_id: &DidCoreId,
+        target_id: &DidCoreId,
     ) -> ServiceResult<Option<ContactRecord>>;
-    async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>>;
+    async fn contacts_for_actor(&self, actor_id: &DidCoreId) -> ServiceResult<Vec<ContactRecord>>;
     async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()>;
     async fn save_contact_if_updated_at(
         &self,
@@ -545,14 +545,26 @@ impl ContactService {
 
     pub async fn contact_any(
         &self,
-        requester: &str,
-        target: &str,
+        requester_id: impl AsRef<str>,
+        target_id: impl AsRef<str>,
     ) -> ServiceResult<Option<ContactRecord>> {
-        self.contacts.contact_any(requester, target).await
+        let requester_id = DidCoreId::new(requester_id.as_ref().to_owned()).map_err(|_| {
+            crate::ServiceError::SchemaViolation("invalid Contact requester_id".to_owned())
+        })?;
+        let target_id = DidCoreId::new(target_id.as_ref().to_owned()).map_err(|_| {
+            crate::ServiceError::SchemaViolation("invalid Contact target_id".to_owned())
+        })?;
+        self.contacts.contact_any(&requester_id, &target_id).await
     }
 
-    pub async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>> {
-        self.contacts.contacts_for_actor(actor_id).await
+    pub async fn contacts_for_actor(
+        &self,
+        actor_id: impl AsRef<str>,
+    ) -> ServiceResult<Vec<ContactRecord>> {
+        let actor_id = DidCoreId::new(actor_id.as_ref().to_owned()).map_err(|_| {
+            crate::ServiceError::SchemaViolation("invalid Contact actor_id".to_owned())
+        })?;
+        self.contacts.contacts_for_actor(&actor_id).await
     }
 
     pub async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()> {
@@ -729,34 +741,57 @@ impl ConsentService {
     /// projection. The Event commit already succeeded, so this only refreshes
     /// the working view a restart would rebuild from `hydrate_runtime`.
     pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
-        let key = consent_cell_key(&cell.holder, &cell.cell_id);
+        let key = consent_cell_key(&cell.holder_principal_id, &cell.cell_id);
         self.runtime_cells.lock().insert(key, cell);
     }
 
     /// Every consent cell the holder owns. Consent is holder-private
     /// (`consent-model.md` section 8): a peer never reads cells, dots or
     /// expiry, so there is no peer-visible listing.
-    pub fn holder_cells(&self, holder: &str) -> Vec<ConsentCellRecord> {
+    pub fn holder_cells(&self, holder_principal_id: impl AsRef<str>) -> Vec<ConsentCellRecord> {
+        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
+        else {
+            return Vec::new();
+        };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder == holder)
+            .filter(|cell| cell.holder_principal_id == holder_principal_id)
             .cloned()
             .collect()
     }
 
-    pub fn holder_cell(&self, holder: &str, cell_id: &str) -> Option<ConsentCellRecord> {
+    pub fn holder_cell(
+        &self,
+        holder_principal_id: impl AsRef<str>,
+        cell_id: impl AsRef<str>,
+    ) -> Option<ConsentCellRecord> {
+        let holder_principal_id = DidCoreId::new(holder_principal_id.as_ref().to_owned()).ok()?;
+        let cell_id = CellRef::new(cell_id.as_ref().to_owned()).ok()?;
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(holder, cell_id))
+            .get(&consent_cell_key(&holder_principal_id, &cell_id))
             .cloned()
     }
 
-    pub fn cells_for_pair(&self, holder: &str, peer: &str) -> Vec<ConsentCellRecord> {
+    pub fn cells_for_pair(
+        &self,
+        holder_principal_id: impl AsRef<str>,
+        peer_principal_id: impl AsRef<str>,
+    ) -> Vec<ConsentCellRecord> {
+        let (Ok(holder_principal_id), Ok(peer_principal_id)) = (
+            DidCoreId::new(holder_principal_id.as_ref().to_owned()),
+            DidCoreId::new(peer_principal_id.as_ref().to_owned()),
+        ) else {
+            return Vec::new();
+        };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder == holder && cell.peer == peer)
+            .filter(|cell| {
+                cell.holder_principal_id == holder_principal_id
+                    && cell.peer_principal_id == peer_principal_id
+            })
             .cloned()
             .collect()
     }
@@ -764,25 +799,33 @@ impl ConsentService {
     /// Holder cells whose frozen intent is exactly `(peer, consent_scope)`.
     pub fn cells_for_intent(
         &self,
-        holder: &str,
-        peer: &str,
+        holder_principal_id: impl AsRef<str>,
+        peer_principal_id: impl AsRef<str>,
         consent_scope: &str,
     ) -> Vec<ConsentCellRecord> {
+        let (Ok(holder_principal_id), Ok(peer_principal_id)) = (
+            DidCoreId::new(holder_principal_id.as_ref().to_owned()),
+            DidCoreId::new(peer_principal_id.as_ref().to_owned()),
+        ) else {
+            return Vec::new();
+        };
         self.runtime_cells
             .lock()
             .values()
             .filter(|cell| {
-                cell.holder == holder && cell.peer == peer && cell.consent_scope == consent_scope
+                cell.holder_principal_id == holder_principal_id
+                    && cell.peer_principal_id == peer_principal_id
+                    && cell.consent_scope == consent_scope
             })
             .cloned()
             .collect()
     }
 }
 
-fn consent_cell_key(holder: &str, cell_id: &str) -> ConsentCellKey {
+fn consent_cell_key(holder_principal_id: &DidCoreId, cell_id: &CellRef) -> ConsentCellKey {
     ConsentCellKey {
-        holder: holder.to_owned(),
-        cell_id: cell_id.to_owned(),
+        holder_principal_id: holder_principal_id.clone(),
+        cell_id: cell_id.clone(),
     }
 }
 
@@ -931,6 +974,7 @@ pub struct AgentController {
 pub trait AccountLookupPort: Send + Sync {
     async fn find_account_by_actor(&self, actor_id: &str)
     -> ServiceResult<Option<AccountIdentity>>;
+    async fn account_by_id(&self, account_id: &str) -> ServiceResult<Option<AccountProfileState>>;
     async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()>;
     async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>>;
     async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>>;
@@ -1056,7 +1100,7 @@ pub struct AgentPairingState {
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
-    pub controller_account_id: Option<uuid::Uuid>,
+    pub controller_account_id: Option<ServiceAccountId>,
     pub recipient_id: Option<String>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
@@ -1306,7 +1350,7 @@ pub struct DevicePairingState {
     /// `#/$defs/device_pairing_state`).
     pub state: arkret_models_collaboration::http_bodies::DevicePairingState,
     pub device_id: Option<String>,
-    pub authorized_by_actor_id: Option<String>,
+    pub authorized_by_actor_id: Option<arkret_wire::DidCoreId>,
     pub authorized_event_ref: Option<String>,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -1358,7 +1402,7 @@ pub struct StoreAgentRuntimeApprovalCommand {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: DateTime<Utc>,
-    pub controller_account_id: String,
+    pub controller_account_id: ServiceAccountId,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
@@ -1467,7 +1511,7 @@ pub struct AgentPairingService {
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyState {
     pub policy_id: String,
-    pub principal_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
     pub version: u32,
     pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
@@ -1539,7 +1583,10 @@ impl RecoveryPolicyService {
         command: PublishRecoveryPolicyCommand,
     ) -> ServiceResult<PublishRecoveryPolicyResult> {
         let policy = command.policy;
-        let existing = self.policies.active_policy(&policy.principal_id).await?;
+        let existing = self
+            .policies
+            .active_policy(policy.principal_id.as_str())
+            .await?;
         if let Some(existing) = existing {
             if policy.version <= existing.version {
                 return Ok(PublishRecoveryPolicyResult::VersionNotMonotonic {
@@ -1570,8 +1617,8 @@ pub struct RecoverySessionState {
     pub recovery_session_id: String,
     pub session_grant_id: String,
     pub session_grant_cnf_jkt: String,
-    pub principal_id: String,
-    pub principal_server_id: String,
+    pub principal_id: arkret_identifiers::DidCoreId,
+    pub principal_server_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,
@@ -1901,7 +1948,7 @@ pub struct AgentSessionState {
 #[derive(Clone, Debug)]
 pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
-    pub issuer: String,
+    pub issuer_id: arkret_identifiers::DidCoreId,
     /// Scopes the Account Authority bound into the presented grant. They are
     /// the only wire-visible statement about what the grant was authorized
     /// for, so deployment policies that gate a high-risk self-service action
@@ -1918,6 +1965,9 @@ pub struct SessionGrantAuthorizationState {
 #[derive(Clone, Debug)]
 pub struct SessionIdentityState {
     pub token_hash: String,
+    /// Exact service-local account binding carried by the credential that
+    /// established this session. It must never be derived from `actor`.
+    pub service_account_id: Option<arkret_identifiers::ServiceAccountId>,
     pub actor: String,
     pub device_id: String,
     pub audience: String,
@@ -2252,6 +2302,13 @@ impl IdentityService {
         query: FindAccountByActorQuery,
     ) -> ServiceResult<Option<AccountIdentity>> {
         self.accounts.find_account_by_actor(&query.actor_id).await
+    }
+
+    pub async fn account_by_id(
+        &self,
+        account_id: &str,
+    ) -> ServiceResult<Option<AccountProfileState>> {
+        self.accounts.account_by_id(account_id).await
     }
 
     pub async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()> {
@@ -3288,7 +3345,24 @@ mod tests {
         ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(
                 (actor_id == "ak:did_core:web:alice.example").then(|| AccountIdentity {
-                    account_id: "ak:account:alice".to_owned(),
+                    account_id: arkret_identifiers::ServiceAccountId::new("account-alice").unwrap(),
+                }),
+            )
+        }
+
+        async fn account_by_id(
+            &self,
+            account_id: &str,
+        ) -> ServiceResult<Option<AccountProfileState>> {
+            Ok(
+                (account_id == "account-alice").then(|| AccountProfileState {
+                    id: arkret_identifiers::ServiceAccountId::new("account-alice").unwrap(),
+                    principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    localpart: "alice".to_owned(),
+                    display_name: None,
+                    bio: None,
+                    avatar_blob_ref: None,
+                    created_at: Utc::now(),
                 }),
             )
         }
@@ -3559,7 +3633,7 @@ mod tests {
         ) -> ServiceResult<Option<RecoveryPolicyState>> {
             Ok(Some(RecoveryPolicyState {
                 policy_id: "ak:policy:current".to_owned(),
-                principal_id: principal_id.to_owned(),
+                principal_id: arkret_identifiers::DidCoreId::new(principal_id).unwrap(),
                 version: 2,
                 acceptance_basis: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
@@ -3599,7 +3673,7 @@ mod tests {
             .await
             .expect("lookup account")
             .expect("account exists");
-        assert_eq!(account.account_id, "ak:account:alice");
+        assert_eq!(account.account_id.as_str(), "account-alice");
     }
 
     #[tokio::test]
@@ -3667,7 +3741,10 @@ mod tests {
             .publish_policy(PublishRecoveryPolicyCommand {
                 policy: RecoveryPolicyState {
                     policy_id: "ak:policy:stale".to_owned(),
-                    principal_id: "ak:did_core:web:alice.example".to_owned(),
+                    principal_id: arkret_identifiers::DidCoreId::new(
+                        "ak:did_core:web:alice.example",
+                    )
+                    .unwrap(),
                     version: 2,
                     acceptance_basis: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),

@@ -109,7 +109,7 @@ pub(super) async fn read_history_key_responses(
         Some(ack_token)
     };
     let outcome = HistoryKeyResponseListOutcome {
-        history_response_page_entries: page.entries,
+        entries: page.entries,
         ack_token,
         cursor: page.cursor,
         limited: page.limited,

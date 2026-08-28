@@ -294,7 +294,7 @@ fn snapshot_auth_state_digest(
 ) -> Result<arkret_identifiers::Hash, soland_http::error::AppError> {
     let commitment = json!({
         "profile": arkret_wire::DomainSeparationId::SNAPSHOT_AUTH_STATE_ISSUER_LOCAL_V1,
-        "issuer": service_id,
+        "issuer_id": service_id,
         "realm_id": realm_id,
         "frontier_event_ids": frontier_event_ids,
         "checked_at": checked_at,

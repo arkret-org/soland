@@ -29,7 +29,7 @@ struct SidecarRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    controller_id: String,
+    controller_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -58,7 +58,7 @@ impl TryFrom<SidecarRow> for AgentSidecarRecord {
         Ok(Self {
             sidecar_id,
             realm_id: row.realm_id,
-            controller_id: row.controller_id,
+            controller_id: row.controller_id.to_string(),
             state,
             state_changed_at: row.state_changed_at,
             created_at: row.created_at,

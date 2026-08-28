@@ -61,7 +61,7 @@ pub struct HealthOutcome {
     /// Effective admin-API authentication posture:
     ///   - `"development"` — any authenticated session may call admin endpoints (dev mode lets
     ///     every session through)
-    ///   - `"did_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_DIDS`
+    ///   - `"principal_id_allowlist"` — production gate via `SOLAND_ADMIN_PRINCIPAL_IDS`
     ///   - `"closed"` — production mode with no admin principals; admin endpoints are locked.
     pub admin_auth_mode: &'static str,
     /// T8.3 — non-sensitive production hardening checklist snapshot.
@@ -385,6 +385,31 @@ fn full_principal_server_gap_summary() -> Vec<Value> {
     })]
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case", deny_unknown_fields)]
+enum MimiInteropProfileStatus {
+    ProviderFacadeFirstRound {
+        drafts: MimiInteropDrafts,
+        not_replaced: Vec<String>,
+        principal_conformance: MimiPrincipalConformance,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MimiInteropDrafts {
+    protocol: String,
+    content: String,
+    room_policy: String,
+    identifiers: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MimiPrincipalConformance {
+    NotClaimed,
+}
+
 /// Build the service description.
 ///
 /// The seven configuration values this used to take positionally were, by its
@@ -397,6 +422,27 @@ pub fn describe(
     storage: &'static str,
     config: &crate::config::AppConfig,
 ) -> ServiceDescribe {
+    let mimi_interop_profile_status = MimiInteropProfileStatus::ProviderFacadeFirstRound {
+        drafts: MimiInteropDrafts {
+            protocol: "draft-ietf-mimi-protocol-06".to_owned(),
+            content: "draft-ietf-mimi-content-08".to_owned(),
+            room_policy: "draft-ietf-mimi-room-policy-03".to_owned(),
+            identifiers: "draft-kohbrok-mimi-identifiers-01".to_owned(),
+        },
+        not_replaced: [
+            "arkret_signed_event_reducer",
+            "realm_id",
+            "did",
+            "hlc",
+            "capability",
+            "auth_refs",
+            "mls_state",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect(),
+        principal_conformance: MimiPrincipalConformance::NotClaimed,
+    };
     let public_base_url = config.public_base_url.as_str();
     let development_mode = config.development_mode;
     let account_authority_url = config.account_authority_url.as_deref();
@@ -416,7 +462,7 @@ pub fn describe(
         .unwrap_or(public_base_url)
         .trim_end_matches('/')
         .to_owned();
-    let gate_account_base = format!("{account_origin}/_arkret/gate/account");
+    let gate_account_base_url = format!("{account_origin}/_arkret/gate/account");
 
     // Authentication methods are pure provider discovery; they do not decide
     // gate/account routing. Advertise OIDC when an Auth Server is configured;
@@ -432,7 +478,7 @@ pub fn describe(
             method: AuthMethodKind::Oidc,
             issuer_uri: Some(issuer.clone()),
             provider_uri: None,
-            openid_configuration_uri: Some(openid_configuration.clone()),
+            openid_configuration_url: Some(openid_configuration.clone()),
             // Registered OAuth `client_id` (coauth keys clients by ULID). The
             // web client uses this verbatim; absent it, it has no valid id to
             // fall back to and coauth answers `could not find client`.
@@ -450,8 +496,9 @@ pub fn describe(
     // this fact; auth_metadata MUST NOT carry a second unregistered copy.
     let auth_metadata = AuthMetadata {
         account_authority: Some(AccountAuthority {
-            origin_uri: account_origin,
-            gate_account_base,
+            origin: arkret_wire::WebOrigin::new(account_origin)
+                .expect("configured account authority base has a valid Web origin"),
+            gate_account_base_url,
         }),
         methods,
         did_binding_methods: Vec::new(),
@@ -577,11 +624,11 @@ pub fn describe(
         ],
         transport_bindings: vec![
             arkret_models_discovery::TransportBinding::HttpJson {
-                base_uri: format!("{}/", public_base_url.trim_end_matches('/')),
+                base_url: format!("{}/", public_base_url.trim_end_matches('/')),
                 extension_profile_required: (),
             },
             arkret_models_discovery::TransportBinding::Tus {
-                base_uri: format!(
+                base_url: format!(
                     "{}/_arkret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
                 ),
@@ -841,25 +888,7 @@ pub fn describe(
                     "mimi_provider_facade"
                 ],
                 "limitations": profile_limitations(),
-                "mimi_interop": {
-                    "status": "provider_facade_first_round",
-                    "drafts": {
-                        "protocol": "draft-ietf-mimi-protocol-06",
-                        "content": "draft-ietf-mimi-content-08",
-                        "room_policy": "draft-ietf-mimi-room-policy-03",
-                        "identifiers": "draft-kohbrok-mimi-identifiers-01"
-                    },
-                    "not_replaced": [
-                        "arkret_signed_event_reducer",
-                        "realm_id",
-                        "did",
-                        "hlc",
-                        "capability",
-                        "auth_refs",
-                        "mls_state"
-                    ],
-                    "principal_conformance": "not_claimed"
-                }
+                "mimi_interop": mimi_interop_profile_status
             }
             }))
             .expect("server limits must be a JSON object"),

@@ -14,7 +14,7 @@
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — return the merged effective policy
 //!   after walking `governed_by` / `inherits_policy_from` ancestors per the realm's
 //!   `ak.realm.inheritance_policy` declaration (G3.S5). Body shape per the task spec: `{realm_id,
-//!   effective_policy, inheritance_chain, inheritance_mode}`.
+//!   effective_policy, inheritance_chain_ids, inheritance_mode}`.
 
 use std::collections::BTreeMap;
 
@@ -171,7 +171,7 @@ async fn list_realm_links_impl(
     json_ok(RealmLinkList {
         realm_id,
         direction: direction_enum,
-        links: entries,
+        realm_link_entries: entries,
     })
 }
 
@@ -373,7 +373,7 @@ async fn delete_realm_link(
 ///     "allowed_capability_bundles": [...],
 ///     "organization_policy_layers": [...]
 ///   },
-///   "inheritance_chain": ["ak:space:...parent...", "ak:space:...grandparent..."],
+///   "inheritance_chain_ids": ["ak:realm:...parent...", "ak:realm:...grandparent..."],
 ///   "inheritance_mode": "explicit" | "none"
 /// }
 /// ```

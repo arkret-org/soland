@@ -581,7 +581,8 @@ impl PersistenceHandle {
     pub async fn seed_demo_identity(&self) -> crate::ServiceResult<()> {
         let now = chrono::Utc::now();
         let account = soland_storage::AccountRecord {
-            id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
+            id: arkret_identifiers::ServiceAccountId::new("0196419b-0000-7000-8000-000000000001")
+                .unwrap(),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .expect("demo principal id is canonical"),
             localpart: "alice".to_owned(),

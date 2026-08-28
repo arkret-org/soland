@@ -369,7 +369,7 @@ pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<
     if backup.supersedes_id.is_some() {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes`",
+            "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes_id`",
         )
         .with_status(StatusCode::CONFLICT)
         .with_wire_code("series_chain_broken"));

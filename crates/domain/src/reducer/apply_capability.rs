@@ -165,7 +165,7 @@ pub fn engine_grant_from_cell_body(
         .unwrap_or_default()
         .to_owned();
     let issuer = body
-        .get("issuer")
+        .get("issuer_id")
         .and_then(Value::as_str)
         .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())?;
     let issuer_principal_server_id = body
@@ -473,7 +473,7 @@ fn genesis_grant_id(operation: &Operation) -> String {
 /// inside the embedded `grant` body).
 fn grant_issuer(payload: &Value) -> Option<String> {
     grant_body(payload)
-        .get("issuer")
+        .get("issuer_id")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
 }
@@ -1011,7 +1011,7 @@ impl ProjectionState {
                 || rule.scope_binding != "grant.resource_exact_registration_scope"
                 || rule.epoch_binding != "constraint.registration_epoch_exact_registration"
                 || rule.requested_action_binding != "grant.action_in_registration.requested_scopes"
-                || registration.service_id != subject
+                || registration.service_id.as_str() != subject
                 || !registration
                     .capabilities
                     .as_ref()
@@ -1403,7 +1403,7 @@ impl ProjectionState {
                     || self
                         .applets
                         .values()
-                        .any(|registration| registration.service_id == subject)
+                        .any(|registration| registration.service_id.as_str() == subject)
             })
         {
             return ProjectionEffect::Rejected {

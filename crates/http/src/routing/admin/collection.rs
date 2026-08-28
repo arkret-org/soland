@@ -17,7 +17,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::RealmId;
+use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_wire::JoinRule;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -72,7 +72,7 @@ pub(super) async fn admin_collection(
     let session = aa.authenticated_session(state, req).await?;
     if !state.config().development_mode && !state.is_admin_principal(&session.actor) {
         return Err(AppError::capability_denied(
-            "admin collection API requires the caller DID to be listed in SOLAND_ADMIN_PRINCIPAL_DIDS",
+            "admin collection API requires the caller principal ID to be listed in SOLAND_ADMIN_PRINCIPAL_IDS",
         ));
     }
     let grant = super::introspect_admin_scopes(state, req, &session)
@@ -329,7 +329,10 @@ async fn admin_realm_item_value(
         public: realm.public,
         member_count: realm.members.len(),
         members: realm.members.iter().map(ToString::to_string).collect(),
-        created_by: realm_meta.as_ref().map(|meta| meta.owner.clone()),
+        created_by: realm_meta.as_ref().map(|meta| {
+            DidCoreId::new(meta.owner.clone())
+                .expect("RealmMetaRecord owner must be a validated DID core id")
+        }),
         history_access: realm_meta.as_ref().map(|meta| meta.history_access.clone()),
         is_encrypted: realm_meta
             .as_ref()
@@ -471,9 +474,14 @@ pub(super) fn admin_invite_item(
         invite_id: invite.invite_id.clone(),
         token: invite.invite_token.clone(),
         realm_id: invite.realm_id.clone(),
-        inviter_id: invite.inviter_id.clone(),
-        created_by: invite.inviter_id.clone(),
-        invitee_id: invite.invitee_id.clone(),
+        inviter_id: DidCoreId::new(invite.inviter_id.clone())
+            .expect("RealmInviteRecord inviter_id must be a validated DID core id"),
+        created_by: DidCoreId::new(invite.inviter_id.clone())
+            .expect("RealmInviteRecord inviter_id must be a validated DID core id"),
+        invitee_id: invite.invitee_id.clone().map(|invitee_id| {
+            DidCoreId::new(invitee_id)
+                .expect("RealmInviteRecord invitee_id must be a validated DID core id")
+        }),
         invite_delivery_target: invite.invite_delivery_target.clone(),
         introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
         token_hash: arkret_canonical::sha256_digest(invite.invite_token.as_bytes()),
@@ -513,7 +521,8 @@ pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
                 filename: blob.filename.clone(),
                 realm_id: blob.realm_id.clone(),
                 encrypted: blob.encryption.is_some(),
-                uploaded_by: blob.uploaded_by.clone(),
+                uploaded_by: DidCoreId::new(blob.uploaded_by.clone())
+                    .expect("BlobRecord uploaded_by must be a validated DID core id"),
                 // The blob store keeps the byte count signed; the wire
                 // contract does not, so a corrupt negative row reports 0
                 // rather than wrapping to 18 exabytes.

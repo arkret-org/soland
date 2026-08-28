@@ -127,7 +127,9 @@ pub(super) async fn dev_login(
     if let Some(error) = account_new_session_error(state, actor_str) {
         return Err(error);
     }
-    if account.is_none() {
+    let service_account_id = if let Some(account) = account {
+        account.account_id
+    } else {
         let synthetic_handle = handle_for_did(actor_str);
         let synthetic_display = body
             .display_name
@@ -143,7 +145,7 @@ pub(super) async fn dev_login(
         };
         state
             .identities()
-            .register_account(record)
+            .register_account(record.clone())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         append_audit_log(
@@ -154,13 +156,15 @@ pub(super) async fn dev_login(
             "accepted",
         )
         .await;
-    }
+        record.account_id
+    };
 
     let expires_at = now() + Duration::hours(12);
     let token = token_for(actor_str, device_id_str, expires_at.timestamp_millis());
     let token_hash = session_credential_hash(&token, state.service_id());
     let session = SessionIdentityState {
         token_hash,
+        service_account_id: Some(service_account_id),
         actor: actor_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.service_id().clone(),

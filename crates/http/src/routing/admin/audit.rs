@@ -31,7 +31,7 @@ struct AuditErasureReceiptsOutcome {
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditErasureReceiptItem {
     receipt_id: Option<String>,
-    issuer: Option<String>,
+    issuer_id: Option<arkret_wire::DidCoreId>,
     subject_kind: Option<String>,
     subject_ref: Option<String>,
     outcome: String,
@@ -89,7 +89,7 @@ async fn audit_erasure_receipts(
             .iter()
             .map(|r| AuditErasureReceiptItem {
                 receipt_id: r.receipt_id.clone(),
-                issuer: r.issuer.clone(),
+                issuer_id: r.issuer_id.clone(),
                 subject_kind: r.subject_kind.clone(),
                 subject_ref: r.subject_ref.clone(),
                 outcome: r.outcome.clone(),

@@ -348,7 +348,7 @@ struct CountRow {
 #[derive(QueryableByName)]
 struct CompactReceiptAuthorityRow {
     #[diesel(sql_type = Text)]
-    requester_actor_id: String,
+    requester_actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     release_id: arkret_wire::DidCoreId,
 }
@@ -1061,7 +1061,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 .ok_or_else(||PersistenceError::NotFound("response stream unavailable".to_owned()))?;
             for quota_lock in [
                 format!("history-compact-service:{}", authority.release_id),
-                format!("history-compact-requester:{}:{}", authority.release_id, authority.requester_actor_id),
+                format!("history-compact-requester_id:{}:{}", authority.release_id, authority.requester_actor_id),
                 format!("history-compact-request:{}", request_id),
             ] {
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
@@ -1103,11 +1103,11 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 return Err(PersistenceError::Conflict("duplicate_conflict: completion differs from reservation".to_owned()).into());
             }
             let requester_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_id=$1 AND r.requester_actor_id=$2")
-                .bind::<Text,_>(&authority.release_id).bind::<Text,_>(&authority.requester_actor_id)
+                .bind::<Text,_>(&authority.release_id).bind::<Text,_>(authority.requester_actor_id.as_str())
                 .get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
-            let requester_limit=as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT,"requester compact receipt quota")?;
+            let requester_limit=as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT,"requester_id compact receipt quota")?;
             if requester_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>requester_limit) {
-                return Err(PersistenceError::Conflict("failed_precondition: history requester compact receipt quota exceeded".to_owned()).into());
+                return Err(PersistenceError::Conflict("failed_precondition: history requester_id compact receipt quota exceeded".to_owned()).into());
             }
             let service_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_id=$1")
                 .bind::<Text,_>(&authority.release_id).get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
@@ -1410,9 +1410,9 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             if let Some(value)=token.consumed_request_json.clone(){let prior:HistoryKeyResponseAckRequest=decode(value,"consumed ack")?;if prior==request{return Ok(request.high_water_cursor);}}
             let claims:HistoryResponseAckTokenClaims=decode(token.claims_json,"ack token claims")?;
             claims.validate().map_err(|error|PersistenceError::Internal(format!("stored ack token claims are invalid: {error}")))?;
-            if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_id.as_str()!=mb.release_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.history_response_ack_entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
+            if token.consumed_at.is_some()||claims.token_expires_at<=now||claims.request_id.as_str()!=stream.as_str()||claims.release_id.as_str()!=mb.release_id.as_str()||claims.high_water_cursor!=request.high_water_cursor||claims.ordered_ack_entries.len()!=request.entries.len(){return Err(PersistenceError::Conflict("failed_precondition: ack token invalid".to_owned()).into());}
             let high_water_sequence=as_i64(claims.ordered_ack_entries.last().expect("validated claims").sequence,"ack high water")?;
-            let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.history_response_ack_entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryResponseAckEntry::Record{sequence,response_id,record_digest,status}=>(*sequence,"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryResponseRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryResponseAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(*sequence,"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_response_dispositions (request_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&stream).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
+            let mut expected_sequences=Vec::new(); for(claim,ack)in claims.ordered_ack_entries.iter().zip(&request.entries){let claim_kind=match claim.kind{arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Record=>"record",arkret_models_collaboration::history_key::HistoryResponseAckTokenEntryKind::Lost=>"lost"}; let(ab_seq,ab_kind,ab_id,ab_digest,status)=match ack{HistoryResponseAckEntry::Record{sequence,response_id,record_digest,status}=>(sequence.to_owned(),"record",response_id.as_str(),record_digest,match status{arkret_models_collaboration::history_key::HistoryResponseRecordStatus::Installed=>"installed",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::CryptographicallyRejected=>"cryptographically_rejected",arkret_models_collaboration::history_key::HistoryResponseRecordStatus::SupersededDuplicate=>"superseded_duplicate"}),HistoryResponseAckEntry::Lost{sequence,response_id,lost_record_digest,..}=>(sequence.to_owned(),"lost",response_id.as_str(),lost_record_digest,"service_record_lost")}; if(claim.sequence,claim_kind,claim.response_id.as_str(),claim.entry_digest.as_str())!=(ab_seq,ab_kind,ab_id,ab_digest.as_str()){return Err(PersistenceError::Conflict("duplicate_conflict: ack entry binding differs".to_owned()).into());} expected_sequences.push(as_i64(ab_seq,"ack sequence")?); sql_query("INSERT INTO history_key_response_dispositions (request_id,sequence,response_id,entry_kind,entry_digest,status,acked_at) VALUES ($1,$2,$3,$4,$5,$6,$7)").bind::<Text,_>(&stream).bind::<BigInt,_>(as_i64(ab_seq,"ack sequence")?).bind::<Text,_>(ab_id).bind::<Text,_>(ab_kind).bind::<Text,_>(ab_digest.as_str()).bind::<Text,_>(status).bind::<Timestamptz,_>(now).execute(&mut *conn).await?;}
             let active=sql_query("SELECT response_id,request_id,source_record_digest,source_record_json,manifest_admission_json,manifest_digest,manifest_admission_digest,release_attestation_json,release_service_signer_evidence_json,sequence,cursor,sent_at,reserved_at,state,record_json,lost_record_json,send_receipt_json,active_bytes,compact_receipt_bytes FROM history_key_responses WHERE request_id=$1 AND sequence>$2 AND sequence<=$3 AND state IN ('accepted','lost') ORDER BY sequence FOR UPDATE").bind::<Text,_>(&stream).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).load::<ResponseRow>(&mut *conn).await?;
             if active.iter().map(|row|row.sequence).collect::<Vec<_>>()!=expected_sequences{return Err(PersistenceError::Conflict("failed_precondition: ack crosses undisposed response".to_owned()).into());} let released: i64=active.iter().map(|row|row.active_bytes).sum();
             sql_query("UPDATE history_key_responses SET state='acked',record_json=NULL,lost_record_json=NULL,active_bytes=0,acked_at=$2 WHERE request_id=$1 AND sequence>$3 AND sequence<=$4 AND state IN ('accepted','lost')").bind::<Text,_>(&stream).bind::<Timestamptz,_>(now).bind::<BigInt,_>(mb.acked_sequence.unwrap_or(-1)).bind::<BigInt,_>(high_water_sequence).execute(&mut *conn).await?;

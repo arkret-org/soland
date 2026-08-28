@@ -355,7 +355,7 @@ async fn mimi_provider_facade_contracts_work_body() {
     );
 
     let key_material_body = json!({
-        "requester": "did:web:alice.example",
+        "requester_id": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
         "device_id": MIMI_TEST_DEVICE_ID,
         "mimi_room_uri": mimi_room_uri(&state, "01JSMIMI"),
@@ -464,7 +464,7 @@ async fn mimi_provider_facade_contracts_work_body() {
             "kind": "mimi_uri",
             "identifier_commitment": commitment.clone(),
         }],
-        "requester": "did:web:alice.example",
+        "requester_id": "did:web:alice.example",
         "privacy_profile": "private_contact_discovery",
     });
     let identifier: Value = signed_mimi_post!(
@@ -516,7 +516,7 @@ async fn mimi_provider_facade_contracts_work_body() {
 
     let proxy_body = json!({
         "asset_ref": "ak:blob:sha256:e2e",
-        "requester": "did:web:alice.example",
+        "requester_id": "did:web:alice.example",
         "strand_id": MIMI_TEST_STRAND_ID,
     });
     let proxy: Value = signed_mimi_post!(
@@ -543,7 +543,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         "mimi_room_uri": room_uri,
         "realm_id": demo_realm_id(),
         "target_ref": demo_realm_id(),
-        "reporter": "did:web:alice.example",
+        "reporter_id": "did:web:alice.example",
         "abuse_reason_code": "spam",
     });
     let report: Value = signed_mimi_post!(
@@ -704,11 +704,11 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             "mimi_room_uri": room_uri.clone(),
             "realm_id": demo_realm,
             "target_ref": demo_realm,
-            // mimi-interop.md §11: attribute a report only after the reporter
+            // mimi-interop.md §11: attribute a report only after the reporter_id
             // resolves through a local account or valid consent/holder claim.
             // This reducer-chain test uses the seeded local demo principal;
             // fake consent references are not valid resolution evidence.
-            "reporter": "did:web:alice.example",
+            "reporter_id": "did:web:alice.example",
             "abuse_reason_code": "spam",
         }),
         None
@@ -745,9 +745,12 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
     // `mimi-interop.md` §11 is about *attribution*: the report must name the
     // principal the facade resolved, not the provider that asserted it. The
     // facade holds no key for that principal, so it authors the envelope under
-    // its own service DID and carries the resolved reporter in the payload, as
+    // its own service DID and carries the resolved reporter_id in the payload, as
     // required by `mimi-interop.md` §11.
-    assert_eq!(report_event["payload"]["reporter"], "did:web:alice.example");
+    assert_eq!(
+        report_event["payload"]["reporter_id"],
+        "did:web:alice.example"
+    );
     assert_eq!(report_event["actor_id"], *state.service_id());
 
     let custom_group_id = "mimi-group-p4-custom";

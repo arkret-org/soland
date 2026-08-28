@@ -138,8 +138,8 @@ fn persistence_event_commit_request(
         contact_projection: command.contact_projection.map(|commit| {
             soland_storage::ContactProjectionCommit {
                 record: soland_storage::ContactRecord {
-                    requester: commit.record.requester,
-                    target: commit.record.target,
+                    requester_id: commit.record.requester_id,
+                    target_id: commit.record.target_id,
                     contact_round_id: commit.record.contact_round_id,
                     version: commit.record.version,
                     granted_to_target_scopes: commit.record.granted_to_target_scopes,
@@ -154,7 +154,7 @@ fn persistence_event_commit_request(
                     response_event_ref: commit.record.response_event_ref,
                     tombstone_event_ref: commit.record.tombstone_event_ref,
                     message: commit.record.message,
-                    peer_id: commit.record.peer_id,
+                    peer_host_id: commit.record.peer_host_id,
                     peer_service_resolution: commit.record.peer_service_resolution,
                     created_at: commit.record.created_at,
                     updated_at: commit.record.updated_at,
@@ -388,7 +388,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
-        received_by: &str,
+        received_by: &arkret_identifiers::DidCoreId,
         target_event_id: &str,
     ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
@@ -1411,15 +1411,15 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .await?)
     }
 
-    async fn retire_actor_keypackages(
+    async fn retire_owner_account_keypackages(
         &self,
-        actor_id: &str,
+        owner_account_id: &str,
         retired_at: i64,
     ) -> crate::ServiceResult<usize> {
         let rows = self.0.mls_key_packages().snapshot_all().await?;
         let mut retired = 0;
         for row in rows.into_iter().filter(|row| {
-            row.actor_id == actor_id
+            row.owner_account_id.as_str() == owner_account_id
                 && row.claimed_by_mls_group_id.is_none()
                 && row.consumed_at.is_none()
         }) {

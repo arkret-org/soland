@@ -128,7 +128,7 @@ pub(in crate::routing) async fn identity_document_record(
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: federation_peer_service_id_document(state, did)
+            did_document: federation_peer_id_document(state, did)
                 .unwrap_or_else(|| default_did_document(Some(state), did)),
             key_log_head: None,
             seq: 0,
@@ -142,7 +142,7 @@ pub(in crate::routing) async fn identity_document_record(
     with_default_also_known_as(record, state, did)
 }
 
-pub(super) fn federation_peer_service_id_document(state: &AppState, did: &str) -> Option<Value> {
+pub(super) fn federation_peer_id_document(state: &AppState, did: &str) -> Option<Value> {
     let verification_method = format!("{did}#notary-key");
     let key = state.federation_peer_verification_method_key(&verification_method)?;
     let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes());

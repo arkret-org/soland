@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use arkret_identifiers::TrustDomainId;
+use arkret_identifiers::{DidCoreId, TrustDomainId};
 use zeroize::{Zeroize, Zeroizing};
 
 /// v1 interoperability bound for HTTP message content of a non-streaming JSON operation, from
@@ -387,11 +387,11 @@ pub struct AppConfig {
     /// against a misbehaving client exhausting in-memory projection state.
     /// Env: `SOLAND_ADMIN_MAX_PAGE_LIMIT` (default `1000`).
     pub admin_max_page_limit: usize,
-    /// Principal DIDs allowed to call `GET /_soland/admin/{resource}` and the
+    /// Stable principal IDs allowed to call `GET /_soland/admin/{resource}` and the
     /// other production-gated admin read surfaces when `development_mode` is
     /// false. Empty (default) keeps the previous "dev-mode only" posture for
-    /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_DIDS` (comma-separated).
-    pub admin_principal_dids: Vec<String>,
+    /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_IDS` (comma-separated).
+    pub admin_principal_ids: Vec<DidCoreId>,
     /// Maximum unacknowledged to-device messages retained per
     /// `(recipient_principal_id, device_id)`. Older messages beyond this
     /// capacity are dropped, and the device lost watermark is advanced so the
@@ -892,7 +892,7 @@ impl AppConfig {
             federation_outbound_enabled: false,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
-            admin_principal_dids: Vec::new(),
+            admin_principal_ids: Vec::new(),
             to_device_queue_capacity: 10_000,
             key_backup_daily_download_limit:
                 soland_services::runtime_guards::clamp_key_backup_daily_download_limit(None),
@@ -1070,15 +1070,21 @@ impl AppConfig {
             .filter(|n| *n > 0)
             .unwrap_or(1000)
             .max(admin_default_page_limit);
-        let admin_principal_dids = lookup(values, "SOLAND_ADMIN_PRINCIPAL_DIDS")
+        let admin_principal_ids = lookup(values, "SOLAND_ADMIN_PRINCIPAL_IDS")
             .ok()
             .map(|value| {
                 value
                     .split(',')
-                    .map(|v| v.trim().to_owned())
-                    .filter(|v| !v.is_empty())
-                    .collect::<Vec<_>>()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(|value| {
+                        DidCoreId::new(value.to_owned()).map_err(|error| {
+                            anyhow::anyhow!("SOLAND_ADMIN_PRINCIPAL_IDS is invalid: {error}")
+                        })
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
             })
+            .transpose()?
             .unwrap_or_default();
         let to_device_queue_capacity = lookup(values, "SOLAND_TO_DEVICE_QUEUE_CAPACITY")
             .ok()
@@ -1248,7 +1254,7 @@ impl AppConfig {
             federation_outbound_enabled,
             admin_default_page_limit,
             admin_max_page_limit,
-            admin_principal_dids,
+            admin_principal_ids,
             to_device_queue_capacity,
             key_backup_daily_download_limit,
             service_identity_bundle_dir,
@@ -1296,11 +1302,11 @@ impl AppConfig {
     }
 
     /// Returns true when `actor` is configured as an admin principal in
-    /// production mode via `SOLAND_ADMIN_PRINCIPAL_DIDS`.
+    /// production mode via `SOLAND_ADMIN_PRINCIPAL_IDS`.
     pub fn is_admin_principal(&self, actor: &str) -> bool {
-        self.admin_principal_dids
+        self.admin_principal_ids
             .iter()
-            .any(|configured| configured == actor)
+            .any(|configured| configured.as_str() == actor)
     }
 
     /// Derive the effective admin-API authentication posture from the
@@ -1309,15 +1315,15 @@ impl AppConfig {
     ///
     ///   - `"development"` — `SOLAND_DEVELOPMENT_MODE=true`; any authenticated session may call
     ///     admin endpoints.
-    ///   - `"did_allowlist"` — production mode, `SOLAND_ADMIN_PRINCIPAL_DIDS` is non-empty; admin
-    ///     endpoints accept calls whose session actor appears in the allowlist.
+    ///   - `"principal_id_allowlist"` — production mode, `SOLAND_ADMIN_PRINCIPAL_IDS` is non-empty;
+    ///     admin endpoints accept calls whose session actor appears in the allowlist.
     ///   - `"closed"` — production mode with neither admin allowlist nor introspection configured;
     ///     admin endpoints are effectively locked.
     pub fn admin_auth_mode(&self) -> &'static str {
         if self.development_mode {
             "development"
-        } else if !self.admin_principal_dids.is_empty() {
-            "did_allowlist"
+        } else if !self.admin_principal_ids.is_empty() {
+            "principal_id_allowlist"
         } else {
             "closed"
         }

@@ -1,3 +1,4 @@
+use arkret_identifiers::ServiceAccountId;
 use arkret_wire::{MlsGroupId, RealmId};
 
 use super::{
@@ -14,6 +15,9 @@ pub struct MlsKeyPackageRow {
     pub id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
+    /// Service-local account that owns this KeyPackage. This is deliberately
+    /// separate from `actor_id`: one principal may have more than one account.
+    pub owner_account_id: ServiceAccountId,
     pub actor_id: String,
     pub device_id: Option<String>,
     pub endpoint_verification_method: Option<String>,

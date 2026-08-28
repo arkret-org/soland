@@ -374,13 +374,13 @@ pub(crate) fn validate_history_access_payload(operation: &Operation) -> Result<(
 pub(crate) fn validate_observed_dots_payload(operation: &Operation) -> Result<(), &'static str> {
     if operation
         .payload
-        .get("observed_dots")
+        .get("observed_dot_ids")
         .and_then(serde_json::Value::as_array)
         .is_some_and(|dots| !dots.is_empty())
     {
         Ok(())
     } else {
-        Err("consent revoke observed_dots must be a non-empty array")
+        Err("consent revoke observed_dot_ids must be a non-empty array")
     }
 }
 

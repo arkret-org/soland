@@ -129,8 +129,12 @@ pub struct SolandMemoryPersistenceStore {
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
-    pub(crate) franking_replay_nonces:
-        Mutex<BTreeMap<(String, String, String), soland_storage::FrankingReplayNonceCommit>>,
+    pub(crate) franking_replay_nonces: Mutex<
+        BTreeMap<
+            (String, arkret_wire::DidCoreId, String),
+            soland_storage::FrankingReplayNonceCommit,
+        >,
+    >,
     pub(crate) agent_approval_nonces:
         Mutex<BTreeMap<(String, String, String, String), soland_storage::AgentApprovalNonceCommit>>,
     control_proposal_authority_acks: MemoryControlProposalAuthorityAckStore,
@@ -291,7 +295,7 @@ impl SolandMemoryPersistenceStore {
         let store = Self::new();
         let now = chrono::Utc::now();
         store.accounts.seed(AccountRecord {
-            id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
+            id: arkret_wire::ServiceAccountId::new("0196419b-0000-7000-8000-000000000001").unwrap(),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .expect("demo principal id is canonical"),
             localpart: "alice".to_owned(),
@@ -733,14 +737,14 @@ mod device_pairing_commit_tests {
             .await
             .unwrap();
 
-        let actor = "did:web:example.com:alice";
+        let actor = "ak:did_core:web:example.com:alice";
         let device_id = "ak:device:01964137-0000-7000-8000-0000000000b2";
         let commit = |pairing_code: &str| DevicePairingAuthorizationCommit {
             device_pairing_request_id: request_id.clone(),
             pairing_code: pairing_code.to_owned(),
             new_device_pubkey: public_key.clone(),
             device_id: device_id.to_owned(),
-            authorized_by_actor_id: actor.to_owned(),
+            authorized_by_actor_id: arkret_wire::DidCoreId::new(actor).unwrap(),
             authorized_event_ref: "ak:event:AQUeFABQK9MQb8JmkZyP7wD2QfYOSDaCH1LDepfyMD-G"
                 .to_owned(),
             changed_at: now,

@@ -703,10 +703,10 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
     // The issuer is persisted with the op because `ordered_log` slots are keyed
     // by `(cell, actor_id, issuer_seq)`. A row without it cannot be joined
     // correctly, so it fails closed instead of falling back to a synthetic DID.
-    let issuer = value
-        .get("issuer")
+    let issuer_id = value
+        .get("issuer_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| StoreError::Backend("sealed op missing issuer".to_owned()))
+        .ok_or_else(|| StoreError::Backend("sealed op missing issuer_id".to_owned()))
         .and_then(|actor_id| {
             arkret_wire::DidCoreId::new(actor_id.to_owned())
                 .map_err(|error| StoreError::Backend(error.to_string()))
@@ -728,7 +728,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok(IssuedOp {
-        issuer_id: issuer,
+        issuer_id,
         op: SealedOp {
             move_id,
             op,

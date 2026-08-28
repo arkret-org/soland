@@ -469,18 +469,18 @@ mod tests {
     #[test]
     fn genesis_envelope_rejects_supersedes() {
         let mut body = key_backup_body("secret_storage", passphrase_encryption());
-        body["supersedes"] = json!("ak:backup:01964137-0000-7000-8000-0000000000ff");
+        body["supersedes_id"] = json!("ak:backup:01964137-0000-7000-8000-0000000000ff");
 
         let backup = typed_key_backup_body(&body).expect("typed key backup");
         let err = validate_series_genesis_shape_typed(&backup)
-            .expect_err("genesis envelope carrying `supersedes` must be series_chain_broken");
+            .expect_err("genesis envelope carrying `supersedes_id` must be series_chain_broken");
         assert_eq!(err.code, ErrorCode::SchemaViolation);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
         assert_eq!(
             err.wire_code_override.as_deref(),
             Some("series_chain_broken")
         );
-        assert!(err.message.contains("`supersedes`"));
+        assert!(err.message.contains("`supersedes_id`"));
     }
 
     #[test]
@@ -509,7 +509,7 @@ mod tests {
         // Spec §7.6 phrases genesis as `supersedes == null`; an explicit
         // JSON null is equivalent to absence, not a chain claim.
         let mut body = key_backup_body("secret_storage", passphrase_encryption());
-        body["supersedes"] = Value::Null;
+        body["supersedes_id"] = Value::Null;
         body["supersedes_digest"] = Value::Null;
 
         let backup = typed_key_backup_body(&body).expect("typed key backup");
