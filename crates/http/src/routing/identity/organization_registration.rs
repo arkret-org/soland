@@ -81,7 +81,11 @@ pub(crate) async fn prepare(
     let body = parse_registration_body(req).await?;
     let issuer = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service core id is invalid: {error}")))?;
-    let origin = format!("{}/", state.config().public_base_url.trim_end_matches('/'));
+    let origin = state
+        .config()
+        .public_base_url
+        .trim_end_matches('/')
+        .to_owned();
     let challenge = state
         .organization_registrations()
         .prepare(

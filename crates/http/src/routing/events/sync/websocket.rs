@@ -22,7 +22,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{LazyLock, Mutex as StdMutex};
 
 use arkret_identifiers::{Cursor, RealmId};
-use arkret_models_collaboration::http_bodies::{EventsSubscribeFrame, EventsSubscribeFrameKind};
+use arkret_models_collaboration::http_bodies::{
+    EpochRotationPayload, EventsSubscribeFrame, EventsSubscribeFrameKind,
+};
 use arkret_models_collaboration::sync_frames::websocket_binding::{
     WebSocketChannelControlPayload, WebSocketClientFrame, WebSocketClosedReason,
     WebSocketConnectionControlPayload, WebSocketConnectionLimits, WebSocketDataPayload,
@@ -1764,12 +1766,13 @@ async fn run_events_channel(
                 previous_epoch: _,
                 new_epoch,
             } => {
-                let frame = EventsSubscribeFrame {
-                    kind: EventsSubscribeFrameKind::EpochRotation,
-                    realm_id: RealmId::new(realm_id.clone()).ok(),
-                    cursor: None,
-                    payload: Some(BTreeMap::from([("new_epoch".to_owned(), new_epoch)])),
-                    reconnect_after_ms: None,
+                let frame = EventsSubscribeFrame::EpochRotation {
+                    realm_id: RealmId::new(realm_id.clone())
+                        .expect("notification realm id is validated"),
+                    payload: EpochRotationPayload {
+                        new_epoch: u32::try_from(new_epoch.as_u64().expect("epoch is unsigned"))
+                            .expect("epoch fits u32"),
+                    },
                 };
                 if !emit_events_control(&sender, &channel_id, frame).await {
                     return WebSocketClosedReason::Error;
@@ -1839,19 +1842,16 @@ async fn emit_events_event(
     cursor: &str,
     envelope: &arkret_wire::Event,
 ) -> bool {
-    let Some(payload) = serde_json::to_value(envelope)
-        .ok()
-        .and_then(|value| value.as_object().cloned())
-        .map(|object| object.into_iter().collect())
-    else {
+    let (Ok(realm_id), Ok(cursor)) = (
+        RealmId::new(realm_id.to_owned()),
+        Cursor::new(cursor.to_owned()),
+    ) else {
         return false;
     };
-    let frame = EventsSubscribeFrame {
-        kind: EventsSubscribeFrameKind::Event,
-        realm_id: RealmId::new(realm_id.to_owned()).ok(),
-        cursor: Cursor::new(cursor.to_owned()).ok(),
-        payload: Some(payload),
-        reconnect_after_ms: None,
+    let frame = EventsSubscribeFrame::Event {
+        realm_id,
+        cursor,
+        payload: Box::new(envelope.clone()),
     };
     let payload = WebSocketDataPayload::Events(Box::new(frame));
     emit(
@@ -1885,8 +1885,17 @@ async fn retire_events_realm(
     active_realms: &mut BTreeSet<String>,
 ) -> bool {
     active_realms.remove(&realm_id);
-    let mut frame = events_frame(kind);
-    frame.realm_id = RealmId::new(realm_id).ok();
+    let realm_id = RealmId::new(realm_id).expect("active realm id is validated");
+    let frame = match kind {
+        EventsSubscribeFrameKind::ResyncRequired => EventsSubscribeFrame::ResyncRequired {
+            realm_id: Some(realm_id),
+            reconnect_after_ms: Some(SUBSCRIBE_RECONNECT_AFTER_MS),
+        },
+        EventsSubscribeFrameKind::Unauthorized => EventsSubscribeFrame::Unauthorized {
+            realm_id: Some(realm_id),
+        },
+        _ => return true,
+    };
     let delivered = emit_events_control(sender, channel_id, frame).await;
     !delivered || active_realms.is_empty()
 }
@@ -2186,24 +2195,29 @@ fn account_resync_required_frame()
 /// A terminal control frame: the channel stops, so it carries the reconnect
 /// guard the client must honour before reopening.
 fn events_frame(kind: EventsSubscribeFrameKind) -> EventsSubscribeFrame {
-    EventsSubscribeFrame {
-        kind,
-        realm_id: None,
-        cursor: None,
-        payload: None,
-        reconnect_after_ms: Some(SUBSCRIBE_RECONNECT_AFTER_MS),
+    match kind {
+        EventsSubscribeFrameKind::ResyncRequired => EventsSubscribeFrame::ResyncRequired {
+            realm_id: None,
+            reconnect_after_ms: Some(SUBSCRIBE_RECONNECT_AFTER_MS),
+        },
+        EventsSubscribeFrameKind::Unauthorized => {
+            EventsSubscribeFrame::Unauthorized { realm_id: None }
+        }
+        EventsSubscribeFrameKind::Heartbeat => EventsSubscribeFrame::Heartbeat,
+        _ => panic!("invalid cursorless events control kind"),
     }
 }
 
 /// A cursor-bearing catch-up control frame (`frontier` / `catchup_complete`).
 /// The channel continues, so there is no reconnect hint.
 fn events_frame_with_cursor(kind: EventsSubscribeFrameKind, cursor: &str) -> EventsSubscribeFrame {
-    EventsSubscribeFrame {
-        kind,
-        realm_id: None,
-        cursor: Cursor::new(cursor.to_owned()).ok(),
-        payload: None,
-        reconnect_after_ms: None,
+    let cursor = Cursor::new(cursor.to_owned()).expect("cursor is validated");
+    match kind {
+        EventsSubscribeFrameKind::Frontier => EventsSubscribeFrame::Frontier { cursor },
+        EventsSubscribeFrameKind::CatchupComplete => {
+            EventsSubscribeFrame::CatchupComplete { cursor }
+        }
+        _ => panic!("invalid cursor-bearing events control kind"),
     }
 }
 

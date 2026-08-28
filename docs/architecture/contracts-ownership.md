@@ -64,7 +64,7 @@
 | `admin::media` | `MediaServiceFocus` | SDK contract | Soland、Sodmin | 直接使用 `arkret-models-collaboration` 中 spec `event-payload.schema.json` `$defs/media_service_focus` 的唯一实现 |
 | `admin::media` | `AdminRealmMediaService` | local contract | Soland、Sodmin | `GET /_soland/admin/realms/{realm_id}/media-service` 只读投影；未命中 spec wire 类型 |
 | `admin::policy` | `PolicyEffect` | SDK re-export | Soland、Sodmin | 直接复用 `arkret-wire` 的规范枚举（spec `governance-objects.md` `default_effect` / `policy.schema.json` `$defs/policy_effect` 四值闭集 `allow`/`deny`/`quarantine`/`require_review`），不在本 crate 重复定义；注意与 decision 五值集（`PolicyCheckOutcome.decision`，SDK `AuthzDecision`，`soft_deny`/`hard_deny` 替代 `deny`）是两个不同枚举 |
-| `admin::policy` | `AdminPolicyPayload` | local contract | Soland、Sodmin | `/_soland/self/policies` 文档决策体；未命中 spec wire 类型 |
+| `admin::policy` | `AdminPolicyPayload` | local contract | Soland、Sodmin | `/_soland/self/policies` 文档决策体；`resource` 永久为 opaque operator data，Sodmin 不得解析或展示其子结构；approval evidence、audit 与 policy decision 只走既有 typed API；未命中 spec wire 类型 |
 | `admin::policy` | `AdminPolicyDocument` | local contract | Soland、Sodmin | `GET /_soland/self/policies` 文档投影；未命中 spec wire 类型 |
 | `admin::policy` | `AdminPolicyDocumentPage` | local contract | Soland、Sodmin | `GET /_soland/self/policies` 分页 envelope；未命中 spec wire 类型 |
 | `admin::policy` | `UpsertPolicyDocumentRequestBody` | local contract | Soland、Sodmin | `POST /_soland/self/policies` 部署本地管理命令；未命中 spec wire 类型 |

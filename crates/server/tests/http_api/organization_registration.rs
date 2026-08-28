@@ -238,8 +238,10 @@ async fn organization_registration_http_round_trip_and_get_are_non_enumerable_bo
             .await;
     let challenge_status = challenge_response.status_code;
     let challenge_body: serde_json::Value = challenge_response.take_json().await.unwrap();
-    let challenge: OrganizationRegistrationChallenge = serde_json::from_value(challenge_body.clone())
-        .unwrap_or_else(|error| panic!("challenge status {challenge_status:?}: {challenge_body}: {error}"));
+    let challenge: OrganizationRegistrationChallenge =
+        serde_json::from_value(challenge_body.clone()).unwrap_or_else(|error| {
+            panic!("challenge status {challenge_status:?}: {challenge_body}: {error}")
+        });
     let ensure = OrganizationRegistrationEnsureRequestBody {
         organization_id: organization_id.clone(),
         did: did.clone(),

@@ -70,10 +70,14 @@ pub(crate) async fn set_account_lifecycle_state(
         );
     }
     if previous_state == "deactivated" && next_state == "active" {
-        return Err(
-            AppError::conflict("deactivated accounts cannot be reactivated")
-                .with_wire_code("account_deactivated"),
-        );
+        // This product-private admin surface has no Account Authority
+        // recovery-completion record or replacement-device generation proof.
+        // Protocol reactivation is admitted only by the signed account-status
+        // replica path after those issuer-side gates have succeeded.
+        return Err(AppError::conflict(
+            "deactivated accounts cannot be reactivated through the local admin surface",
+        )
+        .with_wire_code("account_deactivated"));
     }
 
     let changed_at = now();

@@ -776,13 +776,17 @@ fn device_message_envelope_from_record(
             .and_then(Value::as_str)?,
     )
     .ok()?;
-    let content = message
+    let content_value = message
         .content
         .get("content")
         .and_then(Value::as_object)?
-        .clone()
-        .into_iter()
-        .collect();
+        .clone();
+    let content =
+        arkret_models_collaboration::sync_frames::account_sync::decode_device_message_content(
+            &kind,
+            Value::Object(content_value),
+        )
+        .ok()?;
     let expires_at = message
         .content
         .get("expires_at")

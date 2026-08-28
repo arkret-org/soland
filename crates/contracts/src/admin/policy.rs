@@ -17,6 +17,11 @@
 //! *decision* enum (`service-operation-dtos.schema.json`
 //! `PolicyCheckOutcome.decision`, SDK `arkret_wire::AuthzDecision`), not a
 //! valid rule effect — the two closed sets must not be conflated.
+//!
+//! `AdminPolicyPayload::resource` is permanently opaque operator data.  It is
+//! not an extension point for approval evidence, audit records, or policy
+//! decisions, and consumers must neither parse nor display its substructure.
+//! Those concerns use their existing typed audit and policy-decision APIs.
 
 pub use arkret_wire::PolicyEffect;
 use chrono::{DateTime, Utc};
@@ -36,9 +41,12 @@ pub struct AdminPolicyPayload {
     pub effect: PolicyEffect,
     #[serde(default)]
     pub actions: Vec<String>,
-    /// Operator-authored match target. Genuinely open JSON: the console
-    /// stores its own `name` / `description` / `priority` / `rules` under it.
+    /// Permanently opaque operator-authored data.
+    ///
+    /// Consumers must not infer, parse, or display subfields. In particular,
+    /// evidence and audit data belong to their typed APIs, never here.
     #[cfg_attr(feature = "openapi", salvo(schema(value_type = serde_json::Value)))]
+    /// Permanently opaque operator data; see [`AdminPolicyPayload::resource`].
     #[serde(default)]
     pub resource: Value,
     /// Operator-authored obligations, evaluated by the authz path.
@@ -102,4 +110,32 @@ pub struct UpsertPolicyDocumentRequestBody {
 
 fn default_active() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn resource_round_trips_as_opaque_json_without_a_typed_evidence_shape() {
+        let payload = AdminPolicyPayload {
+            effect: PolicyEffect::RequireReview,
+            actions: vec!["ak.realm.policy.update".to_owned()],
+            resource: json!({
+                "approval_evidence": {"operator_key": "opaque"},
+                "audit_trail": [{"actor": "opaque"}]
+            }),
+            obligations: Vec::new(),
+        };
+
+        let encoded = serde_json::to_value(&payload).expect("serialize payload");
+        let decoded: AdminPolicyPayload =
+            serde_json::from_value(encoded.clone()).expect("deserialize payload");
+
+        assert_eq!(decoded.resource, encoded["resource"]);
+        assert!(encoded.get("approval_evidence").is_none());
+        assert!(encoded.get("audit_trail").is_none());
+    }
 }

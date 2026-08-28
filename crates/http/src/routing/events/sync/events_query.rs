@@ -422,28 +422,20 @@ fn events_event_frame(
     cursor: &str,
     event: &arkret_wire::Event,
 ) -> Option<EventsSubscribeFrame> {
-    let payload = serde_json::to_value(event)
-        .ok()?
-        .as_object()?
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    Some(EventsSubscribeFrame {
-        kind: EventsSubscribeFrameKind::Event,
-        realm_id: RealmId::new(realm_id.to_owned()).ok(),
-        cursor: Cursor::new(cursor.to_owned()).ok(),
-        payload: Some(payload),
-        reconnect_after_ms: None,
+    Some(EventsSubscribeFrame::Event {
+        realm_id: RealmId::new(realm_id.to_owned()).ok()?,
+        cursor: Cursor::new(cursor.to_owned()).ok()?,
+        payload: Box::new(event.clone()),
     })
 }
 
 fn events_epoch_rotation_frame(realm_id: &str, new_epoch: Value) -> EventsSubscribeFrame {
-    EventsSubscribeFrame {
-        kind: EventsSubscribeFrameKind::EpochRotation,
-        realm_id: RealmId::new(realm_id.to_owned()).ok(),
-        cursor: None,
-        payload: Some(BTreeMap::from([("new_epoch".to_owned(), new_epoch)])),
-        reconnect_after_ms: None,
+    EventsSubscribeFrame::EpochRotation {
+        realm_id: RealmId::new(realm_id.to_owned()).expect("stored realm id is validated"),
+        payload: arkret_models_collaboration::http_bodies::EpochRotationPayload {
+            new_epoch: u32::try_from(new_epoch.as_u64().expect("stored epoch is unsigned"))
+                .expect("stored epoch fits u32"),
+        },
     }
 }
 
