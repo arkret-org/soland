@@ -1098,26 +1098,25 @@ pub(super) async fn mimi_report_abuse(
         .map_err(|error| {
             AppError::param_invalid(format!("mimi report franking_proof invalid: {error}"))
         })?;
-    let payload =
-        ModerationReportPayload {
-            realm_id: arkret_wire::RealmId::new(realm_id.clone()).map_err(|error| {
-                AppError::param_invalid(format!("mimi report realm_id invalid: {error}"))
-            })?,
-            effective_scope,
-            target_ref: target_ref.to_owned(),
-            report_reason_code: canonical_reason.to_owned(),
-            description,
-            reporter_id: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
-                AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
-            })?,
-            provenance: Some(ModerationReportProvenance::MimiFacade),
-            source_provider_id: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
-                |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
-            )?),
-            evidence_refs: None,
-            evidence_package,
-            franking_proof,
-        };
+    let payload = ModerationReportPayload {
+        realm_id: arkret_wire::RealmId::new(realm_id.clone()).map_err(|error| {
+            AppError::param_invalid(format!("mimi report realm_id invalid: {error}"))
+        })?,
+        effective_scope,
+        target_ref: target_ref.to_owned(),
+        report_reason_code: canonical_reason.to_owned(),
+        description,
+        reporter_id: arkret_wire::DidCoreId::new(reporter.to_owned()).map_err(|error| {
+            AppError::param_invalid(format!("mimi report reporter invalid: {error}"))
+        })?,
+        provenance: Some(ModerationReportProvenance::MimiFacade),
+        source_provider_id: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
+            |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
+        )?),
+        evidence_refs: None,
+        evidence_package,
+        franking_proof,
+    };
     let report_event_id = persist_mimi_facade_moderation_report_event(state, payload).await?;
 
     // `report` is Event-derived: the id is the accepted

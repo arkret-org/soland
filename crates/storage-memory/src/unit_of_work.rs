@@ -2434,9 +2434,9 @@ mod tests {
             principal_server_id: "ak:did_core:web:soland.example".to_owned(),
         };
         let namespaces = arkret_models_integration::AppletWireNamespaces {
-            realm_namespace_entries: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
-                "bridge:workspace:*",
-            )],
+            realm_namespace_entries: vec![
+                arkret_models_integration::AppletNamespaceEntry::exclusive("bridge:workspace:*"),
+            ],
             ..Default::default()
         };
         let build = |suffix: &str| {

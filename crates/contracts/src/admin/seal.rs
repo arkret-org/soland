@@ -56,10 +56,7 @@ impl AdminNotaryValue {
                 threshold,
                 notary_signer_descriptors,
                 ..
-            } => format!(
-                "threshold({threshold}/{})",
-                notary_signer_descriptors.len()
-            ),
+            } => format!("threshold({threshold}/{})", notary_signer_descriptors.len()),
             arkret_wire::NotaryValue::OpenSet {
                 notary_signer_descriptors,
             } => {

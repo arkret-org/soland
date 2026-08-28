@@ -438,12 +438,12 @@ async fn validate_ghost_managed_actor_unit(
             .actor_namespace_entries
             .iter()
             .any(|entry| {
-            namespace_pattern_matches(
-                AppletNamespaceDomain::Actors,
-                &entry.pattern,
-                payload.initial_resolution.did.as_str(),
-            )
-        })
+                namespace_pattern_matches(
+                    AppletNamespaceDomain::Actors,
+                    &entry.pattern,
+                    payload.initial_resolution.did.as_str(),
+                )
+            })
     {
         return Err(AppError::capability_denied(
             "Ghost did is outside the installed Applet actor namespace",

@@ -1974,8 +1974,7 @@ fn resolved_by_allowed(
     resolved_by: Option<&DidCoreId>,
 ) -> bool {
     if !policy.trusted_directory_ids.is_empty()
-        && !resolved_by
-            .is_some_and(|did| policy.trusted_directory_ids.iter().any(|v| v == did))
+        && !resolved_by.is_some_and(|did| policy.trusted_directory_ids.iter().any(|v| v == did))
     {
         return false;
     }

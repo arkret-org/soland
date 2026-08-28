@@ -1727,13 +1727,18 @@ async fn resolve_realm_endpoint(
         .ok_or_else(|| AppError::param_missing("realm_id_or_alias path segment required"))?;
     let record = applet_records(state).await?.into_iter().find(|record| {
         record.portal_realm_id.as_str() == realm_id_or_alias
-            || record.package.namespaces.realm_namespace_entries.iter().any(|claim| {
-                namespace_pattern_matches(
-                    AppletNamespaceDomain::Realms,
-                    &claim.pattern,
-                    &realm_id_or_alias,
-                )
-            })
+            || record
+                .package
+                .namespaces
+                .realm_namespace_entries
+                .iter()
+                .any(|claim| {
+                    namespace_pattern_matches(
+                        AppletNamespaceDomain::Realms,
+                        &claim.pattern,
+                        &realm_id_or_alias,
+                    )
+                })
             || record.applet_id.as_str() == realm_id_or_alias
     });
     if let Some(record) = record {
@@ -1891,13 +1896,18 @@ async fn third_party_locations_endpoint(
     if let Some(location) = location
         && let Some(record) = applet_records(state).await?.into_iter().find(|record| {
             record.portal_realm_id.as_str() == location
-                || record.package.namespaces.realm_namespace_entries.iter().any(|claim| {
-                    namespace_pattern_matches(
-                        AppletNamespaceDomain::Realms,
-                        &claim.pattern,
-                        &location,
-                    )
-                })
+                || record
+                    .package
+                    .namespaces
+                    .realm_namespace_entries
+                    .iter()
+                    .any(|claim| {
+                        namespace_pattern_matches(
+                            AppletNamespaceDomain::Realms,
+                            &claim.pattern,
+                            &location,
+                        )
+                    })
         })
     {
         let realm_id = record.portal_realm_id.clone();

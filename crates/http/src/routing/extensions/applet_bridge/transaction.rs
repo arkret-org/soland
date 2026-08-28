@@ -223,9 +223,13 @@ fn validate_transaction_event_binding(
         .actor_namespace_entries
         .iter()
         .any(|entry| {
-        !namespace_pattern_is_wildcard(&entry.pattern)
-            && namespace_pattern_matches(AppletNamespaceDomain::Actors, &entry.pattern, actor_id)
-    });
+            !namespace_pattern_is_wildcard(&entry.pattern)
+                && namespace_pattern_matches(
+                    AppletNamespaceDomain::Actors,
+                    &entry.pattern,
+                    actor_id,
+                )
+        });
     if matched {
         Ok(())
     } else {

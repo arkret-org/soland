@@ -531,13 +531,13 @@ pub(super) fn applet_actor_matches_exact_namespace(
         .actor_namespace_entries
         .iter()
         .any(|entry| {
-        !applet_namespace_pattern_is_wildcard(&entry.pattern)
-            && arkret_models_integration::namespace_pattern_matches(
-                arkret_models_integration::AppletNamespaceDomain::Actors,
-                &entry.pattern,
-                actor_id,
-            )
-    })
+            !applet_namespace_pattern_is_wildcard(&entry.pattern)
+                && arkret_models_integration::namespace_pattern_matches(
+                    arkret_models_integration::AppletNamespaceDomain::Actors,
+                    &entry.pattern,
+                    actor_id,
+                )
+        })
 }
 
 pub(super) fn applet_namespace_pattern_is_wildcard(pattern: &str) -> bool {

@@ -1666,12 +1666,7 @@ async fn submit_event_batch_outcome_with_leases(
         .await
         {
             Ok(response) => {
-                for frontier in response
-                    .outcome
-                    .realm_actor_frontier_views
-                    .iter()
-                    .cloned()
-                {
+                for frontier in response.outcome.realm_actor_frontier_views.iter().cloned() {
                     realm_actor_frontiers.insert(
                         (
                             frontier.realm_id.as_str().to_owned(),

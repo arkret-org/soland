@@ -2580,7 +2580,10 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                     != serde_json::to_value(contact_round).map_err(|error| {
                         AppError::internal(format!("glare contact_round: {error}"))
                     })?
-                || !core_id_matches_actor(&remote_attestation.issuer_id, &contact_address.subject_id)
+                || !core_id_matches_actor(
+                    &remote_attestation.issuer_id,
+                    &contact_address.subject_id,
+                )
                 || remote_attestation.peer_id != local_attestation.issuer_id
                 || remote_attestation.request_receipt_digests != receipt_digests
                 || remote_proof.contact_round_id != *contact_round_id
@@ -3819,7 +3822,8 @@ async fn project_delivered_contact_fact(
                 remote_proof,
             )?;
             bundle.current_proofs.retain(|proof| {
-                proof.issuer_id != remote_proof.issuer_id && proof.issuer_id != local_proof.issuer_id
+                proof.issuer_id != remote_proof.issuer_id
+                    && proof.issuer_id != local_proof.issuer_id
             });
             bundle.current_proofs.push(remote_proof.clone());
             bundle.current_proofs.push(local_proof);
@@ -3906,7 +3910,8 @@ async fn project_delivered_contact_fact(
                 remote_proof,
             )?;
             bundle.current_proofs.retain(|proof| {
-                proof.issuer_id != remote_proof.issuer_id && proof.issuer_id != local_proof.issuer_id
+                proof.issuer_id != remote_proof.issuer_id
+                    && proof.issuer_id != local_proof.issuer_id
             });
             bundle.current_proofs.push(remote_proof.clone());
             bundle.current_proofs.push(local_proof);

@@ -195,7 +195,11 @@ pub(super) fn resolve_handle_audience(
                 .as_ref()
                 .map(|realm_id| realm_id.as_str().to_owned())
         })
-        .or_else(|| body.requester_id.as_ref().map(|did| did.as_str().to_owned()))
+        .or_else(|| {
+            body.requester_id
+                .as_ref()
+                .map(|did| did.as_str().to_owned())
+        })
         .unwrap_or_else(|| default_audience.to_owned())
 }
 
@@ -213,9 +217,10 @@ pub(super) fn local_handle_resolution_outcome(
         principal_id: DidCoreId::new(principal_id).map_err(|err| {
             AppError::param_invalid(format!("invalid resolved actor principal id: {err}"))
         })?,
-        subject_id: handle_claim.subject_id.clone().ok_or_else(|| {
-            AppError::internal("resolved handle claim is missing subject_id")
-        })?,
+        subject_id: handle_claim
+            .subject_id
+            .clone()
+            .ok_or_else(|| AppError::internal("resolved handle claim is missing subject_id"))?,
         handle: canonical_handle,
         verified: true,
         claims: Some(vec![handle_claim.clone()]),

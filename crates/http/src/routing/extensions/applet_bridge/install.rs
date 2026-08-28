@@ -1680,7 +1680,9 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(
+                    "bridge.test".to_owned(),
+                )],
                 ..Default::default()
             },
         );
@@ -1805,7 +1807,9 @@ mod tests {
             DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
-                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
+                handle_namespace_entries: vec![AppletNamespaceEntry::exclusive(
+                    "bridge.test".to_owned(),
+                )],
                 ..Default::default()
             },
         )
