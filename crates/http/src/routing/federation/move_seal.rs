@@ -8,6 +8,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{Hash, RealmId, SealId};
+use arkret_models_collaboration::governance_dependencies::{
+    GovernanceDependency, GovernanceDependencySelector,
+};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{Event, NotarySig, Seal};
@@ -31,6 +34,113 @@ struct DeviceGenerationEventSealContext {
     bootstrap_required_delta: Vec<Hash>,
     bootstrap_device_id: String,
     bootstrap_device_public_key: String,
+}
+
+async fn verified_availability_dependency_writes(
+    state: &AppState,
+    seal: &Seal,
+) -> Result<Vec<soland_storage::GovernanceDependencyWrite>, AppError> {
+    let store = state.persistence().governance_dependency_store();
+    let mut dependencies_by_key = BTreeMap::new();
+    for digest in &seal.availability_receipt_digests {
+        let selector = GovernanceDependencySelector::AvailabilityReceipt {
+            content_digest: digest.clone(),
+        };
+        let receipt_dependency = store
+            .get(&seal.realm_id, &selector)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("availability receipt lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                seal_admission_error(
+                    "Seal commits an availability receipt that is not durably available",
+                )
+            })?;
+        let evidence_digest = match &receipt_dependency {
+            GovernanceDependency::AvailabilityReceipt {
+                availability_receipt,
+                ..
+            } => availability_receipt.holder_signer_evidence_digest.clone(),
+            _ => {
+                return Err(seal_admission_error(
+                    "availability receipt selector resolved to another dependency kind",
+                ));
+            }
+        };
+        let receipt_key = receipt_dependency
+            .selector()
+            .canonical_sort_key()
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        dependencies_by_key
+            .entry(receipt_key)
+            .or_insert(receipt_dependency);
+        let evidence_selector =
+            GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                content_digest: evidence_digest,
+            };
+        let evidence_dependency = store
+            .get(&seal.realm_id, &evidence_selector)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("availability signer evidence lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                seal_admission_error(
+                    "availability receipt signer evidence is not durably available",
+                )
+            })?;
+        let evidence_key = evidence_dependency
+            .selector()
+            .canonical_sort_key()
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        dependencies_by_key
+            .entry(evidence_key)
+            .or_insert(evidence_dependency);
+    }
+    let dependencies = dependencies_by_key.into_values().collect::<Vec<_>>();
+    let mut covered = state
+        .projections()
+        .predecessor_covered_events(&seal.predecessor_refs)
+        .map_err(app_error_from_seal_reject)?;
+    covered.extend(seal.delta.iter().cloned());
+    let mut events = BTreeMap::new();
+    for digest in covered {
+        let event = crate::notary::durable_control_event_by_digest(state, &digest)
+            .await
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        events.insert(digest, event);
+    }
+    let (replay_context, events) = state
+        .projections()
+        .seal_dependency_replay_context_with_events(seal, events)
+        .map_err(app_error_from_seal_reject)?;
+    arkret::verify_seal_availability_dependencies_default(
+        seal,
+        &events,
+        &replay_context,
+        &dependencies,
+    )
+    .map_err(|error| seal_admission_error(error.to_string()))?;
+    dependencies
+        .into_iter()
+        .enumerate()
+        .map(|(edge_index, item)| {
+            Ok(soland_storage::GovernanceDependencyWrite {
+                realm_id: seal.realm_id.clone(),
+                source: soland_storage::GovernanceDependencySource::Seal(seal.id.clone()),
+                edge_index: u64::try_from(edge_index)
+                    .map_err(|error| seal_admission_error(error.to_string()))?,
+                item,
+            })
+        })
+        .collect()
 }
 
 /// Map an SDK [`SealReject`] onto an [`AppError`].
@@ -1001,6 +1111,8 @@ async fn try_apply_device_generation_event_seal(
         ));
     }
 
+    let availability_dependency_writes =
+        verified_availability_dependency_writes(state, seal).await?;
     match state.projections().commit_event_seal_if_frontier(
         seal,
         state
@@ -1011,7 +1123,7 @@ async fn try_apply_device_generation_event_seal(
         &context.cas_frontier_refs,
         &new_ops,
         &target,
-        &[],
+        &availability_dependency_writes,
     ) {
         Ok(true) => {}
         Ok(false) => {
@@ -1365,6 +1477,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .filter(|(_, issued)| delta.contains(&issued.op.move_id))
         .cloned()
         .collect::<Vec<_>>();
+    let availability_dependency_writes =
+        verified_availability_dependency_writes(state, seal).await?;
     match state.projections().commit_event_seal_if_frontier(
         seal,
         state
@@ -1375,7 +1489,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         &leaves,
         &new_ops,
         &target,
-        &[],
+        &availability_dependency_writes,
     ) {
         Ok(true) => {}
         Ok(false) => {

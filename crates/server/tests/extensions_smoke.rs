@@ -2943,6 +2943,11 @@ async fn install_applet_package_with_approved_actions(
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
         .add_header("Arkret-Operation", "ak.self.applet.install.command.preview.v1", true)
         .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_APPLET_INSTALL_COMMAND_PREVIEW_V1,
+            true,
+        )
         .json(&json!({
             "applet_package": applet_package,
             "authoring_request_basis": {
@@ -3039,6 +3044,11 @@ async fn install_applet_package_with_approved_actions(
             true,
         )
         .add_header("Authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_APPLET_COMMAND_INSTALL_V1,
+            true,
+        )
         .add_header("Idempotency-Key", idempotency_key.to_owned(), true)
         .json(&json!({
             "applet_package": applet_package,

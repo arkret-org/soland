@@ -32,6 +32,10 @@ use arkret_models_collaboration::event_sync::{
     RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;
+use arkret_models_collaboration::governance_dependencies::{
+    GovernanceDependency, GovernanceDependencySelector, SealAvailabilityReceiptIssueOutcome,
+    SealAvailabilityReceiptIssueRequest,
+};
 use arkret_models_collaboration::http_bodies::{
     EventDeliveryStatusOutcome, EventDeliveryStatusRequestBody, EventDeliveryTargetState,
     EventDeliveryTargetStatus, EventSealSubmitOutcome, EventView, EventsResolveOutcome,

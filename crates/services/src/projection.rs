@@ -1011,6 +1011,59 @@ impl ProjectionService {
         arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store())
     }
 
+    pub fn seal_dependency_replay_context(
+        &self,
+        seal: &Seal,
+    ) -> Result<
+        (
+            arkret_state::mls_governance_proof::SealDependencyReplayContext,
+            BTreeMap<Hash, Event>,
+        ),
+        SealReject,
+    > {
+        let mut covered = self.predecessor_covered_events(&seal.predecessor_refs)?;
+        covered.extend(seal.delta.iter().cloned());
+        let mut events = BTreeMap::new();
+        for digest in covered {
+            let event = self
+                .control_event_store()
+                .get(&digest)
+                .map_err(|error| SealReject::Store(error.to_string()))?
+                .ok_or_else(|| SealReject::MissingControlEvent {
+                    event_digest: digest.as_str().to_owned(),
+                })?;
+            events.insert(digest, event);
+        }
+        self.seal_dependency_replay_context_with_events(seal, events)
+    }
+
+    pub fn seal_dependency_replay_context_with_events(
+        &self,
+        seal: &Seal,
+        events: BTreeMap<Hash, Event>,
+    ) -> Result<
+        (
+            arkret_state::mls_governance_proof::SealDependencyReplayContext,
+            BTreeMap<Hash, Event>,
+        ),
+        SealReject,
+    > {
+        let digest_suites = self.seal_digest_suites(seal)?;
+        let predecessor_state = self
+            .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .map_err(|error| SealReject::Store(error.to_string()))?;
+        let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
+            seal,
+            &predecessor_state,
+            &events,
+            self.seal_store(),
+            self.cell_store(),
+            digest_suites,
+        )
+        .map_err(|error| SealReject::Structural(error.to_string()))?;
+        Ok((context, events))
+    }
+
     pub fn seal_leaf_union_proof(
         &self,
         leaves: &[SealId],

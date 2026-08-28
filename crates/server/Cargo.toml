@@ -72,6 +72,7 @@ tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
+arkret.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = {workspace = true,features = ["account-data"]}
 arkret-event-draft = { workspace = true, features = ["test-support"] }

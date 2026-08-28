@@ -798,6 +798,7 @@ impl NotaryWorker {
                 &accepted,
                 event_digest_suite,
                 sealed_at,
+                0,
             )
             .await?;
         let mut availability_receipt_digests = availability_dependencies
@@ -1458,6 +1459,40 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Construction(format!("compute_state_root: {e}")))
     }
 
+    pub(crate) async fn issue_availability_dependencies(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        predecessor_refs: &[SealId],
+        predecessor_state: &BTreeMap<CellRef, CellState>,
+        predecessor_covered_events: &[Hash],
+        events: &[(Hash, Event)],
+        event_digest_suite: arkret_canonical::DigestSuite,
+        sealed_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<GovernanceDependency>, NotaryError> {
+        let accepted = events
+            .iter()
+            .map(|(event_digest, event)| AcceptedControlMove {
+                event_digest: event_digest.clone(),
+                event: event.clone(),
+                actor_id: event.actor_id.clone(),
+                effects: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        self.build_availability_dependencies(
+            state,
+            realm_id,
+            predecessor_refs,
+            predecessor_state,
+            predecessor_covered_events,
+            &accepted,
+            event_digest_suite,
+            sealed_at,
+            86_400_000,
+        )
+        .await
+    }
+
     async fn build_availability_dependencies(
         &self,
         state: &AppState,
@@ -1468,6 +1503,7 @@ impl NotaryWorker {
         accepted: &[AcceptedControlMove],
         event_digest_suite: arkret_canonical::DigestSuite,
         sealed_at: chrono::DateTime<chrono::Utc>,
+        minimum_retention_floor_ms: u64,
     ) -> Result<Vec<GovernanceDependency>, NotaryError> {
         if availability_authority_is_genesis(predecessor_refs) {
             // The genesis Seal is explicitly exempt and MUST NOT commit
@@ -1495,16 +1531,17 @@ impl NotaryWorker {
 
         let holder_id = arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
-        if !local_service_is_joined_member_principal_server(
+        if !local_service_is_eligible_availability_holder(
             state,
             realm_id,
             predecessor_state,
             predecessor_covered_events,
             &holder_id,
-        )? {
-            return Err(NotaryError::Construction(
-                "local Principal Server has no joined-member holder role in the predecessor view"
-                    .to_owned(),
+        )
+        .await?
+        {
+            return Err(NotaryError::NotAuthorized(
+                "local Principal Server is not the create-locked availability holder".to_owned(),
             ));
         }
 
@@ -1542,7 +1579,10 @@ impl NotaryWorker {
             authenticated_signer_resolution_evidence: Box::new(evidence),
         };
 
-        let minimum_retention_ms = policy.minimum_retention_ms.unwrap_or(86_400_000);
+        let minimum_retention_ms = policy
+            .minimum_retention_ms
+            .unwrap_or(86_400_000)
+            .max(minimum_retention_floor_ms);
         let retention_ms = i64::try_from(minimum_retention_ms).map_err(|error| {
             NotaryError::Construction(format!(
                 "availability minimum retention is outside chrono range: {error}"
@@ -1633,7 +1673,21 @@ impl NotaryWorker {
             });
         }
         dependencies.push(evidence_dependency);
-        Ok(dependencies)
+        let mut keyed = dependencies
+            .into_iter()
+            .map(|dependency| {
+                let key = dependency
+                    .selector()
+                    .canonical_sort_key()
+                    .map_err(|error| NotaryError::Construction(error.to_string()))?;
+                Ok((key, dependency))
+            })
+            .collect::<Result<Vec<_>, NotaryError>>()?;
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        Ok(keyed
+            .into_iter()
+            .map(|(_, dependency)| dependency)
+            .collect())
     }
 
     fn next_notary_seq(
@@ -1799,7 +1853,7 @@ fn availability_authority_is_genesis(predecessor_refs: &[SealId]) -> bool {
     predecessor_refs.is_empty()
 }
 
-fn local_service_is_joined_member_principal_server(
+async fn local_service_is_eligible_availability_holder(
     state: &AppState,
     realm_id: &RealmId,
     predecessor_state: &BTreeMap<CellRef, CellState>,
@@ -1810,6 +1864,42 @@ fn local_service_is_joined_member_principal_server(
         .iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+    let mut create = None;
+    for digest in &covered {
+        let event = durable_control_event_by_digest(state, digest).await?;
+        if event.kind != arkret_wire::EventKind::RealmCreate {
+            continue;
+        }
+        if create.replace(event).is_some() {
+            return Err(NotaryError::Construction(
+                "predecessor closure contains multiple Realm create Events".to_owned(),
+            ));
+        }
+    }
+    let create = create.ok_or_else(|| {
+        NotaryError::Construction("predecessor closure contains no Realm create Event".to_owned())
+    })?;
+    let create_payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::RealmCreatePayload,
+    >(serde_json::to_value(&create.payload).map_err(|error| {
+        NotaryError::Construction(format!("serialize Realm create payload: {error}"))
+    })?)
+    .map_err(|error| NotaryError::Construction(error.to_string()))?;
+    if matches!(
+        create_payload.object.purpose,
+        arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
+            | arkret_models_collaboration::events_payloads::RealmPurpose::ManagedAgentControl
+            | arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
+    ) {
+        create
+            .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| {
+                NotaryError::Construction(format!(
+                    "PCR create Principal Server admission binding is invalid: {error}"
+                ))
+            })?;
+        return Ok(&create.principal_server_id == service_id);
+    }
     for (cell, cell_state) in predecessor_state {
         let cell_id =
             CellId::from_ref(cell).map_err(|error| NotaryError::Construction(error.to_string()))?;
@@ -1827,14 +1917,7 @@ fn local_service_is_joined_member_principal_server(
         let Some(join_digest) = effective_membership_join_digest(&ops)? else {
             continue;
         };
-        let event = state
-            .projections()
-            .control_event_by_digest(&join_digest)?
-            .ok_or_else(|| {
-                NotaryError::Store(format!(
-                    "winning membership Event {join_digest} is unavailable"
-                ))
-            })?;
+        let event = durable_control_event_by_digest(state, &join_digest).await?;
         // Invite acceptance can project the member FSM to `join` from the
         // accepted ak.invite.accept Event itself. That Event is not a
         // MembershipPayload and does not establish a new availability holder
@@ -1858,6 +1941,35 @@ fn local_service_is_joined_member_principal_server(
         }
     }
     Ok(false)
+}
+
+pub(crate) async fn durable_control_event_by_digest(
+    state: &AppState,
+    digest: &Hash,
+) -> Result<Event, NotaryError> {
+    let event_id = arkret_wire::EventId::from_event_digest(digest)
+        .map_err(|error| NotaryError::Construction(error.to_string()))?;
+    let record = state
+        .event_queries()
+        .canonical_event(event_id.as_str())
+        .await
+        .map_err(|error| NotaryError::Store(error.to_string()))?
+        .ok_or_else(|| {
+            NotaryError::Store(format!("accepted Control Event {digest} is unavailable"))
+        })?;
+    if record.canonical_digest != digest.as_str() {
+        return Err(NotaryError::Construction(format!(
+            "accepted Control Event {event_id} has a mismatched canonical digest"
+        )));
+    }
+    let event = serde_json::from_value::<Event>(record.envelope)
+        .map_err(|error| NotaryError::Construction(error.to_string()))?;
+    if !event.kind.is_reducer_input() {
+        return Err(NotaryError::Construction(format!(
+            "accepted Event {event_id} is not a Control Move"
+        )));
+    }
+    Ok(event)
 }
 
 fn effective_membership_join_digest(ops: &[IssuedOp]) -> Result<Option<Hash>, NotaryError> {
@@ -2256,8 +2368,7 @@ mod tests {
     fn availability_genesis_is_defined_by_seal_lineage() {
         assert!(availability_authority_is_genesis(&[]));
 
-        let predecessor =
-            SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
+        let predecessor = SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap();
         assert!(!availability_authority_is_genesis(&[predecessor]));
     }
 

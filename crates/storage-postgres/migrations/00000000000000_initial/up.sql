@@ -204,9 +204,9 @@ CREATE TABLE public.agent_principals (
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
-    CONSTRAINT agent_principals_id_check CHECK (((id ~~ 'did:%'::text) AND (id !~ '[[:space:]#?]'::text))),
+    CONSTRAINT agent_principals_id_check CHECK (((id ~ '^ak:did_core:webvh:[^[:space:]/:#?]+$'::text) AND (char_length(id) <= 512))),
     CONSTRAINT agent_principals_pcr_id_check CHECK ((principal_control_realm_id ~ '^ak:realm:[A-Za-z0-9_-]{44}$'::text)),
-    CONSTRAINT agent_principals_controller_authorization_ref_check CHECK ((controller_authorization_ref ~~ (id || '#%'::text))),
+    CONSTRAINT agent_principals_controller_authorization_ref_check CHECK (((controller_authorization_ref ~ '^did:webvh:[^[:space:]/:#?]+:[^[:space:]/?#]+#managed-controller$'::text) AND (id = ('ak:did_core:webvh:'::text || split_part(controller_authorization_ref, ':'::text, 3))))),
     CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR ((char_length(agent_slug) BETWEEN 1 AND 64) AND (octet_length(agent_slug) <= 256) AND (agent_slug !~ '[[:space:][:cntrl:]]'::text) AND (strpos(agent_slug, ':'::text) = 0) AND (strpos(agent_slug, '@'::text) = 0) AND (strpos(agent_slug, '/'::text) = 0) AND (strpos(agent_slug, '#'::text) = 0) AND (strpos(agent_slug, '?'::text) = 0) AND (strpos(agent_slug, E'\\') = 0))),
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );

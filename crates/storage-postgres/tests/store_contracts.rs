@@ -14,16 +14,18 @@ use soland_storage::contract_tests::{
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
-    AppletAuthoringPreviewRecord, AppletStore, GovernanceDependencySource,
-    GovernanceDependencyStore, GovernanceDependencyWrite, MlsKeyPackageStore, NotificationStore,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
+    AgentPrincipalRecord, AgentStore, AppletAuthoringPreviewRecord, AppletStore,
+    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
+    MlsKeyPackageStore, NotificationStore, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgAppletStore, PgContactStore, PgControlProposalAuthorityAckStore,
-    PgDeviceInventoryStore, PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore,
-    PgFederationOutboxStore, PgGovernanceDependencyStore, PgIdempotencyStore,
-    PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
-    PgNotificationStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    Db, PgAccountDataStore, PgAgentStore, PgAppletStore, PgContactStore,
+    PgControlProposalAuthorityAckStore, PgDeviceInventoryStore, PgDeviceMessageStore,
+    PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgGovernanceDependencyStore,
+    PgIdempotencyStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
+    PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
+    PgProjectionEventStore,
 };
 
 #[tokio::test]
@@ -60,6 +62,82 @@ async fn test_pool() -> Option<PgPool> {
         })
         .await
         .clone()
+}
+
+#[tokio::test]
+async fn postgres_agent_store_accepts_spec_managed_agent_binding_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgAgentStore { pool: pool.clone() };
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let scid = format!("zTest{suffix}");
+    let agent_id = format!("ak:did_core:webvh:{scid}");
+    let full_id = format!("did:webvh:{scid}:agent.example");
+    let now = chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+        .expect("timestamp round-trip");
+    let record = AgentPrincipalRecord::new(
+        agent_id.clone(),
+        "ak:did_core:web:controller.example".to_owned(),
+        event_derived_realm_id(agent_id.as_bytes()),
+        arkret_wire::DidUrl::new(format!("{full_id}#managed-controller")).unwrap(),
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
+        now,
+    );
+
+    store
+        .put(record.clone())
+        .await
+        .expect("spec-valid managed Agent binding must persist");
+    assert_eq!(store.get(&agent_id).await.unwrap(), Some(record));
+
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM agent_principals WHERE id = $1")
+        .bind::<Text, _>(&agent_id)
+        .execute(&mut *conn)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn postgres_agent_table_rejects_mismatched_full_and_core_agent_ids_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let suffix = uuid::Uuid::now_v7().simple().to_string();
+    let agent_id = format!("ak:did_core:webvh:zLeft{suffix}");
+    let authorization_ref = format!("did:webvh:zRight{suffix}:agent.example#managed-controller");
+    let realm_id = event_derived_realm_id(agent_id.as_bytes());
+    let now = chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros())
+        .expect("timestamp round-trip");
+
+    use diesel::sql_types::{Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+    let mut conn = pool.get().await.unwrap();
+    let error = diesel::sql_query(
+        "INSERT INTO agent_principals \
+         (id, controller_id, principal_control_realm_id, controller_authorization_ref, \
+          created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $5)",
+    )
+    .bind::<Text, _>(&agent_id)
+    .bind::<Text, _>("ak:did_core:web:controller.example")
+    .bind::<Text, _>(&realm_id)
+    .bind::<Text, _>(&authorization_ref)
+    .bind::<Timestamptz, _>(now)
+    .execute(&mut *conn)
+    .await
+    .expect_err("database must reject a full DID that projects to a different Agent core id");
+    assert!(
+        error
+            .to_string()
+            .contains("agent_principals_controller_authorization_ref_check"),
+        "{error}"
+    );
 }
 
 fn event_derived_realm_id(seed: &[u8]) -> String {

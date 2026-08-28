@@ -217,12 +217,293 @@ pub(in crate::routing::events) fn router() -> Router {
         .push(Router::with_path("events/resolve").query(resolve_events))
         .push(Router::with_path("events/frontier").query(events_frontier))
         .push(Router::with_path("seals/frontier").query(seals_frontier))
+        .push(
+            Router::with_path("seals/availability-receipts").post(issue_seal_availability_receipts),
+        )
         .push(Router::with_path("seals").post(submit_event_seal))
         .push(
             Router::with_path("seals/mls-governance-proof")
                 .post(super::governance_proof::mls_governance_proof),
         )
         .push(Router::with_path("events/{event_id}").get(get_event))
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.seals.command.issue_availability_receipts",
+    tags("events")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "ak.self.seals.command.issue_availability_receipts.v1")
+)]
+async fn issue_seal_availability_receipts(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+    body: JsonBody<SealAvailabilityReceiptIssueRequest>,
+) -> JsonResult<SealAvailabilityReceiptIssueOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    super::super::require_agent_session_scope(
+        &session,
+        arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_ISSUE_AVAILABILITY_RECEIPTS_V1,
+    )?;
+    let request = body.into_inner();
+    request.validate().map_err(|error| {
+        AppError::new(ErrorCode::SchemaViolation, error.to_string())
+            .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+        AppError::new(
+            ErrorCode::PolicyViolation,
+            format!("availability requester DID core id is invalid: {error}"),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+    let own_pcr = state
+        .projections()
+        .snapshot()
+        .realm_is_principal_control_for_actor(request.realm_id.as_str(), session_core_id.as_str());
+    let managed_agent = if own_pcr {
+        None
+    } else {
+        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
+            state,
+            &session.actor,
+            request.realm_id.as_str(),
+        )
+        .await?
+    };
+    if !own_pcr && managed_agent.is_none() {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "availability preparation is limited to the caller's own or delegated Agent principal-control Realm",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+
+    let request_hash = canonical::canonical_sha256(&request).map_err(|error| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("availability request is not canonical-hashable: {error}"),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
+    let idempotency_key =
+        format!("ak.self.seals.command.issue_availability_receipts.v1:{request_hash}");
+    state
+        .jobs()
+        .prune_expired_idempotency(Utc::now())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("availability idempotency pruning failed: {error}"))
+        })?;
+    // The preparation signs a service-authored timestamp. Serialize local
+    // construction so concurrent byte-identical requests cannot manufacture
+    // sibling preparations before the durable first-response row lands.
+    let availability_lock = service_event_authoring_lock();
+    let _availability_guard = availability_lock.lock().await;
+    if let Some(record) = state
+        .jobs()
+        .idempotency_record(&session.actor, &idempotency_key)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("availability idempotency lookup failed: {error}"))
+        })?
+    {
+        if record.request_hash != request_hash || record.service_id != *state.service_id() {
+            return Err(AppError::internal(
+                "availability idempotency record binding mismatch",
+            ));
+        }
+        let cached =
+            serde_json::from_value::<SealAvailabilityReceiptIssueOutcome>(record.response_body)
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "availability idempotency outcome is invalid: {error}"
+                    ))
+                })?;
+        cached.validate_for_request(&request).map_err(|error| {
+            AppError::internal(format!(
+                "availability idempotency outcome binding is invalid: {error}"
+            ))
+        })?;
+        return json_ok(cached);
+    }
+
+    let mut current = state
+        .projections()
+        .realm_seal_leaves(&request.realm_id)
+        .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
+    current.sort();
+    if current != request.predecessor_refs {
+        return Err(AppError::new(
+            ErrorCode::FrontierUnavailable,
+            "availability preparation predecessor_refs are not the exact current Seal frontier",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    let predecessor_covered = state
+        .projections()
+        .predecessor_covered_events(&request.predecessor_refs)
+        .map_err(|error| {
+            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
+                .with_status(StatusCode::CONFLICT)
+        })?;
+    let mut events = Vec::with_capacity(request.event_digests.len());
+    for digest in &request.event_digests {
+        if predecessor_covered.contains(digest) {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "availability preparation Event is already covered by the predecessor frontier",
+            )
+            .with_status(StatusCode::CONFLICT));
+        }
+        let event = crate::notary::durable_control_event_by_digest(state, digest)
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
+                    .with_status(StatusCode::CONFLICT)
+            })?;
+        if event.realm_id != request.realm_id {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "availability preparation contains a cross-Realm Control Event",
+            )
+            .with_status(StatusCode::CONFLICT));
+        }
+        events.push((digest.clone(), event));
+    }
+    let predecessor_state = state
+        .projections()
+        .effective_state_at(&request.predecessor_refs, &request.realm_id)
+        .map_err(|error| {
+            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
+                .with_status(StatusCode::CONFLICT)
+        })?;
+    let digest_suites = state
+        .projections()
+        .seal_digest_suites_for_delta(
+            &request.realm_id,
+            &request.predecessor_refs,
+            &request.event_digests,
+        )
+        .map_err(|error| {
+            AppError::new(ErrorCode::StateMismatch, error.to_string())
+                .with_status(StatusCode::CONFLICT)
+        })?;
+    // AvailabilityReceipt timestamps are canonicalized at millisecond
+    // precision. Freeze the preparation time at that same precision so an
+    // exact retention boundary cannot lose sub-millisecond time during wire
+    // serialization and then fail its own `sealed_at + minimum` check.
+    let sealed_at = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+        .ok_or_else(|| AppError::internal("availability sealed_at is outside timestamp range"))?;
+    let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+    let dependencies = worker
+        .issue_availability_dependencies(
+            state,
+            &request.realm_id,
+            &request.predecessor_refs,
+            &predecessor_state,
+            &predecessor_covered.iter().cloned().collect::<Vec<_>>(),
+            &events,
+            digest_suites.event_digest_suite,
+            sealed_at,
+        )
+        .await
+        .map_err(|error| match error {
+            crate::notary::NotaryError::NotAuthorized(message) => {
+                AppError::new(ErrorCode::SealSignerUnauthorized, message)
+                    .with_status(StatusCode::FORBIDDEN)
+            }
+            other => AppError::new(ErrorCode::StateMismatch, other.to_string())
+                .with_status(StatusCode::CONFLICT),
+        })?;
+    for dependency in &dependencies {
+        state
+            .persistence()
+            .governance_dependency_store()
+            .put_realm_object_exact(&request.realm_id, dependency.clone())
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("persist availability dependency: {error}"))
+            })?;
+    }
+    let mut availability_receipt_digests = dependencies
+        .iter()
+        .filter_map(|dependency| match dependency {
+            GovernanceDependency::AvailabilityReceipt {
+                selector: GovernanceDependencySelector::AvailabilityReceipt { content_digest },
+                ..
+            } => Some(content_digest.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    availability_receipt_digests.sort();
+    let outcome = SealAvailabilityReceiptIssueOutcome {
+        realm_id: request.realm_id.clone(),
+        predecessor_refs: request.predecessor_refs.clone(),
+        event_digests: request.event_digests.clone(),
+        sealed_at,
+        availability_receipt_digests,
+        governance_dependencies: dependencies,
+    };
+    outcome.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!(
+            "constructed availability outcome is invalid: {error}"
+        ))
+    })?;
+    let expires_at = outcome
+        .governance_dependencies
+        .iter()
+        .filter_map(|dependency| match dependency {
+            GovernanceDependency::AvailabilityReceipt {
+                availability_receipt,
+                ..
+            } => Some(availability_receipt.retention_expires_at),
+            _ => None,
+        })
+        .min()
+        .unwrap_or(sealed_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS));
+    state
+        .jobs()
+        .store_idempotency_record(soland_services::jobs::IdempotencyState {
+            principal_id: session.actor.clone(),
+            idempotency_key: idempotency_key.clone(),
+            service_id: state.service_id().clone(),
+            request_hash: request_hash.clone(),
+            response_status: StatusCode::OK.as_u16() as i32,
+            response_body: serde_json::to_value(&outcome).map_err(|error| {
+                AppError::internal(format!("encode availability idempotency outcome: {error}"))
+            })?,
+            created_at: sealed_at,
+            expires_at,
+        })
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("persist availability idempotency outcome: {error}"))
+        })?;
+    let landed = state
+        .jobs()
+        .idempotency_record(&session.actor, &idempotency_key)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("reload availability idempotency outcome: {error}"))
+        })?
+        .ok_or_else(|| AppError::internal("availability idempotency outcome did not persist"))?;
+    let landed =
+        serde_json::from_value::<SealAvailabilityReceiptIssueOutcome>(landed.response_body)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "persisted availability outcome is invalid: {error}"
+                ))
+            })?;
+    landed.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!(
+            "persisted availability outcome binding is invalid: {error}"
+        ))
+    })?;
+    json_ok(landed)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.seals.command.submit", tags("events"))]

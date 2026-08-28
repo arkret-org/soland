@@ -120,7 +120,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let approval_status = approval_response.status_code;
     let approval_body: Value = approval_response.take_json().await.unwrap();
     assert_eq!(approval_status, Some(StatusCode::OK), "{approval_body}");
-    assert_eq!(approval_body["ok"], true, "{approval_body}");
+    assert_eq!(approval_body["status"], "active", "{approval_body}");
     assert!(
         approval_body["approval_request_id"]
             .as_str()
@@ -433,7 +433,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         "{forged_outcome}"
     );
     assert_eq!(
-        forged_outcome["error"]["code"], "agent_signing_key_mismatch",
+        forged_outcome["type"], "https://arkret.org/problems/agent_signing_key_mismatch",
         "{forged_outcome}"
     );
 
@@ -479,9 +479,50 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         pcr_events.iter().any(|event| event.event_id == event_id),
         "the committed authorize Event must be durable in the Agent PCR"
     );
+    let predecessor_covered = genesis_seal
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let target = pcr_events
+        .iter()
+        .map(|event| {
+            arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let availability_request =
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueRequest {
+            realm_id: agent_pcr_realm.clone(),
+            predecessor_refs: vec![genesis_seal.id.clone()],
+            event_digests: target.difference(&predecessor_covered).cloned().collect(),
+        };
+    let mut availability_response =
+        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+            .send(&app)
+            .await;
+    let availability_status = availability_response.status_code;
+    let availability_body = availability_response.take_string().await.unwrap();
+    assert_eq!(
+        availability_status,
+        Some(StatusCode::OK),
+        "availability receipt issuance failed: {availability_body}"
+    );
+    let availability = serde_json::from_str::<
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
+    >(&availability_body)
+    .unwrap();
     let successor_seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
         &pcr_events,
         Some(&genesis_seal),
+        Some(&availability),
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
         &controller_signer,
         &super::agents::genesis_projector,

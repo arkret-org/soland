@@ -108,6 +108,55 @@ fn test_session_credential_hash(token: &str, audience: &str) -> String {
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
 
+fn attach_fixture_service_admission(
+    state: &AppState,
+    event: &mut arkret_wire::Event,
+    producer_public_key_multibase: &str,
+) {
+    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
+        panic!("fixture Event must begin with exactly one producer proof");
+    };
+    let producer = producer.clone();
+    let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
+        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        verification_method: state
+            .service_notary_signer_descriptor()
+            .unwrap()
+            .verification_method,
+        event_digest: producer.event_digest.clone(),
+        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
+            &producer,
+        )
+        .unwrap(),
+        producer_verification_method: producer.verification_method.clone(),
+        producer_signing_key: arkret_wire::DidKey::new(format!(
+            "did:key:{producer_public_key_multibase}"
+        ))
+        .unwrap(),
+        producer_signer_resolution_evidence_ref: None,
+        producer_signer_resolution_evidence_digest: None,
+        signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
+            "ak:signer_evidence:{evidence_digest}"
+        ))
+        .unwrap(),
+        signer_resolution_evidence_digest: evidence_digest,
+        accepted_at: event.created_at,
+        jws: String::new(),
+    };
+    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
+        state.notary_signing_key().as_ref(),
+        &admission.canonical_binding_bytes().unwrap(),
+    )
+    .unwrap();
+    event
+        .proofs
+        .push(arkret_wire::EventProof::PrincipalServerAdmission(admission));
+    event
+        .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+}
+
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
     let actor_id = arkret_wire::project_full_id_to_core_id(
@@ -320,8 +369,57 @@ pub(crate) async fn seed_active_controller_device_generation(
         &[&bootstrap, &authorize],
         &genesis_projector,
     );
+    let bootstrap_notary: arkret_wire::NotaryValue =
+        serde_json::from_value(bootstrap.payload["object"]["notary"].clone())
+            .expect("bootstrap notary");
+    let bootstrap_authority_set_ref =
+        arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&bootstrap_notary).unwrap())
+            .unwrap();
+    for event in [&bootstrap, &authorize] {
+        let proposal_digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        let authority_ack = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+            realm.clone(),
+            proposal_digest,
+            bootstrap_authority_set_ref.clone(),
+            created_at,
+            arkret_wire::ControlProposalDecisionPolicy::default(),
+            &bootstrap_signer,
+        )
+        .unwrap();
+        let ack = arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![
+            authority_ack,
+        ])
+        .unwrap();
+        state
+            .test_projections()
+            .test_mark_control_event_sealed(
+                event,
+                &bootstrap_seal,
+                &arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .expect("bootstrap sealed Control Event");
+    }
     let authorize_event_id = authorize.event_id.clone();
-    for event in [bootstrap.clone(), authorize] {
+    let controller_public_key_multibase = test_ed25519_multibase_public(&signing_key);
+    let mut accepted_bootstrap = bootstrap.clone();
+    attach_fixture_service_admission(
+        state,
+        &mut accepted_bootstrap,
+        &controller_public_key_multibase,
+    );
+    let mut accepted_authorize = authorize;
+    attach_fixture_service_admission(
+        state,
+        &mut accepted_authorize,
+        &controller_public_key_multibase,
+    );
+    for event in [accepted_bootstrap, accepted_authorize] {
         state
             .test_persistence()
             .events()
@@ -915,14 +1013,120 @@ async fn provision_agent_sdk_commit_attempt_inner(
             .cmp(&right.actor_seq)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
+    let predecessor_covered = predecessor
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let target = controller_events
+        .iter()
+        .map(|event| {
+            arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let availability_request =
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueRequest {
+            realm_id: controller_realm_id.clone(),
+            predecessor_refs: vec![predecessor.id.clone()],
+            event_digests: target.difference(&predecessor_covered).cloned().collect(),
+        };
+    let mut availability_response =
+        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+            .send(&app)
+            .await;
+    let availability_status = availability_response.status_code;
+    let availability_body = availability_response.take_string().await.unwrap();
+    assert_eq!(
+        availability_status,
+        Some(StatusCode::OK),
+        "availability receipt issuance failed: {availability_body}"
+    );
+    let availability = serde_json::from_str::<
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
+    >(&availability_body)
+    .unwrap();
+    for dependency in &availability.governance_dependencies {
+        if let arkret_models_collaboration::governance_dependencies::GovernanceDependency::AvailabilityReceipt {
+            availability_receipt,
+            ..
+        } = dependency
+        {
+            assert!(
+                availability_receipt.retention_expires_at
+                    >= availability.sealed_at + chrono::Duration::hours(24),
+                "canonical-hash preparation must remain usable for the full idempotency window: sealed_at={}, expires_at={}",
+                availability.sealed_at,
+                availability_receipt.retention_expires_at,
+            );
+        }
+    }
+    let mut availability_replay =
+        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+            .send(&app)
+            .await;
+    assert_eq!(availability_replay.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        availability_replay.take_string().await.unwrap(),
+        availability_body,
+        "canonical-hash retry must return the exact first availability preparation"
+    );
     let controller_seal = arkret_bootstrap::build_self_principal_event_seal(
         &controller_events,
         &predecessor,
+        &availability,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         &signer,
         &genesis_projector,
     )
     .unwrap();
+    let mut receiptless_controller_seal = controller_seal.clone();
+    receiptless_controller_seal
+        .availability_receipt_digests
+        .clear();
+    let durable_controller_events = controller_events
+        .iter()
+        .cloned()
+        .map(|event| {
+            let digest = arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap();
+            (digest, event)
+        })
+        .collect();
+    let (receiptless_replay_context, receiptless_events) = state
+        .test_projections()
+        .seal_dependency_replay_context_with_events(
+            &receiptless_controller_seal,
+            durable_controller_events,
+        )
+        .unwrap();
+    let receiptless_error = arkret::verify_seal_availability_dependencies_default(
+        &receiptless_controller_seal,
+        &receiptless_events,
+        &receiptless_replay_context,
+        &availability.governance_dependencies,
+    )
+    .expect_err("PCR successor without committed receipts must fail closed");
+    assert!(
+        receiptless_error
+            .to_string()
+            .contains("availability holder quorum"),
+        "{receiptless_error}"
+    );
     let controller_seal_body = arkret_canonical::canonical_json_bytes(&controller_seal).unwrap();
     let mut controller_seal_response = TestClient::post("http://server/_arkret/self/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1011,6 +1215,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     );
     let genesis_seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
         std::slice::from_ref(&accepted_genesis),
+        None,
         None,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
         &signer,
