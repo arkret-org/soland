@@ -76,13 +76,67 @@ async fn test_pool() -> Option<PgPool> {
         .clone()
 }
 
+fn franking_event_request(
+    realm_id: &arkret_identifiers::RealmId,
+    actor_id: arkret_wire::DidCoreId,
+    principal_server_id: &arkret_wire::DidCoreId,
+    marker: u64,
+    kind: &str,
+    payload: serde_json::Value,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> soland_storage::EventCommitRequest {
+    let event = arkret_wire::test_support::raw_event_at(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_id.clone(),
+        principal_server_id.clone(),
+        0,
+        arkret_identifiers::Hlc::new(format!("019f00000000-{marker:04x}-aabbccdd")).unwrap(),
+        payload,
+        received_at,
+    )
+    .unwrap();
+    let canonical_digest = event
+        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+    soland_storage::EventCommitRequest {
+        governance_dependencies: Vec::new(),
+        device_pairing_authorization: None,
+        contact_projection: None,
+        consent_projection: None,
+        event: soland_storage::CanonicalEventRecord {
+            event_id: event.event_id.to_string(),
+            actor_id: actor_id.to_string(),
+            actor_seq: 0,
+            realm_id: Some(realm_id.to_string()),
+            kind: kind.to_owned(),
+            schema_id: "ak.schema.franking_fixture.v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest,
+            canonical_bytes,
+            envelope: serde_json::to_value(event).unwrap(),
+            received_at,
+        },
+        control_proposal_ingress: None,
+        device_revocation_transition: None,
+        device_revocation_gate: None,
+        projections: Vec::new(),
+        idempotency: None,
+        outbox: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_when_configured() {
     use diesel::sql_types::{BigInt, Text, Timestamptz};
     use diesel_async::RunQueryDsl;
     use soland_storage::{
-        CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
-        EventStore, FrankingReplayNonceCommit, PersistenceError,
+        EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, FrankingReplayNonceCommit,
+        PersistenceError,
     };
 
     let Some(pool) = test_pool().await else {
@@ -95,74 +149,38 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
     .unwrap();
     let received_by =
         arkret_wire::DidCoreId::new("ak:did_core:web:franking-ledger.example".to_owned()).unwrap();
-    let make_request = |marker: u64,
-                        replay_nonce: &str,
-                        consumed_at: chrono::DateTime<chrono::Utc>| {
-        let actor_id = arkret_wire::DidCoreId::new(format!(
-            "ak:did_core:web:franking-reporter-{marker}.example"
-        ))
-        .unwrap();
-        let event = arkret_wire::test_support::raw_event_at(
-            arkret_wire::EventKind::SelfModerationReport.as_str(),
-            arkret_wire::ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            },
-            actor_id.clone(),
-            received_by.clone(),
-            0,
-            arkret_identifiers::Hlc::new(format!("019f00000000-{marker:04x}-aabbccdd")).unwrap(),
-            serde_json::json!({
-                "franking_proof": {
-                    "received_by": received_by.as_str(),
-                    "replay_nonce": replay_nonce,
-                }
-            }),
-            consumed_at,
-        )
-        .unwrap();
-        let event_id = event.event_id.to_string();
-        let canonical_digest = event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+    let make_request =
+        |marker: u64, replay_nonce: &str, consumed_at: chrono::DateTime<chrono::Utc>| {
+            let actor_id = arkret_wire::DidCoreId::new(format!(
+                "ak:did_core:web:franking-reporter-{marker}.example"
+            ))
             .unwrap();
-        let canonical_bytes =
-            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
-        (
-            EventCommitRequest {
-                governance_dependencies: Vec::new(),
-                device_pairing_authorization: None,
-                contact_projection: None,
-                consent_projection: None,
-                event: CanonicalEventRecord {
-                    event_id: event_id.clone(),
-                    actor_id: actor_id.to_string(),
-                    actor_seq: 0,
-                    realm_id: Some(realm_id.to_string()),
-                    kind: arkret_wire::EventKind::SelfModerationReport
-                        .as_str()
-                        .to_owned(),
-                    schema_id: "ak.schema.moderation_report.v1".to_owned(),
-                    digest_suite: arkret_canonical::DigestSuite::Sha256,
-                    canonical_digest,
-                    canonical_bytes,
-                    envelope: serde_json::to_value(event).unwrap(),
-                    received_at: consumed_at,
-                },
-                control_proposal_ingress: None,
-                device_revocation_transition: None,
-                device_revocation_gate: None,
-                projections: Vec::new(),
-                idempotency: None,
-                outbox: Vec::new(),
-            },
-            FrankingReplayNonceCommit {
-                realm_id: realm_id.to_string(),
-                received_by: received_by.clone(),
-                replay_nonce: replay_nonce.to_owned(),
-                report_event_id: event_id,
+            let event = franking_event_request(
+                &realm_id,
+                actor_id,
+                &received_by,
+                marker,
+                arkret_wire::EventKind::SelfModerationReport.as_str(),
+                serde_json::json!({
+                    "franking_proof": {
+                        "received_by": received_by.as_str(),
+                        "replay_nonce": replay_nonce,
+                    }
+                }),
                 consumed_at,
-            },
-        )
-    };
+            );
+            let event_id = event.event.event_id.clone();
+            (
+                event,
+                FrankingReplayNonceCommit {
+                    realm_id: realm_id.to_string(),
+                    received_by: received_by.clone(),
+                    replay_nonce: replay_nonce.to_owned(),
+                    report_event_id: event_id,
+                    consumed_at,
+                },
+            )
+        };
     let commit = |event, nonce| EventBatchCommitRequest {
         events: vec![event],
         agent_approval_nonce: None,
@@ -181,6 +199,8 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
         .await
         .unwrap();
 
+    // Treat the successful write above as a lost response: reconstruct the
+    // adapter and retry the same durable nonce with a competing Event.
     let (replay_event, replay_commit) =
         make_request(2, replay_nonce, consumed_at + chrono::TimeDelta::seconds(1));
     let replay_event_id = replay_event.event.event_id.clone();
@@ -210,6 +230,30 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
     .unwrap()
     .value;
     assert_eq!(stored_expiry, expires_at);
+
+    let (just_before_event, just_before_nonce) = make_request(
+        5,
+        replay_nonce,
+        expires_at - chrono::TimeDelta::microseconds(1),
+    );
+    let just_before_event_id = just_before_event.event.event_id.clone();
+    let just_before_error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(just_before_event, just_before_nonce))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        just_before_error,
+        PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+    ));
+    assert!(!event_store.contains(&just_before_event_id).await.unwrap());
+
+    let (at_expiry_event, at_expiry_nonce) = make_request(6, replay_nonce, expires_at);
+    let at_expiry_event_id = at_expiry_event.event.event_id.clone();
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(at_expiry_event, at_expiry_nonce))
+        .await
+        .unwrap();
+    assert!(event_store.contains(&at_expiry_event_id).await.unwrap());
 
     diesel::sql_query(
         "INSERT INTO moderation_franking_replay_nonces \
@@ -300,6 +344,105 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
     assert_eq!(
         active_count,
         i64::try_from(soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE).unwrap()
+    );
+}
+
+#[tokio::test]
+async fn postgres_franking_target_proof_fault_and_restart_contract_when_configured() {
+    use soland_storage::{
+        EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, PersistenceError,
+    };
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("franking-target-proof:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let received_by =
+        arkret_wire::DidCoreId::new("ak:did_core:web:franking-service.example".to_owned()).unwrap();
+    let created_at =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let target = franking_event_request(
+        &realm_id,
+        arkret_wire::DidCoreId::new("ak:did_core:web:franking-sender.example".to_owned()).unwrap(),
+        &received_by,
+        100,
+        arkret_wire::EventKind::MessageCreate.as_str(),
+        serde_json::json!({"encrypted_content": {"ciphertext": "fixture"}}),
+        created_at,
+    );
+    let target_event_id = target.event.event_id.clone();
+    let mut proof = franking_event_request(
+        &realm_id,
+        received_by.clone(),
+        &received_by,
+        101,
+        arkret_wire::EventKind::ModerationFrankingProof.as_str(),
+        serde_json::json!({"event_id": target_event_id}),
+        created_at,
+    );
+    let proof_event_id = proof.event.event_id.clone();
+    let clean_schema_id = proof.event.schema_id.clone();
+    proof.event.schema_id.push('\0');
+    let failing_batch = EventBatchCommitRequest {
+        events: vec![target.clone(), proof.clone()],
+        agent_approval_nonce: None,
+        franking_replay_nonce: None,
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    };
+
+    let database_error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(failing_batch)
+        .await
+        .unwrap_err();
+    assert!(matches!(database_error, PersistenceError::Database(_)));
+    let event_store = PgEventStore { pool: pool.clone() };
+    assert!(!event_store.contains(&target_event_id).await.unwrap());
+    assert!(!event_store.contains(&proof_event_id).await.unwrap());
+    assert!(
+        event_store
+            .franking_proofs_for_target(realm_id.as_str(), &received_by, &target_event_id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a database error while inserting the proof must roll back its target prefix"
+    );
+
+    proof.event.schema_id = clean_schema_id;
+    let clean_batch = EventBatchCommitRequest {
+        events: vec![target, proof],
+        agent_approval_nonce: None,
+        franking_replay_nonce: None,
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    };
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(clean_batch.clone())
+        .await
+        .unwrap();
+
+    // Model a lost success response by reconstructing the adapter without
+    // carrying the first outcome into the retry. This is not a process-kill
+    // claim; it proves only the durable retry boundary.
+    let retry = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(clean_batch)
+        .await
+        .unwrap();
+    assert_eq!(retry, soland_storage::EventCommitOutcome::default());
+    assert_eq!(
+        event_store
+            .franking_proofs_for_target(realm_id.as_str(), &received_by, &target_event_id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "restart retry must not materialize a second proof Event"
     );
 }
 
