@@ -40,6 +40,7 @@ DROP TABLE IF EXISTS governance_dependency_edges CASCADE;
 DROP TABLE IF EXISTS governance_unscoped_signer_evidence CASCADE;
 DROP TABLE IF EXISTS governance_dependency_objects CASCADE;
 DROP TABLE IF EXISTS state_seal_control_events CASCADE;
+DROP TABLE IF EXISTS state_seal_data_event_manifests CASCADE;
 DROP TABLE IF EXISTS state_seal_quarantine_realms CASCADE;
 DROP TABLE IF EXISTS state_seal_collision_variants CASCADE;
 DROP TABLE IF EXISTS state_seal_quarantine CASCADE;

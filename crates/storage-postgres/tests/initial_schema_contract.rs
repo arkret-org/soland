@@ -47,3 +47,11 @@ fn applet_identity_winner_is_independent_from_exact_scope_installations() {
     assert!(INITIAL_UP.contains("'globally_fenced_at'"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS applet_managed_identities CASCADE"));
 }
+
+#[test]
+fn seal_data_event_manifest_is_created_and_dropped_symmetrically() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.state_seal_data_event_manifests"));
+    assert!(INITIAL_UP.contains("leaf_digests text[] NOT NULL"));
+    assert!(INITIAL_UP.contains("state_seal_data_event_manifests_immutable"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS state_seal_data_event_manifests CASCADE"));
+}

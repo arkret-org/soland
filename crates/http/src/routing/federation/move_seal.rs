@@ -1126,6 +1126,7 @@ async fn try_apply_device_generation_event_seal(
         &context.cas_frontier_refs,
         &new_ops,
         &target,
+        &BTreeSet::new(),
         &availability_dependency_writes,
     ) {
         Ok(true) => {}
@@ -1492,6 +1493,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         &leaves,
         &new_ops,
         &target,
+        &BTreeSet::new(),
         &availability_dependency_writes,
     ) {
         Ok(true) => {}

@@ -225,6 +225,7 @@ pub fn app_state_with_identity(
     let cell_store = Arc::new(MemoryCellStore::default());
     let event_seal_committer = Arc::new(MemoryEventSealCommitter {
         lock: Mutex::new(()),
+        data_event_leaf_manifests: Mutex::new(BTreeMap::new()),
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         cell_registry: cell_registry.clone(),
@@ -680,6 +681,7 @@ impl RuntimeHealthPort for MemoryRuntimeHealth {
 
 struct MemoryEventSealCommitter {
     lock: Mutex<()>,
+    data_event_leaf_manifests: Mutex<BTreeMap<SealId, BTreeSet<Hash>>>,
     seal_store: Arc<MemorySealStore>,
     cell_store: Arc<MemoryCellStore>,
     cell_registry: Arc<dyn CellRegistry>,
@@ -693,9 +695,35 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        data_event_leaf_manifest: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
+        let computed_root = (!data_event_leaf_manifest.is_empty())
+            .then(|| arkret_state::event_digest_set_root(data_event_leaf_manifest, digest_suite))
+            .transpose()
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+        if computed_root != seal.data_event_set_root {
+            return Err(StoreError::Conflict(
+                "Event Seal data_event_set_root does not match its frozen leaf manifest".to_owned(),
+            ));
+        }
+        if let Some(existing) = self.seal_store.get(&seal.id)? {
+            let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            if existing_bytes != retry_bytes
+                || self.data_event_leaf_manifests.lock().get(&seal.id)
+                    != Some(data_event_leaf_manifest)
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
+                        .to_owned(),
+                ));
+            }
+            return Ok(true);
+        }
         let actual = self
             .seal_store
             .list_leaves(&seal.realm_id)?
@@ -729,7 +757,12 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .seal_store
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
-            Ok(true) => Ok(true),
+            Ok(true) => {
+                self.data_event_leaf_manifests
+                    .lock()
+                    .insert(seal.id.clone(), data_event_leaf_manifest.clone());
+                Ok(true)
+            }
             Ok(false) => {
                 self.cell_store.rollback_seal(&seal.realm_id, &seal.id)?;
                 Ok(false)
@@ -739,6 +772,11 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
                 Err(error)
             }
         }
+    }
+
+    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
+        let _guard = self.lock.lock();
+        Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
     }
 }
 

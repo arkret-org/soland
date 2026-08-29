@@ -910,6 +910,7 @@ impl NotaryWorker {
             &leaves,
             &new_ops,
             &covered,
+            &data_event_digests,
             &availability_dependency_writes,
         ) {
             Ok(true) => {}
@@ -1755,23 +1756,6 @@ impl NotaryWorker {
             jws,
         })
     }
-}
-
-/// Reconstruct the deterministic DataEvent observation window used by a
-/// Seal. The lower bound is the newest predecessor commit time; the upper
-/// bound is the signed `sealed_at`. This makes the leaf manifest recoverable
-/// after restart without maintaining a second private observation ledger.
-pub(crate) async fn data_event_digests_for_seal(
-    state: &AppState,
-    seal: &Seal,
-) -> Result<BTreeSet<Hash>, NotaryError> {
-    data_event_digests_for_window(
-        state,
-        &seal.realm_id,
-        &seal.predecessor_refs,
-        seal.sealed_at,
-    )
-    .await
 }
 
 async fn data_event_digests_for_window(

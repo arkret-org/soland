@@ -7,6 +7,8 @@
 //!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
 //!   by the moderation projection preflight.
 
+use std::collections::BTreeSet;
+
 use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingDataEventInclusionProof, FrankingProof, FrankingSealObservationOutcome,
@@ -1090,36 +1092,22 @@ async fn materialize_franking_seal_observation(
         let Some(declared_root) = seal.data_event_set_root.as_ref() else {
             continue;
         };
-        let digests = crate::notary::data_event_digests_for_seal(state, &seal)
-            .await
+        let digests = state
+            .projections()
+            .data_event_leaf_manifest(&seal.id)
             .map_err(|error| {
-                AppError::internal(format!("rebuild DataEvent Seal window: {error}"))
+                AppError::internal(format!("read frozen DataEvent leaf manifest: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::internal(format!(
+                    "accepted Seal {} is missing its frozen DataEvent leaf manifest",
+                    seal.id
+                ))
             })?;
-        let suite_name = declared_root
-            .as_str()
-            .split_once(':')
-            .map(|(suite, _)| suite)
-            .ok_or_else(|| AppError::internal("invalid data_event_set_root suite"))?;
-        let digest_suite = arkret_canonical::digest_suite(suite_name).map_err(|error| {
-            AppError::internal(format!("invalid data_event_set_root suite: {error}"))
-        })?;
-        let recomputed =
-            arkret_state::event_digest_set_root(&digests, digest_suite).map_err(|error| {
-                AppError::internal(format!("recompute data_event_set_root: {error}"))
-            })?;
-        if &recomputed != declared_root {
-            return Err(AppError::internal(
-                "accepted Seal data_event_set_root does not match its deterministic window",
-            ));
-        }
-        if !digests.contains(&proof_digest) {
+        let Some(inclusion) = frozen_manifest_inclusion(declared_root, &digests, &proof_digest)?
+        else {
             continue;
-        }
-        let inclusion =
-            arkret_state::event_digest_set_inclusion_proof(&digests, &proof_digest, digest_suite)
-                .map_err(|error| {
-                AppError::internal(format!("build franking inclusion proof: {error}"))
-            })?;
+        };
         observation = Some((seal, inclusion));
         break;
     }
@@ -1151,6 +1139,34 @@ async fn materialize_franking_seal_observation(
         },
         service_signer_evidence,
     })
+}
+
+fn frozen_manifest_inclusion(
+    declared_root: &Hash,
+    manifest: &BTreeSet<Hash>,
+    proof_digest: &Hash,
+) -> Result<Option<arkret_state::EventDigestSetInclusionProof>, AppError> {
+    let suite_name = declared_root
+        .as_str()
+        .split_once(':')
+        .map(|(suite, _)| suite)
+        .ok_or_else(|| AppError::internal("invalid data_event_set_root suite"))?;
+    let digest_suite = arkret_canonical::digest_suite(suite_name).map_err(|error| {
+        AppError::internal(format!("invalid data_event_set_root suite: {error}"))
+    })?;
+    let recomputed = arkret_state::event_digest_set_root(manifest, digest_suite)
+        .map_err(|error| AppError::internal(format!("recompute data_event_set_root: {error}")))?;
+    if &recomputed != declared_root {
+        return Err(AppError::internal(
+            "accepted Seal data_event_set_root does not match its frozen leaf manifest",
+        ));
+    }
+    if !manifest.contains(proof_digest) {
+        return Ok(None);
+    }
+    arkret_state::event_digest_set_inclusion_proof(manifest, proof_digest, digest_suite)
+        .map(Some)
+        .map_err(|error| AppError::internal(format!("build franking inclusion proof: {error}")))
 }
 
 #[endpoint(
@@ -1592,5 +1608,51 @@ mod report_safety_tests {
             .await
             .unwrap_err();
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
+    }
+
+    #[test]
+    fn franking_inclusion_is_derived_from_the_frozen_manifest() {
+        let manifest = ['1', '2', '3']
+            .into_iter()
+            .map(|marker| Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap())
+            .collect::<BTreeSet<_>>();
+        let root =
+            arkret_state::event_digest_set_root(&manifest, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+        let target = manifest.iter().nth(1).unwrap();
+        let inclusion = frozen_manifest_inclusion(&root, &manifest, target)
+            .unwrap()
+            .expect("manifest contains the franking proof Event");
+        assert!(
+            arkret_state::verify_event_digest_set_inclusion_proof(
+                &inclusion,
+                &root,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap()
+        );
+        let absent = Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap();
+        assert!(
+            frozen_manifest_inclusion(&root, &manifest, &absent)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn franking_inclusion_fails_closed_when_the_frozen_manifest_does_not_match_the_seal_root() {
+        let original = [Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let root =
+            arkret_state::event_digest_set_root(&original, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+        let drifted = [Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let error = frozen_manifest_inclusion(&root, &drifted, drifted.first().unwrap())
+            .expect_err("a changed manifest must not produce an inclusion proof");
+        assert_eq!(error.code, ErrorCode::InternalError);
+        assert!(error.message.contains("frozen leaf manifest"));
     }
 }

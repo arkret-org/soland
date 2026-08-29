@@ -40,8 +40,11 @@ pub trait EventSealCommitStore: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        data_event_leaf_manifest: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
+
+    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
 }
 
 pub fn build_state_resolution_stores(
@@ -70,6 +73,7 @@ pub fn build_state_resolution_stores(
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
+            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             control_event_store,
             seal_store,
             cell_store,
@@ -98,6 +102,8 @@ struct PgEventSealCommitStore {
 
 struct MemoryEventSealCommitStore {
     lock: parking_lot::Mutex<()>,
+    data_event_leaf_manifests:
+        parking_lot::Mutex<std::collections::BTreeMap<SealId, BTreeSet<Hash>>>,
     control_event_store: Arc<arkret_state::state::MemoryControlEventStore>,
     seal_store: Arc<arkret_state::state::MemorySealStore>,
     cell_store: Arc<arkret_state::state::MemoryCellStore>,
@@ -245,6 +251,30 @@ struct OptionalJsonRow {
 struct CountRow {
     #[diesel(sql_type = BigInt)]
     value: i64,
+}
+
+#[derive(QueryableByName)]
+struct DataEventLeafManifestRow {
+    #[diesel(sql_type = Array<Text>)]
+    leaf_digests: Vec<String>,
+}
+
+fn validate_data_event_leaf_manifest(
+    seal: &Seal,
+    digest_suite: arkret_canonical::DigestSuite,
+    manifest: &BTreeSet<Hash>,
+) -> StoreResult<()> {
+    let computed = (!manifest.is_empty())
+        .then(|| arkret_state::event_digest_set_root(manifest, digest_suite))
+        .transpose()
+        .map_err(|error| StoreError::Backend(format!("data_event_set_root recompute: {error}")))?;
+    if computed != seal.data_event_set_root {
+        return Err(StoreError::Conflict(format!(
+            "Event Seal data_event_set_root mismatch: declared {:?}, manifest {:?}",
+            seal.data_event_set_root, computed
+        )));
+    }
+    Ok(())
 }
 
 #[derive(QueryableByName)]
@@ -1863,10 +1893,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        data_event_leaf_manifest: &BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        validate_data_event_leaf_manifest(seal, digest_suite, data_event_leaf_manifest)?;
         for (edge_index, dependency) in governance_dependencies.iter().enumerate() {
             if dependency.realm_id != seal.realm_id
                 || dependency.source
@@ -1916,6 +1948,15 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect::<BTreeSet<_>>();
+        let data_event_leaf_manifest = data_event_leaf_manifest
+            .iter()
+            .map(|digest| digest.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let data_event_set_root = seal
+            .data_event_set_root
+            .as_ref()
+            .map(|root| root.as_str().to_owned());
+        let manifest_digest_suite = digest_suite.as_str().to_owned();
         let governance_dependencies = governance_dependencies.to_vec();
         let new_rows = new_ops
             .iter()
@@ -1945,6 +1986,22 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 };
                 let outcome = preflight_state_seal(conn, &insert).await?;
                 if outcome == SealInsertOutcome::ExactRetry {
+                    let stored_manifest = sql_query(
+                        "SELECT leaf_digests FROM state_seal_data_event_manifests WHERE seal_id = $1",
+                    )
+                    .bind::<Text, _>(&seal_id)
+                    .get_result::<DataEventLeafManifestRow>(&mut *conn)
+                    .await
+                    .optional()?;
+                    if stored_manifest.map(|row| row.leaf_digests)
+                        != Some(data_event_leaf_manifest.clone())
+                    {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
                     let exact_dependencies =
                         crate::governance_dependencies_match_in_transaction(
                             conn,
@@ -2091,6 +2148,18 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
+                sql_query(
+                    "INSERT INTO state_seal_data_event_manifests \
+                     (seal_id, realm_id, digest_suite, leaf_digests, data_event_set_root) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind::<Text, _>(&seal_id)
+                .bind::<Text, _>(&realm_id)
+                .bind::<Text, _>(&manifest_digest_suite)
+                .bind::<Array<Text>, _>(&data_event_leaf_manifest)
+                .bind::<Nullable<Text>, _>(&data_event_set_root)
+                .execute(&mut *conn)
+                .await?;
                 for dependency in &governance_dependencies {
                     crate::put_governance_dependency_exact_in_transaction(conn, dependency)
                         .await
@@ -2120,6 +2189,30 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             ))),
         }
     }
+
+    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
+        let pool = self.pool.clone();
+        let seal_id = seal_id.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            sql_query("SELECT leaf_digests FROM state_seal_data_event_manifests WHERE seal_id = $1")
+                .bind::<Text, _>(&seal_id)
+                .get_result::<DataEventLeafManifestRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(diesel_to_store)?
+                .map(|row| {
+                    row.leaf_digests
+                        .into_iter()
+                        .map(|digest| {
+                            Hash::new(digest)
+                                .map_err(|error| StoreError::Backend(error.to_string()))
+                        })
+                        .collect()
+                })
+                .transpose()
+        })
+    }
 }
 
 impl EventSealCommitStore for MemoryEventSealCommitStore {
@@ -2130,9 +2223,31 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
+        data_event_leaf_manifest: &BTreeSet<Hash>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
+        validate_data_event_leaf_manifest(seal, digest_suite, data_event_leaf_manifest)?;
+        if let Some(existing) = self.seal_store.get(&seal.id)? {
+            let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            if existing_bytes != retry_bytes {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal id replay has different accepted bytes"
+                        .to_owned(),
+                ));
+            }
+            if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(data_event_leaf_manifest)
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                        .to_owned(),
+                ));
+            }
+            return Ok(true);
+        }
         let actual = self
             .seal_store
             .list_leaves(&seal.realm_id)?
@@ -2167,6 +2282,9 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
             Ok(true) => {
+                self.data_event_leaf_manifests
+                    .lock()
+                    .insert(seal.id.clone(), data_event_leaf_manifest.clone());
                 // Match the PostgreSQL transaction: accepted delta Events
                 // leave the pending queue at the same acceptance boundary as
                 // their Seal and cell effects. In particular, the basis-free
@@ -2186,6 +2304,11 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                 Err(error)
             }
         }
+    }
+
+    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
+        let _guard = self.lock.lock();
+        Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
     }
 }
 
@@ -2687,6 +2810,7 @@ mod event_seal_commit_tests {
         );
         let committer = Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
+            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             control_event_store: control_event_store.clone(),
             seal_store: seal_store.clone(),
             cell_store: cell_store.clone(),
@@ -2727,6 +2851,7 @@ mod event_seal_commit_tests {
                         &[],
                         &candidate.1,
                         &candidate.2,
+                        &BTreeSet::new(),
                         &[],
                     )
                     .unwrap();
@@ -2774,6 +2899,77 @@ mod event_seal_commit_tests {
                         .unwrap()
                         == loser.1[0].1.op.move_id
                 })
+        );
+        assert_eq!(
+            committer.data_event_leaf_manifest(&winner.0.id).unwrap(),
+            Some(BTreeSet::new())
+        );
+        let (read_started_tx, read_started_rx) = std::sync::mpsc::channel();
+        let (read_result_tx, read_result_rx) = std::sync::mpsc::channel();
+        let read_committer = committer.clone();
+        let read_seal_id = winner.0.id.clone();
+        let commit_guard = committer.lock.lock();
+        let reader = std::thread::spawn(move || {
+            read_started_tx.send(()).unwrap();
+            read_result_tx
+                .send(read_committer.data_event_leaf_manifest(&read_seal_id))
+                .unwrap();
+        });
+        read_started_rx.recv().unwrap();
+        assert!(
+            read_result_rx
+                .recv_timeout(std::time::Duration::from_millis(50))
+                .is_err(),
+            "manifest reads must wait for the composite commit lock"
+        );
+        drop(commit_guard);
+        assert_eq!(
+            read_result_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap()
+                .unwrap(),
+            Some(BTreeSet::new())
+        );
+        reader.join().unwrap();
+        committer
+            .data_event_leaf_manifests
+            .lock()
+            .remove(&winner.0.id);
+        let retry_error = committer
+            .commit_if_frontier(
+                &winner.0,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &winner.1,
+                &std::iter::once(winner.1[0].1.op.move_id.clone()).collect(),
+                &BTreeSet::new(),
+                &[],
+            )
+            .unwrap_err();
+        assert!(
+            retry_error
+                .to_string()
+                .contains("different or missing DataEvent leaf manifest")
+        );
+
+        let mismatched_manifest = [Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        let root_error = committer
+            .commit_if_frontier(
+                &loser.0,
+                arkret_canonical::DigestSuite::Sha256,
+                &[],
+                &loser.1,
+                &std::iter::once(loser.1[0].1.op.move_id.clone()).collect(),
+                &mismatched_manifest,
+                &[],
+            )
+            .unwrap_err();
+        assert!(
+            root_error
+                .to_string()
+                .contains("data_event_set_root mismatch")
         );
     }
 }

@@ -590,6 +590,7 @@ mod test_construction {
                 arkret_state::lattice::ordered_log::IssuedOp,
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
+            data_event_leaf_manifest: &BTreeSet<arkret_identifiers::Hash>,
             governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> arkret_state::state::StoreResult<bool> {
             self.0.commit_if_frontier(
@@ -598,8 +599,16 @@ mod test_construction {
                 expected_store_frontier,
                 new_ops,
                 covered,
+                data_event_leaf_manifest,
                 governance_dependencies,
             )
+        }
+
+        fn data_event_leaf_manifest(
+            &self,
+            seal_id: &arkret_identifiers::SealId,
+        ) -> arkret_state::state::StoreResult<Option<BTreeSet<arkret_identifiers::Hash>>> {
+            self.0.data_event_leaf_manifest(seal_id)
         }
     }
 

@@ -314,6 +314,7 @@ async fn apply_authoritative_event_seal_path(
             &leaves,
             &new_ops,
             &target,
+            &BTreeSet::new(),
             &[],
         ) {
             Ok(true) => {}

@@ -90,8 +90,11 @@ pub trait EventSealCommitPort: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
+        data_event_leaf_manifest: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
+
+    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
 }
 
 /// Process-local hybrid logical clock owned by the application layer.
@@ -1560,6 +1563,7 @@ impl ProjectionService {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
+        data_event_leaf_manifest: &std::collections::BTreeSet<Hash>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
@@ -1569,8 +1573,17 @@ impl ProjectionService {
             expected_store_frontier,
             new_ops,
             covered,
+            data_event_leaf_manifest,
             governance_dependencies,
         )
+    }
+
+    pub fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>> {
+        self.event_seal_committer()
+            .data_event_leaf_manifest(seal_id)
     }
 
     #[doc(hidden)]
@@ -3328,9 +3341,17 @@ mod control_governance_health_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
+            _data_event_leaf_manifest: &BTreeSet<Hash>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("governance health must not commit a Seal")
+        }
+
+        fn data_event_leaf_manifest(
+            &self,
+            _seal_id: &SealId,
+        ) -> StoreResult<Option<BTreeSet<Hash>>> {
+            panic!("governance health must not read a Seal manifest")
         }
     }
 

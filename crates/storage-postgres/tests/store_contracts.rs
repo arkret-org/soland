@@ -576,6 +576,8 @@ struct SealDependencyAtomicCounts {
     dependency_objects: i64,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     dependency_edges: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    data_event_manifests: i64,
 }
 
 async fn seal_dependency_atomic_counts(
@@ -593,7 +595,8 @@ async fn seal_dependency_atomic_counts(
            (SELECT COUNT(*) FROM state_cell_ops WHERE seal_id = $1) AS cell_ops, \
            (SELECT COUNT(*) FROM state_seal_control_events WHERE seal_id = $1) AS sealed_markers, \
            (SELECT COUNT(*) FROM governance_dependency_objects WHERE object_digest = $2) AS dependency_objects, \
-           (SELECT COUNT(*) FROM governance_dependency_edges WHERE seal_id = $1) AS dependency_edges",
+           (SELECT COUNT(*) FROM governance_dependency_edges WHERE seal_id = $1) AS dependency_edges, \
+           (SELECT COUNT(*) FROM state_seal_data_event_manifests WHERE seal_id = $1) AS data_event_manifests",
     )
     .bind::<Text, _>(seal_id.as_str())
     .bind::<Text, _>(object_digest.as_str())
@@ -651,13 +654,27 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     let genesis_covered = [genesis_digest.clone()]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>();
-    let genesis_seal = seal_dependency_contract_seal(
+    let mut genesis_seal = seal_dependency_contract_seal(
         &realm_id,
         Vec::new(),
         genesis_digest.clone(),
         &genesis_covered,
         genesis_object_digest.clone(),
     );
+    let genesis_manifest =
+        [arkret_identifiers::Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+    genesis_seal.data_event_set_root = Some(
+        arkret_state::event_digest_set_root(
+            &genesis_manifest,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap(),
+    );
+    genesis_seal.id = genesis_seal
+        .derive_id(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
     let genesis_write = GovernanceDependencyWrite {
         realm_id: realm_id.clone(),
         source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
@@ -673,6 +690,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
+                &genesis_manifest,
                 std::slice::from_ref(&genesis_write),
             )
             .unwrap()
@@ -684,6 +702,26 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert_eq!(committed.sealed_markers, 1);
     assert_eq!(committed.dependency_objects, 1);
     assert_eq!(committed.dependency_edges, 1);
+    assert_eq!(committed.data_event_manifests, 1);
+    assert_eq!(
+        stores
+            .event_seal_committer
+            .data_event_leaf_manifest(&genesis_seal.id)
+            .unwrap(),
+        Some(genesis_manifest.clone())
+    );
+    let restarted = soland_storage_postgres::build_state_resolution_stores(
+        Some(pool.clone()),
+        stores.cell_registry.clone(),
+    );
+    assert_eq!(
+        restarted
+            .event_seal_committer
+            .data_event_leaf_manifest(&genesis_seal.id)
+            .unwrap(),
+        Some(genesis_manifest.clone()),
+        "a reconstructed PostgreSQL adapter must return the byte-identical frozen manifest"
+    );
     assert_eq!(
         stores
             .control_event_store
@@ -714,6 +752,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
+                &genesis_manifest,
                 std::slice::from_ref(&genesis_write),
             )
             .unwrap(),
@@ -730,6 +769,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &genesis_covered,
+            &genesis_manifest,
             &[GovernanceDependencyWrite {
                 realm_id: realm_id.clone(),
                 source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
@@ -806,6 +846,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 std::slice::from_ref(&genesis_seal.id),
                 &[],
                 &covered,
+                &std::collections::BTreeSet::new(),
                 &[write],
             )
             .unwrap_err();
@@ -823,6 +864,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         assert_eq!(
             counts.dependency_edges, 0,
             "{failure} failure leaked a dependency edge"
+        );
+        assert_eq!(
+            counts.data_event_manifests, 0,
+            "{failure} failure leaked a DataEvent manifest"
         );
         assert!(
             stores
@@ -845,7 +890,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         .collect::<std::collections::BTreeSet<_>>();
     let cas_seal = seal_dependency_contract_seal(
         &realm_id,
-        vec![genesis_seal.id],
+        vec![genesis_seal.id.clone()],
         cas_digest.clone(),
         &cas_covered,
         cas_object_digest.clone(),
@@ -856,6 +901,31 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         edge_index: 0,
         item: cas_dependency,
     };
+    let root_mismatch_manifest =
+        [arkret_identifiers::Hash::new(format!("sha256:{}", "e".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+    let root_mismatch = stores
+        .event_seal_committer
+        .commit_if_frontier(
+            &cas_seal,
+            arkret_canonical::DigestSuite::Sha256,
+            &[],
+            &[],
+            &cas_covered,
+            &root_mismatch_manifest,
+            std::slice::from_ref(&cas_write),
+        )
+        .unwrap_err();
+    assert!(
+        root_mismatch
+            .to_string()
+            .contains("data_event_set_root mismatch")
+    );
+    let root_mismatch_counts =
+        seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
+    assert_eq!(root_mismatch_counts.seals, 0);
+    assert_eq!(root_mismatch_counts.data_event_manifests, 0);
     assert!(
         !stores
             .event_seal_committer
@@ -865,6 +935,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &cas_covered,
+                &std::collections::BTreeSet::new(),
                 &[cas_write],
             )
             .unwrap()
@@ -875,12 +946,39 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert_eq!(cas_counts.sealed_markers, 0);
     assert_eq!(cas_counts.dependency_objects, 0);
     assert_eq!(cas_counts.dependency_edges, 0);
+    assert_eq!(cas_counts.data_event_manifests, 0);
     assert!(
         stores
             .control_event_store
             .covering_seals(&cas_digest)
             .unwrap()
             .is_empty()
+    );
+
+    use diesel::sql_types::Text;
+    use diesel_async::RunQueryDsl;
+    let mut conn = pool.get().await.unwrap();
+    diesel::sql_query("DELETE FROM state_seal_data_event_manifests WHERE seal_id = $1")
+        .bind::<Text, _>(genesis_seal.id.as_str())
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let missing_manifest_retry = stores
+        .event_seal_committer
+        .commit_if_frontier(
+            &genesis_seal,
+            arkret_canonical::DigestSuite::Sha256,
+            &[],
+            &[],
+            &genesis_covered,
+            &genesis_manifest,
+            std::slice::from_ref(&genesis_write),
+        )
+        .unwrap_err();
+    assert!(
+        missing_manifest_retry
+            .to_string()
+            .contains("different or missing DataEvent leaf manifest")
     );
 }
 
