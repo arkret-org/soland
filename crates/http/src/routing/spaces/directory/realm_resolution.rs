@@ -62,9 +62,21 @@ pub(super) async fn resolve_realm(
     }
 
     let session = authenticated_session(state, req).await.ok();
-    let invite_realm_id = match body.invite_token.as_deref() {
-        Some(token) => invite_token_realm_id(state, token).await,
-        None => None,
+    let (invite_realm_id, invite_seal_basis) = match body.invite_token.as_deref() {
+        Some(token) => match invite_token_realm_resolution(state, token).await {
+            InviteTokenRealmResolution::Ready {
+                realm_id,
+                seal_basis,
+            } => (Some(realm_id), Some(seal_basis)),
+            InviteTokenRealmResolution::FrontierUnavailable => {
+                return Err(AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "invite lifecycle is not yet covered by the current accepted Realm Seal",
+                ));
+            }
+            InviteTokenRealmResolution::NotFound => (None, None),
+        },
+        None => (None, None),
     };
     let candidates: Vec<RealmDirectoryEntry> = {
         let realms = state.realm_directory().snapshot();
@@ -125,6 +137,10 @@ pub(super) async fn resolve_realm(
                     state,
                     realm.realm_id.as_str(),
                     discoverability.as_str(),
+                    invite_realm_id
+                        .as_deref()
+                        .filter(|invite_realm_id| *invite_realm_id == realm.realm_id.as_str())
+                        .and(invite_seal_basis.as_ref()),
                 )
                 .await,
             })
@@ -239,6 +255,7 @@ pub(super) async fn resolve_target(
             state,
             realm_entry.realm_id.as_str(),
             discoverability.as_str(),
+            None,
         )
         .await
     } else {
@@ -729,6 +746,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     state: &AppState,
     realm_id: &str,
     discoverability: &str,
+    disclosed_seal_basis: Option<&arkret_wire::SealBasis>,
 ) -> Vec<RealmJoinCandidate> {
     let observed_at = now();
     let join_methods = if discoverability == "public" {
@@ -770,11 +788,15 @@ pub(super) async fn join_candidates_for_resolved_realm(
     // this deployment holds no accepted Seal for the Realm (e.g. it does not
     // host it / cannot notarize), it must not advertise itself as a submit
     // candidate.
-    let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed) else {
-        return Vec::new();
+    let seal_basis = if let Some(seal_basis) = disclosed_seal_basis {
+        seal_basis.clone()
+    } else {
+        let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed) else {
+            return Vec::new();
+        };
+        leaves.sort();
+        arkret_wire::SealBasis { leaves }
     };
-    leaves.sort();
-    let seal_basis = arkret_wire::SealBasis { leaves };
     if seal_basis.validate_protocol_bounds().is_err() {
         return Vec::new();
     }
