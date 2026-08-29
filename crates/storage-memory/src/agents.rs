@@ -1,15 +1,14 @@
 #[cfg(test)]
 use soland_storage::AgentRuntimeSnapshotGuard;
+#[cfg(feature = "fault-injection")]
+use super::Arc;
 
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
-    AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
-    AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentStore, Arc, CanonicalEventRecord,
-    ConfirmAgentProvisioningAbandonment, EnqueueAgentRuntimeMessage,
-    IssueAgentProvisioningAbandonmentChallenge, Mutex, PendingAgentPairingCommitIntent,
-    PersistenceError, PersistenceResult, Utc, Value, agent_participation_record_key,
-    apply_agent_provisioning_abandonment, apply_agent_provisioning_abandonment_challenge,
-    async_trait, ids,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
+    AgentRuntimeMessageRecord, AgentStore, EnqueueAgentRuntimeMessage, Mutex,
+    PendingAgentPairingCommitIntent, PersistenceError, PersistenceResult, Utc, Value,
+    agent_participation_record_key, async_trait, ids,
 };
 #[derive(Default)]
 pub(crate) struct MemoryAgentParticipationStore {
@@ -106,42 +105,15 @@ pub(crate) struct MemoryAgentStore {
     fault_injector: Arc<crate::FaultInjector>,
     data: Mutex<std::collections::BTreeMap<String, AgentPrincipalRecord>>,
     runtime_messages: Mutex<std::collections::BTreeMap<String, AgentRuntimeMessageRecord>>,
-    events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
 }
 impl MemoryAgentStore {
-    #[cfg(not(feature = "fault-injection"))]
-    pub(crate) fn with_events(
-        events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
-    ) -> Self {
-        Self {
-            events,
-            ..Self::default()
-        }
-    }
-
     #[cfg(feature = "fault-injection")]
-    pub(crate) fn with_events_and_fault_injector(
-        events: Arc<Mutex<std::collections::BTreeMap<String, CanonicalEventRecord>>>,
-        fault_injector: Arc<crate::FaultInjector>,
-    ) -> Self {
+    pub(crate) fn with_fault_injector(fault_injector: Arc<crate::FaultInjector>) -> Self {
         Self {
-            events,
             fault_injector,
             ..Self::default()
         }
     }
-}
-
-fn managed_agent_genesis_is_accepted(
-    events: &std::collections::BTreeMap<String, CanonicalEventRecord>,
-    agent_id: &str,
-    realm_id: &str,
-) -> bool {
-    events.values().any(|event| {
-        event.actor_id == agent_id
-            && event.realm_id.as_deref() == Some(realm_id)
-            && event.kind == arkret_wire::EventKind::RealmCreate.as_str()
-    })
 }
 #[async_trait]
 impl AgentStore for MemoryAgentStore {
@@ -367,50 +339,6 @@ impl AgentStore for MemoryAgentStore {
         record.runtime_key_request = Some(write.runtime_key_request.clone());
         record.updated_at = Utc::now();
         Ok(Some(record.clone()))
-    }
-
-    async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &IssueAgentProvisioningAbandonmentChallenge,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome> {
-        // Keep the accepted-Event map locked until the Agent row mutation is
-        // durable so a concurrent genesis commit cannot cross this decision.
-        let events = self.events.lock();
-        let genesis_accepted = managed_agent_genesis_is_accepted(
-            &events,
-            &command.agent_id,
-            &command.principal_control_realm_id,
-        );
-        let mut data = self.data.lock();
-        let Some(record) = data.get_mut(&command.agent_id) else {
-            return Ok(AgentProvisioningAbandonmentWriteOutcome::NotFound);
-        };
-        Ok(apply_agent_provisioning_abandonment_challenge(
-            record,
-            genesis_accepted,
-            command,
-        ))
-    }
-
-    async fn confirm_provisioning_abandonment(
-        &self,
-        command: &ConfirmAgentProvisioningAbandonment,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome> {
-        let events = self.events.lock();
-        let genesis_accepted = managed_agent_genesis_is_accepted(
-            &events,
-            &command.agent_id,
-            &command.principal_control_realm_id,
-        );
-        let mut data = self.data.lock();
-        let Some(record) = data.get_mut(&command.agent_id) else {
-            return Ok(AgentProvisioningAbandonmentWriteOutcome::NotFound);
-        };
-        Ok(apply_agent_provisioning_abandonment(
-            record,
-            genesis_accepted,
-            command,
-        ))
     }
 
     async fn enqueue_runtime_message_if_current(

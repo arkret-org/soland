@@ -1,10 +1,6 @@
 use arkret_wire::{OpaqueLocalId, ServiceAccountId};
 
-use super::{
-    AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
-    ConfirmAgentProvisioningAbandonment, IssueAgentProvisioningAbandonmentChallenge,
-    PersistenceResult, Value, async_trait,
-};
+use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
 /// projection are stored as JSON records. A selection record contains only
@@ -167,14 +163,6 @@ pub trait AgentStore: Send + Sync {
         &self,
         write: &AgentRuntimeApprovalWrite,
     ) -> PersistenceResult<Option<AgentPrincipalRecord>>;
-    async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &IssueAgentProvisioningAbandonmentChallenge,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome>;
-    async fn confirm_provisioning_abandonment(
-        &self,
-        command: &ConfirmAgentProvisioningAbandonment,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome>;
     /// Check exact replay first, then atomically validate the unique current
     /// active runtime snapshot and append one inbox message.
     async fn enqueue_runtime_message_if_current(

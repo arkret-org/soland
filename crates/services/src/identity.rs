@@ -1440,14 +1440,6 @@ pub trait AgentPairingPort: Send + Sync {
         agent_id: &str,
         approval_request_id: &str,
     ) -> ServiceResult<bool>;
-    async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
-    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
-    async fn confirm_provisioning_abandonment(
-        &self,
-        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
-    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome>;
     async fn enqueue_runtime_message_if_current(
         &self,
         command: &EnqueueAgentRuntimeMessage,
@@ -2184,22 +2176,6 @@ impl AgentPairingService {
         self.pairing
             .clear_approval_notification_if_current(agent_id, approval_request_id)
             .await
-    }
-
-    pub async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
-    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-        self.pairing
-            .issue_provisioning_abandonment_challenge(command)
-            .await
-    }
-
-    pub async fn confirm_provisioning_abandonment(
-        &self,
-        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
-    ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-        self.pairing.confirm_provisioning_abandonment(command).await
     }
 
     pub async fn enqueue_runtime_message_if_current(
@@ -3601,20 +3577,6 @@ mod tests {
             _approval_request_id: &str,
         ) -> ServiceResult<bool> {
             Ok(true)
-        }
-
-        async fn issue_provisioning_abandonment_challenge(
-            &self,
-            _command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
-        ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-            Ok(soland_storage::AgentProvisioningAbandonmentWriteOutcome::NotFound)
-        }
-
-        async fn confirm_provisioning_abandonment(
-            &self,
-            _command: &soland_storage::ConfirmAgentProvisioningAbandonment,
-        ) -> ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-            Ok(soland_storage::AgentProvisioningAbandonmentWriteOutcome::NotFound)
         }
 
         async fn enqueue_runtime_message_if_current(

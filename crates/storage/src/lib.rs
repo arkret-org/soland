@@ -20,12 +20,7 @@ mod agent_membership_cascades;
 mod agent_principal;
 mod records;
 pub use agent_membership_cascades::*;
-pub use agent_principal::{
-    AgentPrincipalRecord, AgentProvisioningAbandonmentWriteOutcome,
-    ConfirmAgentProvisioningAbandonment, IssueAgentProvisioningAbandonmentChallenge,
-    PendingAgentPairingCommitIntent, agent_provisioning_is_abandoned,
-    apply_agent_provisioning_abandonment, apply_agent_provisioning_abandonment_challenge,
-};
+pub use agent_principal::{AgentPrincipalRecord, PendingAgentPairingCommitIntent};
 pub use records::*;
 
 mod account_status;

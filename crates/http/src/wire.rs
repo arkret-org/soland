@@ -217,10 +217,8 @@ pub struct SolandAccountRegisterOutcome {
 // / `CallMediaParticipantBinding` are shared SDK wire types),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
 pub use arkret_models_collaboration::agent_operations::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentGrantDetachRequestBody, AgentKeyPairOutcome,
-    AgentKeyPairRequestBody, AgentList, AgentPauseRequestBody, AgentResumeRequestBody,
-    AgentSidecarList, AgentSidecarView, AgentView,
+    AgentDeactivateRequestBody, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
 };
 pub use arkret_models_collaboration::objects::media::{
     CallMediaParticipantBinding, CallMediaTokenExchangeOutcome, CallMediaTokenExchangeRequestBody,

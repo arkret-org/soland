@@ -259,14 +259,11 @@ impl SolandMemoryPersistenceStore {
             agents: {
                 #[cfg(feature = "fault-injection")]
                 {
-                    MemoryAgentStore::with_events_and_fault_injector(
-                        canonical_events.clone(),
-                        fault_injector.clone(),
-                    )
+                    MemoryAgentStore::with_fault_injector(fault_injector.clone())
                 }
                 #[cfg(not(feature = "fault-injection"))]
                 {
-                    MemoryAgentStore::with_events(canonical_events.clone())
+                    MemoryAgentStore::default()
                 }
             },
             agent_membership_cascades: MemoryAgentMembershipCascadeStore::new(),

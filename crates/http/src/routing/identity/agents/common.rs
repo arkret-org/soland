@@ -239,9 +239,8 @@ pub(crate) fn agent_actions_within_requested_scope(
         .all(|action| ceiling.contains(action.as_str()))
 }
 
-/// Enforce the action ceiling and, when provisioning declared explicit
-/// content selectors, the optional resource ceiling. With no content
-/// selectors, Realm grants remain responsible for choosing concrete scope.
+/// Enforce the immutable provisioning ceiling during ordinary
+/// `ak.capability.grant` Event admission.
 pub(crate) fn agent_grant_within_requested_scope(
     record: &AgentPrincipalRecord,
     actions: &[String],

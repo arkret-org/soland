@@ -927,28 +927,6 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .await?)
     }
 
-    async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &soland_storage::IssueAgentProvisioningAbandonmentChallenge,
-    ) -> crate::ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-        Ok(self
-            .0
-            .agents()
-            .issue_provisioning_abandonment_challenge(command)
-            .await?)
-    }
-
-    async fn confirm_provisioning_abandonment(
-        &self,
-        command: &soland_storage::ConfirmAgentProvisioningAbandonment,
-    ) -> crate::ServiceResult<soland_storage::AgentProvisioningAbandonmentWriteOutcome> {
-        Ok(self
-            .0
-            .agents()
-            .confirm_provisioning_abandonment(command)
-            .await?)
-    }
-
     async fn enqueue_runtime_message_if_current(
         &self,
         command: &EnqueueAgentRuntimeMessage,

@@ -183,7 +183,7 @@ async fn health_and_describe_work_body() {
     ));
     assert!(advertises_operation(
         &describe,
-        "ak.self.circle.command.restore.v1"
+        "ak.self.circle.command.create.v1"
     ));
     for operation_id in [
         "ak.self.authz.read.check.v1",

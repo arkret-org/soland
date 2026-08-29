@@ -16,10 +16,6 @@
 //! - `POST   /_arkret/self/agents/{id}/resume`                 — `ak.self.agent.command.resume.v1`
 //! - `POST   /_arkret/self/agents/{id}/deactivate`             —
 //!   `ak.self.agent.command.deactivate.v1`
-//! - `POST   /_arkret/self/agents/{id}/grants`                 —
-//!   `ak.self.agent.grant.command.attach.v1`
-//! - `DELETE /_arkret/self/agents/{id}/grants/{grant_id}`      —
-//!   `ak.self.agent.grant.resource.delete.v1`
 //! - `POST   /_arkret/self/agent-sidecars:ensure`              —
 //!   `ak.self.agent.sidecar.command.ensure.v1`
 //! - `GET    /_arkret/self/agent-sidecars[/{sidecar_id}]`      — dedicated reads
@@ -34,14 +30,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{BlobRef, Did, DidCoreId, EventId, GrantId, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
-    AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentGrantDetachRequestBody, AgentKeyPairActivationState,
-    AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState,
-    AgentList, AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody,
-    AgentPauseRequestBody, AgentPresence, AgentPresenceState, AgentProjection,
-    AgentProvisionOutcome, AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker,
-    AgentReadinessState, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
-    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentDeactivateRequestBody, AgentKeyPairActivationState, AgentKeyPairOutcome,
+    AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
+    AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody, AgentPauseRequestBody,
+    AgentPresence, AgentPresenceState, AgentProjection, AgentProvisionOutcome,
+    AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker, AgentReadinessState,
+    AgentRenewPairingOutcome, AgentRenewPairingRequestBody, AgentResumeRequestBody,
+    AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
     AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
     AgentView, KeyState,
 };
@@ -75,7 +70,7 @@ use crate::state::AppState;
 mod dev_fanout;
 use dev_fanout::{
     require_controller_principal_control_realm, submit_durable_agent_lifecycle,
-    submit_provision_event, submit_signed_agent_event, validate_durable_agent_lifecycle,
+    submit_provision_event, validate_durable_agent_lifecycle,
 };
 
 mod common;
@@ -115,11 +110,6 @@ pub(super) fn protocol_router() -> Router {
                 .push(Router::with_path("{agent_id}/resume").post(resume_agent))
                 .push(Router::with_path("{agent_id}/deactivate").post(deactivate_agent))
                 .push(
-                    Router::with_path("{agent_id}/grants")
-                        .post(attach_agent_grant)
-                        .push(Router::with_path("{grant_id}").delete(detach_agent_grant)),
-                )
-                .push(
                     Router::with_path("{agent_id}/participation")
                         .get(get_agent_participation)
                         .put(set_agent_participation),
@@ -129,11 +119,6 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("agent-signer-evidence/query")
                 .post(evidence::query_agent_signer_evidence),
         )
-        .push(
-            Router::with_path("agent-provisioning-abandonment-challenges")
-                .post(issue_provisioning_abandonment_challenge),
-        )
-        .push(Router::with_path("agent-provisioning-abandonments").post(abandon_provisioning))
         .push(Router::with_path("agent-sidecars:ensure").post(ensure_sidecar))
         .push(
             Router::with_path("agent-sidecars")

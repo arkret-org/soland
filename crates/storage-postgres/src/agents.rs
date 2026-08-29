@@ -7,14 +7,11 @@ use soland_storage::PendingAgentPairingCommitIntent;
 
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
-    AgentProvisioningAbandonmentWriteOutcome, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
-    AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentStore, Array, BigInt, Bool,
-    ConfirmAgentProvisioningAbandonment, EnqueueAgentRuntimeMessage,
-    IssueAgentProvisioningAbandonmentChallenge, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    Text, Timestamptz, Utc, Uuid, Value, apply_agent_provisioning_abandonment,
-    apply_agent_provisioning_abandonment_challenge, async_trait, ids, pg_conn, sql_query,
-    sql_types,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
+    AgentRuntimeMessageRecord, AgentStore, Array, BigInt, Bool, EnqueueAgentRuntimeMessage, Jsonb,
+    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn,
+    sql_query, sql_types,
 };
 use crate::schema::agent_principals;
 
@@ -297,36 +294,6 @@ pub struct PgAgentStore {
     pub pool: PgPool,
 }
 
-#[derive(QueryableByName)]
-struct GenesisAcceptedRow {
-    #[diesel(sql_type = Bool)]
-    accepted: bool,
-}
-
-async fn managed_agent_genesis_is_accepted_in_transaction(
-    conn: &mut diesel_async::AsyncPgConnection,
-    agent_id: &str,
-    realm_id: &str,
-) -> Result<bool, PgTransactionError> {
-    // Challenge issue/consume is rare and security-sensitive. A SHARE table
-    // lock blocks concurrent canonical Event inserts until this transaction
-    // has either committed the challenge/tombstone or written nothing. This
-    // closes the genesis-after-EXISTS race without a compensating delete.
-    sql_query("LOCK TABLE canonical_events IN SHARE MODE")
-        .execute(&mut *conn)
-        .await?;
-    sql_query(
-        "SELECT EXISTS (SELECT 1 FROM canonical_events \
-         WHERE state = 'accepted' AND actor_id = $1 AND realm_id = $2 \
-         AND kind = 'ak.realm.create') AS accepted",
-    )
-    .bind::<Text, _>(agent_id)
-    .bind::<Text, _>(realm_id)
-    .get_result::<GenesisAcceptedRow>(conn)
-    .await
-    .map(|row| row.accepted)
-    .map_err(Into::into)
-}
 #[async_trait]
 impl AgentStore for PgAgentStore {
     async fn put(&self, principal: AgentPrincipalRecord) -> PersistenceResult<()> {
@@ -641,93 +608,6 @@ impl AgentStore for PgAgentStore {
         .optional()
         .map_err(PersistenceError::database)?;
         record.map(TryInto::try_into).transpose()
-    }
-
-    async fn issue_provisioning_abandonment_challenge(
-        &self,
-        command: &IssueAgentProvisioningAbandonmentChallenge,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let command = command.clone();
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let row = agent_principals::table
-                .find(&command.agent_id)
-                .for_update()
-                .select(AgentPrincipalRow::as_select())
-                .first::<AgentPrincipalRow>(conn)
-                .await
-                .optional()?;
-            let Some(row) = row else {
-                return Ok(AgentProvisioningAbandonmentWriteOutcome::NotFound);
-            };
-            let mut record: AgentPrincipalRecord = row.try_into()?;
-            let original = record.clone();
-            let genesis_accepted = managed_agent_genesis_is_accepted_in_transaction(
-                conn,
-                &command.agent_id,
-                &command.principal_control_realm_id,
-            )
-            .await?;
-            let outcome = apply_agent_provisioning_abandonment_challenge(
-                &mut record,
-                genesis_accepted,
-                &command,
-            );
-            if record != original {
-                let update = AgentPrincipalRow::try_from(record)?;
-                diesel::update(agent_principals::table.find(&command.agent_id))
-                    .set(&update)
-                    .execute(conn)
-                    .await?;
-            }
-            Ok(outcome)
-        })
-        .await
-        .map_err(PgTransactionError::into_persistence)
-    }
-
-    async fn confirm_provisioning_abandonment(
-        &self,
-        command: &ConfirmAgentProvisioningAbandonment,
-    ) -> PersistenceResult<AgentProvisioningAbandonmentWriteOutcome> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let command = command.clone();
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            let row = agent_principals::table
-                .find(&command.agent_id)
-                .for_update()
-                .select(AgentPrincipalRow::as_select())
-                .first::<AgentPrincipalRow>(conn)
-                .await
-                .optional()?;
-            let Some(row) = row else {
-                return Ok(AgentProvisioningAbandonmentWriteOutcome::NotFound);
-            };
-            let mut record: AgentPrincipalRecord = row.try_into()?;
-            let original = record.clone();
-            let genesis_accepted = managed_agent_genesis_is_accepted_in_transaction(
-                conn,
-                &command.agent_id,
-                &command.principal_control_realm_id,
-            )
-            .await?;
-            let outcome =
-                apply_agent_provisioning_abandonment(&mut record, genesis_accepted, &command);
-            if record != original {
-                let update = AgentPrincipalRow::try_from(record)?;
-                diesel::update(agent_principals::table.find(&command.agent_id))
-                    .set(&update)
-                    .execute(conn)
-                    .await?;
-            }
-            Ok(outcome)
-        })
-        .await
-        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn enqueue_runtime_message_if_current(

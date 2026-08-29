@@ -24,9 +24,6 @@
 //! - `POST   /_arkret/self/circles/{circle_id}/members`          add member
 //! - `DELETE /_arkret/self/circles/{circle_id}/members/{actor}`  remove member
 //! - `POST   /_arkret/self/circles/{circle_id}/scope-rotate`     rotate MLS scope (501 until wired)
-//! - `POST   /_arkret/self/circles/{circle_id}/archive`          archive Circle
-//! - `POST   /_arkret/self/circles/{circle_id}/restore`          restore Circle
-//! - `POST   /_arkret/self/circles/{circle_id}/tombstone`        tombstone Circle
 //!
 //! `scope-rotate` intentionally returns `501 unsupported_feature` until the
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
@@ -34,10 +31,9 @@
 
 use arkret_identifiers::{CircleId, DidCoreId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
-    CircleArchiveRequestBody, CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody,
-    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CircleRestoreRequestBody,
-    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleTombstoneRequestBody, CircleView,
-    EncryptionFloor,
+    CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody, CircleMemberRequestBody,
+    CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
+    CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -69,9 +65,6 @@ pub(crate) fn router() -> Router {
                 .push(Router::with_path("{actor_id}").delete(delete_circle_member)),
         )
         .push(Router::with_path("{circle_id}/scope-rotate").post(post_scope_rotate))
-        .push(Router::with_path("{circle_id}/archive").post(post_circle_archive))
-        .push(Router::with_path("{circle_id}/restore").post(post_circle_restore))
-        .push(Router::with_path("{circle_id}/tombstone").post(post_circle_tombstone))
 }
 
 fn parse_sdk_field<T>(field: &str, value: impl Serialize) -> Result<T, AppError>
@@ -706,175 +699,6 @@ async fn post_scope_rotate(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.circle.command.archive",
-    summary = "Archive a circle",
-    tags("circles")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive.v1"))]
-async fn post_circle_archive(
-    aa: AuthArgs,
-    circle_id: PathParam<String>,
-    body: JsonBody<CircleArchiveRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(
-        depot,
-        req,
-        aa,
-        circle_id.into_inner(),
-        arkret_wire::EventKind::CircleArchive,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-}
-
-#[endpoint(
-    operation_id = "ak.self.circle.command.restore",
-    summary = "Restore a circle",
-    tags("circles")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore.v1"))]
-async fn post_circle_restore(
-    aa: AuthArgs,
-    circle_id: PathParam<String>,
-    body: JsonBody<CircleRestoreRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(
-        depot,
-        req,
-        aa,
-        circle_id.into_inner(),
-        arkret_wire::EventKind::CircleRestore,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-}
-
-#[endpoint(
-    operation_id = "ak.self.circle.command.tombstone",
-    summary = "Tombstone a circle",
-    tags("circles")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone.v1"))]
-async fn post_circle_tombstone(
-    aa: AuthArgs,
-    circle_id: PathParam<String>,
-    body: JsonBody<CircleTombstoneRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<CircleView> {
-    submit_circle_lifecycle(
-        depot,
-        req,
-        aa,
-        circle_id.into_inner(),
-        arkret_wire::EventKind::CircleTombstone,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-}
-
-async fn submit_circle_lifecycle(
-    depot: &mut Depot,
-    req: &mut Request,
-    aa: AuthArgs,
-    circle_id: String,
-    kind: arkret_wire::EventKind,
-    submission: arkret_wire::EventInitialSubmission,
-) -> JsonResult<CircleView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    // `ak.circle.manage` and the lifecycle transition matrix are both the
-    // admission path's job now; this only binds the submitted Event to the path.
-    caller_signed_circle_lifecycle_target(&session.actor, &circle_id, &kind, &submission.event)?;
-    submit_caller_signed_circle_event(state, &session, submission).await?;
-    let expected_state = circle_lifecycle_target_state(&kind)?;
-
-    // Lifecycle operations are Control Moves. Admission durably queues the
-    // Move and wakes the Seal coordinator, but the Circle projection cannot
-    // change until that Move is covered by the resulting Seal. Do not return a
-    // successful response carrying the pre-transition state from that bounded
-    // convergence window.
-    const PROJECTION_ATTEMPTS: usize = 50;
-    for attempt in 0..PROJECTION_ATTEMPTS {
-        let projection = state.projections().snapshot();
-        // For tombstone the read-helper hides the row; use the direct map so
-        // the terminal state can still be returned by this command endpoint.
-        if let Some(circle) = projection.circles.get(&circle_id)
-            && circle.state == expected_state
-        {
-            let response = circle_view_from_projection(&projection, circle, &session.actor)?;
-            return json_ok(response);
-        }
-        drop(projection);
-        if attempt + 1 < PROJECTION_ATTEMPTS {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        }
-    }
-
-    Err(
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!(
-                "accepted {kind} Event did not materialize Circle state `{}` before the projection deadline",
-                expected_state.as_str()
-            ),
-        )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE),
-    )
-}
-
-fn circle_lifecycle_target_state(
-    kind: &arkret_wire::EventKind,
-) -> Result<CircleLifecycleState, AppError> {
-    match kind {
-        arkret_wire::EventKind::CircleArchive => Ok(CircleLifecycleState::Archived),
-        arkret_wire::EventKind::CircleRestore => Ok(CircleLifecycleState::Active),
-        arkret_wire::EventKind::CircleTombstone => Ok(CircleLifecycleState::Tombstoned),
-        _ => Err(AppError::internal(format!(
-            "unsupported Circle lifecycle Event kind {kind}"
-        ))),
-    }
-}
-
-/// Bind a caller-signed Circle lifecycle Event to the path it was submitted on.
-///
-/// `object_lifecycle_payload` single-sources the target by `target_ref`, so that
-/// is the field checked; a body that named a different Circle than the URL would
-/// otherwise act on the Circle in the payload.
-fn caller_signed_circle_lifecycle_target(
-    actor: &str,
-    circle_id: &str,
-    kind: &arkret_wire::EventKind,
-    event: &Event,
-) -> Result<(), AppError> {
-    if &event.kind != kind {
-        return Err(AppError::param_invalid(format!(
-            "lifecycle_event.event.kind must be {kind}"
-        )));
-    }
-    if event.actor_id.as_str() != actor {
-        return Err(AppError::param_invalid(
-            "lifecycle_event.event.actor_id must be the authenticated caller",
-        ));
-    }
-    let target_ref = event
-        .payload
-        .get("target_ref")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::param_missing("lifecycle_event payload.target_ref is required"))?;
-    if target_ref != circle_id {
-        return Err(AppError::param_invalid(
-            "lifecycle_event payload.target_ref must equal the path circle_id",
-        ));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -978,24 +802,6 @@ mod tests {
         .expect("member state envelope")
     }
 
-    fn lifecycle_event(kind: &str, actor: &str, target_ref: &str) -> Event {
-        serde_json::from_value(json!({
-            "event_id": "ak:event:ATGd5JrukD5xsqzxo2mPDYgWsgsvKfW0RmWdOZLa_hOO",
-            "kind": kind,
-            "realm_id": REALM,
-            "scope_ref": { "kind": "realm", "realm_id": REALM },
-            "actor_id": actor,
-            "principal_server_id": PRINCIPAL_SERVER,
-            "actor_seq": 0,
-            "created_at": "2026-07-06T00:00:00.000Z",
-            "prev_refs": [],
-            "refs": [],
-            "payload": { "target_ref": target_ref },
-            "proofs": [],
-        }))
-        .expect("lifecycle envelope")
-    }
-
     #[test]
     fn a_member_event_reports_the_transition_it_names() {
         let event = member_state_event(
@@ -1083,48 +889,6 @@ mod tests {
         );
         caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &missing_head)
             .expect_err("DELETE must carry its signed membership head_eq guard");
-    }
-
-    #[test]
-    fn a_lifecycle_event_binds_to_the_path_circle_and_its_own_kind() {
-        caller_signed_circle_lifecycle_target(
-            ACTOR,
-            CIRCLE,
-            &arkret_wire::EventKind::CircleArchive,
-            &lifecycle_event(
-                arkret_wire::EventKind::CircleArchive.as_str(),
-                ACTOR,
-                CIRCLE,
-            ),
-        )
-        .unwrap();
-
-        // The archive endpoint must not accept a tombstone Event.
-        caller_signed_circle_lifecycle_target(
-            ACTOR,
-            CIRCLE,
-            &arkret_wire::EventKind::CircleArchive,
-            &lifecycle_event(
-                arkret_wire::EventKind::CircleTombstone.as_str(),
-                ACTOR,
-                CIRCLE,
-            ),
-        )
-        .expect_err("the archive surface must not accept a tombstone Event");
-
-        // `object_lifecycle_payload` single-sources the target, so a mismatch is a
-        // request for a different Circle than the URL.
-        caller_signed_circle_lifecycle_target(
-            ACTOR,
-            CIRCLE,
-            &arkret_wire::EventKind::CircleArchive,
-            &lifecycle_event(
-                arkret_wire::EventKind::CircleArchive.as_str(),
-                ACTOR,
-                "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
-            ),
-        )
-        .expect_err("payload.target_ref must equal the path circle_id");
     }
 
     #[test]
