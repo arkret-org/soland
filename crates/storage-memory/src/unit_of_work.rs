@@ -1250,6 +1250,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
+    #[cfg(feature = "fault-injection")]
+    use soland_storage::EventStore;
     use soland_storage::{
         AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletAuthoringPreviewCommit,
         AppletAuthoringPreviewRecord, AppletIdentityCommit, AppletRecordCommit,
@@ -1378,6 +1380,38 @@ mod tests {
             idempotency,
             outbox: Vec::new(),
         }
+    }
+
+    #[cfg(feature = "fault-injection")]
+    fn typed_event_request(
+        kind: &str,
+        realm_id: &str,
+        actor_id: &str,
+        payload: serde_json::Value,
+    ) -> EventCommitRequest {
+        let mut request = event_request(
+            uuid::Uuid::now_v7().to_string(),
+            realm_id.to_owned(),
+            actor_id,
+            None,
+        );
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(request.event.envelope.clone()).unwrap();
+        event.kind = kind.into();
+        event.payload = serde_json::from_value(payload).unwrap();
+        event
+            .refresh_content_bound_identity_with_digest_suite(request.event.digest_suite)
+            .unwrap();
+        request.event.event_id = event.event_id.to_string();
+        request.event.kind = kind.to_owned();
+        request.event.schema_id = format!("ak.schema.{}.v1", kind.replace('.', "_"));
+        request.event.canonical_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        request.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        request.event.envelope = serde_json::to_value(event).unwrap();
+        request
     }
 
     fn cascade_event_request(seed: &str, realm_id: &str, actor_id: &str) -> EventCommitRequest {
@@ -1784,6 +1818,123 @@ mod tests {
         assert!(store.events.quarantined.lock().is_empty());
     }
 
+    #[cfg(feature = "fault-injection")]
+    #[tokio::test]
+    async fn franking_target_proof_faults_distinguish_rollback_from_response_loss() {
+        let realm_id = realm_id();
+        let target = typed_event_request(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            &realm_id,
+            "ak:did_core:web:message-sender.example",
+            serde_json::json!({"encrypted_content": {"ciphertext": "fixture"}}),
+        );
+        let target_event_id = target.event.event_id.clone();
+        let received_by =
+            arkret_wire::DidCoreId::new("ak:did_core:web:soland.example".to_owned()).unwrap();
+        let proof = typed_event_request(
+            arkret_wire::EventKind::ModerationFrankingProof.as_str(),
+            &realm_id,
+            received_by.as_str(),
+            serde_json::json!({"event_id": target_event_id}),
+        );
+        let proof_event_id = proof.event.event_id.clone();
+        let batch = EventBatchCommitRequest {
+            events: vec![target, proof],
+            agent_approval_nonce: None,
+            franking_replay_nonce: None,
+            applet_record: None,
+            applet_authoring_preview: None,
+            agent_membership_cascade: None,
+        };
+
+        let before_store = SolandMemoryPersistenceStore::new();
+        before_store.fault_injector().arm(crate::FaultPlan::new(
+            crate::FaultPoint::EventCommit,
+            crate::FaultTiming::Before,
+            1,
+        ));
+        let before_error = before_store
+            .commit_event_batch(batch.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(before_error, PersistenceError::Database(_)));
+        assert!(
+            !before_store
+                .events
+                .data
+                .lock()
+                .contains_key(&target_event_id)
+        );
+        assert!(
+            !before_store
+                .events
+                .data
+                .lock()
+                .contains_key(&proof_event_id)
+        );
+        assert!(
+            before_store
+                .events
+                .franking_proofs_for_target(&realm_id, &received_by, &target_event_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        let response_loss_store = SolandMemoryPersistenceStore::new();
+        response_loss_store
+            .fault_injector()
+            .arm(crate::FaultPlan::new(
+                crate::FaultPoint::EventCommit,
+                crate::FaultTiming::After,
+                1,
+            ));
+        let response_loss = response_loss_store
+            .commit_event_batch(batch.clone())
+            .await
+            .unwrap_err();
+        assert!(matches!(response_loss, PersistenceError::Database(_)));
+        assert!(
+            response_loss_store
+                .events
+                .data
+                .lock()
+                .contains_key(&target_event_id)
+        );
+        assert!(
+            response_loss_store
+                .events
+                .data
+                .lock()
+                .contains_key(&proof_event_id)
+        );
+        assert_eq!(
+            response_loss_store
+                .events
+                .franking_proofs_for_target(&realm_id, &received_by, &target_event_id)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        let retry = response_loss_store
+            .commit_event_batch(batch)
+            .await
+            .expect("an exact retry after response loss is a no-op");
+        assert_eq!(retry, soland_storage::EventCommitOutcome::default());
+        assert_eq!(
+            response_loss_store
+                .events
+                .franking_proofs_for_target(&realm_id, &received_by, &target_event_id)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the retry must not materialize a second proof Event"
+        );
+    }
+
     #[tokio::test]
     async fn franking_nonce_replay_rolls_back_the_competing_report_event() {
         let store = SolandMemoryPersistenceStore::new();
@@ -1886,6 +2037,44 @@ mod tests {
         );
         let consumed_at = soland_storage::franking_replay_nonce_expires_at(first_consumed_at)
             .expect("fixture expiry");
+        let mut just_before_report = event_request(
+            typed_id("ak:event:"),
+            realm_id.clone(),
+            "ak:did_core:web:reporter-before-expiry.example",
+            None,
+        );
+        just_before_report.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
+        just_before_report.event.envelope["payload"] = serde_json::json!({
+            "franking_proof": {
+                "received_by": received_by.as_str(),
+                "replay_nonce": old_key.2.as_str(),
+            }
+        });
+        let just_before_event_id = just_before_report.event.event_id.clone();
+        let just_before_error = store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![just_before_report],
+                agent_approval_nonce: None,
+                franking_replay_nonce: Some(FrankingReplayNonceCommit {
+                    realm_id: realm_id.clone(),
+                    received_by: received_by.clone(),
+                    replay_nonce: old_key.2.clone(),
+                    report_event_id: just_before_event_id.clone(),
+                    consumed_at: consumed_at - chrono::TimeDelta::microseconds(1),
+                }),
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            just_before_error,
+            PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+        ));
+        assert!(!store.events.data.lock().contains_key(&just_before_event_id));
+        assert!(store.franking_replay_nonces.lock().contains_key(&old_key));
+
         let replay_nonce = "nonce_new_0123456789";
         let mut report = event_request(
             typed_id("ak:event:"),
