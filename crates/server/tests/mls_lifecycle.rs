@@ -666,8 +666,7 @@ async fn mls_lifecycle_end_to_end_body() {
         .unwrap()
         .expect("publish must mirror into the store");
     assert_eq!(
-        persisted_keypackage.owner_account_id,
-        alice_local_account_id,
+        persisted_keypackage.owner_account_id, alice_local_account_id,
         "KeyPackage owner must use the Principal Server local account id"
     );
     for rejected_id in [mismatched_capabilities_id, noncanonical_capabilities_id] {

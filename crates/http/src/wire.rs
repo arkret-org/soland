@@ -617,6 +617,7 @@ pub fn describe(
             "ak.operation_bundle.principal_server.applet_ghost.v1".to_owned(),
             "ak.operation_bundle.principal_server.applet_install.v1".to_owned(),
             "ak.operation_bundle.principal_server.describe.v1".to_owned(),
+            "ak.operation_bundle.principal_server.history_key_recovery.v1".to_owned(),
             "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
             "ak.operation_bundle.principal_server.mimi_interop.v1".to_owned(),
             "ak.operation_bundle.principal_server.push.v1".to_owned(),
@@ -676,11 +677,12 @@ pub fn describe(
         takedown_contact: None,
         rate_limits: None,
         supported_features: vec![
-            arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
+            arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             "ak.feature.events_query_range_completeness.v1".to_owned(),
-            "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
+            "ak.feature.history_key_recovery.v1".to_owned(),
             "ak.feature.mls_exporter_aead.v1".to_owned(),
+            "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
         ],
         supported_reducer_profiles: SUPPORTED_REDUCER_PROFILES
             .iter()
@@ -940,6 +942,9 @@ mod tests {
             .as_array()
             .expect("operation bundle ids are present");
         assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.describe.v1")));
+        assert!(bundles.contains(&json!(
+            "ak.operation_bundle.principal_server.history_key_recovery.v1"
+        )));
         assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.http_core.v1")));
         assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.tus_upload.v1")));
         assert!(value["transport_bindings"][0]["extension_profile_required"].is_null());
@@ -961,6 +966,21 @@ mod tests {
                 .expect("features array")
                 .contains(&json!("ak.feature.blob.resumable_upload.tus.v1"))
         );
+        assert!(
+            value["supported_features"]
+                .as_array()
+                .expect("features array")
+                .contains(&json!("ak.feature.history_key_recovery.v1"))
+        );
+        let description: arkret_models_discovery::ServiceDescribe =
+            serde_json::from_value(value.clone()).expect("description round-trips");
+        assert!(description.supports_operation_binding(
+            arkret_wire::ServiceOperationId::SelfHistoryKeyRequestsReadListV1,
+            arkret_wire::BindingKind::HttpJson,
+        ));
+        description
+            .validate()
+            .expect("history-key recovery advertisement must remain transport-closed");
         assert_eq!(
             value["privacy_derivation"]["push_target_id_derivation"]["derivation_profile"],
             json!("ak.push_target_id.hmac_sha256.v1")

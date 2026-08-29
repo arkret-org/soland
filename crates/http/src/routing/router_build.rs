@@ -570,3 +570,21 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     .max_age(3600)
     .into_handler()
 }
+
+#[cfg(test)]
+mod tests {
+    use soland_storage_postgres::Db;
+
+    use super::*;
+
+    #[test]
+    fn history_key_request_read_is_reachable_through_advertised_bundle() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+
+        assert!(locally_advertises(
+            &state,
+            arkret_wire::ServiceOperationId::SelfHistoryKeyRequestsReadListV1,
+            arkret_wire::BindingKind::HttpJson,
+        ));
+    }
+}
