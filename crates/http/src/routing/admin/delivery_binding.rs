@@ -45,8 +45,8 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
             updated_at: None,
         };
     };
-    let allowed_recipient_services = value
-        .get("allowed_recipient_services")
+    let allowed_recipient_ids = value
+        .get("allowed_recipient_ids")
         .and_then(Value::as_array)
         .map(|items| {
             items
@@ -65,7 +65,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
         .map(str::to_owned);
     RealmDeliveryBindingPolicyOutcome {
         realm_id: realm_id.to_owned(),
-        allowed_recipient_services,
+        allowed_recipient_services: allowed_recipient_ids,
         binding_source_policy,
         updated_at,
     }
@@ -126,7 +126,7 @@ pub struct MemberRoutabilityListOutcome {
 /// `GET /_soland/admin/realms/{realm_id}/member-routability` — read-only
 /// operator view of whether each Realm member is currently routable for
 /// delivery (has a known recipient service that sits inside the Realm's
-/// `allowed_recipient_services` allow-list, with a live push route).
+/// canonical `allowed_recipient_ids` allow-list, with a live push route).
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.admin.realms.member_routability.list",
     tags("soland_admin")
@@ -167,7 +167,7 @@ pub(super) async fn admin_list_member_routability(
         let proj = state.projections().snapshot();
         let allowed: Vec<String> = proj
             .realm_delivery_binding_policy_cell_value(&realm_id)
-            .and_then(|value| value.get("allowed_recipient_services").cloned())
+            .and_then(|value| value.get("allowed_recipient_ids").cloned())
             .and_then(|value| value.as_array().cloned())
             .map(|items| {
                 items
@@ -332,5 +332,37 @@ fn handover_row_from_audit(realm_id: &str, entry: Value) -> DeliveryBindingHando
             .or_else(|| entry.get("timestamp"))
             .and_then(Value::as_str)
             .map(str::to_owned),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_policy_response_reads_canonical_recipient_ids() {
+        let value = serde_json::json!({
+            "allowed_recipient_ids": ["ak:did_core:web:principal.example"]
+        });
+        let response = response_from_cell(
+            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+            Some(&value),
+        );
+        assert_eq!(
+            response.allowed_recipient_services,
+            vec!["ak:did_core:web:principal.example".to_owned()]
+        );
+    }
+
+    #[test]
+    fn projected_policy_response_does_not_fallback_to_removed_recipient_field() {
+        let value = serde_json::json!({
+            "allowed_recipient_services": ["ak:did_core:web:legacy.example"]
+        });
+        let response = response_from_cell(
+            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+            Some(&value),
+        );
+        assert!(response.allowed_recipient_services.is_empty());
     }
 }

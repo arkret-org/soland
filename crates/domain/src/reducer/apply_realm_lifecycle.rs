@@ -646,8 +646,8 @@ impl ProjectionState {
         Some(serde_json::json!({
             "allowed_binding_sources": ["explicit"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": [recipient_id],
-            "required_endorsers": [],
+            "allowed_recipient_ids": [recipient_id],
+            "required_endorser_ids": [],
         }))
     }
 

@@ -63,13 +63,13 @@ pub(crate) fn enforce_delivery_binding_policy(
         return Err("binding_source_not_allowed");
     }
 
-    // `allowed_recipient_services` is fail-closed (member-delivery-binding.md
+    // `allowed_recipient_ids` is fail-closed (member-delivery-binding.md
     // §2 / §4, event-payload.schema.json delivery_binding_policy_payload):
     // empty array `[]` — and an omitted field, which defaults to `[]` —
     // rejects every recipient service; only the explicit sentinel `["*"]`
     // means unrestricted. An empty list MUST NOT be read as "unrestricted".
     let allowed_recipients: Vec<&str> = policy
-        .get("allowed_recipient_services")
+        .get("allowed_recipient_ids")
         .and_then(Value::as_array)
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();

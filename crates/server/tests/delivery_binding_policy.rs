@@ -25,14 +25,15 @@ fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
 }
 
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
-    let effect = state.apply(
-        &op(
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            REALM_A,
-            payload,
-        ),
-        hlc,
+    let operation = op(
+        arkret_wire::EventKind::RealmDeliveryBindingPolicy,
+        REALM_A,
+        payload,
     );
+    operation
+        .typed_payload::<arkret_wire::event_spec::RealmDeliveryBindingPolicy>()
+        .expect("delivery-binding policy fixture must use the canonical typed wire shape");
+    let effect = state.apply(&operation, hlc);
     assert!(
         !matches!(effect, ProjectionEffect::Ignored),
         "delivery_binding_policy projection produced Ignored; expected the cell to be written"
@@ -145,7 +146,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
 
 // ── 1. delivery_binding_policy_member_join_test ─────────────────────────
 //
-// `recipient_id` outside the policy's `allowed_recipient_services`
+// `recipient_id` outside the policy's `allowed_recipient_ids`
 // allow-list MUST be rejected with `recipient_service_not_allowed`.
 
 #[test]
@@ -159,8 +160,8 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "allowed_binding_sources": ["explicit", "invite"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": ["ak:did_core:web:principal.acme.example"],
-            "required_endorsers": [],
+            "allowed_recipient_ids": ["ak:did_core:web:principal.acme.example"],
+            "required_endorser_ids": [],
             "unroutable_membership_allowed": false,
             "rebind_authorization": "member_and_admin"
         }),
@@ -209,7 +210,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
     );
 }
 
-// `allowed_recipient_services` is fail-closed (member-delivery-binding.md
+// `allowed_recipient_ids` is fail-closed (member-delivery-binding.md
 // §2 / §4): an empty array `[]` — and an omitted field, which defaults to
 // `[]` — rejects every recipient service; only the explicit sentinel
 // `["*"]` means unrestricted.
@@ -225,8 +226,8 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
         json!({
             "allowed_binding_sources": ["explicit"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": [],
-            "required_endorsers": [],
+            "allowed_recipient_ids": [],
+            "required_endorser_ids": [],
         }),
     );
 
@@ -257,8 +258,8 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
         json!({
             "allowed_binding_sources": ["explicit"],
             "did_document_default_allowed": false,
-            // allowed_recipient_services omitted → defaults to [] (fail-closed).
-            "required_endorsers": [],
+            // allowed_recipient_ids omitted → defaults to [] (fail-closed).
+            "required_endorser_ids": [],
         }),
     );
 
@@ -287,19 +288,19 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         &mut state,
         &hlc,
         json!({
-            "allowed_binding_sources": ["explicit"],
-            "did_document_default_allowed": false,
-            "allowed_recipient_services": ["*"],
-            "required_endorsers": [],
+            "allowed_binding_sources": ["did_document_default"],
+            "did_document_default_allowed": true,
+            "allowed_recipient_ids": ["*"],
+            "required_endorser_ids": [],
         }),
     );
 
     let good = join_op(
         "ak:did_core:web:kim",
         json!({
-            "binding_source": "explicit",
+            "binding_source": "did_document_default",
             "recipient_id": "ak:did_core:web:principal.anywhere.example",
-            "service_acceptance_ref": "ak:event:AWFZIiVRYv3UXtLsxC0FrmfecM_JlRJAoKP0NXeMrpiQ",
+            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );
     let effect = state.apply(&good, &hlc);
@@ -307,6 +308,44 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         matches!(effect, ProjectionEffect::MembershipChanged { .. }),
         "expected MembershipChanged under the [\"*\"] sentinel, got {effect:?}"
     );
+}
+
+#[test]
+fn delivery_binding_policy_legacy_recipient_field_does_not_authorize_join() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let legacy_policy = op(
+        arkret_wire::EventKind::RealmDeliveryBindingPolicy,
+        REALM_A,
+        json!({
+            "allowed_binding_sources": ["did_document_default"],
+            "did_document_default_allowed": true,
+            "allowed_recipient_services": ["*"],
+        }),
+    );
+    assert!(
+        legacy_policy
+            .typed_payload::<arkret_wire::event_spec::RealmDeliveryBindingPolicy>()
+            .is_err(),
+        "the removed allowed_recipient_services wire field must fail typed decoding"
+    );
+    assert!(!matches!(
+        state.apply(&legacy_policy, &hlc),
+        ProjectionEffect::Ignored
+    ));
+
+    let join = join_op(
+        "ak:did_core:web:legacy-field-member",
+        json!({
+            "binding_source": "did_document_default",
+            "recipient_id": "ak:did_core:web:principal.anywhere.example",
+            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&join, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "recipient_service_not_allowed"
+    ));
 }
 
 // `binding_source` not in `allowed_binding_sources` → reject.
@@ -321,8 +360,8 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         json!({
             "allowed_binding_sources": ["invite", "organization_policy"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": [],
-            "required_endorsers": [],
+            "allowed_recipient_ids": [],
+            "required_endorser_ids": [],
         }),
     );
 
@@ -356,8 +395,8 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
             "did_document_default_allowed": false,
             // Sentinel ["*"] lifts only the recipient allow-list dimension so
             // this test exercises the service_acceptance_ref check.
-            "allowed_recipient_services": ["*"],
-            "required_endorsers": ["ak:did_core:web:acme.example"],
+            "allowed_recipient_ids": ["*"],
+            "required_endorser_ids": ["ak:did_core:web:acme.example"],
         }),
     );
 
@@ -485,8 +524,8 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
             // `did_document_default_allowed` toggle still gates it.
             "allowed_binding_sources": ["did_document_default", "explicit"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": [],
-            "required_endorsers": [],
+            "allowed_recipient_ids": [],
+            "required_endorser_ids": [],
         }),
     );
 
@@ -523,8 +562,8 @@ fn delivery_binding_policy_event_projects_cell_value() {
         json!({
             "allowed_binding_sources": ["explicit", "invite"],
             "did_document_default_allowed": false,
-            "allowed_recipient_services": ["ak:did_core:web:principal.acme.example"],
-            "required_endorsers": ["ak:did_core:web:acme.example"],
+            "allowed_recipient_ids": ["ak:did_core:web:principal.acme.example"],
+            "required_endorser_ids": ["ak:did_core:web:acme.example"],
             "unroutable_membership_allowed": false,
             "rebind_authorization": "member_and_admin"
         }),
@@ -534,9 +573,9 @@ fn delivery_binding_policy_event_projects_cell_value() {
         .realm_delivery_binding_policy_cell_value(REALM_A)
         .expect("policy cell must be projected");
     let allowed = value
-        .get("allowed_recipient_services")
+        .get("allowed_recipient_ids")
         .and_then(Value::as_array)
-        .expect("allowed_recipient_services must be an array");
+        .expect("allowed_recipient_ids must be an array");
     assert_eq!(
         allowed.iter().filter_map(Value::as_str).collect::<Vec<_>>(),
         vec!["ak:did_core:web:principal.acme.example"]
