@@ -348,51 +348,6 @@ pub(super) async fn mimi_room_message(
 }
 
 #[endpoint(
-    operation_id = "ak.open.mimi.read.group_info",
-    summary = "Get MIMI group info",
-    tags("mimi")
-)]
-#[tracing::instrument(skip_all, fields(op = "ak.open.mimi.read.group_info.v1"))]
-pub(super) async fn mimi_group_info(
-    strand_id: PathParam<String>,
-    depot: &mut Depot,
-) -> JsonResult<MimiGroupInfoOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let room_id = strand_id.into_inner();
-    if !valid_mimi_room_id(&room_id) {
-        return Err(AppError::param_invalid("invalid MIMI room id"));
-    }
-    let realm_id = mimi_bound_realm_id(state, &room_id).await?.ok_or_else(|| {
-        AppError::not_found("MIMI room is not bound to any Arkret Realm")
-            .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
-    })?;
-    let projection = mimi_room_projection(state, &room_id, &realm_id)?;
-    let projection_bytes = serde_json::to_vec(&projection)
-        .map_err(|error| AppError::internal(format!("MIMI group info serialize: {error}")))?;
-    let projection = MimiGroupInfo {
-        mls_group_id: MlsGroupId::new(format!("mls:{room_id}"))
-            .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
-        epoch: 0,
-        group_info: Base64UrlString::new(arkret_canonical::base64url_encode(&projection_bytes))
-            .map_err(|error| AppError::internal(format!("MIMI group info invalid: {error}")))?,
-    };
-    let _receipt = mimi_receipt(
-        state,
-        arkret_wire::ServiceOperationId::OPEN_MIMI_READ_GROUP_INFO_V1,
-        &json!({"room_id": room_id}),
-        json!({
-            "truth_source": "arkret_signed_event_reducer",
-            "projection_only": true
-        }),
-    );
-    json_ok(MimiGroupInfoOutcome {
-        group_info: projection,
-        room_binding_ref: None,
-        proofs: Vec::new(),
-    })
-}
-
-#[endpoint(
     operation_id = "ak.open.mimi.command.request_consent",
     summary = "Request MIMI consent",
     tags("mimi")

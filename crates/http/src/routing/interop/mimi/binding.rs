@@ -346,44 +346,6 @@ pub(super) async fn admit_mimi_room_binding_event(
     Ok(event_id)
 }
 
-pub(super) fn mimi_room_projection(
-    state: &AppState,
-    room_id: &str,
-    realm_id: &str,
-) -> Result<arkret_models_collaboration::events_payloads::MimiRoomBindingPayload, AppError> {
-    use arkret_models_collaboration::events_payloads::{
-        MimiLocalProviderRole, MimiRoomBindingPayload, MimiRoomBindingPayloadBindingScope,
-        MimiRoomBindingStatus,
-    };
-    let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned())
-        .map_err(|error| AppError::internal(format!("MIMI bound realm id invalid: {error}")))?;
-    let strand_id = crate::routing::events::strand::strand_id_from_realm_id(realm_id.as_str())
-        .ok_or_else(|| AppError::internal("MIMI bound realm has no canonical Strand id"))?;
-    Ok(MimiRoomBindingPayload {
-        profile: arkret_wire::MimiInteropProfileId::new(arkret_wire::ProfileId::MIMI_INTEROP_V1)
-            .map_err(|error| AppError::internal(format!("MIMI profile id invalid: {error}")))?,
-        mimi_room_uri: mimi_room_uri(state, room_id)?,
-        binding_scope: MimiRoomBindingPayloadBindingScope {
-            realm_id,
-            strand_id: arkret_identifiers::StrandId::new(strand_id).map_err(|error| {
-                AppError::internal(format!("MIMI bound Strand id invalid: {error}"))
-            })?,
-        },
-        hub_provider_id: arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("MIMI hub id invalid: {error}")))?,
-        local_provider_role: MimiLocalProviderRole::Hub,
-        follower_provider_ids: None,
-        mls_group_id: Some(
-            MlsGroupId::new(format!("mls:{room_id}"))
-                .map_err(|error| AppError::internal(format!("MIMI group id invalid: {error}")))?,
-        ),
-        content_profile: None,
-        policy_root: None,
-        status: MimiRoomBindingStatus::Accepted,
-        created_at: None,
-    })
-}
-
 pub(super) fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {
     for (field, expected, message) in [
         (

@@ -22,23 +22,23 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::{Did, EventId, Hash, ReportId};
 use arkret_models_collaboration::http_bodies::{
-    MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
-    MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,
-    MimiProxyDownloadOutcome, MimiProxyDownloadRequestBody, MimiReportAbuseOutcome,
-    MimiReportAbuseRequestBody, MimiReportAbuseStatus, MimiRequestConsentOutcome,
-    MimiRequestConsentRequestBody, MimiRequestConsentStatus, MimiRoomUpdateOutcome,
-    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
-    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
+    MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome,
+    MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
+    MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
+    MimiReportAbuseStatus, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
+    MimiRequestConsentStatus, MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody,
+    MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome,
+    MimiUpdateConsentRequestBody,
 };
 use arkret_models_collaboration::objects::mimi::{
     MimiCiphertext, MimiConsentPurpose, MimiConsentTargetKind, MimiDelivery, MimiDeliveryStatus,
-    MimiGroupInfo, MimiIdentifierMatch, MimiOpaquePayload,
+    MimiIdentifierMatch, MimiOpaquePayload,
 };
 use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
     SignatureVerificationPolicy,
 };
-use arkret_wire::{Audience, Base64UrlString, MimiRoomUri, MimiUri, MlsGroupId};
+use arkret_wire::{Audience, MimiRoomUri, MimiUri, MlsGroupId};
 use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -82,7 +82,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("strands/{strand_id}/update").post(mimi_room_update))
         .push(Router::with_path("strands/{strand_id}/notify").post(mimi_notify))
         .push(Router::with_path("strands/{strand_id}/messages").post(mimi_room_message))
-        .push(Router::with_path("strands/{strand_id}/group-info").get(mimi_group_info))
         .push(Router::with_path("consent/request").post(mimi_consent_request))
         .push(Router::with_path("consent/update").post(mimi_consent_update))
         .push(Router::with_path("identifiers/query").post(mimi_identifiers_query))

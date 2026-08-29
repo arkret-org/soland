@@ -317,7 +317,6 @@ pub(super) fn mimi_provider_directory_value(
             })?,
             endpoints: [
                 ("consent", "/consent/request"),
-                ("group_info", "/strands/{strand_id}/group-info"),
                 ("identifier_query", "/identifiers/query"),
                 ("key_material", "/key-material"),
                 ("notify", "/strands/{strand_id}/notify"),
@@ -334,7 +333,6 @@ pub(super) fn mimi_provider_directory_value(
             .collect(),
             features: [
                 "consent",
-                "group_info",
                 "identifier_query",
                 "key_material",
                 "notify",
