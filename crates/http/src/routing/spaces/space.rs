@@ -13,8 +13,7 @@
 
 use arkret_identifiers::{DidCoreId, RealmId, SpaceId};
 use arkret_models_collaboration::governance::realm_governance::{
-    RealmArchiveRequestBody, RealmDestroyRequestBody, RealmFreezeRequestBody, RealmLifecycleView,
-    RealmModerationPolicyReplaceRequestBody, RealmTombstoneRequestBody,
+    RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
 };
 use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
@@ -44,10 +43,6 @@ pub(super) fn protocol_router() -> Router {
                     .get(get_realm_effective_moderation_policy),
             )
             .push(Router::with_path("moderation-policy").put(upsert_realm_moderation_policy))
-            .push(Router::with_path("archive").post(archive_realm))
-            .push(Router::with_path("freeze").post(freeze_realm))
-            .push(Router::with_path("tombstone").post(tombstone_realm))
-            .push(Router::with_path("destroy").post(destroy_realm))
             .push(Router::with_path("export").get(export_realm)),
     )
 }
@@ -121,151 +116,6 @@ async fn get_realm(
     realm_lifecycle_response(state, &realm_id)
         .await
         .map(salvo::prelude::Json)
-}
-
-/// Submit a caller-signed Realm lifecycle Move through ordinary Event admission.
-///
-/// These four operations used to take the Event payload and let the service build
-/// the Move around it, which meant the signature could only have come from a
-/// service key. Now the caller signs and the service forwards those exact bytes;
-/// the lifecycle transition matrix and the `ak.realm.*` capability are admission's
-/// to enforce.
-async fn submit_realm_lifecycle_command(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: String,
-    kind: arkret_wire::EventKind,
-    submission: arkret_wire::EventInitialSubmission,
-) -> Result<RealmLifecycleView, AppError> {
-    caller_signed_realm_lifecycle_target(&session.actor, &realm_id, &kind, &submission.event)?;
-    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
-        .await
-        .map(|_| ())
-        .map_err(|error| {
-            crate::routing::events::event_log::submit_one_error_to_app_error(
-                &format!("{kind} submit failed"),
-                error.status,
-                error.code,
-                &error.message,
-            )
-        })?;
-    realm_lifecycle_response(state, &realm_id).await
-}
-
-/// Bind a caller-signed Realm lifecycle Event to the path it was submitted on.
-///
-/// The Realm is single-sourced by `event.realm_id`, so that is what the path is
-/// checked against; a body naming another Realm would otherwise act on that one.
-fn caller_signed_realm_lifecycle_target(
-    actor: &str,
-    realm_id: &str,
-    kind: &arkret_wire::EventKind,
-    event: &arkret_wire::Event,
-) -> Result<(), AppError> {
-    if &event.kind != kind {
-        return Err(AppError::param_invalid(format!(
-            "lifecycle_event.event.kind must be {kind}"
-        )));
-    }
-    if event.actor_id.as_str() != actor {
-        return Err(AppError::param_invalid(
-            "lifecycle_event.event.actor_id must be the authenticated caller",
-        ));
-    }
-    if event.realm_id.as_str() != realm_id {
-        return Err(AppError::param_invalid(
-            "lifecycle_event.event.realm_id must equal the path realm_id",
-        ));
-    }
-    Ok(())
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.archive", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.archive.v1"))]
-async fn archive_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-    body: JsonBody<RealmArchiveRequestBody>,
-) -> JsonResult<RealmLifecycleView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    submit_realm_lifecycle_command(
-        state,
-        &session,
-        realm_id.into_inner(),
-        arkret_wire::EventKind::RealmArchive,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-    .map(salvo::prelude::Json)
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.freeze", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.freeze.v1"))]
-async fn freeze_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-    body: JsonBody<RealmFreezeRequestBody>,
-) -> JsonResult<RealmLifecycleView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    submit_realm_lifecycle_command(
-        state,
-        &session,
-        realm_id.into_inner(),
-        arkret_wire::EventKind::RealmFreeze,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-    .map(salvo::prelude::Json)
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.tombstone", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.tombstone.v1"))]
-async fn tombstone_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-    body: JsonBody<RealmTombstoneRequestBody>,
-) -> JsonResult<RealmLifecycleView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    submit_realm_lifecycle_command(
-        state,
-        &session,
-        realm_id.into_inner(),
-        arkret_wire::EventKind::RealmTombstone,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-    .map(salvo::prelude::Json)
-}
-
-#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.destroy", tags("spaces"))]
-#[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.destroy.v1"))]
-async fn destroy_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-    body: JsonBody<RealmDestroyRequestBody>,
-) -> JsonResult<RealmLifecycleView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    submit_realm_lifecycle_command(
-        state,
-        &session,
-        realm_id.into_inner(),
-        arkret_wire::EventKind::RealmDestroy,
-        body.into_inner().lifecycle_event,
-    )
-    .await
-    .map(salvo::prelude::Json)
 }
 
 #[salvo::oapi::endpoint(
@@ -1090,26 +940,7 @@ mod tests {
     use super::*;
 
     const LIFECYCLE_ACTOR: &str = "ak:did_core:web:owner.example";
-    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
     const LIFECYCLE_REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
-
-    fn realm_lifecycle_event(kind: &str, actor: &str, realm_id: &str) -> arkret_wire::Event {
-        serde_json::from_value(serde_json::json!({
-            "event_id": "ak:event:AdMGtDS93qeltLI_MYwQqXktcIXSzfonrtSShq1Ca8MX",
-            "kind": kind,
-            "realm_id": realm_id,
-            "scope_ref": { "kind": "realm", "realm_id": realm_id },
-            "actor_id": actor,
-            "principal_server_id": PRINCIPAL_SERVER,
-            "actor_seq": 0,
-            "created_at": "2026-07-06T00:00:00.000Z",
-            "prev_refs": [],
-            "refs": [],
-            "payload": { "archived": true },
-            "proofs": [],
-        }))
-        .expect("realm lifecycle envelope")
-    }
 
     #[tokio::test]
     async fn private_pending_invite_is_pre_join_authoring_evidence() {
@@ -1155,59 +986,5 @@ mod tests {
             .await,
             None
         );
-    }
-
-    #[test]
-    fn a_realm_lifecycle_event_binds_to_the_path_realm_and_its_own_kind() {
-        caller_signed_realm_lifecycle_target(
-            LIFECYCLE_ACTOR,
-            LIFECYCLE_REALM,
-            &arkret_wire::EventKind::RealmArchive,
-            &realm_lifecycle_event(
-                arkret_wire::EventKind::RealmArchive.as_str(),
-                LIFECYCLE_ACTOR,
-                LIFECYCLE_REALM,
-            ),
-        )
-        .unwrap();
-
-        // The archive endpoint must not be a way to submit a terminal destroy.
-        caller_signed_realm_lifecycle_target(
-            LIFECYCLE_ACTOR,
-            LIFECYCLE_REALM,
-            &arkret_wire::EventKind::RealmArchive,
-            &realm_lifecycle_event(
-                arkret_wire::EventKind::RealmDestroy.as_str(),
-                LIFECYCLE_ACTOR,
-                LIFECYCLE_REALM,
-            ),
-        )
-        .expect_err("the archive surface must not accept a destroy Event");
-
-        // The Realm is single-sourced by event.realm_id, so a mismatch is a
-        // request to act on a Realm the URL did not name.
-        caller_signed_realm_lifecycle_target(
-            LIFECYCLE_ACTOR,
-            LIFECYCLE_REALM,
-            &arkret_wire::EventKind::RealmArchive,
-            &realm_lifecycle_event(
-                arkret_wire::EventKind::RealmArchive.as_str(),
-                LIFECYCLE_ACTOR,
-                "ak:realm:AW6ST0TiEb2kdaVDQ-YtsKW8ig0EM-l6_Y5YiT16u7b-",
-            ),
-        )
-        .expect_err("event.realm_id must equal the path realm_id");
-
-        caller_signed_realm_lifecycle_target(
-            LIFECYCLE_ACTOR,
-            LIFECYCLE_REALM,
-            &arkret_wire::EventKind::RealmArchive,
-            &realm_lifecycle_event(
-                arkret_wire::EventKind::RealmArchive.as_str(),
-                "ak:did_core:web:someone-else.example",
-                LIFECYCLE_REALM,
-            ),
-        )
-        .expect_err("the submitted Event must be authored by the authenticated caller");
     }
 }
