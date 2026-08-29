@@ -2750,9 +2750,15 @@ CREATE TABLE public.moderation_franking_replay_nonces (
     replay_nonce text NOT NULL,
     report_event_id text NOT NULL UNIQUE,
     consumed_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
     CONSTRAINT moderation_franking_replay_nonces_pkey
-        PRIMARY KEY (realm_id, received_by, replay_nonce)
+        PRIMARY KEY (realm_id, received_by, replay_nonce),
+    CONSTRAINT moderation_franking_replay_nonces_expiry_check
+        CHECK (expires_at > consumed_at)
 );
+
+CREATE INDEX moderation_franking_replay_nonces_expiry_idx
+    ON public.moderation_franking_replay_nonces (realm_id, received_by, expires_at);
 
 CREATE TABLE public.control_proposal_authority_acks (
     ack_key text PRIMARY KEY,

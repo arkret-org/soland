@@ -1005,14 +1005,36 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         if let Some(nonce) = request.franking_replay_nonce {
+            let expired = staged_franking_replay_nonces
+                .iter()
+                .map(|(key, existing)| {
+                    soland_storage::franking_replay_nonce_expires_at(existing.consumed_at)
+                        .map(|expires_at| (key.clone(), expires_at <= nonce.consumed_at))
+                })
+                .collect::<PersistenceResult<Vec<_>>>()?;
+            for (key, expired) in expired {
+                if expired {
+                    staged_franking_replay_nonces.remove(&key);
+                }
+            }
             let key = (
                 nonce.realm_id.clone(),
                 nonce.received_by.clone(),
                 nonce.replay_nonce.clone(),
             );
-            if staged_franking_replay_nonces.insert(key, nonce).is_some() {
+            if staged_franking_replay_nonces.contains_key(&key) {
                 return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
             }
+            let active_in_scope = staged_franking_replay_nonces
+                .keys()
+                .filter(|(realm_id, received_by, _)| {
+                    realm_id == &nonce.realm_id && received_by == &nonce.received_by
+                })
+                .count();
+            if active_in_scope >= soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE {
+                return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+            }
+            staged_franking_replay_nonces.insert(key, nonce);
         }
 
         if let Some(nonce) = request.agent_approval_nonce {
@@ -1837,6 +1859,134 @@ mod tests {
         assert!(store.events.data.lock().contains_key(&first_id));
         assert!(!store.events.data.lock().contains_key(&competing_id));
         assert_eq!(store.franking_replay_nonces.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn franking_nonce_ledger_evicts_only_expired_rows() {
+        let store = SolandMemoryPersistenceStore::new();
+        let realm_id = realm_id();
+        let received_by =
+            arkret_wire::DidCoreId::new("ak:did_core:web:receiver-expiry.example".to_owned())
+                .unwrap();
+        let first_consumed_at = Utc::now();
+        let old_key = (
+            realm_id.clone(),
+            received_by.clone(),
+            "nonce_old_0123456789".to_owned(),
+        );
+        store.franking_replay_nonces.lock().insert(
+            old_key.clone(),
+            FrankingReplayNonceCommit {
+                realm_id: realm_id.clone(),
+                received_by: received_by.clone(),
+                replay_nonce: old_key.2.clone(),
+                report_event_id: typed_id("ak:event:"),
+                consumed_at: first_consumed_at,
+            },
+        );
+        let consumed_at = soland_storage::franking_replay_nonce_expires_at(first_consumed_at)
+            .expect("fixture expiry");
+        let replay_nonce = "nonce_new_0123456789";
+        let mut report = event_request(
+            typed_id("ak:event:"),
+            realm_id.clone(),
+            "ak:did_core:web:reporter-expiry.example",
+            None,
+        );
+        report.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
+        report.event.envelope["payload"] = serde_json::json!({
+            "franking_proof": {
+                "received_by": received_by.as_str(),
+                "replay_nonce": replay_nonce,
+            }
+        });
+        let report_event_id = report.event.event_id.clone();
+        store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![report],
+                agent_approval_nonce: None,
+                franking_replay_nonce: Some(FrankingReplayNonceCommit {
+                    realm_id: realm_id.clone(),
+                    received_by: received_by.clone(),
+                    replay_nonce: replay_nonce.to_owned(),
+                    report_event_id,
+                    consumed_at,
+                }),
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+            .unwrap();
+        let ledger = store.franking_replay_nonces.lock();
+        assert!(!ledger.contains_key(&old_key));
+        assert_eq!(ledger.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn franking_nonce_ledger_capacity_fails_closed_without_evicting_active_rows() {
+        let store = SolandMemoryPersistenceStore::new();
+        let realm_id = realm_id();
+        let received_by =
+            arkret_wire::DidCoreId::new("ak:did_core:web:receiver-cap.example".to_owned()).unwrap();
+        let consumed_at = Utc::now();
+        {
+            let mut ledger = store.franking_replay_nonces.lock();
+            for index in 0..soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE {
+                let replay_nonce = format!("active_nonce_{index:08}");
+                ledger.insert(
+                    (realm_id.clone(), received_by.clone(), replay_nonce.clone()),
+                    FrankingReplayNonceCommit {
+                        realm_id: realm_id.clone(),
+                        received_by: received_by.clone(),
+                        replay_nonce,
+                        report_event_id: format!("ak:event:capacity-{index}"),
+                        consumed_at,
+                    },
+                );
+            }
+        }
+        let replay_nonce = "nonce_over_capacity_0123456789";
+        let mut report = event_request(
+            typed_id("ak:event:"),
+            realm_id.clone(),
+            "ak:did_core:web:reporter-cap.example",
+            None,
+        );
+        report.event.kind = arkret_wire::EventKind::SelfModerationReport.to_string();
+        report.event.envelope["payload"] = serde_json::json!({
+            "franking_proof": {
+                "received_by": received_by.as_str(),
+                "replay_nonce": replay_nonce,
+            }
+        });
+        let report_event_id = report.event.event_id.clone();
+        let error = store
+            .commit_event_batch(EventBatchCommitRequest {
+                events: vec![report],
+                agent_approval_nonce: None,
+                franking_replay_nonce: Some(FrankingReplayNonceCommit {
+                    realm_id,
+                    received_by,
+                    replay_nonce: replay_nonce.to_owned(),
+                    report_event_id: report_event_id.clone(),
+                    consumed_at: consumed_at + chrono::TimeDelta::seconds(1),
+                }),
+                applet_record: None,
+                applet_authoring_preview: None,
+                agent_membership_cascade: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+        ));
+        assert!(!store.events.data.lock().contains_key(&report_event_id));
+        assert_eq!(
+            store.franking_replay_nonces.lock().len(),
+            soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE
+        );
     }
 
     #[tokio::test]

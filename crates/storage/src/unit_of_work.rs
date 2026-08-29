@@ -479,6 +479,28 @@ pub struct FrankingReplayNonceCommit {
     pub consumed_at: DateTime<Utc>,
 }
 
+/// Soland's local retention default for a consumed franking nonce. The wire
+/// protocol requires a finite window but does not assign its duration.
+pub const LOCAL_FRANKING_REPLAY_NONCE_TTL_SECONDS: i64 = 24 * 60 * 60;
+
+/// Soland's local active-row ceiling per `(realm_id, received_by)` scope.
+/// Capacity exhaustion fails closed instead of evicting an active nonce.
+pub const LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE: usize = 4096;
+
+pub fn franking_replay_nonce_expires_at(
+    consumed_at: DateTime<Utc>,
+) -> PersistenceResult<DateTime<Utc>> {
+    consumed_at
+        .checked_add_signed(chrono::TimeDelta::seconds(
+            LOCAL_FRANKING_REPLAY_NONCE_TTL_SECONDS,
+        ))
+        .ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: franking nonce expiry overflows canonical time".to_owned(),
+            )
+        })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentApprovalNonceCommit {
     pub agent_id: String,

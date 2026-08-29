@@ -37,6 +37,12 @@ struct ContactMirrorCommitRow {
 }
 
 #[derive(diesel::QueryableByName)]
+struct CountRow {
+    #[diesel(sql_type = BigInt)]
+    count: i64,
+}
+
+#[derive(diesel::QueryableByName)]
 struct AppletNamespaceClaimRow {
     #[diesel(sql_type = Text)]
     domain: String,
@@ -1154,16 +1160,62 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             if let Some(nonce) = request.franking_replay_nonce {
+                let expires_at = soland_storage::franking_replay_nonce_expires_at(
+                    nonce.consumed_at,
+                )?;
+                let scope_lock = format!(
+                    "moderation_franking_replay_nonces.capacity.v1|{}:{}|{}:{}",
+                    nonce.realm_id.len(),
+                    nonce.realm_id,
+                    nonce.received_by.as_str().len(),
+                    nonce.received_by
+                );
+                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(&scope_lock)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                sql_query(
+                    "DELETE FROM moderation_franking_replay_nonces \
+                     WHERE realm_id = $1 AND received_by = $2 AND expires_at <= $3",
+                )
+                .bind::<Text, _>(&nonce.realm_id)
+                .bind::<Text, _>(nonce.received_by.as_str())
+                .bind::<Timestamptz, _>(nonce.consumed_at)
+                .execute(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                let active = sql_query(
+                    "SELECT COUNT(*) AS count FROM moderation_franking_replay_nonces \
+                     WHERE realm_id = $1 AND received_by = $2",
+                )
+                .bind::<Text, _>(&nonce.realm_id)
+                .bind::<Text, _>(nonce.received_by.as_str())
+                .get_result::<CountRow>(&mut *conn)
+                .await
+                .map_err(PersistenceError::database)?
+                .count;
+                if active
+                    >= i64::try_from(
+                        soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE,
+                    )
+                    .expect("franking replay ledger per-scope bound fits i64")
+                {
+                    return Err(
+                        PersistenceError::Conflict("duplicate_conflict".to_owned()).into(),
+                    );
+                }
                 let inserted = sql_query(
                     "INSERT INTO moderation_franking_replay_nonces \
-                     (realm_id, received_by, replay_nonce, report_event_id, consumed_at) \
-                     VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+                     (realm_id, received_by, replay_nonce, report_event_id, consumed_at, expires_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
                 )
                 .bind::<Text, _>(&nonce.realm_id)
                 .bind::<Text, _>(nonce.received_by.as_str())
                 .bind::<Text, _>(&nonce.replay_nonce)
                 .bind::<Text, _>(&nonce.report_event_id)
                 .bind::<Timestamptz, _>(nonce.consumed_at)
+                .bind::<Timestamptz, _>(expires_at)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;

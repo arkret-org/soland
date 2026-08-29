@@ -49,6 +49,18 @@ static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell:
 /// conflict, so each case holds this guard for its duration.
 static DB_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[derive(diesel::QueryableByName)]
+struct TimestampRow {
+    #[diesel(sql_type = diesel::sql_types::Timestamptz)]
+    value: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(diesel::QueryableByName)]
+struct LedgerCountRow {
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    value: i64,
+}
+
 async fn test_pool() -> Option<PgPool> {
     TEST_POOL
         .get_or_init(|| async {
@@ -62,6 +74,233 @@ async fn test_pool() -> Option<PgPool> {
         })
         .await
         .clone()
+}
+
+#[tokio::test]
+async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_when_configured() {
+    use diesel::sql_types::{BigInt, Text, Timestamptz};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{
+        CanonicalEventRecord, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+        EventStore, FrankingReplayNonceCommit, PersistenceError,
+    };
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
+        format!("franking-ledger:{}", uuid::Uuid::now_v7()).as_bytes(),
+    ))
+    .unwrap();
+    let received_by =
+        arkret_wire::DidCoreId::new("ak:did_core:web:franking-ledger.example".to_owned()).unwrap();
+    let make_request = |marker: u64,
+                        replay_nonce: &str,
+                        consumed_at: chrono::DateTime<chrono::Utc>| {
+        let actor_id = arkret_wire::DidCoreId::new(format!(
+            "ak:did_core:web:franking-reporter-{marker}.example"
+        ))
+        .unwrap();
+        let event = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::SelfModerationReport.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor_id.clone(),
+            received_by.clone(),
+            0,
+            arkret_identifiers::Hlc::new(format!("019f00000000-{marker:04x}-aabbccdd")).unwrap(),
+            serde_json::json!({
+                "franking_proof": {
+                    "received_by": received_by.as_str(),
+                    "replay_nonce": replay_nonce,
+                }
+            }),
+            consumed_at,
+        )
+        .unwrap();
+        let event_id = event.event_id.to_string();
+        let canonical_digest = event
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        (
+            EventCommitRequest {
+                governance_dependencies: Vec::new(),
+                device_pairing_authorization: None,
+                contact_projection: None,
+                consent_projection: None,
+                event: CanonicalEventRecord {
+                    event_id: event_id.clone(),
+                    actor_id: actor_id.to_string(),
+                    actor_seq: 0,
+                    realm_id: Some(realm_id.to_string()),
+                    kind: arkret_wire::EventKind::SelfModerationReport
+                        .as_str()
+                        .to_owned(),
+                    schema_id: "ak.schema.moderation_report.v1".to_owned(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
+                    canonical_digest,
+                    canonical_bytes,
+                    envelope: serde_json::to_value(event).unwrap(),
+                    received_at: consumed_at,
+                },
+                control_proposal_ingress: None,
+                device_revocation_transition: None,
+                device_revocation_gate: None,
+                projections: Vec::new(),
+                idempotency: None,
+                outbox: Vec::new(),
+            },
+            FrankingReplayNonceCommit {
+                realm_id: realm_id.to_string(),
+                received_by: received_by.clone(),
+                replay_nonce: replay_nonce.to_owned(),
+                report_event_id: event_id,
+                consumed_at,
+            },
+        )
+    };
+    let commit = |event, nonce| EventBatchCommitRequest {
+        events: vec![event],
+        agent_approval_nonce: None,
+        franking_replay_nonce: Some(nonce),
+        applet_record: None,
+        applet_authoring_preview: None,
+        agent_membership_cascade: None,
+    };
+    let consumed_at =
+        chrono::DateTime::from_timestamp_micros(chrono::Utc::now().timestamp_micros()).unwrap();
+    let replay_nonce = "shared_nonce_0123456789";
+    let (first_event, first_nonce) = make_request(1, replay_nonce, consumed_at);
+    let first_event_id = first_event.event.event_id.clone();
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(first_event, first_nonce))
+        .await
+        .unwrap();
+
+    let (replay_event, replay_commit) =
+        make_request(2, replay_nonce, consumed_at + chrono::TimeDelta::seconds(1));
+    let replay_event_id = replay_event.event.event_id.clone();
+    let replay_error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(replay_event, replay_commit))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        replay_error,
+        PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+    ));
+    let event_store = PgEventStore { pool: pool.clone() };
+    assert!(event_store.contains(&first_event_id).await.unwrap());
+    assert!(!event_store.contains(&replay_event_id).await.unwrap());
+
+    let expires_at = soland_storage::franking_replay_nonce_expires_at(consumed_at).unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let stored_expiry = diesel::sql_query(
+        "SELECT expires_at AS value FROM moderation_franking_replay_nonces \
+         WHERE realm_id = $1 AND received_by = $2 AND replay_nonce = $3",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(received_by.as_str())
+    .bind::<Text, _>(replay_nonce)
+    .get_result::<TimestampRow>(&mut conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(stored_expiry, expires_at);
+
+    diesel::sql_query(
+        "INSERT INTO moderation_franking_replay_nonces \
+         (realm_id, received_by, replay_nonce, report_event_id, consumed_at, expires_at) \
+         VALUES ($1, $2, 'expired_nonce_0123456789', $3, $4, $5)",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(received_by.as_str())
+    .bind::<Text, _>(format!("expired-report-{}", uuid::Uuid::now_v7()))
+    .bind::<Timestamptz, _>(consumed_at - chrono::TimeDelta::hours(25))
+    .bind::<Timestamptz, _>(consumed_at - chrono::TimeDelta::hours(1))
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let (after_expiry_event, after_expiry_nonce) = make_request(
+        3,
+        "after_expiry_nonce_0123456789",
+        consumed_at + chrono::TimeDelta::seconds(2),
+    );
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(after_expiry_event, after_expiry_nonce))
+        .await
+        .unwrap();
+    let mut conn = pool.get().await.unwrap();
+    let expired_count = diesel::sql_query(
+        "SELECT COUNT(*) AS value FROM moderation_franking_replay_nonces \
+         WHERE replay_nonce = 'expired_nonce_0123456789'",
+    )
+    .get_result::<LedgerCountRow>(&mut conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(expired_count, 0);
+
+    diesel::sql_query(
+        "DELETE FROM moderation_franking_replay_nonces \
+         WHERE realm_id = $1 AND received_by = $2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(received_by.as_str())
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    diesel::sql_query(
+        "INSERT INTO moderation_franking_replay_nonces \
+         (realm_id, received_by, replay_nonce, report_event_id, consumed_at, expires_at) \
+         SELECT $1, $2, 'capacity_nonce_' || n, 'capacity_report_' || n, $3, $4 \
+         FROM generate_series(1, $5) AS n",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(received_by.as_str())
+    .bind::<Timestamptz, _>(consumed_at)
+    .bind::<Timestamptz, _>(expires_at)
+    .bind::<BigInt, _>(
+        i64::try_from(soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE).unwrap(),
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+    let (overflow_event, overflow_nonce) = make_request(
+        4,
+        "overflow_nonce_0123456789",
+        consumed_at + chrono::TimeDelta::seconds(3),
+    );
+    let overflow_event_id = overflow_event.event.event_id.clone();
+    let overflow_error = PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event_batch(commit(overflow_event, overflow_nonce))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        overflow_error,
+        PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
+    ));
+    assert!(!event_store.contains(&overflow_event_id).await.unwrap());
+    let mut conn = pool.get().await.unwrap();
+    let active_count = diesel::sql_query(
+        "SELECT COUNT(*) AS value FROM moderation_franking_replay_nonces \
+         WHERE realm_id = $1 AND received_by = $2",
+    )
+    .bind::<Text, _>(realm_id.as_str())
+    .bind::<Text, _>(received_by.as_str())
+    .get_result::<LedgerCountRow>(&mut conn)
+    .await
+    .unwrap()
+    .value;
+    assert_eq!(
+        active_count,
+        i64::try_from(soland_storage::LOCAL_FRANKING_REPLAY_NONCE_MAX_ACTIVE_PER_SCOPE).unwrap()
+    );
 }
 
 #[tokio::test]

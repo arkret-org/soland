@@ -55,3 +55,14 @@ fn seal_data_event_manifest_is_created_and_dropped_symmetrically() {
     assert!(INITIAL_UP.contains("state_seal_data_event_manifests_immutable"));
     assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS state_seal_data_event_manifests CASCADE"));
 }
+
+#[test]
+fn franking_replay_nonce_ledger_has_bounded_expiry_contract() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.moderation_franking_replay_nonces"));
+    assert!(INITIAL_UP.contains("expires_at timestamp with time zone NOT NULL"));
+    assert!(INITIAL_UP.contains("moderation_franking_replay_nonces_expiry_check"));
+    assert!(INITIAL_UP.contains("moderation_franking_replay_nonces_expiry_idx"));
+    assert!(
+        INITIAL_DOWN.contains("DROP TABLE IF EXISTS moderation_franking_replay_nonces CASCADE")
+    );
+}
