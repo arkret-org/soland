@@ -278,10 +278,8 @@ async fn upload_keypackage(
             "actor_id must match the calling session",
         ));
     }
-    if body.keypackage_upload_entries.is_empty() {
-        return Err(AppError::param_missing(
-            "keypackage_upload_entries is required",
-        ));
+    if body.keypackages.is_empty() {
+        return Err(AppError::param_missing("keypackages is required"));
     }
     let (device_id, trust_binding, publish_trust_anchor) = if let Some(device_id) = &body.device_id
     {
@@ -390,7 +388,7 @@ async fn upload_keypackage(
     let mut accepted = 0_u32;
     let mut key_package_refs = Vec::new();
     let mut rejected = Vec::new();
-    for entry in body.keypackage_upload_entries {
+    for entry in body.keypackages {
         if entry.keypackage_id.is_empty() {
             rejected.push(keypackage_failure(
                 &entry,

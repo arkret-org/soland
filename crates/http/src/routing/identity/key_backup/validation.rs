@@ -435,7 +435,7 @@ pub(super) async fn validate_current_recovery_recipient(
             )
         })?;
     let agreements = policy
-        .recovery_key_agreement_entries
+        .recovery_key_agreements
         .as_deref()
         .unwrap_or_default();
     let matching_recipient = agreements

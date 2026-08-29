@@ -228,7 +228,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, _suffix:
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackage_upload_entries: vec![entry],
+        keypackages: vec![entry],
         expires_at: None,
         strand_id: None,
         mls_group_id: None,
