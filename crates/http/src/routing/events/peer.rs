@@ -138,14 +138,9 @@ async fn peer_principal_genesis(
         .and_then(json_ok)
 }
 
-pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<DidCoreId, AppError> {
-    if let Some(service_id) = state.config().account_authority_id.as_deref() {
-        return arkret_identifiers::DidCoreId::new(service_id.to_owned()).map_err(|error| {
-            AppError::internal(format!(
-                "configured Account Authority service identity is invalid: {error}"
-            ))
-        });
-    }
+async fn trusted_account_authority_binding(
+    state: &AppState,
+) -> Result<(DidCoreId, CanonicalServiceUrl), AppError> {
     let authority_url = state
         .config()
         .account_authority_url
@@ -182,11 +177,31 @@ pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<Did
                 "Account Authority service identity registration is invalid: {error}"
             ))
         })?;
-    arkret_wire::project_did_to_core_id(registration.did()).map_err(|error| {
-        AppError::internal(format!(
-            "registered Account Authority DID cannot be projected: {error}"
-        ))
-    })
+    let registered_id =
+        arkret_wire::project_did_to_core_id(registration.did()).map_err(|error| {
+            AppError::internal(format!(
+                "registered Account Authority DID cannot be projected: {error}"
+            ))
+        })?;
+    if let Some(configured_id) = state.config().account_authority_id.as_deref() {
+        let configured_id = DidCoreId::new(configured_id.to_owned()).map_err(|error| {
+            AppError::internal(format!(
+                "configured Account Authority service identity is invalid: {error}"
+            ))
+        })?;
+        if configured_id != registered_id {
+            return Err(AppError::capability_denied(
+                "accepted Account Authority service registration does not match the configured service identity pin",
+            ));
+        }
+    }
+    Ok((registered_id, registration_key.public_base_url().clone()))
+}
+
+pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<DidCoreId, AppError> {
+    trusted_account_authority_binding(state)
+        .await
+        .map(|(service_id, _)| service_id)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.account_status.command.submit", tags("events"))]
@@ -487,7 +502,7 @@ fn sign_account_status_receipt(
 async fn historical_account_status_service_key(
     state: &AppState,
     service_id: &DidCoreId,
-    service_kind: &str,
+    service_kind: ServiceKind,
     verification_method: &str,
     at: chrono::DateTime<chrono::Utc>,
     label: &str,
@@ -506,18 +521,28 @@ async fn historical_account_status_service_key(
             "account-status {label} verification method invalid: {error}"
         ))
     })?;
-    let base_url = crate::routing::federation::federation::resolved_peer_base_url(
-        state,
-        service_id.as_str(),
-        service_kind,
-        false,
-    )
-    .await
-    .map_err(|error| {
-        AppError::capability_denied(format!(
-            "account-status {label} authenticated route resolution failed: {error}"
-        ))
-    })?;
+    let base_url = if service_kind == ServiceKind::AuthServer {
+        let (registered_id, registered_base_url) = trusted_account_authority_binding(state).await?;
+        if registered_id != *service_id {
+            return Err(AppError::capability_denied(format!(
+                "account-status {label} service identity does not match the accepted Account Authority registration"
+            )));
+        }
+        registered_base_url.as_str().to_owned()
+    } else {
+        crate::routing::federation::federation::resolved_peer_base_url(
+            state,
+            service_id.as_str(),
+            service_kind.as_str(),
+            false,
+        )
+        .await
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "account-status {label} authenticated route resolution failed: {error}"
+            ))
+        })?
+    };
     let evidence = crate::routing::identity::agents::evidence::fetch_service_signer_evidence(
         state,
         service_id,
@@ -579,7 +604,7 @@ async fn validate_account_status_publication(
     let public_key = historical_account_status_service_key(
         state,
         &record.account_authority_id,
-        "auth_server",
+        ServiceKind::AuthServer,
         method,
         record.proof.created_at,
         "Account Authority",
@@ -615,7 +640,7 @@ async fn validate_account_status_publication(
         let receipt_key = historical_account_status_service_key(
             state,
             &source_receipt.receiver_id,
-            "principal_server",
+            ServiceKind::PrincipalServer,
             receipt_method,
             source_receipt.accepted_at,
             "receipt issuer",

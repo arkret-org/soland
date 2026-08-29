@@ -218,6 +218,29 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         event_string_field(object, &["principal_server_id"]).unwrap_or_default();
     let applet_id = event_string_field(object, &["applet_id"]);
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
+    let is_rotation = kind == arkret_wire::event_kind_str::IDENTITY_RESOLUTION_UPDATE;
+    let event_scope = if is_rotation {
+        None
+    } else {
+        Some(
+            serde_json::from_value::<arkret_wire::ScopeRef>(
+                object.get("scope_ref").cloned().ok_or_else(|| {
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        "Applet-managed actor Event requires scope_ref",
+                    )
+                })?,
+            )
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("Applet-managed actor Event scope_ref is invalid: {error}"),
+                )
+            })?,
+        )
+    };
     let records = crate::routing::extensions::applet_bridge::record::applet_records(state)
         .await
         .map_err(|error| {
@@ -229,6 +252,9 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             )
         })?;
     let mut actor_core_seen = false;
+    let mut selected_scope_seen = false;
+    let mut selected_scope_revoked = false;
+    let mut selected_scope_live = false;
     for record in records {
         let bot_match = record.bot_actor_id.as_str() == actor_id;
         let ghost_match = record
@@ -239,6 +265,13 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             continue;
         }
         actor_core_seen = true;
+        if record.identity.globally_fenced_at.is_some() {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_revoked",
+                "Applet-managed actor identity is globally fenced",
+            ));
+        }
         let (expected_server, expected_authorization, expected_pcr_realm) = if bot_match {
             let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
                 serde_json::from_value(
@@ -282,52 +315,41 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         if expected_server != principal_server_id {
             continue;
         }
+        if applet_id.as_deref() != Some(record.applet_id.as_str()) {
+            continue;
+        }
+        if !managed_actor_installation_selects_event(
+            &record.effective_scope,
+            record.portal_realm_id.as_str(),
+            event_scope.as_ref(),
+            realm_id,
+            is_rotation,
+            &expected_pcr_realm,
+        ) {
+            continue;
+        }
+        selected_scope_seen = true;
         if record.revoked_at.is_some()
             || !matches!(record.status.as_str(), "installed" | "partially_installed")
         {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "applet_revoked",
-                "Applet-managed actor registration has been revoked",
-            ));
+            selected_scope_revoked = true;
+            continue;
         }
-        if applet_id.as_deref() != Some(record.applet_id.as_str()) {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "authorization_ref_inactive",
-                "Applet-managed actor write must carry its exact live Applet registration and grant",
-            ));
-        }
+        selected_scope_live = true;
         let grants = state.authorization().grants_for_subject(
             record.package.service_id.as_str(),
             Some(&expected_server),
             record.portal_realm_id.as_str(),
         );
-        let active_authority = grants
-            .iter()
-            .any(|grant| grant.grant_id.as_str() == expected_authorization);
-        if !active_authority {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "authorization_ref_inactive",
-                "Applet-managed actor creation authority grant is no longer active",
-            ));
+        if !bot_match
+            && !grants
+                .iter()
+                .any(|grant| grant.grant_id.as_str() == expected_authorization)
+        {
+            continue;
         }
-        let is_rotation = kind == "ak.identity.resolution.update";
         if is_rotation {
-            if realm_id != expected_pcr_realm {
-                return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "principal_control_realm_mismatch",
-                    "Applet-managed actor rotation must target its exact PCR",
-                ));
-            }
-        } else if realm_id != record.portal_realm_id.as_str() {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "applet_effective_scope_mismatch",
-                "Applet-managed actor write is outside its portal Realm",
-            ));
+            debug_assert_eq!(realm_id, expected_pcr_realm);
         }
         {
             let event_id = event_string_field(object, &["event_id"]).unwrap_or_default();
@@ -341,11 +363,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                         .any(|resource| crate::authz::resource_matches(&grant.resource, resource))
             });
             let Some(grant) = grant else {
-                return Err(event_validation_error(
-                    StatusCode::FORBIDDEN,
-                    "authorization_ref_scope",
-                    "Applet-managed actor write requires an active exact grant covering its Event kind and resource",
-                ));
+                continue;
             };
             crate::authz::validate_applet_authority_binding(
                 grant,
@@ -364,13 +382,110 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         return Ok(true);
     }
     if actor_core_seen {
+        if selected_scope_revoked && !selected_scope_live {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "applet_revoked",
+                "Applet-managed actor registration has been revoked",
+            ));
+        }
+        if selected_scope_seen {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_scope",
+                "Applet-managed actor write requires an active exact grant covering its selected scope",
+            ));
+        }
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
-            "principal_authority_mismatch",
-            "Applet-managed actor Event targets a different Principal Server authority",
+            if is_rotation {
+                "principal_control_realm_mismatch"
+            } else {
+                "applet_effective_scope_mismatch"
+            },
+            "Applet-managed actor Event does not select a live installation scope",
         ));
     }
     Ok(false)
+}
+
+fn managed_actor_installation_selects_event(
+    installation_scope: &arkret_wire::ScopeRef,
+    installation_realm_id: &str,
+    event_scope: Option<&arkret_wire::ScopeRef>,
+    event_realm_id: &str,
+    is_pcr_rotation: bool,
+    actor_pcr_realm_id: &str,
+) -> bool {
+    if is_pcr_rotation {
+        event_realm_id == actor_pcr_realm_id
+    } else {
+        event_scope == Some(installation_scope) && event_realm_id == installation_realm_id
+    }
+}
+
+#[cfg(test)]
+mod managed_actor_scope_selection_tests {
+    use super::managed_actor_installation_selects_event;
+
+    #[test]
+    fn non_pcr_write_selects_exact_scope_before_liveness() {
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+        )
+        .unwrap();
+        let realm = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let circle = arkret_wire::ScopeRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: arkret_wire::CircleId::new(
+                "ak:circle:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+            )
+            .unwrap(),
+        };
+        assert!(!managed_actor_installation_selects_event(
+            &realm,
+            realm_id.as_str(),
+            Some(&circle),
+            realm_id.as_str(),
+            false,
+            "ak:realm:pcr"
+        ));
+        assert!(managed_actor_installation_selects_event(
+            &circle,
+            realm_id.as_str(),
+            Some(&circle),
+            realm_id.as_str(),
+            false,
+            "ak:realm:pcr"
+        ));
+    }
+
+    #[test]
+    fn pcr_rotation_selects_any_scope_only_through_shared_pcr() {
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+        )
+        .unwrap();
+        let scope = arkret_wire::ScopeRef::Realm { realm_id };
+        assert!(managed_actor_installation_selects_event(
+            &scope,
+            "ak:realm:portal",
+            None,
+            "ak:realm:pcr",
+            true,
+            "ak:realm:pcr"
+        ));
+        assert!(!managed_actor_installation_selects_event(
+            &scope,
+            "ak:realm:portal",
+            None,
+            "ak:realm:other",
+            true,
+            "ak:realm:pcr"
+        ));
+    }
 }
 
 pub(super) async fn validate_applet_registration_epoch_binding(

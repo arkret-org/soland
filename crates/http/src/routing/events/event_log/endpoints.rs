@@ -1757,6 +1757,35 @@ struct AppletManagedActorPcrAccess {
     pcr_realm_id: String,
     owned_by_session: bool,
     active: bool,
+    globally_fenced: bool,
+}
+
+fn merge_applet_managed_actor_pcr_access(
+    access: &mut Option<AppletManagedActorPcrAccess>,
+    pcr_realm_id: String,
+    owned_by_session: bool,
+    installation_live: bool,
+    scope_authority_active: bool,
+    globally_fenced: bool,
+) -> Result<(), AppError> {
+    let candidate = access.get_or_insert_with(|| AppletManagedActorPcrAccess {
+        pcr_realm_id: pcr_realm_id.clone(),
+        owned_by_session: false,
+        active: false,
+        globally_fenced: false,
+    });
+    if candidate.pcr_realm_id != pcr_realm_id {
+        return Err(AppError::internal(
+            "Applet-managed actor installations disagree on the immutable PCR anchor",
+        ));
+    }
+    candidate.owned_by_session |= owned_by_session;
+    candidate.active |= owned_by_session && installation_live && scope_authority_active;
+    candidate.globally_fenced |= globally_fenced;
+    if candidate.globally_fenced {
+        candidate.active = false;
+    }
+    Ok(())
 }
 
 /// Resolve an Applet-managed principal through its immutable provision/PCR
@@ -1770,41 +1799,40 @@ async fn applet_managed_actor_pcr_access(
     session_service_id: &str,
 ) -> Result<Option<AppletManagedActorPcrAccess>, AppError> {
     let records = crate::routing::extensions::applet_bridge::record::applet_records(state).await?;
+    let mut access: Option<AppletManagedActorPcrAccess> = None;
     for record in records {
-        let owned_by_session = record.package.service_id.as_str() == session_service_id;
         let record_active = record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed");
         if record.bot_actor_id.as_str() == actor_id {
             if record.bot_actor_principal_server_id.as_str() != state.service_id() {
                 continue;
             }
-            let provision: arkret_models_integration::AppletManagedActorProvisionPayload =
-                serde_json::from_value(
-                    serde_json::to_value(&record.bot_actor_provision_event.payload).map_err(
-                        |error| {
-                            AppError::internal(format!(
-                                "stored Bot provision payload is invalid: {error}"
-                            ))
-                        },
-                    )?,
-                )
-                .map_err(|error| {
-                    AppError::internal(format!("stored Bot provision payload is invalid: {error}"))
-                })?;
-            let authority_active = state
+            let owned_by_session =
+                record.identity.initial_package.service_id.as_str() == session_service_id;
+            let active_grant_ids = state
                 .authorization()
                 .grants_for_subject(
                     record.package.service_id.as_str(),
-                    Some(record.package.service_id.as_str()),
+                    Some(record.bot_actor_principal_server_id.as_str()),
                     record.portal_realm_id.as_str(),
                 )
+                .into_iter()
+                .map(|grant| grant.grant_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            let scope_authority_active = record
+                .install_response
+                .capability_grant_refs
                 .iter()
-                .any(|grant| grant.grant_id.as_str() == provision.applet_authority_ref.as_str());
-            return Ok(Some(AppletManagedActorPcrAccess {
-                pcr_realm_id: record.bot_principal_control_realm_id.to_string(),
+                .any(|grant_id| active_grant_ids.contains(grant_id.as_str()));
+            merge_applet_managed_actor_pcr_access(
+                &mut access,
+                record.bot_principal_control_realm_id.to_string(),
                 owned_by_session,
-                active: owned_by_session && record_active && authority_active,
-            }));
+                record_active,
+                scope_authority_active,
+                record.identity.globally_fenced_at.is_some(),
+            )?;
+            continue;
         }
         if let Some(ghost) = record
             .ghosts
@@ -1814,6 +1842,7 @@ async fn applet_managed_actor_pcr_access(
             if ghost.actor_principal_server_id.as_str() != state.service_id() {
                 continue;
             }
+            let owned_by_session = record.package.service_id.as_str() == session_service_id;
             let ghost_provision = ghost.provision_payload().map_err(|error| {
                 AppError::internal(format!(
                     "stored Ghost provision bindings are invalid: {error}"
@@ -1823,21 +1852,105 @@ async fn applet_managed_actor_pcr_access(
                 .authorization()
                 .grants_for_subject(
                     record.package.service_id.as_str(),
-                    Some(record.package.service_id.as_str()),
+                    Some(ghost.actor_principal_server_id.as_str()),
                     record.portal_realm_id.as_str(),
                 )
                 .iter()
                 .any(|grant| {
                     grant.grant_id.as_str() == ghost_provision.applet_authority_ref.as_str()
                 });
-            return Ok(Some(AppletManagedActorPcrAccess {
-                pcr_realm_id: ghost.principal_control_realm_id().to_string(),
+            merge_applet_managed_actor_pcr_access(
+                &mut access,
+                ghost.principal_control_realm_id().to_string(),
                 owned_by_session,
-                active: owned_by_session && record_active && authority_active,
-            }));
+                record_active,
+                authority_active,
+                record.identity.globally_fenced_at.is_some(),
+            )?;
         }
     }
-    Ok(None)
+    Ok(access)
+}
+
+#[cfg(test)]
+mod applet_managed_actor_pcr_access_tests {
+    use super::*;
+
+    #[test]
+    fn revoked_sibling_does_not_mask_live_scope_but_global_fence_is_terminal() {
+        let mut access = None;
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+        assert!(access.as_ref().unwrap().active);
+
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        assert!(!access.unwrap().active);
+    }
+
+    #[test]
+    fn live_scope_with_revoked_authority_is_not_pcr_active() {
+        let mut access = None;
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            true,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(!access.unwrap().active);
+    }
+
+    #[test]
+    fn global_fence_is_terminal_independent_of_installation_iteration_order() {
+        let mut access = None;
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        merge_applet_managed_actor_pcr_access(
+            &mut access,
+            "ak:realm:shared-pcr".to_owned(),
+            true,
+            true,
+            true,
+            false,
+        )
+        .unwrap();
+        let access = access.unwrap();
+        assert!(access.globally_fenced);
+        assert!(!access.active);
+    }
 }
 
 pub(crate) async fn load_realm_actor_frontier(

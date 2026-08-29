@@ -2187,10 +2187,20 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
         .await
         .unwrap()
         .expect("applet record remains durable after ghost provision");
-    assert_eq!(
-        stored_applet["identity"]["registry_id"],
-        json!(package.controller_id)
+    assert!(
+        stored_applet.get("identity").is_none()
+            && stored_applet.get("registry_id").is_none()
+            && stored_applet.get("bot_actor_id").is_none(),
+        "exact-scope installation must not copy managed identity anchors"
     );
+    let stored_identity = state
+        .test_persistence()
+        .applets()
+        .get_identity(&applet_id, state.service_id())
+        .await
+        .unwrap()
+        .expect("accepted Applet identity winner remains durable after ghost provision");
+    assert_eq!(stored_identity["registry_id"], json!(package.controller_id));
 
     let revoke_preview: Value = TestClient::post(format!(
         "http://server/_arkret/self/applets/{applet_id}/revoke/preview"

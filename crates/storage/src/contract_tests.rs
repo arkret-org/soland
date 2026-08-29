@@ -1711,6 +1711,181 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         Some(both_record)
     );
 
+    // Two first installs for distinct scopes can both observe no identity,
+    // but only one insert-only managed identity winner may commit. The losing
+    // aggregate leaves no Event prefix and can then reuse the exact durable
+    // winner without manufacturing a second identity.
+    let winner_applet_id = contract_applet_id();
+    let winner_left_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:winner-left")))
+            .expect("contract first-winner left Realm id"),
+    };
+    let winner_right_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!(
+            "{namespace}:winner-right"
+        )))
+        .expect("contract first-winner right Realm id"),
+    };
+    let winner_left_key = applet_effective_scope_key(&winner_left_scope)
+        .expect("contract first-winner left scope key");
+    let winner_right_key = applet_effective_scope_key(&winner_right_scope)
+        .expect("contract first-winner right scope key");
+    let winner_left_record =
+        contract_applet_record_for_scope(&winner_applet_id, "12", winner_left_scope, Vec::new());
+    let winner_right_record =
+        contract_applet_record_for_scope(&winner_applet_id, "13", winner_right_scope, Vec::new());
+    let winner_left = contract_applet_batch(
+        &winner_applet_id,
+        contract_applet_event_group(
+            namespace,
+            &contract_realm_id(&format!("{namespace}:winner-left-event")),
+            "winner-left",
+            1,
+        ),
+        None,
+        winner_left_record.clone(),
+    );
+    let winner_right = contract_applet_batch(
+        &winner_applet_id,
+        contract_applet_event_group(
+            namespace,
+            &contract_realm_id(&format!("{namespace}:winner-right-event")),
+            "winner-right",
+            1,
+        ),
+        None,
+        winner_right_record.clone(),
+    );
+    let winner_left_event_ids = contract_event_ids(&winner_left);
+    let winner_right_event_ids = contract_event_ids(&winner_right);
+    let (winner_left_result, winner_right_result) = tokio::join!(
+        stores.unit_of_work.commit_event_batch(winner_left.clone()),
+        stores.unit_of_work.commit_event_batch(winner_right.clone())
+    );
+    assert_eq!(
+        usize::from(winner_left_result.is_ok()) + usize::from(winner_right_result.is_ok()),
+        1,
+        "concurrent first installs must persist one identity winner"
+    );
+    let (mut winner_retry, winner_loser_event_ids) = if winner_left_result.is_ok() {
+        assert_eq!(
+            winner_right_result
+                .as_ref()
+                .expect_err("right first install must lose")
+                .conflict_code(),
+            Some(super::ConflictCode::DuplicateConflict)
+        );
+        (winner_right, winner_right_event_ids)
+    } else {
+        assert_eq!(
+            winner_left_result
+                .as_ref()
+                .expect_err("left first install must lose")
+                .conflict_code(),
+            Some(super::ConflictCode::DuplicateConflict)
+        );
+        (winner_left, winner_left_event_ids)
+    };
+    assert_contract_event_group_visibility(stores.events, &winner_loser_event_ids, false).await;
+    winner_retry
+        .applet_record
+        .as_mut()
+        .expect("first-winner retry carries Applet mutation")
+        .identity
+        .expected_record = Some(contract_applet_identity(&winner_applet_id));
+    stores
+        .unit_of_work
+        .commit_event_batch(winner_retry)
+        .await
+        .expect("losing scope may reuse the exact accepted identity winner");
+    assert_contract_event_group_visibility(stores.events, &winner_loser_event_ids, true).await;
+    assert!(
+        stores
+            .applets
+            .get(winner_applet_id.as_str(), &winner_left_key)
+            .await
+            .expect("read first-winner left installation")
+            .is_some()
+    );
+    assert!(
+        stores
+            .applets
+            .get(winner_applet_id.as_str(), &winner_right_key)
+            .await
+            .expect("read first-winner right installation")
+            .is_some()
+    );
+    let accepted_identity = contract_applet_identity(&winner_applet_id);
+    assert_eq!(
+        stores
+            .applets
+            .get_identity(
+                winner_applet_id.as_str(),
+                "ak:did_core:webvh:z6mkcontractservice"
+            )
+            .await
+            .expect("read accepted first-winner identity"),
+        Some(accepted_identity.clone())
+    );
+    let conflicting_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!(
+            "{namespace}:winner-conflict"
+        )))
+        .expect("contract conflicting winner Realm id"),
+    };
+    let conflicting_scope_key = applet_effective_scope_key(&conflicting_scope)
+        .expect("contract conflicting winner scope key");
+    let mut conflicting_winner = contract_applet_batch(
+        &winner_applet_id,
+        contract_applet_event_group(
+            namespace,
+            &contract_realm_id(&format!("{namespace}:winner-conflict-event")),
+            "winner-conflict",
+            1,
+        ),
+        None,
+        contract_applet_record_for_scope(&winner_applet_id, "14", conflicting_scope, Vec::new()),
+    );
+    let conflicting_identity = serde_json::json!({
+        "applet_id": winner_applet_id,
+        "bot_actor_id": "ak:did_core:web:different-winner.example",
+        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
+    });
+    let conflicting_mutation = conflicting_winner
+        .applet_record
+        .as_mut()
+        .expect("conflicting winner batch carries Applet mutation");
+    conflicting_mutation.identity.expected_record = Some(accepted_identity.clone());
+    conflicting_mutation.identity.record = conflicting_identity;
+    assert_eq!(
+        stores
+            .unit_of_work
+            .commit_event_batch(conflicting_winner)
+            .await
+            .expect_err("reuse with different identity bytes must fail")
+            .conflict_code(),
+        Some(super::ConflictCode::DuplicateConflict)
+    );
+    assert!(
+        stores
+            .applets
+            .get(winner_applet_id.as_str(), &conflicting_scope_key)
+            .await
+            .expect("read rejected conflicting winner installation")
+            .is_none()
+    );
+    assert_eq!(
+        stores
+            .applets
+            .get_identity(
+                winner_applet_id.as_str(),
+                "ak:did_core:webvh:z6mkcontractservice"
+            )
+            .await
+            .expect("re-read accepted identity after conflict"),
+        Some(accepted_identity)
+    );
+
     // The identity winner is independent of installations. Concurrently
     // revoking the last two exact scopes must therefore serialize on that
     // winner and persist exactly one global fence; neither adapter may leave
@@ -1720,9 +1895,13 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-left")))
             .expect("contract left fence Realm id"),
     };
-    let right_scope = arkret_wire::ScopeRef::Realm {
+    let right_scope = arkret_wire::ScopeRef::Circle {
         realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-right")))
             .expect("contract right fence Realm id"),
+        circle_id: arkret_wire::CircleId::new(
+            "ak:circle:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+        )
+        .expect("contract right fence Circle id"),
     };
     let left_scope_key =
         applet_effective_scope_key(&left_scope).expect("contract left Applet effective scope key");

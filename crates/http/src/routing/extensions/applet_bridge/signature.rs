@@ -61,6 +61,7 @@ pub(super) async fn require_inbound_transaction_signature(
             &idempotency_key,
             Some("/source_id"),
             Some("/applet_id"),
+            SignedAppletScopeCarrier::TransactionEvents,
         )
         .await
     }
@@ -117,6 +118,11 @@ pub(super) async fn require_ghost_provision_signature(
             &idempotency_key,
             (!is_preview).then_some("/authoring_request/basis/service_id"),
             (!is_preview).then_some("/authoring_request/basis/applet_id"),
+            SignedAppletScopeCarrier::RealmPointer(if is_preview {
+                "/realm_id"
+            } else {
+                "/authoring_request/basis/realm_id"
+            }),
         )
         .await
     }
@@ -152,6 +158,7 @@ async fn verify_inbound_applet_service_signature(
     idempotency_key: &str,
     source_service_json_pointer: Option<&str>,
     applet_id_json_pointer: Option<&str>,
+    scope_carrier: SignedAppletScopeCarrier,
 ) -> Result<VerifiedAppletServiceSignature, AppError> {
     // §7.3.1 ordering: a transaction push carrying only `Authorization: Bearer`
     // (no `Signature` / `Signature-Input`) MUST be rejected before any other
@@ -219,12 +226,13 @@ async fn verify_inbound_applet_service_signature(
             "Source-Service-ID header does not match the signed body binding"
         )));
     }
+    let scope_selector = signed_applet_scope_selector(&request_body, scope_carrier)?;
 
     // §7.3.1 anchor: the signing key comes only from an active installed
     // registration. Without one there is no authenticated key source to try;
     // reject at the registration gate instead of manufacturing a method URL
     // from the Core service id.
-    let install = active_install_for_service_id(state, &header_source, &applet_id)
+    let install = active_install_for_service_id(state, &header_source, &applet_id, &scope_selector)
         .await?
         .ok_or_else(|| {
             AppError::capability_denied(
@@ -291,6 +299,78 @@ async fn verify_inbound_applet_service_signature(
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+enum SignedAppletScopeCarrier {
+    TransactionEvents,
+    RealmPointer(&'static str),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum SignedAppletScopeSelector {
+    Exact(arkret_wire::ScopeRef),
+    Realm(arkret_wire::RealmId),
+}
+
+fn signed_applet_scope_selector(
+    request_body: &serde_json::Value,
+    carrier: SignedAppletScopeCarrier,
+) -> Result<SignedAppletScopeSelector, AppError> {
+    match carrier {
+        SignedAppletScopeCarrier::TransactionEvents => {
+            let events = request_body
+                .get("events")
+                .and_then(serde_json::Value::as_array)
+                .ok_or_else(|| {
+                    applet_signature_error_invalid(
+                        "signed Applet transaction body requires an events array",
+                    )
+                })?;
+            let mut scope = None;
+            for event in events {
+                let candidate = event.get("scope_ref").cloned().ok_or_else(|| {
+                    applet_signature_error_invalid(
+                        "signed Applet transaction Event requires scope_ref",
+                    )
+                })?;
+                let candidate = serde_json::from_value::<arkret_wire::ScopeRef>(candidate)
+                    .map_err(|error| {
+                        applet_signature_error_invalid(format!(
+                            "signed Applet transaction Event scope_ref is invalid: {error}"
+                        ))
+                    })?;
+                if scope.as_ref().is_some_and(|scope| scope != &candidate) {
+                    return Err(applet_signature_error_invalid(
+                        "one signed Applet transaction cannot select multiple effective scopes",
+                    ));
+                }
+                scope = Some(candidate);
+            }
+            scope.map(SignedAppletScopeSelector::Exact).ok_or_else(|| {
+                applet_signature_error_invalid(
+                    "signed Applet transaction requires at least one exact effective scope",
+                )
+            })
+        }
+        SignedAppletScopeCarrier::RealmPointer(pointer) => {
+            let realm_id = request_body
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    applet_signature_error_invalid(format!(
+                        "signed Applet service request body requires {pointer}"
+                    ))
+                })?;
+            arkret_wire::RealmId::new(realm_id.to_owned())
+                .map(SignedAppletScopeSelector::Realm)
+                .map_err(|error| {
+                    applet_signature_error_invalid(format!(
+                        "signed Applet service request realm is invalid: {error}"
+                    ))
+                })
+        }
+    }
+}
+
 fn inbound_transaction_signature_present(req: &Request) -> bool {
     req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some()
 }
@@ -298,17 +378,50 @@ fn inbound_transaction_signature_present(req: &Request) -> bool {
 /// Find an active (non-revoked) effective install whose registration service
 /// DID equals `source_id`. The registration carries the service DID in
 /// its required SDK-owned installed package.
-pub(super) async fn active_install_for_service_id(
+async fn active_install_for_service_id(
     state: &AppState,
     source_id: &str,
     applet_id: &str,
+    scope_selector: &SignedAppletScopeSelector,
 ) -> Result<Option<AppletRecord>, AppError> {
-    Ok(applet_records(state).await?.into_iter().find(|record| {
+    let matches = applet_records(state).await?.into_iter().filter(|record| {
         record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed")
+            && record.identity.globally_fenced_at.is_none()
             && record.applet_id.as_str() == applet_id
             && record.package.service_id.as_str() == source_id
-    }))
+            && signed_scope_selector_matches(
+                scope_selector,
+                &record.effective_scope,
+                &record.portal_realm_id,
+            )
+    });
+    select_one_signed_scope_candidate(matches)
+}
+
+fn signed_scope_selector_matches(
+    selector: &SignedAppletScopeSelector,
+    effective_scope: &arkret_wire::ScopeRef,
+    portal_realm_id: &arkret_wire::RealmId,
+) -> bool {
+    match selector {
+        SignedAppletScopeSelector::Exact(scope) => effective_scope == scope,
+        SignedAppletScopeSelector::Realm(realm_id) => portal_realm_id == realm_id,
+    }
+}
+
+fn select_one_signed_scope_candidate<T>(
+    candidates: impl IntoIterator<Item = T>,
+) -> Result<Option<T>, AppError> {
+    let mut candidates = candidates.into_iter();
+    let selected = candidates.next();
+    if candidates.next().is_some() {
+        return Err(AppError::conflict(
+            "signed Applet request realm selects multiple active effective scopes",
+        )
+        .with_wire_code("applet_effective_scope_ambiguous"));
+    }
+    Ok(selected)
 }
 
 /// Resolve the verification method to verify the inbound signature against.
@@ -482,5 +595,76 @@ mod tests {
         )
         .expect_err("an unregistered DID method must fail closed in development mode");
         assert_eq!(error.wire_code(), "http_signature_invalid");
+    }
+
+    #[test]
+    fn signed_transaction_scope_selector_requires_one_exact_scope() {
+        let realm = "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH";
+        let one = serde_json::json!({
+            "events": [
+                {"scope_ref": {"kind": "realm", "realm_id": realm}},
+                {"scope_ref": {"kind": "realm", "realm_id": realm}}
+            ]
+        });
+        assert!(matches!(
+            signed_applet_scope_selector(&one, SignedAppletScopeCarrier::TransactionEvents),
+            Ok(SignedAppletScopeSelector::Exact(
+                arkret_wire::ScopeRef::Realm { .. }
+            ))
+        ));
+
+        let multiple = serde_json::json!({
+            "events": [
+                {"scope_ref": {"kind": "realm", "realm_id": realm}},
+                {"scope_ref": {"kind": "circle", "realm_id": realm, "circle_id": "ak:circle:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH"}}
+            ]
+        });
+        assert_eq!(
+            signed_applet_scope_selector(&multiple, SignedAppletScopeCarrier::TransactionEvents)
+                .expect_err("one signature must not select different registration keys")
+                .wire_code(),
+            "http_signature_invalid"
+        );
+    }
+
+    #[test]
+    fn exact_selector_chooses_one_epoch_while_realm_only_multi_scope_is_ambiguous() {
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+        )
+        .unwrap();
+        let realm_scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let circle_scope = arkret_wire::ScopeRef::Circle {
+            realm_id: realm_id.clone(),
+            circle_id: arkret_wire::CircleId::new(
+                "ak:circle:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH".to_owned(),
+            )
+            .unwrap(),
+        };
+        let exact = SignedAppletScopeSelector::Exact(circle_scope.clone());
+        let epochs = [
+            (&realm_scope, "did:web:service#epoch-1"),
+            (&circle_scope, "did:web:service#epoch-2"),
+        ];
+        let selected = select_one_signed_scope_candidate(
+            epochs
+                .iter()
+                .filter(|(scope, _)| signed_scope_selector_matches(&exact, scope, &realm_id))
+                .map(|(_, key)| *key),
+        )
+        .unwrap();
+        assert_eq!(selected, Some("did:web:service#epoch-2"));
+
+        let realm_only = SignedAppletScopeSelector::Realm(realm_id.clone());
+        let error = select_one_signed_scope_candidate(
+            epochs
+                .iter()
+                .filter(|(scope, _)| signed_scope_selector_matches(&realm_only, scope, &realm_id))
+                .map(|(_, key)| *key),
+        )
+        .expect_err("realm-only signed carrier must fail closed across two keys");
+        assert_eq!(error.wire_code(), "applet_effective_scope_ambiguous");
     }
 }
