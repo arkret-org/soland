@@ -899,6 +899,49 @@ fn commit_epoch_in_order_succeeds() {
 }
 
 #[test]
+fn commit_epoch_rejects_content_scheme_drift_from_genesis() {
+    let mut state = ProjectionState::default();
+    let mut genesis = genesis_payload("mls-group-abc", realm_scope());
+    genesis["governance_binding"]["content_scheme"] = json!("mls_exporter_aead_v1");
+    genesis["governance_binding"]["durability_policy"] = json!("none");
+    assert!(matches!(
+        apply_group_genesis(&mut state, &op_at(499, "ak.mls.genesis", genesis)),
+        ProjectionEffect::Mls(MlsEffect::GroupGenesis { .. })
+    ));
+
+    let effect = apply_commit_epoch(
+        &mut state,
+        &op_at(
+            500,
+            "ak.mls.commit",
+            json!({
+                "mls_group_id": "mls-group-abc",
+                "base_epoch": 0,
+                "next_epoch": 1,
+                "commit_bytes_b64": b64(b"scheme-drift-commit"),
+                "governance_binding": governance_binding(0),
+            }),
+        ),
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE
+    ));
+    let row = state
+        .mls_commit_epochs
+        .get(&mls_epoch_key(&realm_scope(), "mls-group-abc").unwrap())
+        .expect("genesis row remains accepted");
+    assert_eq!(row.epoch, 0);
+    assert_eq!(
+        row.governance_binding["content_scheme"],
+        "mls_exporter_aead_v1"
+    );
+    assert_eq!(row.governance_binding["durability_policy"], "none");
+}
+
+#[test]
 fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);

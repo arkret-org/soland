@@ -808,6 +808,15 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         .get("governance_binding")
         .cloned()
         .unwrap_or(Value::Null);
+    if governance_binding.get("content_scheme") != existing.governance_binding.get("content_scheme")
+    {
+        return reject(arkret_wire::ReasonCode::MLS_CONTENT_SCHEME_IMMUTABLE);
+    }
+    if governance_binding.get("durability_policy")
+        != existing.governance_binding.get("durability_policy")
+    {
+        return reject(arkret_wire::ReasonCode::STATE_MISMATCH);
+    }
     let accepted_digest = existing.accepted_commit_digest.clone();
     let creator_device_id = existing.creator_device_id.clone();
     let genesis_event_ref = existing.genesis_event_ref.clone();
