@@ -122,7 +122,39 @@ pub(crate) fn is_controller_private_account_data_key(account_data_key: &str) -> 
 
 fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     crate::routing::account_data_encryption::validate_encrypted_account_data_key(account_data_key)
-        .map_err(|error| AppError::param_invalid(error.message()))
+        .map_err(|error| AppError::param_invalid(error.message()))?;
+    let is_holder_writable_encrypted = arkret_schema::account_data_pattern(account_data_key)
+        .is_some_and(|descriptor| {
+            descriptor.storage == "encrypted_account_data"
+                && descriptor.writer_authorities.contains(&"holder_event")
+                && !descriptor.holder_self_operations.is_empty()
+        });
+    if !is_holder_writable_encrypted {
+        return Err(AppError::param_invalid(
+            crate::routing::account_data_encryption::AccountDataEncryptionError::InvalidKeyPattern
+                .message(),
+        ));
+    }
+    Ok(())
+}
+
+/// Resource reads cover both holder-authored encrypted cells and the two
+/// registry-declared plaintext inboxes written by the Principal Server.  The
+/// write validator above deliberately remains narrower: a holder must never
+/// gain PUT/DELETE authority over a `principal_server_cas` cell merely because
+/// it is readable through the actor-private account-data resource.
+fn validate_readable_account_data_key(account_data_key: &str) -> Result<(), AppError> {
+    let is_plaintext_service_cas = arkret_schema::account_data_pattern(account_data_key)
+        .is_some_and(|descriptor| {
+            descriptor.storage == "plaintext_account_data"
+                && descriptor.writer_authorities == ["principal_server_cas"]
+                && descriptor.holder_self_operations.is_empty()
+                && descriptor.write_event_kinds.is_empty()
+        });
+    if is_plaintext_service_cas {
+        return Ok(());
+    }
+    validate_registered_account_data_key(account_data_key)
 }
 
 fn validate_private_account_data_content_for_actor(
@@ -525,7 +557,7 @@ async fn get_account_data(
     if is_service_internal_account_data_key(&account_data_key) {
         return Err(AppError::not_found("not found"));
     }
-    validate_registered_account_data_key(&account_data_key)?;
+    validate_readable_account_data_key(&account_data_key)?;
 
     // Controller-private entries are indistinguishable from absent ones for
     // Agent runtime sessions (fail closed, no existence disclosure). Same
@@ -848,6 +880,31 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));
+    }
+
+    #[test]
+    fn account_data_get_accepts_only_registered_plaintext_service_cas_keys() {
+        for key in [
+            arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+            arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+        ] {
+            assert!(validate_readable_account_data_key(key).is_ok());
+            assert!(
+                validate_registered_account_data_key(key).is_err(),
+                "holder writes must remain forbidden for service-CAS key `{key}`"
+            );
+        }
+
+        // The GET exception comes from an exact generated registry descriptor;
+        // neither an unregistered key nor an extension of an exact key can use
+        // the plaintext service-CAS path.
+        for key in [
+            "ak.account.unregistered",
+            "ak.account.invite_delivery.extra",
+        ] {
+            let error = validate_readable_account_data_key(key).unwrap_err();
+            assert!(error.to_string().contains("registered private key pattern"));
+        }
     }
 
     #[test]
