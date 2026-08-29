@@ -63,8 +63,6 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             "agent_pcr_recovery_not_ready",
         )
-    } else if message == arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL {
-        (salvo::http::StatusCode::CONFLICT, "failed_precondition")
     } else if message.starts_with("message_edit_window")
         || message.starts_with("message_redact_window")
         || message.starts_with("direct_conversation_")
@@ -289,7 +287,6 @@ async fn validate_one_operation_policy(
         validate_realm_organization_policy(state, operation).await?;
         validate_history_access_content_scheme_policy(state, operations, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
-        validate_realm_moderation_policy(state, operation).await?;
         validate_audience_mention_operation_policy(state, operation).await?;
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;

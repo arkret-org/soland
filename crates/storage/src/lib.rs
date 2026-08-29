@@ -46,7 +46,6 @@ mod idempotency;
 #[doc(hidden)]
 pub mod ids;
 mod invite_locators;
-mod join_applications;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -89,7 +88,6 @@ pub use governance_history::*;
 pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
-pub use join_applications::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
@@ -333,7 +331,6 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn realm_organizations(&self) -> &dyn RealmOrganizationStore;
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn audit(&self) -> &dyn AuditStore;
-    fn join_applications(&self) -> &dyn JoinApplicationStore;
     fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore;
     fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore;
     fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore;

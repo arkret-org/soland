@@ -311,36 +311,6 @@ pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {
     )
 }
 
-pub(crate) async fn validate_realm_moderation_policy(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::RealmModerationPolicy)
-    {
-        return Ok(());
-    }
-    let realm_id = operation.realm_id.as_str();
-    let Some(policy) = operation
-        .payload
-        .get("value")
-        .filter(|value| value.is_object())
-    else {
-        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
-    };
-    let requires_approval = crate::routing::organizations::realm_policy_override_requires_approval(
-        state, realm_id, policy,
-    )
-    .await;
-    let has_approval =
-        crate::routing::organizations::realm_policy_override_has_approval(state, realm_id, policy)
-            .await;
-    if requires_approval && !has_approval {
-        return Err(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL);
-    }
-    Ok(())
-}
-
 pub(crate) async fn validate_audience_mention_operation_policy(
     state: &AppState,
     operation: &Operation,

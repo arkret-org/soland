@@ -1016,7 +1016,6 @@ async fn actor_has_exact_scope_moderation_capability(
         .unwrap_or_default();
     [
         arkret_wire::CapabilityActionId::MODERATION_DECISION,
-        arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
         arkret_wire::CapabilityActionId::REALM_ADMIN,
     ]
     .into_iter()
@@ -1350,7 +1349,6 @@ async fn moderation_routing_visible_to_actor(
     };
     [
         arkret_wire::CapabilityActionId::MODERATION_DECISION,
-        arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
         arkret_wire::CapabilityActionId::REALM_ADMIN,
     ]
     .into_iter()

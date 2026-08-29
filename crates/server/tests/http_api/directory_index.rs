@@ -545,52 +545,6 @@ async fn directory_demo_projection_rejects_outside_development_mode_body() {
 }
 
 #[test]
-fn private_contact_discovery_rejects_plaintext_identifier_matching() {
-    run_on_deep_stack(
-        "private_contact_discovery_rejects_plaintext_identifier_matching",
-        private_contact_discovery_rejects_plaintext_identifier_matching_body,
-    );
-}
-
-async fn private_contact_discovery_rejects_plaintext_identifier_matching_body() {
-    let service = app();
-    let mut response = TestClient::post(
-        "http://server/_arkret/find/directory/private-contact-discovery",
-    )
-    .json(&serde_json::json!({
-        "requester_id": "did:web:alice.example",
-        "contacts": [
-            {"contact_ref": "did", "identifier_kind": "did", "identifier": "did:web:alice.example"},
-            {"contact_ref": "handle", "identifier_kind": "handle", "handle": "@alice"},
-            {"contact_ref": "email", "identifier_kind": "email", "identifier": "alice@example.com"},
-            {"contact_ref": "phone", "identifier_kind": "phone", "identifier": "+15550101010"}
-        ],
-        "privacy_profile": "ak.private_contact_discovery.v1"
-    }))
-    .send(&service)
-    .await;
-
-    assert_eq!(
-        response.status_code.unwrap(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(
-        problem_code(&body),
-        "unsupported_operation_version",
-        "{body}"
-    );
-    assert!(
-        body.get("matches").is_none(),
-        "private contact discovery must not return plaintext matches: {body}"
-    );
-    assert!(
-        !body.to_string().contains("did:web:alice.example"),
-        "private contact discovery error must not echo matched account identifiers: {body}"
-    );
-}
-
-#[test]
 fn directory_resolve_target_preview_requires_effective_preview_policy() {
     run_on_deep_stack(
         "directory_resolve_target_preview_requires_effective_preview_policy",

@@ -27,7 +27,6 @@ mod federation;
 mod health;
 mod identity;
 mod invites;
-mod join_applications;
 mod lifecycle;
 mod mimi;
 mod openapi;

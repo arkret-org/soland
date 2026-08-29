@@ -13,9 +13,6 @@
 //! - `POST /_arkret/find/directory/resolve-handle`
 //! - `POST /_arkret/find/directory/resolve-agent-selector`
 //! - `POST /_arkret/find/directory/list-handles-for-subject`
-//! - `POST /_arkret/find/directory/announce`
-//! - `POST /_arkret/find/directory/withdraw`
-//! - `POST /_arkret/find/directory/push/register`
 //!
 //! Demo data lives here too — `demo_organization` / `demo_actors` are
 //! placeholders until a real `actors` / `organizations` / `handles`
@@ -25,23 +22,21 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{BlobRef, DidCoreId, MessageId, RealmId, StrandId, SubscriptionId};
+use arkret_identifiers::{BlobRef, DidCoreId, MessageId, RealmId, StrandId};
 use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload;
 use arkret_models_collaboration::objects::realm_alias::RealmAlias;
 use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
-    DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome,
+    DirectoryHandleResolutionOutcome,
     DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
-    DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
-    DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,
     DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
-    DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
+    DirectoryUserSearchOutcome,
     ObjectPreview, ObjectPreviewId, OrganizationPreview, RealmJoinCandidate,
     RealmJoinCandidateRole, RealmJoinCandidateServiceKind, RealmJoinCandidateSource,
     RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview,
@@ -79,7 +74,6 @@ use super::{
     is_realm_deleted, now, realm_discoverability, realm_has_member, realm_history_access,
     realm_resolvable_to, realm_search_visible_to, sha256_hex,
 };
-use crate::ids;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};
 
@@ -140,18 +134,6 @@ pub(crate) fn protocol_router() -> Router {
         .push(
             Router::with_path("directory/list-handles-for-subject").post(list_handles_for_subject),
         )
-        .push(
-            Router::with_path("directory/private-contact-discovery")
-                .post(private_contact_discovery),
-        )
-        .push(Router::with_path("directory/announce").post(directory_announce))
-        .push(Router::with_path("directory/withdraw").post(directory_withdraw))
-        // Spec-canonical directory push-webhook registration
-        // (`ak.find.directory.push.command.register.v1`). The retired `/_soland/find/
-        // directory/subscribe` mirror used the same handler under the
-        // historical `subscribe` path; the protocol surface mounts only the
-        // canonical `push/register` path.
-        .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.find.directory.read.describe", tags("spaces"))]

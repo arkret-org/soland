@@ -633,9 +633,6 @@ fn canonical_event_read_operation(req: &Request) -> Option<&'static str> {
         ("POST", "/_arkret/peer/mls/group-state-material") => {
             Some(arkret_wire::ServiceOperationId::PEER_MLS_READ_GROUP_STATE_MATERIAL_V1)
         }
-        ("QUERY", "/_arkret/peer/events/describe") => {
-            Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_DESCRIBE_V1)
-        }
         ("QUERY", "/_arkret/peer/events/frontier") => {
             Some(arkret_wire::ServiceOperationId::PEER_EVENTS_READ_FRONTIER_V1)
         }

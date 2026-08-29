@@ -1617,37 +1617,6 @@ CREATE TABLE public.invite_locators (
 
 CREATE INDEX invite_locators_subject_active_idx ON public.invite_locators USING btree (subject_id, expires_at) WHERE revoked_at IS NULL AND consumed_at IS NULL;
 
-CREATE TABLE public.join_applications (
-    realm_id text NOT NULL,
-    application_ref text NOT NULL,
-    record jsonb NOT NULL,
-    updated_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (realm_id, application_ref)
-);
-
-CREATE INDEX join_applications_realm_updated_idx
-    ON public.join_applications (realm_id, updated_at, application_ref);
-
-CREATE TABLE public.join_application_idempotency (
-    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    idempotency_key text NOT NULL,
-    request_hash text NOT NULL,
-    response_body jsonb NOT NULL,
-    realm_id text NOT NULL,
-    application_ref text NOT NULL,
-    expires_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (principal_id, idempotency_key),
-    FOREIGN KEY (realm_id, application_ref)
-        REFERENCES public.join_applications (realm_id, application_ref)
-        ON DELETE CASCADE
-);
-
-CREATE INDEX join_application_idempotency_expiry_idx
-    ON public.join_application_idempotency (expires_at);
-
-CREATE INDEX join_application_idempotency_application_idx
-    ON public.join_application_idempotency (realm_id, application_ref);
-
 -- Deployment-wide dynamic operational settings (rate limits, admin
 -- allowlist, federation peers, feature toggles). One row PER setting key:
 -- `value` is the JSON for that key only. This is an OVERLAY — env/boot config

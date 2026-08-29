@@ -2,32 +2,23 @@
 //!
 //! This is the local P2 governance surface for organization-owned Realms:
 //! org policies are stored once, Realm create links fan out through an index,
-//! and Realm-level overrides are accepted only when the organization has
-//! explicitly approved the exception.
+//! and linked Realm projections consume the effective organization policy.
 
 use std::collections::BTreeSet;
 
-use arkret_models_collaboration::governance::realm_governance::{
-    REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
-    REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
-};
-use arkret_state::lattice::CellState;
 use arkret_wire::DidCoreId;
 use chrono::Utc;
-use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::governance::{OrganizationPolicyRecord, OrganizationRecord};
 
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
-
-const REALM_MODERATION_POLICY_CELL: &str = "ak:cell:ak.component.realm.moderation_policy.v1:null";
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct UpsertOrganizationRequestBody {
@@ -94,15 +85,6 @@ pub(crate) struct OrganizationPolicyView {
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub(crate) struct RealmModerationPolicyOutcome {
-    kind: String,
-    realm_id: String,
-    policy: Value,
-    updated_by: DidCoreId,
-    updated_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct OrganizationRealmLinkOutcome {
     organization_id: String,
     realm_id: String,
@@ -118,29 +100,6 @@ struct OrganizationPolicyLayer {
     policy: Value,
     #[serde(default)]
     applies_to_realms: Vec<String>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct RealmModerationPolicyFanout {
-    source: String,
-    rewrites_realm_policy: bool,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-pub(crate) struct RealmEffectiveModerationPolicyOutcome {
-    realm_id: String,
-    inheritance_mode: String,
-    #[serde(default)]
-    inheritance_chain_ids: Vec<String>,
-    #[serde(default)]
-    organization_policy_layers: Vec<OrganizationPolicyLayer>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    realm_policy: Option<RealmModerationPolicyOutcome>,
-    #[serde(default)]
-    effective_rules: Vec<Value>,
-    override_organization_approval_required: bool,
-    policy_merge_strategy: String,
-    fanout: RealmModerationPolicyFanout,
 }
 
 #[derive(Debug, salvo::oapi::ToSchema)]
@@ -570,10 +529,7 @@ pub(crate) fn verified_moderation_organization_ids(
     ids
 }
 
-pub(crate) async fn effective_policy_for_realm(
-    state: &AppState,
-    realm_id: &str,
-) -> Result<RealmEffectiveModerationPolicyOutcome, AppError> {
+pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str) -> Value {
     // SOL-ORG-05 — only organizations with a verified, active, in-window
     // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
@@ -600,40 +556,11 @@ pub(crate) async fn effective_policy_for_realm(
         })
         .collect::<Vec<_>>();
 
-    let realm_policy = current_realm_policy_outcome(state, realm_id).await?;
-    let has_organization_inheritance = !org_ids.is_empty();
-    Ok(RealmEffectiveModerationPolicyOutcome {
-        realm_id: realm_id.to_owned(),
-        inheritance_mode: if has_organization_inheritance {
-            "organization".to_owned()
-        } else {
-            "none".to_owned()
-        },
-        inheritance_chain_ids: directory_org_ids,
-        organization_policy_layers: org_layers,
-        realm_policy,
-        effective_rules: effective_rules(state, realm_id),
-        override_organization_approval_required: has_organization_inheritance,
-        // content-moderation.md §7 — when a Realm names more than one owning
-        // organization, the inherited layers combine most-restrictively: a join
-        // / write is denied if ANY owning organization denies it (union of deny
-        // rules). `organization_policy_blocks_join` already evaluates this union
-        // across all linked organizations; this field surfaces the merge
-        // semantics so a cross-organization Realm can be reasoned about.
-        policy_merge_strategy: REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE.to_owned(),
-        fanout: RealmModerationPolicyFanout {
-            source: REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY.to_owned(),
-            rewrites_realm_policy: false,
-        },
+    json!({
+        "organization_policy_layers": org_layers,
+        "effective_rules": effective_rules(state, realm_id),
+        "policy_merge_strategy": "most_restrictive",
     })
-}
-
-pub(crate) async fn effective_policy_value_for_realm(
-    state: &AppState,
-    realm_id: &str,
-) -> Result<Value, AppError> {
-    serde_json::to_value(effective_policy_for_realm(state, realm_id).await?)
-        .map_err(|error| AppError::internal(format!("serialize effective policy: {error}")))
 }
 
 pub(crate) async fn organization_policy_blocks_join(
@@ -643,9 +570,6 @@ pub(crate) async fn organization_policy_blocks_join(
 ) -> bool {
     if let Err(error) = refresh_organization_projection(state).await {
         tracing::warn!(%error, "failed to refresh organization projection for join policy");
-    }
-    if accepted_realm_override_allows_join(state, realm_id, actor) {
-        return false;
     }
     // SOL-ORG-05 — only verified moderation-scoped organizations gate joins.
     let org_ids = verified_moderation_organization_ids(state, realm_id);
@@ -658,101 +582,6 @@ pub(crate) async fn organization_policy_blocks_join(
             .cached_organization_policy(org_id.as_str())
             .is_some_and(|policy| policy_denies_join_actor(&policy.payload, actor))
     })
-}
-
-pub(crate) async fn realm_policy_override_requires_approval(
-    state: &AppState,
-    realm_id: &str,
-    payload: &Value,
-) -> bool {
-    if let Err(error) = refresh_organization_projection(state).await {
-        tracing::warn!(%error, "failed to refresh organization projection for policy override");
-    }
-    realm_policy_override_requires_approval_cached(state, realm_id, payload)
-}
-
-fn realm_policy_override_requires_approval_cached(
-    state: &AppState,
-    realm_id: &str,
-    payload: &Value,
-) -> bool {
-    let targets = allow_join_override_targets(payload);
-    if targets.is_empty() {
-        return false;
-    }
-    // SOL-ORG-05 — only verified moderation-scoped organizations' deny rules
-    // require a Realm override to be approved.
-    let org_ids = verified_moderation_organization_ids(state, realm_id);
-    if org_ids.is_empty() {
-        return false;
-    }
-    targets.iter().any(|target| {
-        org_ids.iter().any(|org_id| {
-            state
-                .governance()
-                .cached_organization_policy(org_id.as_str())
-                .is_some_and(|policy| policy_denies_join_actor(&policy.payload, target))
-        })
-    })
-}
-
-pub(crate) async fn realm_policy_override_has_approval(
-    state: &AppState,
-    realm_id: &str,
-    payload: &Value,
-) -> bool {
-    if let Err(error) = refresh_organization_projection(state).await {
-        tracing::warn!(%error, "failed to refresh organization projection for policy approval");
-    }
-    if !realm_policy_override_requires_approval_cached(state, realm_id, payload) {
-        return true;
-    }
-    // content-moderation.md §7 — most-restrictive cross-organization merge:
-    // every owning organization that denies one of the override targets MUST
-    // independently approve the override. An approval from an unrelated owning
-    // organization (one that does not deny the target) does not satisfy the
-    // denying organization's gate.
-    let denying_org_ids = organizations_denying_override_targets(state, realm_id, payload);
-    if denying_org_ids.is_empty() {
-        return true;
-    }
-    let approvals = approvals_from_payload(payload);
-    denying_org_ids.iter().all(|org_id| {
-        let single = BTreeSet::from([org_id.clone()]);
-        approvals
-            .iter()
-            .any(|approval| approval_matches(approval, &single))
-    })
-}
-
-/// The verified moderation-scoped organizations of `realm_id` whose policy
-/// denies at least one of the `allow_join` override targets carried in
-/// `payload`. Drives the most-restrictive approval gate: each such organization
-/// MUST approve. SOL-ORG-05 — declared `owning_organization_ids` hints do not
-/// participate.
-fn organizations_denying_override_targets(
-    state: &AppState,
-    realm_id: &str,
-    payload: &Value,
-) -> BTreeSet<DidCoreId> {
-    let targets = allow_join_override_targets(payload);
-    if targets.is_empty() {
-        return BTreeSet::new();
-    }
-    let org_ids = verified_moderation_organization_ids(state, realm_id);
-    org_ids
-        .into_iter()
-        .filter(|org_id| {
-            state
-                .governance()
-                .cached_organization_policy(org_id.as_str())
-                .is_some_and(|policy| {
-                    targets
-                        .iter()
-                        .any(|target| policy_denies_join_actor(&policy.payload, target))
-                })
-        })
-        .collect()
 }
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
@@ -859,96 +688,6 @@ fn organization_policy_record_view(
     }
 }
 
-pub(crate) fn realm_policy_event_outcome(
-    realm_id: &str,
-    policy: Value,
-    updated_by: &str,
-    updated_at: chrono::DateTime<Utc>,
-) -> Result<RealmModerationPolicyOutcome, AppError> {
-    Ok(RealmModerationPolicyOutcome {
-        kind: arkret_wire::event_kind_str::REALM_MODERATION_POLICY.to_owned(),
-        realm_id: realm_id.to_owned(),
-        policy,
-        updated_by: DidCoreId::new(updated_by.to_owned()).map_err(|error| {
-            AppError::param_invalid(format!("realm policy updated_by: {error}"))
-        })?,
-        updated_at: arkret_canonical::format_timestamp_canonical(updated_at),
-    })
-}
-
-async fn current_realm_policy_outcome(
-    state: &AppState,
-    realm_id: &str,
-) -> Result<Option<RealmModerationPolicyOutcome>, AppError> {
-    let Some(policy) = current_realm_policy_value(state, realm_id)? else {
-        return Ok(None);
-    };
-    let projected = state
-        .event_queries()
-        .projected_events_for_realm(realm_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let event = projected
-        .into_iter()
-        .filter(|event| {
-            event.event_kind == arkret_wire::EventKind::RealmModerationPolicy
-                && event.payload.get("value") == Some(&policy)
-        })
-        .max_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.event_id.cmp(&right.event_id))
-        })
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "settled realm moderation policy has no accepted Event projection",
-            )
-            .with_status(StatusCode::PRECONDITION_FAILED)
-            .with_wire_code("failed_precondition")
-        })?;
-    let sender = event.sender.ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
-            "settled realm moderation policy Event has no actor projection",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("failed_precondition")
-    })?;
-    Ok(Some(realm_policy_event_outcome(
-        realm_id,
-        policy,
-        &sender,
-        event.created_at,
-    )?))
-}
-
-fn current_realm_policy_value(state: &AppState, realm_id: &str) -> Result<Option<Value>, AppError> {
-    let snapshot = state.projections().snapshot();
-    let key = (realm_id.to_owned(), REALM_MODERATION_POLICY_CELL.to_owned());
-    let payload = match snapshot.realm_null_subject_cells.get(&key) {
-        Some(CellState::Bottom(_)) => {
-            return Err(AppError::new(
-                ErrorCode::FailedPrecondition,
-                "realm moderation policy cell is in Bottom",
-            )
-            .with_status(StatusCode::CONFLICT)
-            .with_wire_code("failed_bottom"));
-        }
-        Some(CellState::Value(payload)) => payload,
-        None => return Ok(None),
-    };
-    let Some(policy) = payload.get("value").filter(|value| value.is_object()) else {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "settled realm moderation policy cell has an invalid value",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("failed_precondition"));
-    };
-    Ok(Some(policy.clone()))
-}
-
 fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     // SOL-ORG-05 — effective rules are sourced only from verified
     // moderation-scoped organizations.
@@ -961,19 +700,6 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
         {
             rules.extend(policy_rules(&policy.payload));
         }
-    }
-    if let Some(realm_policy) = current_realm_policy_value(state, realm_id).ok().flatten() {
-        rules.extend(
-            allow_join_override_targets(&realm_policy)
-                .into_iter()
-                .map(|target| {
-                    json!({
-                        "source": "realm_override",
-                        "target": { "kind": "actor", "actor_id": target },
-                        "action": "allow_join",
-                    })
-                }),
-        );
     }
     rules
 }
@@ -1016,67 +742,6 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
     })
 }
 
-fn accepted_realm_override_allows_join(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    current_realm_policy_value(state, realm_id)
-        .ok()
-        .flatten()
-        .is_some_and(|policy| allow_join_override_targets(&policy).contains(actor))
-}
-
-fn allow_join_override_targets(payload: &Value) -> BTreeSet<String> {
-    let mut targets = BTreeSet::new();
-    for key in ["allow_override", "allow_overrides", "overrides"] {
-        let Some(array) = payload.get(key).and_then(Value::as_array) else {
-            continue;
-        };
-        for item in array {
-            let action = item
-                .get("action")
-                .or_else(|| item.get("override_action"))
-                .and_then(Value::as_str)
-                .unwrap_or("allow_join");
-            if action != "allow_join" {
-                continue;
-            }
-            if let Some(target) = target_actor_id(item) {
-                targets.insert(target.to_owned());
-            }
-        }
-    }
-    targets
-}
-
-fn approvals_from_payload(payload: &Value) -> Vec<Value> {
-    let mut approvals = Vec::new();
-    for key in [
-        "organization_approval",
-        "organization_approvals",
-        "approval",
-        "approvals",
-    ] {
-        match payload.get(key) {
-            Some(Value::Array(array)) => approvals.extend(array.iter().cloned()),
-            Some(Value::Object(_)) => approvals.push(payload[key].clone()),
-            _ => {}
-        }
-    }
-    approvals
-}
-
-fn approval_matches(approval: &Value, org_ids: &BTreeSet<DidCoreId>) -> bool {
-    if approval.get("approved").and_then(Value::as_bool) == Some(false) {
-        return false;
-    }
-    let Some(org_id) = approval
-        .get("organization_id")
-        .or_else(|| approval.get("organization_principal_id"))
-        .and_then(Value::as_str)
-    else {
-        return false;
-    };
-    DidCoreId::new(org_id).is_ok_and(|organization_id| org_ids.contains(&organization_id))
-}
-
 fn target_actor_id(value: &Value) -> Option<&str> {
     value
         .get("target")
@@ -1106,15 +771,6 @@ fn safe_id_fragment(value: &str) -> String {
         .chars()
         .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
         .collect()
-}
-
-pub(crate) fn requires_organization_approval_error() -> AppError {
-    AppError::new(
-        ErrorCode::FailedPrecondition,
-        "realm moderation policy override requires organization approval",
-    )
-    .with_status(StatusCode::CONFLICT)
-    .with_reason_code(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
 }
 
 #[cfg(test)]
@@ -1159,16 +815,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn organization_approval_rejection_uses_failed_precondition_layering() {
-        let error = requires_organization_approval_error();
-
-        assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(error.http_status(), StatusCode::CONFLICT);
-        assert_eq!(error.wire_code(), "failed_precondition");
-        assert_eq!(
-            error.reason_code.as_deref(),
-            Some(arkret_wire::ReasonCode::REQUIRES_ORGANIZATION_APPROVAL)
-        );
-    }
 }

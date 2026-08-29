@@ -527,14 +527,6 @@ pub struct AppConfig {
     /// copy of it — see
     /// [`crate::security::sovereign_enclave_allowed_outbound_hosts`].
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
-    /// When true, soland claims the `ak.profile.candidate.join_policy.v1`
-    /// candidate profile and exposes its complete profile-private signed
-    /// receipt carrier at the standard
-    /// `/_arkret/self/realms/{realm_id}/join-applications` surface.
-    /// Application/review/cancel remain private records and never become
-    /// Realm Event kinds.
-    /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).
-    pub candidate_join_policy_enabled: bool,
     /// P5 (5.4) — structured-logging output format. Defaults to
     /// [`LogFormat::Json`] in production (`SOLAND_DEVELOPMENT_MODE=false`)
     /// and [`LogFormat::Plain`] in development. Override at any time via
@@ -920,7 +912,6 @@ impl AppConfig {
             receive_policy_constraints: None,
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
-            candidate_join_policy_enabled: false,
             log_format: LogFormat::Plain,
         }
     }
@@ -1200,8 +1191,6 @@ impl AppConfig {
         crate::ratelimit::install_forwarded_for_trust(
             env_bool(values, "SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")?.unwrap_or(false),
         );
-        let candidate_join_policy_enabled =
-            env_bool(values, "SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
         let trust_domain = env_non_empty(values, "SOLAND_TRUST_DOMAIN").ok_or_else(|| {
             anyhow::anyhow!(
                 "SOLAND_TRUST_DOMAIN is required; it cannot be derived from the service core id"
@@ -1280,7 +1269,6 @@ impl AppConfig {
             receive_policy_constraints,
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
-            candidate_join_policy_enabled,
             log_format,
         })
     }

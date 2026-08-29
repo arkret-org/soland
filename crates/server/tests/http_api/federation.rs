@@ -250,45 +250,6 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
 }
 
 #[test]
-fn peer_events_describe_advertises_formal_surface() {
-    run_on_deep_stack(
-        "peer_events_describe_advertises_formal_surface",
-        peer_events_describe_advertises_formal_surface_body,
-    );
-}
-
-async fn peer_events_describe_advertises_formal_surface_body() {
-    let state = soland_test_support::app_state(test_config());
-    let describe: Value = TestClient::query("http://server/_arkret/peer/events/describe")
-        .json(&serde_json::json!({}))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-
-    assert_eq!(describe["service_kind"], "principal_server");
-    assert!(advertises_operation(
-        &describe,
-        "ak.peer.events.command.submit.v1"
-    ));
-    assert!(advertises_operation(
-        &describe,
-        "ak.peer.events.read.scan.v1"
-    ));
-    assert!(advertises_operation(
-        &describe,
-        "ak.peer.events.read.frontier.v1"
-    ));
-    // The canonical registry owns the formal surface even when a deployment
-    // returns a closed `not_implemented` problem for an optional capability.
-    assert!(advertises_operation(
-        &describe,
-        "ak.peer.snapshot.read.manifest_head.v1"
-    ));
-}
-
-#[test]
 fn peer_events_query_and_frontier_use_peer_surface() {
     run_on_deep_stack(
         "peer_events_query_and_frontier_use_peer_surface",

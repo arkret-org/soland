@@ -293,7 +293,6 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
-        state.settings().candidate_join_policy_enabled,
         state.config().sovereign_enclave_enabled,
     );
     let mut profiles = profile_ids_from_description(&description);

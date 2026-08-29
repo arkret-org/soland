@@ -142,10 +142,6 @@ fn assert_event_read_query_bindings(root: &Value) {
             "ak.self.events.read.resolve",
         ),
         (
-            "/_arkret/peer/events/describe",
-            "ak.peer.events.read.describe",
-        ),
-        (
             "/_arkret/peer/events/frontier",
             "ak.peer.events.read.frontier",
         ),

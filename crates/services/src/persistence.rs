@@ -12,7 +12,6 @@ use crate::identity::{
     DidDocumentState, DidLogEvent, DidResolverPort, ServiceRegistrationCommitResult,
 };
 use crate::jobs::RuntimeHealthPort;
-use crate::join_applications::JoinApplicationService;
 use crate::persistence_delivery::build_persistence_delivery_service;
 use crate::persistence_events::{PersistenceEventServices, build_persistence_event_services};
 use crate::persistence_identity::{
@@ -680,10 +679,6 @@ impl PersistenceHandle {
             runtime_health,
             sync_cursor_hmac_key,
         )
-    }
-
-    pub fn join_application_service(&self) -> JoinApplicationService {
-        JoinApplicationService::new(self.persistence.clone())
     }
 
     pub fn governance_history_service(

@@ -178,7 +178,6 @@ fn install_event_read_query_bindings(doc: &mut Value) {
         "/_arkret/self/seals/frontier",
         "/_arkret/self/events",
         "/_arkret/self/events/resolve",
-        "/_arkret/peer/events/describe",
         "/_arkret/peer/events/frontier",
         "/_arkret/peer/seals/frontier",
         "/_arkret/peer/events",

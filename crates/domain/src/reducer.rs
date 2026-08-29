@@ -29,7 +29,6 @@ mod apply_history_access;
 mod apply_identity_resolution;
 mod apply_invites;
 mod apply_key_backup;
-mod apply_member_application;
 mod apply_messages;
 mod apply_moderation;
 mod apply_objects;
@@ -84,7 +83,6 @@ pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relati
 // The handful of `pub` items in these modules get an explicit `pub use`
 // (which takes priority over the glob for that name).
 pub use apply_capability::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
-pub(crate) use apply_member_application::MemberApplicationState;
 pub use capability_derivation::inheritance_allowed_policies;
 pub(crate) use capability_derivation::*;
 pub(crate) use dispatch::{APPLY_REGISTRY, extract_event_ref_id, upsert_realm_link};

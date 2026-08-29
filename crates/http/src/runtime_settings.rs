@@ -85,8 +85,6 @@ pub struct RuntimeSettings {
     /// Service DIDs promotable from `pending` to `trusted` on push-bridge
     /// snapshot import.
     pub push_bridge_trusted_ids: Vec<String>,
-    /// Candidate join-policy member-application read surface toggle.
-    pub candidate_join_policy_enabled: bool,
     /// Rate-limit ceilings.
     pub rate_limit: RateLimitSettings,
 }
@@ -101,7 +99,6 @@ impl RuntimeSettings {
             federation_peers: config.federation_peers.clone(),
             federation_fanout_topology: config.federation_fanout_topology,
             push_bridge_trusted_ids: config.push_bridge_trusted_ids.clone(),
-            candidate_join_policy_enabled: config.candidate_join_policy_enabled,
             rate_limit: RateLimitSettings::from_limiter_config(&config.rate_limiter),
         }
     }
@@ -139,9 +136,6 @@ impl RuntimeSettings {
             keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
                 self.push_bridge_trusted_ids = decode(key, value)?
             }
-            keys::CANDIDATE_JOIN_POLICY_ENABLED => {
-                self.candidate_join_policy_enabled = decode(key, value)?
-            }
             keys::RATE_LIMIT => {
                 self.rate_limit = decode(key, value)?;
                 self.floor_rate_limit();
@@ -163,9 +157,6 @@ impl RuntimeSettings {
             }
             keys::PUSH_BRIDGE_TRUSTED_SERVICE_IDS => {
                 serde_json::to_value(&self.push_bridge_trusted_ids)
-            }
-            keys::CANDIDATE_JOIN_POLICY_ENABLED => {
-                serde_json::to_value(self.candidate_join_policy_enabled)
             }
             keys::RATE_LIMIT => serde_json::to_value(self.rate_limit),
             other => anyhow::bail!("unknown setting key: {other}"),
@@ -192,7 +183,6 @@ pub mod keys {
     pub const FEDERATION_PEERS: &str = "federation_peers";
     pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
     pub const PUSH_BRIDGE_TRUSTED_SERVICE_IDS: &str = "push_bridge_trusted_ids";
-    pub const CANDIDATE_JOIN_POLICY_ENABLED: &str = "candidate_join_policy_enabled";
     pub const RATE_LIMIT: &str = "rate_limit";
 
     /// Every recognized key, for validation / documentation.
@@ -201,7 +191,6 @@ pub mod keys {
         FEDERATION_PEERS,
         FEDERATION_FANOUT_TOPOLOGY,
         PUSH_BRIDGE_TRUSTED_SERVICE_IDS,
-        CANDIDATE_JOIN_POLICY_ENABLED,
         RATE_LIMIT,
     ];
 }
@@ -221,7 +210,6 @@ mod tests {
             federation_peers: vec!["https://peer.example|did:web:peer.example".to_owned()],
             federation_fanout_topology: FederationFanoutTopology::Hub,
             push_bridge_trusted_ids: vec!["did:web:push.example".to_owned()],
-            candidate_join_policy_enabled: true,
             rate_limit: RateLimitSettings {
                 window_seconds: 60,
                 default_per_minute: 600,
@@ -274,7 +262,6 @@ mod tests {
             settings.federation_fanout_topology,
             FederationFanoutTopology::Hub
         );
-        assert!(settings.candidate_join_policy_enabled);
     }
 
     #[test]
@@ -300,15 +287,6 @@ mod tests {
     fn apply_key_rejects_unknown_and_bad_shape() {
         let mut settings = sample();
         assert!(settings.apply_key("nope", serde_json::json!(1)).is_err());
-        assert!(
-            settings
-                .apply_key(
-                    keys::CANDIDATE_JOIN_POLICY_ENABLED,
-                    serde_json::json!("yes")
-                )
-                .is_err(),
-            "a string is not a bool"
-        );
     }
 
     #[test]
@@ -321,7 +299,6 @@ mod tests {
                 federation_peers: vec![],
                 federation_fanout_topology: FederationFanoutTopology::Mesh,
                 push_bridge_trusted_ids: vec![],
-                candidate_join_policy_enabled: false,
                 rate_limit: RateLimitSettings {
                     window_seconds: 1,
                     default_per_minute: 1,

@@ -2495,17 +2495,6 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            // join-policy.md §7.5 — `ak.invite.create` with
-            // `refs[role="join_authorised_by"]` MUST bind to a fresh,
-            // unconsumed review accept set. Each accepted review remains
-            // valid at its own authorization basis after later revocation.
-            if let Err(reason) = proj.check_invite_join_authorisation(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
             if let Err(reason) = proj.check_pin_scope_safety(operation) {
                 let status = if reason == "not_found" {
                     StatusCode::NOT_FOUND

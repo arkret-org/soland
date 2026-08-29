@@ -23,7 +23,6 @@ struct WellKnownArkretEndpoints {
     openapi: String,
     peer_events: String,
     peer_events_frontier: String,
-    peer_snapshot_head: String,
 }
 
 #[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
@@ -59,7 +58,6 @@ async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownArkretOutco
             openapi: format!("{}/.well-known/arkret/openapi.json", public_base_url),
             peer_events: format!("{}/_arkret/peer/events", public_base_url),
             peer_events_frontier: format!("{}/_arkret/peer/events/frontier", public_base_url),
-            peer_snapshot_head: format!("{}/_arkret/peer/snapshot/head", public_base_url),
         },
         version: env!("CARGO_PKG_VERSION").to_owned(),
     })

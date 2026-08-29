@@ -21,8 +21,8 @@ use super::{
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
     MemoryFederationOutboxStore, MemoryGovernanceDependencyStore, MemoryHandleReleaseStore,
     MemoryHistoryResponseStreamStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
-    MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
-    MemoryKeyBackupStore, MemoryMemberIdentityStore, MemoryMessageStore,
+    MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryKeyBackupStore,
+    MemoryMemberIdentityStore, MemoryMessageStore,
     MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
     MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
     MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
@@ -88,7 +88,6 @@ pub struct SolandMemoryPersistenceStore {
     history_traversal_retentions: MemoryHistoryTraversalRetentionStore,
     history_response_streams: MemoryHistoryResponseStreamStore,
     pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore,
-    join_applications: MemoryJoinApplicationStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
@@ -205,7 +204,6 @@ impl SolandMemoryPersistenceStore {
             history_traversal_retentions,
             history_response_streams,
             pending_rrk_acquisitions: MemoryPendingRrkAcquisitionStore::default(),
-            join_applications: MemoryJoinApplicationStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
@@ -513,9 +511,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
         &self.audit
     }
 
-    fn join_applications(&self) -> &dyn soland_storage::JoinApplicationStore {
-        &self.join_applications
-    }
 }
 
 impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStore {

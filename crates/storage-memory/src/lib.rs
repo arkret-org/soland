@@ -95,7 +95,6 @@ mod governance_history;
 mod history_response_stream;
 mod idempotency;
 mod invite_locators;
-mod join_applications;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -161,7 +160,6 @@ pub(crate) use governance_history::{
 pub(crate) use history_response_stream::MemoryHistoryResponseStreamStore;
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
-pub(crate) use join_applications::MemoryJoinApplicationStore;
 pub(crate) use key_backup::MemoryKeyBackupStore;
 pub(crate) use member_identity::MemoryMemberIdentityStore;
 pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore};

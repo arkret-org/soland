@@ -292,18 +292,6 @@ pub struct ProjectionState {
     /// by the `erasure_receipts_endpoint` server-describe surface and
     /// by `apply_audit_erasure_receipt_dispatch`.
     pub erasure_receipts: Vec<ErasureReceiptRecord>,
-    /// Rebuildable mirror of profile-private join-application records, keyed
-    /// by `(realm_id, application_receipt_digest)`. The durable private store,
-    /// not shared Event history, owns application/review/cancel receipts and
-    /// bodies.
-    pub member_applications: BTreeMap<(String, String), MemberApplicationState>,
-    /// Per-`(realm_id, applicant_actor_id)` reject cooldown anchor. Spec
-    /// `governance/join-policy.md` §3 `cooldown_after_reject` / §12:
-    /// after a review reject the reducer MUST refuse a fresh
-    /// `member.application` from the same actor until the window elapses.
-    /// Distinct from the `cooldown` deny gate (which keys off the last
-    /// `leave`); this keys off the last review `reject`.
-    pub member_application_reject_at: BTreeMap<(String, String), chrono::DateTime<chrono::Utc>>,
     /// Registry-derived cell writes of the Event currently being reduced.
     ///
     /// The v1 Event wire carries no producer `effects[]`: every cell write is

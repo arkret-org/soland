@@ -703,27 +703,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    join_application_idempotency (principal_id, idempotency_key) {
-        principal_id -> Text,
-        idempotency_key -> Text,
-        request_hash -> Text,
-        response_body -> Jsonb,
-        realm_id -> Text,
-        application_ref -> Text,
-        expires_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    join_applications (realm_id, application_ref) {
-        realm_id -> Text,
-        application_ref -> Text,
-        record -> Jsonb,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     key_backups (id) {
         id -> Uuid,
         actor_id -> Nullable<Text>,
@@ -1890,8 +1869,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     idempotency_keys,
     invite_locators,
     invite_receive_policies,
-    join_application_idempotency,
-    join_applications,
     key_backups,
     member_identity_events,
     member_identity_handle_claims,

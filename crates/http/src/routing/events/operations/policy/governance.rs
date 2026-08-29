@@ -545,12 +545,10 @@ pub(super) async fn validate_moderation_event_policy(
     };
     let actions = match &kind {
         arkret_wire::EventKind::ModerationDecision => &[
-            arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
             arkret_wire::CapabilityActionId::POLICY_MANAGE,
             arkret_wire::CapabilityActionId::MODERATION_DECISION,
         ][..],
         arkret_wire::EventKind::ModerationDecisionLift => &[
-            arkret_wire::CapabilityActionId::REALM_MODERATION_POLICY,
             arkret_wire::CapabilityActionId::POLICY_MANAGE,
             arkret_wire::CapabilityActionId::MODERATION_DECISION_LIFT,
         ][..],

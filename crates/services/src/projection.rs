@@ -36,8 +36,7 @@ use soland_domain::reducer::{
     SolandMembershipState, SolandRealmState,
 };
 use soland_storage::{
-    HistoryAuthorityViewCas, JoinApplicationRecord, PersistenceError, PersistenceResult,
-    PersistenceStore,
+    HistoryAuthorityViewCas, PersistenceError, PersistenceResult, PersistenceStore,
 };
 
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
@@ -1691,20 +1690,6 @@ impl ProjectionService {
     #[must_use]
     pub fn snapshot(&self) -> ProjectionState {
         self.state.lock().clone()
-    }
-
-    pub fn install_join_application_record(&self, record: &JoinApplicationRecord) {
-        self.state.lock().install_private_join_application(
-            &record.receipt,
-            &record.private_body,
-            &record.status,
-            &record.reviews,
-            &record.required_accept_refs,
-            record.superseded_by.as_ref(),
-            record.invite_consumed,
-            record.applicant_visibility.clone(),
-            record.expires_at,
-        );
     }
 
     pub fn invite_claim_proof_context(

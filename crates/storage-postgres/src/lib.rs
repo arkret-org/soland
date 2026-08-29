@@ -42,8 +42,7 @@ pub(crate) use soland_storage::{
     IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
     IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
     InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
-    JoinApplicationRecord, JoinApplicationStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    KeyBackupDeleteChallengeRecord, KeyBackupStore,
     MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord,
     MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
@@ -110,7 +109,6 @@ mod governance_history;
 mod history_response_stream;
 mod idempotency;
 mod invite_locators;
-mod join_applications;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -161,7 +159,6 @@ pub use governance_history::*;
 pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
-pub use join_applications::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;

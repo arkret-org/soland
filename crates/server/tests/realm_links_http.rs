@@ -1,22 +1,11 @@
-//! G3.S5 — HTTP integration tests for the realm-links surface:
+//! G3.S5 — integration tests for Realm Link Event admission and reads:
 //!
-//! - `POST /_arkret/self/realms/{realm_id}/links` — create / status-flip a `ak.realm.link`.
-//! - `DELETE /_arkret/self/realms/{realm_id}/links/{target_realm_id}` — tombstone an existing link.
+//! - `POST /_arkret/self/events` — create, status-flip, or tombstone an `ak.realm.link`.
 //! - `GET /_arkret/self/realms/{realm_id}/effective-policy` — read the merged effective policy
 //!   (walks the inheritance chain).
 //! - General directed cycles are accepted; self-links and illegal FSM transitions are rejected.
-//!
-//! Both writes carry the caller-signed `ak.realm.link` Move rather than the edge
-//! fields: only the caller can produce the signature the operation's `event_log`
-//! durable effect requires (`zh/extensions/capabilities.md` sections 118/361,
-//! `zh/security/key-management.md` section 411). That is why every Realm here is
-//! bootstrapped through the real `ak.realm.create` genesis batch — a Control Move
-//! has to cite an accepted Seal, and a Realm that was never created has none.
 
 use arkret_identifiers::{RealmId, SealId};
-use arkret_models_collaboration::governance::realm_governance::{
-    RealmLinkCreateRequestBody, RealmLinkDeleteRequestBody,
-};
 use chrono::Utc;
 use ed25519_dalek::SigningKey;
 use salvo::http::StatusCode;
@@ -46,12 +35,6 @@ fn test_config() -> AppConfig {
 
 fn app_from_state(state: &AppState) -> salvo::Service {
     service(state.clone())
-}
-
-/// The registered operation bodies are read as canonical JSON, so a fixture
-/// posts RFC 8785 bytes rather than whatever field order `serde_json` emits.
-fn canonical_body<T: serde::Serialize>(body: &T) -> Vec<u8> {
-    arkret_canonical::canonical_json_bytes(body).expect("canonical operation body")
 }
 
 /// A session plus the device key the submitted Events are signed with.
@@ -229,57 +212,20 @@ async fn link_move(
     .build_submission()
 }
 
-async fn post_link(
+async fn submit_link(
     state: &AppState,
     token: &str,
     realm_id: &str,
     target: &str,
+    status: &str,
 ) -> salvo::http::Response {
-    let request = RealmLinkCreateRequestBody {
-        link_event: link_move(state, token, realm_id, target, "active").await,
-    };
-    TestClient::post(format!(
-        "http://server/_arkret/self/realms/{realm_id}/links"
-    ))
-    .add_header(
-        "Arkret-Operation",
-        "ak.self.realm_link.command.create.v1",
-        true,
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&request))
-    .send(&app_from_state(state))
-    .await
-}
-
-/// Tombstone the edge.
-///
-/// The DELETE carries a request body because the removal is as durable a signed
-/// Event as the creation, and `link_kind` travels in that signed payload: a query
-/// parameter is outside the bytes the caller signs.
-async fn delete_link(
-    state: &AppState,
-    token: &str,
-    realm_id: &str,
-    target: &str,
-) -> salvo::http::Response {
-    let request = RealmLinkDeleteRequestBody {
-        link_event: link_move(state, token, realm_id, target, "tombstoned").await,
-    };
-    TestClient::delete(format!(
-        "http://server/_arkret/self/realms/{realm_id}/links/{target}"
-    ))
-    .add_header(
-        "Arkret-Operation",
-        "ak.self.realm_link.resource.delete.v1",
-        true,
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .add_header("content-type", "application/json", true)
-    .body(canonical_body(&request))
-    .send(&app_from_state(state))
-    .await
+    let submission = link_move(state, token, realm_id, target, status).await;
+    TestClient::post("http://server/_arkret/self/events")
+        .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&submission)
+        .send(&app_from_state(state))
+        .await
 }
 
 async fn effective_policy(state: &AppState, token: &str, realm_id: &str) -> Value {
@@ -334,24 +280,22 @@ fn project_inheritance_policy(
     proj.apply(&op, state.test_hlc());
 }
 
-/// G3.S5 — happy path: POST a `governed_by` link from B → A, GET the
+/// G3.S5 — happy path: submit a `governed_by` link from B → A, GET the
 /// effective policy on B (after an explicit `ak.realm.inheritance_policy`
 /// opt-in) and assert the chain walked back to A.
 #[tokio::test(flavor = "multi_thread")]
-async fn realm_links_post_parent_then_effective_policy_walks_chain() {
+async fn realm_link_event_then_effective_policy_walks_chain() {
     let state = soland_test_support::app_state(test_config());
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm_a = bootstrap_realm(&state, &token, "links chain parent").await;
     let realm_b = bootstrap_realm(&state, &token, "links chain child").await;
 
-    // 1. POST B → A (`governed_by`, active). HTTP 200, body echoes the projected status.
-    let mut response = post_link(&state, &token, &realm_b, &realm_a).await;
+    // 1. Submit B → A (`governed_by`, active) through ordinary Event admission.
+    let mut response = submit_link(&state, &token, &realm_b, &realm_a, "active").await;
     assert_eq!(response.status_code, Some(StatusCode::OK));
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["realm_id"], realm_b);
-    assert_eq!(body["target_realm_id"], realm_a);
-    assert_eq!(body["status"], "active");
+    assert_eq!(body["status"], "accepted");
 
     // 2. Explicit inheritance opt-in on B (spec §6.1 — a link alone doesn't enable inheritance).
     project_inheritance_policy(&state, &realm_b, &realm_a, &["b.policy"]);
@@ -385,7 +329,7 @@ async fn realm_links_post_parent_then_effective_policy_walks_chain() {
 
 /// Realm Link is a general graph: a directed triangle is valid.
 #[tokio::test(flavor = "multi_thread")]
-async fn realm_links_post_general_directed_cycle_is_allowed() {
+async fn realm_link_events_allow_general_directed_cycle() {
     let state = soland_test_support::app_state(test_config());
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
@@ -399,18 +343,18 @@ async fn realm_links_post_general_directed_cycle_is_allowed() {
         (&realm_b, &realm_c),
         (&realm_c, &realm_a),
     ] {
-        let mut response = post_link(&state, &token, source, target).await;
+        let mut response = submit_link(&state, &token, source, target, "active").await;
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         assert_eq!(status, Some(StatusCode::OK), "{source} -> {target}: {body}");
     }
 }
 
-/// G3.S5 — DELETE a link, verify the effective policy recomputes
-/// (the deleted edge is treated as severed, so it no longer
+/// G3.S5 — tombstone a link, verify the effective policy recomputes
+/// (the tombstoned edge is treated as severed, so it no longer
 /// contributes to the inheritance walk).
 #[tokio::test(flavor = "multi_thread")]
-async fn realm_links_delete_recomputes_effective_policy() {
+async fn realm_link_tombstone_recomputes_effective_policy() {
     let state = soland_test_support::app_state(test_config());
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
@@ -418,9 +362,9 @@ async fn realm_links_delete_recomputes_effective_policy() {
     let realm_c = bootstrap_realm(&state, &token, "links delete parent").await;
     let realm_d = bootstrap_realm(&state, &token, "links delete child").await;
 
-    // Build D → C → B chain via POSTs, opt-in inheritance at each level.
+    // Build D → C → B chain via Event submissions, opt-in inheritance at each level.
     for (source, target) in [(&realm_d, &realm_c), (&realm_c, &realm_b)] {
-        let mut response = post_link(&state, &token, source, target).await;
+        let mut response = submit_link(&state, &token, source, target, "active").await;
         let status = response.status_code;
         let body: Value = response.take_json().await.unwrap_or(Value::Null);
         assert_eq!(status, Some(StatusCode::OK), "{source} -> {target}: {body}");
@@ -438,26 +382,30 @@ async fn realm_links_delete_recomputes_effective_policy() {
         "2-level walk MUST surface grandparent's allowed_policies: {allowed1:?}"
     );
 
-    // DELETE D → C. Severs the chain at the first edge — D's chain
+    // Tombstone D → C. Severs the chain at the first edge — D's chain
     // walk now stops at C (still declared in D's inheritance_policy)
     // but cannot transit further because the governed_by edge is
     // tombstoned. C's own `c.policy` still surfaces because D's
     // inheritance_policy explicitly names C as the parent; B drops out.
-    let mut deleted = delete_link(&state, &token, &realm_d, &realm_c).await;
+    let mut deleted = submit_link(&state, &token, &realm_d, &realm_c, "tombstoned").await;
     let delete_status = deleted.status_code;
     let delete_body: Value = deleted.take_json().await.unwrap_or(Value::Null);
-    assert_eq!(delete_status, Some(StatusCode::OK), "DELETE: {delete_body}");
-    assert_eq!(delete_body["status"], "tombstoned");
+    assert_eq!(
+        delete_status,
+        Some(StatusCode::OK),
+        "tombstone: {delete_body}"
+    );
+    assert_eq!(delete_body["status"], "accepted");
 
     let allowed2 = allowed_policies(&effective_policy(&state, &token, &realm_d).await);
     assert!(
         !allowed2.iter().any(|policy| policy == "b.policy"),
-        "after DELETE D→C, the transitive walk to B must be cut: {allowed2:?}"
+        "after tombstoning D→C, the transitive walk to B must be cut: {allowed2:?}"
     );
 
     // Tombstoned is terminal. A later attempt to reactivate the same cell
     // fails with the canonical FSM reason.
-    let mut reactivate = post_link(&state, &token, &realm_d, &realm_c).await;
+    let mut reactivate = submit_link(&state, &token, &realm_d, &realm_c, "active").await;
     assert_eq!(
         reactivate.status_code,
         Some(StatusCode::UNPROCESSABLE_ENTITY)
@@ -475,13 +423,13 @@ async fn realm_links_delete_recomputes_effective_policy() {
 
 /// G3.S5 — self-link is rejected as a schema violation with HTTP 422.
 #[tokio::test(flavor = "multi_thread")]
-async fn realm_links_post_self_link_rejected() {
+async fn realm_link_event_self_reference_is_rejected() {
     let state = soland_test_support::app_state(test_config());
     let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let token = prepare_alice(&state).await;
     let realm_a = bootstrap_realm(&state, &token, "links self reference").await;
 
-    let mut response = post_link(&state, &token, &realm_a, &realm_a).await;
+    let mut response = submit_link(&state, &token, &realm_a, &realm_a, "active").await;
     assert_eq!(response.status_code, Some(StatusCode::UNPROCESSABLE_ENTITY));
     let body: Value = response.take_json().await.expect("error envelope is JSON");
     assert_eq!(body["type"], "https://arkret.org/problems/schema_violation");

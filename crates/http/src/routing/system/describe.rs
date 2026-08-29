@@ -19,8 +19,7 @@
 use arkret_identity::service_identity::DidCoreIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
-use arkret_wire::generated::profile_requirements::requirements_for;
-use arkret_wire::{PROFILE_PRIVATE_HTTP_RECEIPT_V1, ProfileId};
+use arkret_wire::ProfileId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -371,7 +370,6 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
-        state.settings().candidate_join_policy_enabled,
         state.config().sovereign_enclave_enabled,
     );
 
@@ -412,68 +410,8 @@ async fn build_server_description_resolved(
 pub(crate) fn apply_claim_level_partition(
     description: &mut arkret_models_discovery::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileArtifactEntry],
-    candidate_join_policy_enabled: bool,
     sovereign_enclave_enabled: bool,
 ) {
-    // `governance/join-policy.md` §7.1.1 requires the *complete* carrier
-    // surface behind this claim. Read it off the SDK's generated projection of
-    // `conformance-profiles.json` rather than a hand-kept copy, so a spec
-    // change reaches the advertised surface without editing this file — and so
-    // the producer here and the validator in `ServiceDescribe::validate` can
-    // never disagree about what "complete" means.
-    let join_requirements = requirements_for(ProfileId::CANDIDATE_JOIN_POLICY_V1)
-        .expect("SDK-generated profile table must carry the candidate join-policy profile");
-    let join_features = join_requirements.required_features;
-    const JOIN_POLICY_BUNDLE: &str =
-        "ak.operation_bundle.principal_server.candidate_join_policy.v1";
-    if candidate_join_policy_enabled {
-        description.profile_bindings.insert(
-            ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned(),
-            arkret_models_discovery::service_description::ProfileBinding {
-                carrier: PROFILE_PRIVATE_HTTP_RECEIPT_V1.to_owned(),
-            },
-        );
-        if !description
-            .supported_profiles
-            .iter()
-            .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
-        {
-            description
-                .supported_profiles
-                .push(ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned());
-        }
-        if !description
-            .supported_operation_bundles
-            .iter()
-            .any(|bundle| bundle == JOIN_POLICY_BUNDLE)
-        {
-            description
-                .supported_operation_bundles
-                .push(JOIN_POLICY_BUNDLE.to_owned());
-        }
-        for feature in join_features {
-            if !description
-                .supported_features
-                .iter()
-                .any(|candidate| candidate == feature)
-            {
-                description.supported_features.push((*feature).to_owned());
-            }
-        }
-    } else {
-        description
-            .profile_bindings
-            .remove(ProfileId::CANDIDATE_JOIN_POLICY_V1);
-        description
-            .supported_profiles
-            .retain(|profile| profile != ProfileId::CANDIDATE_JOIN_POLICY_V1);
-        description
-            .supported_operation_bundles
-            .retain(|bundle| bundle != JOIN_POLICY_BUNDLE);
-        description
-            .supported_features
-            .retain(|feature| !join_features.contains(&feature.as_str()));
-    }
     let advertised_profile_ids = description
         .supported_profiles
         .iter()
@@ -574,21 +512,6 @@ pub(crate) fn apply_claim_level_partition(
                 ),
                 ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
                     ProfileId::SOVEREIGN_ENCLAVE_V1,
-                )
-            },
-        );
-    }
-    if candidate_join_policy_enabled {
-        claimed_profiles.push(
-            arkret_models_discovery::service_description::ClaimedProfileEntry {
-                notes: Some(
-                    "Candidate join-policy profile: the complete standard profile-private \
-                 signed receipt carrier is enabled; application/review concepts remain \
-                 outside shared Realm Event history."
-                        .to_owned(),
-                ),
-                ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                    arkret_wire::ProfileId::CANDIDATE_JOIN_POLICY_V1,
                 )
             },
         );
@@ -824,66 +747,6 @@ mod tests {
     use super::apply_claim_level_partition;
 
     #[test]
-    fn candidate_join_policy_claim_is_complete_and_flag_gated() {
-        let mut description = ServiceDescribe::development(
-            Did::new("did:web:soland.example".to_owned()).unwrap(),
-            TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-            ServiceKind::PrincipalServer,
-            vec![
-                "ak.operation_bundle.principal_server.describe.v1".to_owned(),
-                "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
-            ],
-            vec![arkret_models_discovery::TransportBinding::HttpJson {
-                base_url: "https://soland.example/".to_owned(),
-                extension_profile_required: (),
-            }],
-        );
-        apply_claim_level_partition(&mut description, &[], true, false);
-        assert!(
-            description
-                .supported_profiles
-                .iter()
-                .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
-        );
-        assert_eq!(
-            description.profile_bindings[ProfileId::CANDIDATE_JOIN_POLICY_V1].carrier,
-            "profile_private_http_receipt_v1"
-        );
-        for operation in [
-            "ak.self.realm.join_application.command.submit.v1",
-            "ak.self.realm.join_application.command.review.v1",
-            "ak.self.realm.join_application.command.cancel.v1",
-            "ak.self.realm.join_application.read.list.v1",
-            "ak.self.realm.join_application.resource.get.v1",
-            "ak.self.realm.join_application.audit.read.list.v1",
-        ] {
-            assert!(
-                arkret_wire::ServiceOperationId::from_wire(operation)
-                    .is_some_and(|operation| description.supports_operation(operation))
-            );
-        }
-        description
-            .validate()
-            .expect("candidate join-policy describe must remain transport-closed");
-
-        apply_claim_level_partition(&mut description, &[], false, false);
-        assert!(
-            !description
-                .supported_profiles
-                .iter()
-                .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
-        );
-        assert!(
-            !description
-                .profile_bindings
-                .contains_key(ProfileId::CANDIDATE_JOIN_POLICY_V1)
-        );
-        assert!(!description.supported_operation_bundles.iter().any(
-            |bundle| bundle == "ak.operation_bundle.principal_server.candidate_join_policy.v1"
-        ));
-    }
-
-    #[test]
     fn conformance_discovery_tokens_are_not_wire_features() {
         let mut description = ServiceDescribe::development(
             Did::new("did:web:soland.example".to_owned()).unwrap(),
@@ -901,7 +764,7 @@ mod tests {
         description
             .supported_profiles
             .push("ak.profile.chat_mvp.v1".to_owned());
-        apply_claim_level_partition(&mut description, &[], false, false);
+        apply_claim_level_partition(&mut description, &[], false);
         for feature in [
             "discussion_history_access",
             "supported_event_kinds",

@@ -7,8 +7,7 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountStatusReceiptedPublication, UnsignedAccountStatusReceipt,
 };
 use arkret_models_collaboration::event_query::{
-    EventsQueryPostRequestBody, PeerEventsDescribeRequestBody, PeerEventsFrontierRequestBody,
-    SealFrontierRequestBody,
+    EventsQueryPostRequestBody, PeerEventsFrontierRequestBody, SealFrontierRequestBody,
 };
 use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
@@ -44,19 +43,8 @@ const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-struct PeerEventsDescribeLimits {
-    max_batch_item_count: usize,
-    max_query_limit: usize,
-    max_resolve: usize,
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-struct PeerSnapshotHeadOutcome {}
-
 pub(super) fn router() -> Router {
     Router::new()
-        .push(Router::with_path("events/describe").query(peer_events_describe))
         .push(
             Router::with_path("events")
                 .post(peer_events_submit)
@@ -67,7 +55,6 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
         .push(Router::with_path("account-status").post(peer_account_status_submit))
-        .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
         .push(
             Router::with_path("device-revocations/check")
                 .post(super::peer_device_revocations::check_device_revocation_gate),
@@ -739,45 +726,6 @@ fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
     Ok(())
 }
 
-#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.describe", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.describe.v1"))]
-async fn peer_events_describe(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<arkret_models_discovery::ServiceDescribe> {
-    if req.method().as_str() == "QUERY" {
-        parse_json_body::<PeerEventsDescribeRequestBody>(
-            req,
-            "invalid ak.peer.events.read.describe.v1 request body",
-        )
-        .await?;
-    }
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let mut description = crate::routing::system::describe::build_server_description(state);
-    description.supported_profiles = vec![
-        arkret_wire::ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
-        arkret_wire::ProfileId::SIGNAL_PEER_RELAY_V1.to_owned(),
-    ];
-    description.limits.extensions.insert(
-        "peer_events".to_owned(),
-        serde_json::to_value(PeerEventsDescribeLimits {
-            max_batch_item_count: MAX_FEDERATED_EVENTS,
-            max_query_limit: MAX_PEER_EVENTS_READ_LIMIT,
-            max_resolve: MAX_PEER_EVENTS_RESOLVE,
-        })
-        .expect("peer limits serialize"),
-    );
-    description.claimed_profiles = description
-        .supported_profiles
-        .iter()
-        .map(arkret_models_discovery::ClaimedProfileEntry::self_claimed)
-        .collect();
-    description.validate().map_err(|error| {
-        AppError::internal(format!("peer ServiceDescribe validation failed: {error}"))
-    })?;
-    json_ok(description)
-}
-
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.command.submit", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.command.submit.v1"))]
 async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Response) {
@@ -1214,30 +1162,6 @@ async fn peer_seals_frontier(
         frontier,
         service_proof,
     })
-}
-
-/// Spec resolution (2026-06-11): `ak.peer.snapshot.read.manifest_head.v1` returns the full
-/// signed `ak.schema.snapshot.v1` manifest. soland cannot produce a real
-/// Snapshot detached proof yet, and the spec forbids serving a dev-signed
-/// stand-in (`signature` / `authority_binding` / `event_set_commitment`
-/// MUST NOT be fabricated — service-http-binding.md §6.1, service-surface.md
-/// §5.2). The operation is therefore undeclared and the endpoint fails
-/// closed with `not_implemented` until a real signing path lands. The
-/// dev snapshot bundle remains reachable on the `/_soland/` product face
-/// (`org.arkret.soland.sync.snapshot_chunk`).
-#[salvo::oapi::endpoint(operation_id = "ak.peer.snapshot.read.manifest_head", tags("events"))]
-#[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.read.manifest_head.v1"))]
-async fn peer_snapshot_head(
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<PeerSnapshotHeadOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    validate_peer_request(state, req, false).await?;
-    Err(AppError::new(
-        soland_http::error::ErrorCode::NotImplemented,
-        "ak.peer.snapshot.read.manifest_head.v1 is not implemented: this deployment cannot \
-         produce a signed ak.schema.snapshot.v1 manifest",
-    ))
 }
 
 #[derive(Debug)]
