@@ -586,7 +586,8 @@ mod tests {
         let challenge = OrganizationRegistrationChallenge {
             challenge_id: format!("ak:organization_registration_challenge:{}", "a".repeat(64)),
             organization_id: organization_id.clone(),
-            did: Did::new("did:webvh:zActualOrganization:organization.example").unwrap(),
+            organization_did: Did::new("did:webvh:zActualOrganization:organization.example")
+                .unwrap(),
             purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
             nonce: "fixture_challenge_nonce_000001".to_owned(),
             audience_id: DidCoreId::new("ak:did_core:webvh:zService").unwrap(),

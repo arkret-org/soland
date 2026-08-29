@@ -927,7 +927,7 @@ fn registration_challenge(
     OrganizationRegistrationChallenge {
         challenge_id: format!("ak:organization_registration_challenge:{challenge_hash}"),
         organization_id: organization_id.clone(),
-        did: organization_did.clone(),
+        organization_did: organization_did.clone(),
         purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
         audience_id: DidCoreId::new("ak:did_core:webvh:zService").expect("valid service core id"),
@@ -959,7 +959,7 @@ fn registration_outcome(
     let mut receipt = OrganizationRegistrationReceipt {
         registration_receipt_id: "ak:organization_registration_receipt:placeholder".to_owned(),
         organization_id: organization_id.clone(),
-        did: organization_did.clone(),
+        organization_did: organization_did.clone(),
         registration_generation: generation,
         version_id: version_id.to_owned(),
         log_head_digest: test_hash(&format!(
