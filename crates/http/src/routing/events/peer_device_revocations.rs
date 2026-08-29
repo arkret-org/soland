@@ -1,8 +1,7 @@
 use arkret_wire::{
-    AcceptedDevicePossessionProof, AcceptedDevicePossessionVerification,
-    DeviceRevocationGateActionClass, DeviceRevocationGateCheckOutcome,
-    DeviceRevocationGateCheckRequestBody, DeviceRevocationGateDecision,
-    DeviceRevocationGateDecisionReceipt, Hash, PayloadProof, SealId,
+    AcceptedDevicePossessionProof, DeviceRevocationGateActionClass,
+    DeviceRevocationGateCheckOutcome, DeviceRevocationGateCheckRequestBody,
+    DeviceRevocationGateDecision, DeviceRevocationGateDecisionReceipt, Hash, PayloadProof, SealId,
     UnsignedDeviceRevocationGateDecisionReceipt,
 };
 use salvo::prelude::*;
@@ -174,7 +173,7 @@ pub(super) async fn check_device_revocation_gate(
     // origin's accepted current device authority before any allow receipt can
     // be minted. Initial registration/recovery issue deliberately has no such
     // proof because its accepted binding comes from its own terminal ledger.
-    let (accepted_device_possession_verification, verified_proof_binding) = if let Some(proof) =
+    let (accepted_device_possession_proof_digest, verified_proof_binding) = if let Some(proof) =
         request.accepted_device_possession_proof.as_ref()
     {
         let (issued_at, expires_at, signature) = match proof {
@@ -217,12 +216,11 @@ pub(super) async fn check_device_revocation_gate(
             schema_violation("accepted-device possession proof is invalid")
         })?;
         (
-            Some(AcceptedDevicePossessionVerification {
-                proof_digest: proof
+            Some(
+                proof
                     .proof_digest()
                     .map_err(|error| schema_violation(error.to_string()))?,
-                verification_method: proof.verification_method().clone(),
-            }),
+            ),
             Some(verified_binding),
         )
     } else {
@@ -357,7 +355,7 @@ pub(super) async fn check_device_revocation_gate(
         target_device_generation_ref,
         action_class: request.action_class,
         intent_digest: request.intent_digest.clone(),
-        accepted_device_possession_verification,
+        accepted_device_possession_proof_digest,
         decision,
         linearization_seq: linearization.linearization_seq,
         linearized_at: linearization.linearized_at,

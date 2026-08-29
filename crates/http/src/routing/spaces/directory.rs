@@ -27,8 +27,7 @@ use arkret_models_collaboration::governance::realm_governance::RealmAliasPayload
 use arkret_models_collaboration::objects::realm_alias::RealmAlias;
 use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
-    DirectoryHandleResolutionOutcome,
-    DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
+    DirectoryHandleResolutionOutcome, DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
     DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
@@ -36,11 +35,10 @@ use arkret_models_discovery::{
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
-    DirectoryUserSearchOutcome,
-    ObjectPreview, ObjectPreviewId, OrganizationPreview, RealmJoinCandidate,
-    RealmJoinCandidateRole, RealmJoinCandidateServiceKind, RealmJoinCandidateSource,
-    RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview,
-    ServiceDescribe, TargetKind, UserSearchOutcome,
+    DirectoryUserSearchOutcome, ObjectPreview, ObjectPreviewId, OrganizationPreview,
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
+    RealmJoinCandidateSource, RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel,
+    RealmPreview, ServiceDescribe, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
 use arkret_models_identity::delivery_binding::{DeliveryMode, RecipientServiceKind};

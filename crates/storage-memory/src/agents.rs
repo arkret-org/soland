@@ -1,8 +1,8 @@
 #[cfg(test)]
 use soland_storage::AgentRuntimeSnapshotGuard;
+
 #[cfg(feature = "fault-injection")]
 use super::Arc;
-
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
     AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,

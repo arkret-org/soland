@@ -22,18 +22,17 @@ use super::{
     MemoryFederationOutboxStore, MemoryGovernanceDependencyStore, MemoryHandleReleaseStore,
     MemoryHistoryResponseStreamStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
     MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryKeyBackupStore,
-    MemoryMemberIdentityStore, MemoryMessageStore,
-    MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
-    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
-    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
-    MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
-    MemoryPendingRrkAcquisitionStore, MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore,
-    MemoryProjectionEventStore, MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore,
-    MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
-    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
-    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemoryMemberIdentityStore, MemoryMessageStore, MemoryMimiConsentCorrelationStore,
+    MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
+    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
+    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
+    MemoryOrganizationStore, MemoryPendingRrkAcquisitionStore, MemoryPolicyDocumentStore,
+    MemoryPrincipalResolutionStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
+    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
+    MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore,
+    MemoryRecoveryPolicyStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
+    MemoryRetentionTombstoneStore, MemorySecurityTransactionStore, MemoryServiceIdentityStore,
+    MemoryServiceRouteStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
     MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
     MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
@@ -510,7 +509,6 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
     }
-
 }
 
 impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStore {

@@ -14,7 +14,6 @@
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
 //! supported-effect/scope/type validators are `pub` so admin / authz handlers
 //! can reuse them via the `crate::routing::*` re-exports.
-//!
 use arkret_identifiers::{Did, DidCoreId, RealmId, project_did_to_core_id};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;

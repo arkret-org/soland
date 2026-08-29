@@ -365,7 +365,6 @@ impl FederationGovernanceStoreRegistry for PgPersistenceStore {
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
     }
-
 }
 
 impl DeliveryPolicyStoreRegistry for PgPersistenceStore {

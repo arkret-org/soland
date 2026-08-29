@@ -815,7 +815,10 @@ mod tests {
 
     #[test]
     fn cursorless_signal_rollover_does_not_inherit_durable_stream_cooldown() {
-        assert_eq!(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS, SIGNAL_SUBSCRIBE_POLL_MS);
+        assert_eq!(
+            SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS,
+            SIGNAL_SUBSCRIBE_POLL_MS
+        );
         assert!(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS < super::super::SUBSCRIBE_RECONNECT_AFTER_MS);
     }
 }

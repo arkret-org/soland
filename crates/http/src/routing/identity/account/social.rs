@@ -467,6 +467,16 @@ async fn contact_list_rows(
             bidirectional_scopes: Vec::new(),
             effective_scopes: None,
             peer_host_id: record.peer_host_id.clone(),
+            peer_host_resolution: record
+                .peer_service_resolution
+                .clone()
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "stored Contact peer service resolution is invalid: {error}"
+                    ))
+                })?,
             continuity_evidence:
                 crate::routing::identity::contact_federation::committed_continuity_evidence(&record),
             direct_conversation: None,
