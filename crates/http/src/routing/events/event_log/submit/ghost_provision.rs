@@ -180,11 +180,6 @@ async fn prepare_ghost_event(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             SubmitOneError::new(status, code, message)
         })?;
-        policy_gate::enforce_operation_policy_server(state, parsed.actor_id.as_str(), operation)
-            .await
-            .map_err(|rejection| {
-                SubmitOneError::new(rejection.status, rejection.code, rejection.message)
-            })?;
         let projection = state.projections().snapshot();
         projection
             .check_move_preconditions(operation)

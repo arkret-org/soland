@@ -760,59 +760,6 @@ impl ProjectionState {
         self.capability_derived.get(capability_id)
     }
 
-    /// G3.S2 — read the most-recent `ak.realm.policy_server` projection
-    /// for a Realm, walking up the `governed_by` link chain when the
-    /// realm itself has no row of its own (org-level fallback). Returns
-    /// `None` if neither the realm nor any ancestor declared a policy
-    /// server. The walk caps at depth 8 and uses a visited set because
-    /// general Realm Link graphs may contain cycles.
-    pub fn try_realm_policy_server_config(
-        &self,
-        realm_id: &str,
-    ) -> Result<Option<&RealmPolicyServerConfig>, &'static str> {
-        let mut cursor = realm_id.to_owned();
-        let mut visited = std::collections::BTreeSet::new();
-        for _ in 0..8 {
-            if !visited.insert(cursor.clone()) {
-                return Err("realm_policy_server_governance_cycle");
-            }
-            let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
-            match self
-                .realm_null_subject_cells
-                .get(&(cursor.clone(), cell_id))
-            {
-                Some(CellState::Bottom(_)) => return Err("cell_bottom_state"),
-                Some(CellState::Value(value)) => {
-                    let is_tombstone = value.as_object().is_some_and(|object| {
-                        object.len() == 1
-                            && object.get("tombstone").and_then(Value::as_bool) == Some(true)
-                    });
-                    if !is_tombstone && !self.realm_policy_servers.contains_key(&cursor) {
-                        return Err("realm_policy_server_projection_missing");
-                    }
-                }
-                _ => {}
-            }
-            if let Some(config) = self.realm_policy_servers.get(&cursor) {
-                return Ok(Some(config));
-            }
-            let targets = self
-                .realm_links
-                .get(&cursor)
-                .into_iter()
-                .flatten()
-                .filter(|row| row.link_kind == "governed_by" && row.status == "active")
-                .map(|row| row.target_realm_id.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
-            match targets.len() {
-                0 => return Ok(None),
-                1 => cursor = (*targets.first().expect("one governed_by target")).to_owned(),
-                _ => return Err("realm_policy_server_governance_ambiguous"),
-            }
-        }
-        Err("realm_policy_server_governance_depth_exceeded")
-    }
-
     /// Read the create-locked Realm encryption profile from genesis.
     pub fn realm_encryption_profile(&self, realm_id: &str) -> Option<String> {
         self.realm_genesis_cell_value(realm_id)
@@ -870,8 +817,8 @@ impl ProjectionState {
 
     /// The Realm's non-`⊥` policy control cells.
     ///
-    /// `authz/policy-server.md` §5 defines `policy_frontier_digest` as a
-    /// *filtered state root* over exactly these cells, reusing the governance
+    /// `policy_frontier_digest` is a *filtered state root* over exactly these
+    /// cells, reusing the governance
     /// `state_root` Merkle rules of `event-auth-state-resolution.md` §6.2.1 —
     /// JCS leaves, cell-id order, `leaf=H(0x00||bytes)`, `node=H(0x01||l||r)`.
     /// It is explicitly not an issuer-local opaque value, which is why this
@@ -914,7 +861,7 @@ impl ProjectionState {
         cells
     }
 
-    /// `authz/policy-server.md` §5 `policy_frontier_digest` for this Realm.
+    /// `policy_frontier_digest` for this Realm.
     ///
     /// Delegates the leaf/sort/combine rules to the SDK so an issuer and a
     /// verifier cannot drift; a hash assembled from policy field names would be

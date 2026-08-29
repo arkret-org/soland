@@ -526,7 +526,7 @@ pub(super) async fn validate_realm_organization_policy(
 /// Realm. Realm ownership alone is not a capability; fail closed with
 /// `missing_capability` otherwise.
 ///
-/// Action mapping (capability-action-registry.json and policy-server.md):
+/// Action mapping (capability-action-registry.json):
 /// - `ak.moderation.decision`            → governance policy action or narrow decision action
 /// - `ak.moderation.decision.lift`       → governance policy action or narrow lift action
 /// - `ak.moderation.appeal.submit`       → action `ak.moderation.appeal.submit`
@@ -617,50 +617,6 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     }
     Err("missing_capability")
-}
-
-pub(super) async fn validate_realm_policy_server_policy(
-    state: &AppState,
-    operation: &Operation,
-) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::EventKind::RealmPolicyServer)
-    {
-        return Ok(());
-    }
-    let actor = &operation.context.sender;
-    let realm_id = operation.realm_id.as_str();
-    if state
-        .projections()
-        .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor.as_str(),
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
-    {
-        return Ok(());
-    }
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor: actor.as_str(),
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
-            action: arkret_wire::CapabilityActionId::POLICY_MANAGE,
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
-    {
-        Ok(())
-    } else {
-        Err("missing_capability")
-    }
 }
 
 pub(super) async fn validate_call_recording_start_policy(

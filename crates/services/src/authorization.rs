@@ -22,23 +22,6 @@ pub struct AuthorizationCheck<'a> {
     pub resource_facets: &'a [String],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmPolicyServerConfig {
-    pub realm_id: String,
-    pub policy_server_id: arkret_wire::DidCoreId,
-    pub policy_server_url: String,
-    pub cache_ttl_seconds: u64,
-    pub timeout_ms: u64,
-    pub on_timeout: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmPolicyServerConfigView {
-    pub config: RealmPolicyServerConfig,
-    pub inherited_from_organization: bool,
-}
-
 pub trait AuthorizationPort: Send + Sync {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision;
     fn upsert_projected_grant(&self, grant: Grant);

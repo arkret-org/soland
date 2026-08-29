@@ -316,7 +316,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(spaces::router())
                 // self/events/*.
                 .push(events::router())
-                // self/authz/* + self/policy/check. (Owner-scoped policy
+                // self/authz/*. (Owner-scoped policy
                 // document CRUD lives on the product surface at
                 // `/_soland/self/policies*`, see `soland_local_router`.)
                 .push(access::router())
@@ -326,8 +326,6 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 // (ak.self.realm_link.*).
                 .push(realms::router())
                 .push(invites::self_router())
-                // self/realms/{realm_id}/policy-server (ak.self.realm_policy_server.*).
-                .push(realm_policy::router())
                 // self/realms/{realm_id}/organizations (ak.self.realm_organization.read.list.v1).
                 .push(realm_organization::router())
                 .push(governance_history::self_router())
@@ -411,10 +409,9 @@ fn soland_local_router() -> Router {
                 // (`/_soland/self/relations`). See `events::local_router`.
                 .push(events::local_router())
                 // Owner-scoped policy document storage CRUD
-                // (`/_soland/self/policies*`). Deployment-local management
-                // capability backing `ak.self.policy.read.check.v1`; kept off
-                // the `/_arkret/...` protocol root per
-                // `service-http-binding.md` §1007.
+                // (`/_soland/self/policies*`). This is deployment-local
+                // management state and stays off the `/_arkret/...` protocol
+                // root.
                 .push(access::product_router())
                 // Organization governance CRUD is deployment-local product
                 // state; it must not occupy the `ak.self.*` protocol surface.

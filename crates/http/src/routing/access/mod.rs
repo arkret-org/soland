@@ -7,9 +7,7 @@ use super::{now, query_param, validate_canonical_json_value};
 
 /// Protocol surface mounted under `/_arkret/self/...`.
 pub fn router() -> Router {
-    Router::new()
-        .push(authz::protocol_router())
-        .push(policy::protocol_router())
+    Router::new().push(authz::protocol_router())
 }
 
 /// Product surface mounted under `/_soland/self/...`: owner-scoped policy

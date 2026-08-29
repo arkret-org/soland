@@ -40,7 +40,6 @@ use soland_storage::{
     PersistenceStore,
 };
 
-use crate::authorization::{RealmPolicyServerConfig, RealmPolicyServerConfigView};
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
 pub mod tombstone;
@@ -1693,33 +1692,6 @@ impl ProjectionService {
             record.applicant_visibility.clone(),
             record.expires_at,
         );
-    }
-
-    pub fn realm_policy_server_config(
-        &self,
-        realm_id: &str,
-    ) -> Result<Option<RealmPolicyServerConfigView>, &'static str> {
-        let state = self.state.lock();
-        let direct = state.realm_policy_servers.get(realm_id);
-        let (config, inherited_from_organization) = match direct {
-            Some(config) => (config, false),
-            None => match state.try_realm_policy_server_config(realm_id)? {
-                Some(config) => (config, true),
-                None => return Ok(None),
-            },
-        };
-        Ok(Some(RealmPolicyServerConfigView {
-            config: RealmPolicyServerConfig {
-                realm_id: config.realm_id.clone(),
-                policy_server_id: config.policy_server_id.clone(),
-                policy_server_url: config.policy_server_url.clone(),
-                cache_ttl_seconds: config.cache_ttl_seconds,
-                timeout_ms: config.timeout_ms,
-                on_timeout: config.on_timeout.clone(),
-                updated_at: config.updated_at,
-            },
-            inherited_from_organization,
-        }))
     }
 
     pub fn invite_claim_proof_context(

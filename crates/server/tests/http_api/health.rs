@@ -189,7 +189,6 @@ async fn health_and_describe_work_body() {
         "ak.self.authz.read.check.v1",
         "ak.self.authz.grants.read.effective.v1",
         "ak.self.authz.invites.read.list.v1",
-        "ak.self.policy.read.check.v1",
     ] {
         assert!(
             advertises_operation(&describe, operation_id),
@@ -206,11 +205,7 @@ async fn health_and_describe_work_body() {
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
-        serde_json::json!(["policy_unavailable"])
-    );
-    assert_eq!(
-        describe["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
-        "/_arkret/self/policy/check"
+        serde_json::json!([])
     );
     assert_eq!(
         describe["limits"]["authz_policy"]["effective_grants"]["path"],

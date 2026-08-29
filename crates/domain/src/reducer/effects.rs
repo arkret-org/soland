@@ -284,22 +284,6 @@ pub enum ProjectionEffect {
     /// so the routing layer can dispatch on `MlsEffect` without
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
-    /// G3.S2 — `ak.realm.policy_server` projected into the
-    /// `ak.component.realm.policy_server.v1` cas-register cell + the
-    /// `realm_policy_servers` structured cache.
-    RealmPolicyServerProjected {
-        realm_id: String,
-        policy_server_id: arkret_wire::DidCoreId,
-    },
-    RealmPolicyServerTombstoned {
-        realm_id: String,
-    },
-    /// Two accepted `ak.realm.policy_server` Moves cited the same frozen basis
-    /// with different values; the cas-register cell joined to `⊥` and every
-    /// dependent read now fails closed until conflict recovery.
-    RealmPolicyServerConflicted {
-        realm_id: String,
-    },
     /// `ak.device.push_route` actor-private state projected into the
     /// per-recipient Principal Server push-route cell cache.
     PushRouteUpdated {

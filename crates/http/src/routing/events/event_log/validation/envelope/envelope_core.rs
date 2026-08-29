@@ -273,7 +273,7 @@ async fn validate_event_envelope_with_ingress(
         .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
     validate_content_bound_event_id(envelope, typed_digest_suite)?;
 
-    // A closed internal adapter (policy-server self-management, moderation
+    // A closed internal adapter (moderation
     // report, MIMI ingress, ...) authors the Event on behalf of the
     // authenticated caller under the service's own session, so its
     // `actor_id` is the caller while `session.actor` is the service.

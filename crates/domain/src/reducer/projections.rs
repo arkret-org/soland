@@ -31,18 +31,6 @@ pub struct CallFsmHead {
     pub value: String,
 }
 
-/// Latest accepted head of the per-Realm `ak.component.realm.policy_server.v1`
-/// cas-register cell, together with the frozen basis (the `head_eq` expected
-/// value) its Move cited. Two accepted Moves citing the same basis with
-/// different values are cas-register siblings and MUST join to `⊥` instead of
-/// resolving by arrival order (`authz/policy-server.md` §2.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmPolicyServerHead {
-    pub basis: Option<Value>,
-    pub operation_id: String,
-    pub value: Value,
-}
-
 #[derive(Clone, Debug)]
 pub struct PendingReplayEntry {
     pub target_ref: String,
@@ -146,38 +134,6 @@ pub struct RealmLinkState {
     pub label: Option<String>,
     pub commitment: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// G3.S2 — structured cache row for `ak.realm.policy_server`. Mirrors
-/// the canonical `ak.component.realm.policy_server.v1` cas-register
-/// payload. Per spec `authz/policy-server.md` §2 the wire payload also
-/// carries `applies_to[]` / `policy_sources[]` / `abuse_profile_ref` /
-/// `public_keys[]`; the runtime fields needed by the outbound
-/// `/policy/check` client are the five captured here. The rest is held
-/// on the raw cell value for admin tooling that wants to round-trip the
-/// full declaration.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RealmPolicyServerConfig {
-    pub realm_id: String,
-    /// Stable identity core of the policy decision service. Used to resolve the
-    /// signature verification key and match against `bound_to.policy_server_id`.
-    pub policy_server_id: arkret_wire::DidCoreId,
-    /// HTTPS endpoint that accepts `POST /_arkret/self/policy/check`.
-    pub policy_server_url: String,
-    /// Decision cache TTL. Spec §2 default `300`. The outbound client
-    /// uses this as the per-realm cap on the in-memory decision cache;
-    /// a `bypass_cache=true` request still skips it.
-    pub cache_ttl_seconds: u64,
-    /// Wall-clock timeout for one `/policy/check` round-trip. Spec §6
-    /// `fail_mode=closed` deployments MUST fail-closed on timeout (see
-    /// `on_timeout` below). Defaults to 2000 ms when absent, matching
-    /// coauth's own evaluator deadline.
-    pub timeout_ms: u64,
-    /// `fail_closed` or `deny`. Both produce a locally-signed
-    /// `decision_proxy: true` deny when the upstream times out; the
-    /// difference is the canonical `reason_code` we emit.
-    pub on_timeout: String,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

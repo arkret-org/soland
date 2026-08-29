@@ -126,11 +126,6 @@ use crate::artifacts;
 // `/_soland/self/realms/{realm_id}/effective-policy` surface walks the
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
-// G3.S2 — `ak.realm.policy_server` (realm / reducer_input): declares the
-// pluggable policy-decision service for a Realm. cell_family
-// `ak.component.realm.policy_server.v1` (cas-register per SDK lattice
-// registry). Spec `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
-
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
     let binding = payload
         .get("governance_binding")

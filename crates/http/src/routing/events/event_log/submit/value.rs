@@ -2363,16 +2363,6 @@ pub(super) async fn submit_event_value_with_context(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
         }
-        let policy_actor = operation.context.sender.as_str();
-        if let Err(rejection) =
-            policy_gate::enforce_operation_policy_server(state, policy_actor, operation).await
-        {
-            return Err(SubmitOneError::new(
-                rejection.status,
-                rejection.code,
-                rejection.message,
-            ));
-        }
         if let Some(reason) = preflight_mls_welcome_recipient_reject(state, operation).await {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,

@@ -135,10 +135,6 @@ pub struct ProjectionState {
     /// Other canonical null-subject Realm facets keyed by
     /// `(realm_id, canonical_cell_ref)`.
     pub realm_null_subject_cells: BTreeMap<(String, String), CellState>,
-    /// Latest accepted policy-server cell head per Realm, carrying the frozen
-    /// basis its Move cited so same-basis siblings join to `⊥` instead of
-    /// last-writer-wins (`authz/policy-server.md` §2.2).
-    pub realm_policy_server_heads: BTreeMap<String, RealmPolicyServerHead>,
     /// Effective `default_join_rule`, keyed by Realm. This mirrors the
     /// bootstrap/create value and later sealed join-rule facet so admission
     /// can select the protocol's C-axis gates without inventing a Realm id
@@ -280,13 +276,6 @@ pub struct ProjectionState {
     /// that Realm. For MLS-backed Circle scopes, the same transition queues an
     /// obligation for the MLS path to issue a remove proposal/commit.
     pub pending_mls_removals: Vec<MlsRemoveObligation>,
-    /// G3.S2 — per-Realm `ak.realm.policy_server` projection. Cas-
-    /// register semantics — last write wins. Org-level fallback (when
-    /// a Realm has no row of its own) is resolved at query time by
-    /// walking the `governed_by` link chain via [`Self::realm_links`].
-    /// Cell-family canonical value lives in
-    /// `ak.component.realm.policy_server.v1`.
-    pub realm_policy_servers: BTreeMap<String, RealmPolicyServerConfig>,
     /// Device push-route projection keyed by the protocol composite
     /// `(recipient_id, principal_id, device_id, push_route)`.
     /// These are actor-private state cells and MUST stay isolated per
@@ -987,21 +976,6 @@ impl ProjectionState {
                 "ak:cell:ak.component.realm.policy_bundle.v1:null" => {
                     self.realm_policy_bundle_cells
                         .insert(realm_id.to_string(), resolved);
-                }
-                "ak:cell:ak.component.realm.policy_server.v1:null" => {
-                    let direct_binding_unavailable = match &resolved {
-                        CellState::Bottom(_) => true,
-                        CellState::Value(Value::Object(value)) => {
-                            value.len() == 1
-                                && value.get("tombstone").and_then(Value::as_bool) == Some(true)
-                        }
-                        CellState::Value(_) => false,
-                    };
-                    if direct_binding_unavailable {
-                        self.realm_policy_servers.remove(realm_id.as_str());
-                    }
-                    self.realm_null_subject_cells
-                        .insert((realm_id.to_string(), cell.as_str().to_owned()), resolved);
                 }
                 _ if cell.as_str().ends_with(":null") => {
                     self.realm_null_subject_cells

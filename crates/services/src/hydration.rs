@@ -708,10 +708,6 @@ pub async fn hydrate_projections_from_persistence(
     // so restore them from the durable event stream. Agent authorize/revoke
     // transitions must be replayed in global acceptance order; querying each
     // kind independently would lose their relative ordering.
-    // `ak.realm.policy_server` declarations and value tombstones live in the
-    // cas-register cell + `realm_policy_servers` cache only, so the durable
-    // stream is likewise their single restart source; replay order preserves
-    // the accepted CAS chain.
     let events = persistence.projection_events().snapshot_all().await?;
     for event in events.iter().cloned() {
         let projection_name = match arkret_wire::EventKind::from_wire(&event.event_kind) {
@@ -719,7 +715,6 @@ pub async fn hydrate_projections_from_persistence(
                 "agent-key"
             }
             arkret_wire::EventKind::KeyBackupActiveSeries => "active-series",
-            arkret_wire::EventKind::RealmPolicyServer => "realm-policy-server",
             _ => continue,
         };
         replay_projection_event(

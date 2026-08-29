@@ -7,8 +7,7 @@
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
 //! `state.authorization()` field is shared). This surface is a local preflight/read
-//! projection. Dynamic, signed, or obligation-bearing decisions are served by
-//! `/_arkret/self/policy/check`.
+//! projection; canonical Event admission remains authoritative.
 
 use arkret_identifiers::{GrantId, Hash, InviteId, RealmId};
 use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
@@ -144,7 +143,7 @@ async fn authz_check(
         .collect::<Vec<_>>();
     // The local authz engine yields a binary allow/deny verdict. spec §18 models
     // the decision as a five-valued enum where `quarantine`/`require_review` are
-    // Policy Server-mediated soft outcomes (not produced by the local engine);
+    // local moderation soft outcomes (not produced by this engine);
     // a local refusal maps to the conservative terminal `hard_deny`.
     let decision = if allowed {
         AuthzDecision::Allow

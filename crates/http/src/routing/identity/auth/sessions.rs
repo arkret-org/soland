@@ -531,7 +531,6 @@ fn method_path_requires_fresh_introspection(method: &salvo::http::Method, path: 
         "/members",
         "/moderation",
         "/morphs",
-        "/policy/check",
         "/spaces",
         "/strands",
     ]

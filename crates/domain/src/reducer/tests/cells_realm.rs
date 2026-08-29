@@ -1821,7 +1821,7 @@ fn the_policy_frontier_digest_is_a_filtered_state_root() {
 }
 
 #[test]
-fn policy_check_frontiers_are_independent_actor_scoped_commitments() {
+fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
     let realm_id = "ak:realm:AYzSDw0uyDZ0DpWUE57e1TNDnSVg-vp-MLwyB1Cp5Hdf";
     let actor_id = "ak:did_core:web:alice.example";
     let mut state = ProjectionState::new();

@@ -724,8 +724,7 @@ pub fn describe(
                 "operations": [
                     arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK_V1,
                     arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE_V1,
-                    arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST_V1,
-                    arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1
+                    arkret_wire::ServiceOperationId::SELF_AUTHZ_INVITES_READ_LIST_V1
                 ],
                 "authz_check": {
                     "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_READ_CHECK_V1,
@@ -733,7 +732,7 @@ pub fn describe(
                     "path": "/_arkret/self/authz/check",
                     "request_shape": "AuthzCheckRequestBody",
                     "response_shape": "AuthzCheckOutcome",
-                    "operation_specific_error_codes": ["policy_unavailable"],
+                    "operation_specific_error_codes": [],
                     "decision_source": "local_projection_preflight_diagnostic",
                     "signed_decision": false,
                     "emits_dynamic_obligations": false,
@@ -748,9 +747,7 @@ pub fn describe(
                     "policy_boundary": {
                         "dynamic_claim_or_approval": false,
                         "usable_as_policy_obligation_proof": false,
-                        "cross_service_signed_authorization_fact": false,
-                        "dynamic_or_auditable_decision_operation": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
-                        "dynamic_or_auditable_decision_path": "/_arkret/self/policy/check"
+                        "cross_service_signed_authorization_fact": false
                     }
                 },
                 "effective_grants": {
@@ -770,18 +767,6 @@ pub fn describe(
                     "response_schema_ref": "schemas/authz-operations.schema.json#/$defs/authz_invite_list",
                     "subject_scope": "authenticated_actor_or_inviter_or_realm_owner",
                     "operation_specific_error_codes": []
-                },
-                "policy_check": {
-                    "operation_id": arkret_wire::ServiceOperationId::SELF_POLICY_READ_CHECK_V1,
-                    "method": "POST",
-                    "path": "/_arkret/self/policy/check",
-                    "operation_specific_error_codes": ["policy_unavailable", "policy_stale"],
-                    "decision_source": "policy_server_signed_decision",
-                    "signed_decision": true,
-                    "emits_dynamic_obligations": true,
-                    "binds_auth_state_digest": true,
-                    "binds_policy_frontier_digest": true,
-                    "binds_membership_frontier_digest": true
                 }
             },
             "search": {
@@ -1050,8 +1035,7 @@ mod tests {
             json!([
                 "ak.self.authz.read.check.v1",
                 "ak.self.authz.grants.read.effective.v1",
-                "ak.self.authz.invites.read.list.v1",
-                "ak.self.policy.read.check.v1"
+                "ak.self.authz.invites.read.list.v1"
             ])
         );
         assert_eq!(
@@ -1064,7 +1048,7 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["operation_specific_error_codes"],
-            json!(["policy_unavailable"])
+            json!([])
         );
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["signed_decision"],
@@ -1073,10 +1057,6 @@ mod tests {
         assert_eq!(
             value["limits"]["authz_policy"]["authz_check"]["emits_dynamic_obligations"],
             json!(false)
-        );
-        assert_eq!(
-            value["limits"]["authz_policy"]["authz_check"]["policy_boundary"]["dynamic_or_auditable_decision_path"],
-            json!("/_arkret/self/policy/check")
         );
         assert_eq!(
             value["limits"]["authz_policy"]["effective_grants"]["path"],
@@ -1093,22 +1073,6 @@ mod tests {
         assert_eq!(
             value["limits"]["authz_policy"]["invites"]["response_schema_ref"],
             json!("schemas/authz-operations.schema.json#/$defs/authz_invite_list")
-        );
-        assert_eq!(
-            value["limits"]["authz_policy"]["policy_check"]["decision_source"],
-            json!("policy_server_signed_decision")
-        );
-        assert_eq!(
-            value["limits"]["authz_policy"]["policy_check"]["operation_specific_error_codes"],
-            json!(["policy_unavailable", "policy_stale"])
-        );
-        assert_eq!(
-            value["limits"]["authz_policy"]["policy_check"]["signed_decision"],
-            json!(true)
-        );
-        assert_eq!(
-            value["limits"]["authz_policy"]["policy_check"]["emits_dynamic_obligations"],
-            json!(true)
         );
         assert_eq!(
             value["limits"]["personal_productivity"]["reminders"]["storage"],

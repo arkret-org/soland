@@ -20,12 +20,9 @@ pub(crate) mod join_applications;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
 pub(crate) mod organizations;
-pub(crate) mod policy_gate;
 pub(crate) mod realms;
 pub(crate) mod spaces;
 pub(crate) mod system;
-// G3.S2: realm policy server
-pub(crate) mod realm_policy;
 // SOL-ORG-06: realm organization-relationship read surface
 pub(crate) mod realm_organization;
 

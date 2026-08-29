@@ -13,10 +13,8 @@
 //! `policy.schema.json#/$defs/policy_effect` register exactly four rule
 //! effects (`allow`, `deny`, `quarantine`, `require_review`), and that type
 //! lives in the SDK (`arkret_wire::PolicyEffect`). The five-value set with
-//! `soft_deny` / `hard_deny` instead of `deny` is the Policy Server
-//! *decision* enum (`service-operation-dtos.schema.json`
-//! `PolicyCheckOutcome.decision`, SDK `arkret_wire::AuthzDecision`), not a
-//! valid rule effect — the two closed sets must not be conflated.
+//! `soft_deny` / `hard_deny` instead of `deny` is an authorization-decision
+//! enum, not a valid stored rule effect — the two closed sets must not be conflated.
 //!
 //! `AdminPolicyPayload::resource` is permanently opaque operator data.  It is
 //! not an extension point for approval evidence, audit records, or policy

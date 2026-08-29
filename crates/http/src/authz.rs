@@ -5,18 +5,6 @@
 //! - Active explicit grants authorize actors
 //! - Realm ownership and membership never imply a capability
 //!
-//! ## G3.S2 — policy server integration
-//!
-//! [`SolandAuthzEngine::check`] is the LOCAL capability decision. The
-//! remote `/policy/check` round-trip lives in [`policy_client`], and
-//! the post-decision side-effect set lives in [`obligation_executor`].
-//! The integration helper [`check_with_policy_server`] composes the
-//! two so request handlers can hand off the merge logic to one call.
-
-// G3.S2 — policy-server outbound + obligation executor.
-pub mod obligation_executor;
-pub mod policy_client;
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -37,7 +25,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 pub(crate) use soland_domain::capability::resource_matches;
 use soland_domain::capability::validate_resource_pattern;
-use soland_services::authorization::{AuthorizationDecision, AuthorizationService};
+use soland_services::authorization::AuthorizationService;
 
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
 pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
@@ -813,159 +801,6 @@ fn evaluate_constraint(
             // never fail the satisfaction check.
             None
         }
-    }
-}
-
-/// G3.S2 — discriminated decision returned by [`check_with_policy_server`].
-///
-/// `Allowed` means BOTH the local capability check AND (if configured)
-/// the remote policy server returned allow. `LocalDeny` short-circuits
-/// the remote call when the local check has already rejected.
-/// `RemoteDeny` carries the canonical wire response so the caller can
-/// surface the reason_code and run obligations.
-/// `RemoteObligationFailed` records the case where the remote allowed
-/// but a required obligation (mfa / rate_limit / unknown_kind) caused
-/// the executor to deny.
-#[derive(Debug)]
-pub enum MergedAuthzDecision {
-    Allowed {
-        local: AuthorizationDecision,
-        remote: Option<arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome>,
-    },
-    LocalDeny(AuthorizationDecision),
-    RemoteDeny {
-        local: AuthorizationDecision,
-        remote: arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome,
-    },
-    RemoteObligationFailed {
-        local: AuthorizationDecision,
-        remote: arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome,
-        error: obligation_executor::ObligationError,
-    },
-}
-
-impl MergedAuthzDecision {
-    pub fn is_allowed(&self) -> bool {
-        matches!(self, MergedAuthzDecision::Allowed { .. })
-    }
-}
-
-/// G3.S2 — integration helper. Runs the local capability check first;
-/// if it allows AND the realm has a `ak.realm.policy_server` config,
-/// calls the remote policy server. Merges the two decisions per the
-/// spec rule "deny if either denies; allow only if both allow", then
-/// runs the remote response's obligations through the executor.
-///
-/// `realm_id` is the canonical Realm identifier the policy server
-/// keys decisions on (NOT the SDK `RealmId` newtype — pass the wire string).
-pub(crate) fn revocation_freshness_fail_closed(
-    action: &str,
-    freshness_state: arkret_wire::FreshnessState,
-) -> bool {
-    use arkret_schema::CapabilityRiskTier;
-    use arkret_wire::FreshnessState;
-
-    match freshness_state {
-        FreshnessState::Fresh => false,
-        FreshnessState::Stale => !matches!(
-            capability_action_risk_tier(action),
-            Some(CapabilityRiskTier::Low | CapabilityRiskTier::Medium)
-        ),
-        FreshnessState::Unknown => !matches!(
-            capability_action_risk_tier(action),
-            Some(CapabilityRiskTier::Low)
-        ),
-    }
-}
-
-fn capability_action_risk_tier(action: &str) -> Option<arkret_schema::CapabilityRiskTier> {
-    arkret_schema::embedded_capability_action(action)
-        .ok()
-        .flatten()
-        .map(|descriptor| descriptor.risk_tier)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn check_with_policy_server(
-    engine: &AuthorizationService,
-    actor: &str,
-    actor_principal_server_id: Option<&str>,
-    action: &str,
-    resource: &str,
-    realm_id: &str,
-    owner: Option<&str>,
-    members: &[String],
-    resource_facets: &[String],
-    policy_client: Option<&policy_client::PolicyClient>,
-    realm_config: Option<soland_services::authorization::RealmPolicyServerConfig>,
-    policy_request: Option<policy_client::PolicyCheckRequestInput>,
-    request_ctx: &mut obligation_executor::RequestContext,
-) -> MergedAuthzDecision {
-    // Step 1 — local capability check (existing behaviour).
-    let local = engine.check(soland_services::authorization::AuthorizationCheck {
-        actor,
-        actor_principal_server_id,
-        action,
-        resource,
-        realm_id,
-        owner,
-        members,
-        resource_facets,
-    });
-    if !local.allowed {
-        return MergedAuthzDecision::LocalDeny(local);
-    }
-
-    // Step 2 — short-circuit when there's no policy server for this
-    // realm (no per-realm config AND no org-fallback resolved).
-    let (Some(client), Some(config), Some(input)) = (policy_client, realm_config, policy_request)
-    else {
-        return MergedAuthzDecision::Allowed {
-            local,
-            remote: None,
-        };
-    };
-    let config_clone = config.clone();
-    let remote = match client.check(input, move |_| Some(config_clone)).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                actor = %actor,
-                action = %action,
-                "policy_client check failed unexpectedly; treating as deny"
-            );
-            // Synthesise a deny so we never silently allow on a hard fault.
-            return MergedAuthzDecision::LocalDeny(AuthorizationDecision {
-                allowed: false,
-                reason: "policy_client_error".to_owned(),
-                reason_detail: Some(e.to_string()),
-                grants: local.grants.clone(),
-            });
-        }
-    };
-
-    use arkret_wire::AuthzDecision;
-    let allow = matches!(remote.decision, AuthzDecision::Allow);
-    if !allow {
-        return MergedAuthzDecision::RemoteDeny { local, remote };
-    }
-    if revocation_freshness_fail_closed(action, remote.freshness_state) {
-        return MergedAuthzDecision::RemoteDeny { local, remote };
-    }
-
-    // Step 3 — run obligations on the allow path.
-    if let Err(err) = obligation_executor::execute_obligations(&remote.obligations, request_ctx) {
-        return MergedAuthzDecision::RemoteObligationFailed {
-            local,
-            remote,
-            error: err,
-        };
-    }
-
-    MergedAuthzDecision::Allowed {
-        local,
-        remote: Some(remote),
     }
 }
 

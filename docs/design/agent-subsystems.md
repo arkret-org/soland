@@ -8,7 +8,7 @@
 
 现状基线(已勘察):
 - 事件提交:`routing/events/event_log.rs::submit_event_value` → `store.put(CanonicalEventRecord)` → `routing/events/projection.rs::project_accepted_operations_from_device` → `reducer.rs::ProjectionState::apply` 经 `APPLY_REGISTRY`(`kind → apply_*`)分发。
-- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_bundle`(floor ratchet + cell write `ak.component.realm.policy_bundle.v1`)、`apply_realm_policy_server`(cell + side-band BTreeMap 缓存)。
+- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_bundle`(floor ratchet + cell write `ak.component.realm.policy_bundle.v1`)。
 - capability grant:存于 cell `ak:cell:ak.component.capability.grant.v1:<capability_id>`,authz 经 `capability_grant_cells` / `grants_for_realm` 读取;`ak.capability.derived` 已注册 reducer(`apply_capability_derived_dispatch`)——capability 事件→cell 的先例。
 - 消息:`apply_message` 仅写 `MessageState`,无 fanout。
 - 通知:**无** NotificationStore / fanout / mention→notification。mention 仅在 `wire_validators/mention.rs` + `routing/events/operations.rs::validate_mentions` 做语法校验。

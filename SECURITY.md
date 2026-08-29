@@ -62,8 +62,6 @@ We aim to:
 
 - Many endpoints still scaffold-respond and persist state in process memory.
   See `_todos.md` Stream-D, Stream-F-2/F-8, F2 for the concrete TODOs.
-- `policy_check` and `authz_check` evaluate independently and can disagree
-  (`_todos.md` B9).
 - The directory surface is backed by demo data, exposing pseudo-real handles
   during development (`_todos.md` Stream-E).
 - The built-in rate limiter is per-instance. Multi-replica production

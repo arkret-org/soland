@@ -285,7 +285,6 @@ async fn validate_one_operation_policy(
         validate_applet_registration_authz(state, operation).await?;
         validate_call_recording_start_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
-        validate_realm_policy_server_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_realm_organization_policy(state, operation).await?;
         validate_history_access_content_scheme_policy(state, operations, operation).await?;

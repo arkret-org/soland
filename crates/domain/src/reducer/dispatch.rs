@@ -894,18 +894,6 @@ fn apply_mls_commit_dispatch(
     mls::apply_commit_epoch(s, op)
 }
 
-// G3.S2: dispatch adapter for `ak.realm.policy_server`. The reducer
-// helper lives in the dedicated `reducer::realm_policy_server` module;
-// this adapter normalises its `(state, op) -> effect` signature to the
-// registry's `(state, op, hlc) -> effect` shape.
-fn apply_realm_policy_server_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    crate::reducer::realm_policy_server::apply_realm_policy_server(s, op)
-}
-
 /// Build the canonical `event_kind → ApplyFn` registry consumed by
 /// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
 /// exact coverage of the active reducer-input set.
@@ -1336,11 +1324,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         apply_mls_proposal_dispatch,
     );
     m.insert(arkret_wire::EventKind::MlsCommit, apply_mls_commit_dispatch);
-    // G3.S2: policy server cell
-    m.insert(
-        arkret_wire::EventKind::RealmPolicyServer,
-        apply_realm_policy_server_dispatch,
-    );
     for kind in EventKind::ALL.iter().filter(|kind| kind.is_reducer_input()) {
         m.entry(kind.clone()).or_insert(apply_noop_dispatch);
     }

@@ -41,9 +41,6 @@ mod apply_space_container;
 pub mod lattice_kinds;
 pub mod mls;
 pub mod realm_links;
-// G3.S2: policy server cell reducer
-pub mod realm_policy_server;
-
 // Structural split (2026-06-18) — the direct content of this mod file
 // (top-level projection types, free helpers, dispatch registry, and the
 // `ProjectionState` struct + inline impl) was moved into the sibling
@@ -121,7 +118,7 @@ pub use projections::{
     MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
     PollOptionState, PollState, PollVoteState, ProjectedMessageView, PushRouteCellValue,
     PushRouteSubject, ReactionState, RealmInheritancePolicyState, RealmLinkState,
-    RealmOrganizationStatementState, RealmPolicyServerConfig, RealmPolicyServerHead,
+    RealmOrganizationStatementState,
     RedactionCellValue, RsvpHead, RsvpProjection, SidecarContextProjection, SidecarProjection,
     SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
     SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
