@@ -36,6 +36,11 @@ use crate::state::{AppState, EventNotification};
 const SIGNAL_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 /// Idle keepalive so an intermediary does not reap a quiet connection.
 const SIGNAL_SUBSCRIBE_DEFAULT_HEARTBEAT_MS: u64 = 15_000;
+/// A cursorless Signal rail cannot catch up across a reconnect gap. Keep the
+/// normal bounded-response rollover below the product's five-second live
+/// presence recovery target instead of inheriting the durable subscribe
+/// surfaces' ten-second cooldown.
+const SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS: u64 = 250;
 /// How often the stream re-polls the relay. Signals are short-lived and are
 /// not carried on the durable event broadcast, so the live rail polls.
 const SIGNAL_SUBSCRIBE_POLL_MS: u64 = 250;
@@ -672,7 +677,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
             tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => {
                     let frame = SignalStreamFrame::Drain {
-                        reconnect_after_ms: Some(super::SUBSCRIBE_RECONNECT_AFTER_MS),
+                        reconnect_after_ms: Some(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS),
                         reason: None,
                     };
                     yield Ok::<bytes::Bytes, std::io::Error>(ndjson_line(&frame));
@@ -806,5 +811,11 @@ mod tests {
             "signal expires_at must be strictly after sent_at".to_owned(),
         ));
         assert_eq!(error.wire_code(), "param_invalid");
+    }
+
+    #[test]
+    fn cursorless_signal_rollover_does_not_inherit_durable_stream_cooldown() {
+        assert_eq!(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS, SIGNAL_SUBSCRIBE_POLL_MS);
+        assert!(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS < super::super::SUBSCRIBE_RECONNECT_AFTER_MS);
     }
 }
