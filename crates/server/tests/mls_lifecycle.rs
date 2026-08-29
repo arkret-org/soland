@@ -577,7 +577,7 @@ async fn mls_lifecycle_end_to_end_body() {
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackage_upload_entries: vec![
+        keypackages: vec![
             valid_entry,
             mismatched_capabilities_entry,
             noncanonical_capabilities_entry,
@@ -782,7 +782,7 @@ async fn mls_lifecycle_end_to_end_body() {
         intended_realm_id: None,
         agent_verification_method: None,
         agent_key_authorize_event_id: None,
-        keypackage_upload_entries: vec![
+        keypackages: vec![
             arkret_models_crypto::mls_key_package_record_upload_entry(&lifecycle_keypackage_record)
                 .unwrap(),
         ],
