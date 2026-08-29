@@ -10,8 +10,8 @@ use arkret_models_collaboration::event_query::{
     EventsQueryPostRequestBody, PeerEventsFrontierRequestBody, SealFrontierRequestBody,
 };
 use arkret_models_collaboration::event_sync::{
-    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
-    PeerSealFrontierState, RealmSealFrontierView,
+    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, PeerSealFrontierState,
+    RealmSealFrontierView,
 };
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,

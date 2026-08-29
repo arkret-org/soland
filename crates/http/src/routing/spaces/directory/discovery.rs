@@ -1,3 +1,9 @@
+use serde_json::Value;
+use soland_services::identity::SessionIdentityState as SessionRecord;
+
+use super::{now, query_matches};
+use crate::state::AppState;
+
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
     let (Ok(left), Ok(right)) = (
         arkret_wire::DidCoreId::new(left.to_owned()),
@@ -40,6 +46,7 @@ pub async fn actor_visible_to(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[tokio::test]
     async fn accepted_contact_visibility_does_not_turn_a_mismatched_query_into_a_hit() {

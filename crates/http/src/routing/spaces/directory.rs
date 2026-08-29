@@ -72,7 +72,7 @@ use super::space::{InviteTokenRealmResolution, invite_token_realm_resolution};
 use super::{
     authenticated_session, device_inventory_to_json, handle_for_did, invite_token_matches_realm,
     is_realm_deleted, now, realm_discoverability, realm_has_member, realm_history_access,
-    realm_resolvable_to, realm_search_visible_to, sha256_hex,
+    realm_resolvable_to, realm_search_visible_to,
 };
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};
@@ -100,7 +100,6 @@ use agent_selector::*;
 use demo::*;
 pub use demo::{checked_limit, demo_actors, demo_organization, query_matches};
 pub use discovery::actor_visible_to;
-use discovery::*;
 // Re-export the helpers that sibling routing modules reach for at their
 // original visibility (the moved definitions now live in submodules).
 pub(crate) use handles::signed_handle_claim_value;
