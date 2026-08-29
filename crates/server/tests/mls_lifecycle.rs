@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::RealmId;
+use arkret_identifiers::{RealmId, ServiceAccountId};
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
@@ -333,6 +333,31 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
+async fn rebind_session_to_foreign_auth_account(
+    state: &AppState,
+    actor_id: &arkret_wire::DidCoreId,
+    device_id: &str,
+) -> ServiceAccountId {
+    let persistence = state.test_persistence();
+    let local_account = persistence
+        .accounts()
+        .get(actor_id.as_str())
+        .await
+        .unwrap()
+        .expect("Principal Server local account");
+    let foreign_auth_account_id = ServiceAccountId::new("auth-server-alice-account").unwrap();
+    assert_ne!(local_account.id, foreign_auth_account_id);
+
+    let mut sessions = persistence.sessions().snapshot_all().await.unwrap();
+    let session = sessions
+        .iter_mut()
+        .find(|session| session.actor == actor_id.as_str() && session.device_id == device_id)
+        .expect("dev-login session");
+    session.service_account_id = foreign_auth_account_id;
+    persistence.sessions().put(session).await.unwrap();
+    local_account.id
+}
+
 async fn project_authorized_principal_device(
     state: &AppState,
     principal_did: &str,
@@ -482,6 +507,11 @@ async fn mls_lifecycle_end_to_end_body() {
     let alice_core =
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(alice_did).unwrap())
             .unwrap();
+    // A production session grant carries the Auth Server's service-local
+    // account id. It is intentionally different from this Principal Server's
+    // account id and must not be used as the KeyPackage owner lookup key.
+    let alice_local_account_id =
+        rebind_session_to_foreign_auth_account(&state, &alice_core, alice_device).await;
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     let alice_device_authorize_event_id =
         project_authorized_principal_device(&state, alice_did, alice_device, &event_signing_key)
@@ -628,15 +658,17 @@ async fn mls_lifecycle_end_to_end_body() {
             .iter()
             .any(|failure| failure["reason_code"] == json!("capabilities_invalid"))
     );
-    assert!(
-        state
-            .test_persistence()
-            .mls_key_packages()
-            .get(&keypackage_id)
-            .await
-            .unwrap()
-            .is_some(),
-        "publish must mirror into the store"
+    let persisted_keypackage = state
+        .test_persistence()
+        .mls_key_packages()
+        .get(&keypackage_id)
+        .await
+        .unwrap()
+        .expect("publish must mirror into the store");
+    assert_eq!(
+        persisted_keypackage.owner_account_id,
+        alice_local_account_id,
+        "KeyPackage owner must use the Principal Server local account id"
     );
     for rejected_id in [mismatched_capabilities_id, noncanonical_capabilities_id] {
         assert!(

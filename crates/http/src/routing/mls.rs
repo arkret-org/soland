@@ -102,6 +102,29 @@ async fn ensure_keypackage_owner_account_active(
     Ok(())
 }
 
+async fn local_keypackage_owner_account_id(
+    state: &AppState,
+    actor_id: &str,
+) -> Result<arkret_identifiers::ServiceAccountId, AppError> {
+    let account = state
+        .identities()
+        .account(actor_id)
+        .await
+        .map_err(|error| AppError::internal(format!("owner account lookup failed: {error}")))?
+        .ok_or_else(|| AppError::capability_denied("owner account is unavailable"))?;
+    if account.principal_id.as_str() != actor_id {
+        return Err(AppError::capability_denied(
+            "owner account principal binding is invalid",
+        ));
+    }
+    if state.account_lifecycle_status(account.principal_id.as_str())
+        != arkret_models_collaboration::objects::account_status::AccountStatus::Active
+    {
+        return Err(AppError::capability_denied("owner account is not active"));
+    }
+    Ok(account.id)
+}
+
 fn welcome_recipient_device_id(
     welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
 ) -> Option<&arkret_wire::DeviceId> {
@@ -264,10 +287,15 @@ async fn upload_keypackage(
 ) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let owner_account_id = session.service_account_id.as_ref().ok_or_else(|| {
+    session.service_account_id.as_ref().ok_or_else(|| {
         AppError::capability_denied("KeyPackage upload requires an account-bound session")
     })?;
-    ensure_keypackage_owner_account_active(state, owner_account_id.as_str()).await?;
+    // `service_account_id` belongs to the credential issuer (normally the
+    // Auth Server), whereas KeyPackage rows are owned by this Principal
+    // Server's local account id. Resolve that local id through the stable
+    // principal carried by the authenticated session; never reinterpret one
+    // service's local account id in another service's account namespace.
+    let owner_account_id = local_keypackage_owner_account_id(state, &session.actor).await?;
 
     let body = body.into_inner();
     body.validate_shape().map_err(AppError::param_invalid)?;
