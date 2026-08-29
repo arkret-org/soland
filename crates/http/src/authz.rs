@@ -4,7 +4,6 @@
 //! on a resource within a scope. Default rules:
 //! - Active explicit grants authorize actors
 //! - Realm ownership and membership never imply a capability
-//!
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -25,6 +24,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 pub(crate) use soland_domain::capability::resource_matches;
 use soland_domain::capability::validate_resource_pattern;
+#[cfg(any(test, feature = "test-support"))]
 use soland_services::authorization::AuthorizationService;
 
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";

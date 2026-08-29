@@ -41,7 +41,6 @@ use crate::state::AppState;
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
-const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
 pub(super) fn router() -> Router {
     Router::new()

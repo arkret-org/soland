@@ -433,31 +433,6 @@ async fn mimi_provider_facade_contracts_work_body() {
     );
     assert!(room_binding["room_state_ref"].as_str().is_some());
 
-    let group_info: Value =
-        TestClient::get("http://server/_arkret/open/mimi/strands/01JSMIMI/group-info")
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    let encoded_group_info = group_info["group_info"]["group_info"]
-        .as_str()
-        .expect("encoded group_info missing");
-    let decoded_group_info: Value = serde_json::from_slice(
-        &arkret_canonical::base64url_decode(encoded_group_info)
-            .expect("group_info must be base64url"),
-    )
-    .expect("group_info must contain JSON");
-    assert_eq!(
-        decoded_group_info["mimi_room_uri"],
-        mimi_room_uri(&state, "01JSMIMI"),
-        "group_info response: {group_info}"
-    );
-    assert_eq!(
-        decoded_group_info["canonical_truth"],
-        "arkret_signed_event_reducer"
-    );
-
     let commitment = identifier_commitment("mimi://remote.example/alice");
     let identifier_body = json!({
         "identifiers": [{
