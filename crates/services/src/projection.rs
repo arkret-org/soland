@@ -216,7 +216,7 @@ pub enum ProjectionEffectView {
     },
     RealmOrganizationProjected {
         realm_id: String,
-        organization_id: String,
+        organization_id: arkret_wire::DidCoreId,
         relationship: String,
     },
     CapabilityProjected {

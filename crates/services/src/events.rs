@@ -125,7 +125,7 @@ pub struct MorphProjectionRecord {
 #[derive(Clone, Debug)]
 pub struct RealmOrganizationStatementRecord {
     pub realm_id: String,
-    pub organization_id: String,
+    pub organization_id: DidCoreId,
     pub relationship: String,
     pub statement_id: String,
     pub status: String,

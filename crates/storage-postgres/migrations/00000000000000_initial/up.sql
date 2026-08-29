@@ -2013,7 +2013,7 @@ CREATE INDEX realm_organizations_organization_idx ON public.realm_organizations 
 
 CREATE INDEX realm_organizations_relationship_idx ON public.realm_organizations USING btree (realm_id, relationship, status);
 
--- SOL-ORG-05 — `owning_organizations` declared hints. These NO LONGER drive
+-- SOL-ORG-05 — `owning_organization_ids` declared hints. These NO LONGER drive
 -- governance / durability / delivery / directory policy inheritance (only a
 -- verified `ak.realm.organization` statement does); the table is retained as a
 -- discovery / display hint surface.

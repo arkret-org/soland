@@ -767,7 +767,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn link_realm_organization(
         &self,
         realm_id: &str,
-        organization_id: &str,
+        organization_id: &arkret_wire::DidCoreId,
     ) -> crate::ServiceResult<()> {
         self.0
             .realm_organizations()
@@ -778,7 +778,8 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn realm_organization_links(
         &self,
-    ) -> crate::ServiceResult<Vec<(String, std::collections::BTreeSet<String>)>> {
+    ) -> crate::ServiceResult<Vec<(String, std::collections::BTreeSet<arkret_wire::DidCoreId>)>>
+    {
         Ok(self.0.realm_organizations().snapshot_all().await?)
     }
 

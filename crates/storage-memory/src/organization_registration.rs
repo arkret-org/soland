@@ -16,7 +16,7 @@ use super::{BTreeMap, Mutex, async_trait};
 #[derive(Clone, Default)]
 struct MemoryOrganizationRegistrationState {
     challenges: BTreeMap<String, OrganizationRegistrationChallengeRecord>,
-    registrations: BTreeMap<String, OrganizationRegistrationStateRecord>,
+    registrations: BTreeMap<DidCoreId, OrganizationRegistrationStateRecord>,
     outcomes: BTreeMap<String, OrganizationRegistrationOutcome>,
 }
 
@@ -73,7 +73,7 @@ impl OrganizationRegistrationStore for MemoryOrganizationRegistrationStore {
             .state
             .lock()
             .registrations
-            .get(organization_id.as_str())
+            .get(organization_id)
             .and_then(|state| state.generations.get(&generation))
             .cloned())
     }
@@ -161,12 +161,9 @@ impl OrganizationRegistrationStore for MemoryOrganizationRegistrationStore {
                 outcomes,
                 ..
             } = &mut *state;
-            let registration =
-                registrations
-                    .get_mut(organization_id.as_str())
-                    .ok_or_else(|| {
-                        PersistenceError::NotFound("organization registration".to_owned())
-                    })?;
+            let registration = registrations.get_mut(organization_id).ok_or_else(|| {
+                PersistenceError::NotFound("organization registration".to_owned())
+            })?;
             apply_organization_registration_stale(
                 registration,
                 outcomes,
@@ -215,7 +212,7 @@ impl MemoryOrganizationRegistrationStore {
                 ..
             } = &mut *state;
             let registration = registrations
-                .get_mut(commit.organization_id.as_str())
+                .get_mut(&commit.organization_id)
                 .ok_or_else(|| {
                     PersistenceError::NotFound("organization registration".to_owned())
                 })?;
@@ -236,11 +233,11 @@ impl MemoryOrganizationRegistrationStore {
 fn challenge_organization_id(
     state: &MemoryOrganizationRegistrationState,
     challenge_id: &str,
-) -> PersistenceResult<String> {
+) -> PersistenceResult<DidCoreId> {
     state
         .challenges
         .get(challenge_id)
-        .map(|record| record.challenge.organization_id.as_str().to_owned())
+        .map(|record| record.challenge.organization_id.clone())
         .ok_or_else(|| {
             PersistenceError::Conflict(
                 "organization_registration_challenge_invalid: challenge not found".to_owned(),
@@ -252,7 +249,7 @@ fn current_from_state(
     state: &MemoryOrganizationRegistrationState,
     organization_id: &DidCoreId,
 ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>> {
-    let Some(registration) = state.registrations.get(organization_id.as_str()) else {
+    let Some(registration) = state.registrations.get(organization_id) else {
         return Ok(None);
     };
     registration.validate()?;

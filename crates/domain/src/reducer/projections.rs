@@ -12,7 +12,7 @@ use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_wire::AppletId;
+use arkret_wire::{AppletId, DidCoreId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -206,7 +206,7 @@ pub struct RealmInheritancePolicyState {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RealmOrganizationStatementState {
     pub realm_id: String,
-    pub organization_id: String,
+    pub organization_id: DidCoreId,
     /// snake_case relationship: `owner` / `governance` / `sponsor` /
     /// `directory_certifier`.
     pub relationship: String,

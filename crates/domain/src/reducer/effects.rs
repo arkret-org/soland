@@ -4,7 +4,7 @@
 //! `crate::reducer::ProjectionEffect` / `MlsEffect` paths stay unchanged.
 
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::{AppletId, EventKind};
+use arkret_wire::{AppletId, DidCoreId, EventKind};
 use serde_json::Value;
 
 use super::{
@@ -213,7 +213,7 @@ pub enum ProjectionEffect {
     /// (inactive, retained for audit).
     RealmOrganizationProjected {
         realm_id: String,
-        organization_id: String,
+        organization_id: DidCoreId,
         relationship: String,
         status: String,
     },

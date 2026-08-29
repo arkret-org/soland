@@ -308,8 +308,8 @@ async fn get_organization(
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id =
-        normalized_organization_id(organization_principal_id.into_inner().as_str())?;
+    let organization_principal_id = organization_principal_id.into_inner();
+    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
     let record = state
         .governance()
         .cached_organization(&organization_id)
@@ -337,8 +337,8 @@ async fn get_organization_policy(
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_id =
-        normalized_organization_id(organization_principal_id.into_inner().as_str())?;
+    let organization_principal_id = organization_principal_id.into_inner();
+    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
     let policy = state
         .governance()
         .cached_organization_policy(&organization_id)
@@ -450,15 +450,15 @@ async fn link_organization_realm(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_id =
-        normalized_organization_id(organization_principal_id.into_inner().as_str())?;
+    let organization_principal_id = organization_principal_id.into_inner();
+    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
     let body = body.into_inner();
     let actor_id = DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("authenticated principal_id: {error}")))?;
     ensure_organization_placeholder(state, &organization_id, &actor_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    link_realm_to_organization(state, &body.realm_id, &organization_id)
+    link_realm_to_organization(state, &body.realm_id, &organization_principal_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(OrganizationRealmLinkOutcome {
@@ -487,42 +487,53 @@ pub(crate) async fn record_realm_organizations_from_event(
     else {
         return;
     };
-    let mut orgs = Vec::new();
-    if let Some(array) = object.get("owning_organizations").and_then(Value::as_array) {
-        orgs.extend(
-            array
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned),
-        );
-    }
-    for key in [
-        "organization_id",
-        "organization_principal_id",
-        "organization_ref",
-    ] {
-        if let Some(value) = object.get(key).and_then(Value::as_str) {
-            orgs.push(value.to_owned());
+    let organization_ids = match declared_organization_ids(object) {
+        Ok(organization_ids) => organization_ids,
+        Err(error) => {
+            tracing::warn!(%realm_id, %error, "Realm organization projection contains invalid owning_organization_ids");
+            return;
         }
-    }
-    for org in orgs {
-        let Ok(org_id) = normalized_organization_id(&org) else {
-            continue;
-        };
+    };
+    for organization_principal_id in organization_ids {
+        let org_id = organization_principal_id.to_string();
         if let Err(error) = ensure_organization_placeholder(state, &org_id, &created_by).await {
             tracing::warn!(%error, organization_id = %org_id, "failed to persist organization placeholder from Realm event");
             continue;
         }
-        if let Err(error) = link_realm_to_organization(state, realm_id, &org_id).await {
+        if let Err(error) =
+            link_realm_to_organization(state, realm_id, &organization_principal_id).await
+        {
             tracing::warn!(%error, %realm_id, organization_id = %org_id, "failed to persist Realm organization link");
         }
     }
 }
 
+fn declared_organization_ids(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Vec<DidCoreId>, String> {
+    let Some(value) = object.get("owning_organization_ids") else {
+        return Ok(Vec::new());
+    };
+    let array = value
+        .as_array()
+        .ok_or_else(|| "owning_organization_ids must be an array".to_owned())?;
+    array
+        .iter()
+        .map(|value| {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| "owning_organization_ids entries must be strings".to_owned())?;
+            DidCoreId::new(raw).map_err(|_| {
+                "owning_organization_ids entries must be DID core identifiers".to_owned()
+            })
+        })
+        .collect()
+}
+
 pub(crate) async fn link_realm_to_organization(
     state: &AppState,
     realm_id: &str,
-    organization_id: &str,
+    organization_id: &DidCoreId,
 ) -> soland_services::ServiceResult<()> {
     state
         .governance()
@@ -531,22 +542,22 @@ pub(crate) async fn link_realm_to_organization(
     Ok(())
 }
 
-/// SOL-ORG-05 — declared `owning_organizations` hint ids for a Realm. Display /
+/// SOL-ORG-05 — declared `owning_organization_ids` hints for a Realm. Display /
 /// discovery surface ONLY; never use this to drive policy inheritance.
-pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
+pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<DidCoreId> {
     state.governance().cached_realm_organizations(realm_id)
 }
 
-/// SOL-ORG-05 — the organization DIDs whose active, in-window
+/// SOL-ORG-05 — the stable organization ids whose active, in-window
 /// `ak.realm.organization` statement endorses `realm_id` with a
 /// `moderation_policy` control scope. This is the ONLY basis on which an
 /// organization's moderation policy may flow into the Realm's effective policy;
-/// `owning_organizations` declared hints no longer qualify. Returns a stable,
+/// `owning_organization_ids` declared hints no longer qualify. Returns a stable,
 /// de-duplicated, sorted list.
 pub(crate) fn verified_moderation_organization_ids(
     state: &AppState,
     realm_id: &str,
-) -> Vec<String> {
+) -> Vec<DidCoreId> {
     let now = Utc::now();
     let proj = state.projections().snapshot();
     let mut ids = proj.verified_organizations_with_scope(
@@ -566,19 +577,26 @@ pub(crate) async fn effective_policy_for_realm(
     // SOL-ORG-05 — only organizations with a verified, active, in-window
     // `ak.realm.organization` statement carrying the `moderation_policy`
     // control scope drive the effective moderation policy. Declared
-    // `owning_organizations` hints no longer qualify.
+    // `owning_organization_ids` hints no longer qualify.
     let org_ids = verified_moderation_organization_ids(state, realm_id);
+    let directory_org_ids = org_ids.iter().map(ToString::to_string).collect::<Vec<_>>();
     let org_layers = state
         .governance()
-        .cached_organization_policies(&org_ids)
+        .cached_organization_policies(&directory_org_ids)
         .into_iter()
-        .map(|(org_id, policy)| OrganizationPolicyLayer {
-            source: "organization".to_owned(),
-            organization_id: org_id.clone(),
-            policy_id: policy.policy_id.clone(),
-            version: policy.version,
-            policy: policy.payload.clone(),
-            applies_to_realms: state.governance().cached_organization_realms(&org_id),
+        .map(|(org_id, policy)| {
+            let organization_principal_id = DidCoreId::new(org_id.clone())
+                .expect("verified organization id remains a DID core id");
+            OrganizationPolicyLayer {
+                source: "organization".to_owned(),
+                organization_id: org_id.clone(),
+                policy_id: policy.policy_id.clone(),
+                version: policy.version,
+                policy: policy.payload.clone(),
+                applies_to_realms: state
+                    .governance()
+                    .cached_organization_realms(&organization_principal_id),
+            }
         })
         .collect::<Vec<_>>();
 
@@ -591,7 +609,7 @@ pub(crate) async fn effective_policy_for_realm(
         } else {
             "none".to_owned()
         },
-        inheritance_chain_ids: org_ids,
+        inheritance_chain_ids: directory_org_ids,
         organization_policy_layers: org_layers,
         realm_policy,
         effective_rules: effective_rules(state, realm_id),
@@ -637,7 +655,7 @@ pub(crate) async fn organization_policy_blocks_join(
     org_ids.iter().any(|org_id| {
         state
             .governance()
-            .cached_organization_policy(org_id)
+            .cached_organization_policy(org_id.as_str())
             .is_some_and(|policy| policy_denies_join_actor(&policy.payload, actor))
     })
 }
@@ -672,7 +690,7 @@ fn realm_policy_override_requires_approval_cached(
         org_ids.iter().any(|org_id| {
             state
                 .governance()
-                .cached_organization_policy(org_id)
+                .cached_organization_policy(org_id.as_str())
                 .is_some_and(|policy| policy_denies_join_actor(&policy.payload, target))
         })
     })
@@ -710,13 +728,13 @@ pub(crate) async fn realm_policy_override_has_approval(
 /// The verified moderation-scoped organizations of `realm_id` whose policy
 /// denies at least one of the `allow_join` override targets carried in
 /// `payload`. Drives the most-restrictive approval gate: each such organization
-/// MUST approve. SOL-ORG-05 — declared `owning_organizations` hints do not
+/// MUST approve. SOL-ORG-05 — declared `owning_organization_ids` hints do not
 /// participate.
 fn organizations_denying_override_targets(
     state: &AppState,
     realm_id: &str,
     payload: &Value,
-) -> BTreeSet<String> {
+) -> BTreeSet<DidCoreId> {
     let targets = allow_join_override_targets(payload);
     if targets.is_empty() {
         return BTreeSet::new();
@@ -727,7 +745,7 @@ fn organizations_denying_override_targets(
         .filter(|org_id| {
             state
                 .governance()
-                .cached_organization_policy(org_id)
+                .cached_organization_policy(org_id.as_str())
                 .is_some_and(|policy| {
                     targets
                         .iter()
@@ -791,7 +809,7 @@ async fn ensure_organization_placeholder(
 fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {
     let realms = state
         .governance()
-        .cached_organization_realms(&record.organization_id);
+        .cached_organization_realms(&record.organization_principal_id);
     let realm_count = realms.len();
     OrganizationView {
         organization_id: record.organization_id.clone(),
@@ -822,7 +840,13 @@ fn organization_policy_record_view(
 ) -> OrganizationPolicyView {
     let applies_to_realms = state
         .governance()
-        .cached_organization_realms(&record.organization_id);
+        .cached_organization(&record.organization_id)
+        .map(|organization| {
+            state
+                .governance()
+                .cached_organization_realms(&organization.organization_principal_id)
+        })
+        .unwrap_or_default();
     OrganizationPolicyView {
         kind: arkret_wire::event_kind_str::ORGANIZATION_MODERATION_POLICY.to_owned(),
         organization_id: record.organization_id.clone(),
@@ -931,7 +955,10 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let mut rules = Vec::new();
     for org_id in org_ids {
-        if let Some(policy) = state.governance().cached_organization_policy(&org_id) {
+        if let Some(policy) = state
+            .governance()
+            .cached_organization_policy(org_id.as_str())
+        {
             rules.extend(policy_rules(&policy.payload));
         }
     }
@@ -1036,7 +1063,7 @@ fn approvals_from_payload(payload: &Value) -> Vec<Value> {
     approvals
 }
 
-fn approval_matches(approval: &Value, org_ids: &BTreeSet<String>) -> bool {
+fn approval_matches(approval: &Value, org_ids: &BTreeSet<DidCoreId>) -> bool {
     if approval.get("approved").and_then(Value::as_bool) == Some(false) {
         return false;
     }
@@ -1047,7 +1074,7 @@ fn approval_matches(approval: &Value, org_ids: &BTreeSet<String>) -> bool {
     else {
         return false;
     };
-    org_ids.contains(org_id)
+    DidCoreId::new(org_id).is_ok_and(|organization_id| org_ids.contains(&organization_id))
 }
 
 fn target_actor_id(value: &Value) -> Option<&str> {
@@ -1093,6 +1120,44 @@ pub(crate) fn requires_organization_approval_error() -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn declared_organization_ids_accept_only_the_canonical_typed_array() {
+        let object = serde_json::json!({
+            "owning_organization_ids": [
+                "ak:did_core:webvh:zOrganizationA",
+                "ak:did_core:webvh:zOrganizationB"
+            ]
+        });
+        let ids = declared_organization_ids(object.as_object().unwrap()).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0].as_str(), "ak:did_core:webvh:zOrganizationA");
+    }
+
+    #[test]
+    fn declared_organization_ids_fail_closed_on_any_invalid_entry() {
+        let object = serde_json::json!({
+            "owning_organization_ids": [
+                "ak:did_core:webvh:zOrganizationA",
+                "did:webvh:zOrganizationB:organization.example"
+            ]
+        });
+        assert!(declared_organization_ids(object.as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn declared_organization_ids_do_not_read_legacy_single_value_fields() {
+        let object = serde_json::json!({
+            "organization_id": "ak:did_core:webvh:zOrganizationA",
+            "organization_principal_id": "ak:did_core:webvh:zOrganizationB",
+            "organization_ref": "ak:did_core:webvh:zOrganizationC"
+        });
+        assert!(
+            declared_organization_ids(object.as_object().unwrap())
+                .unwrap()
+                .is_empty()
+        );
+    }
 
     #[test]
     fn organization_approval_rejection_uses_failed_precondition_layering() {

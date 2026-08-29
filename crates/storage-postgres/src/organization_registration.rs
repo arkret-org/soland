@@ -34,7 +34,7 @@ struct ChallengeRow {
     #[diesel(sql_type = Text)]
     challenge_id: String,
     #[diesel(sql_type = Text)]
-    organization_id: String,
+    organization_id: DidCoreId,
     #[diesel(sql_type = Jsonb)]
     record: Value,
     #[diesel(sql_type = Nullable<Text>)]
@@ -55,8 +55,9 @@ impl TryFrom<ChallengeRow> for OrganizationRegistrationChallengeRecord {
                     "organization registration challenge row: {error}"
                 ))
             })?;
+        validate_prepared_challenge(&record.challenge)?;
         if record.challenge.challenge_id != row.challenge_id
-            || record.challenge.organization_id.as_str() != row.organization_id
+            || record.challenge.organization_id != row.organization_id
             || record.consumed_request_digest.as_ref().map(Hash::as_str)
                 != row.consumed_request_digest.as_deref()
             || record.consumed_outcome_id != row.consumed_outcome_id
@@ -73,7 +74,7 @@ impl TryFrom<ChallengeRow> for OrganizationRegistrationChallengeRecord {
 #[derive(QueryableByName)]
 struct StateRow {
     #[diesel(sql_type = Text)]
-    organization_id: String,
+    organization_id: DidCoreId,
     #[diesel(sql_type = BigInt)]
     current_generation: i64,
     #[diesel(sql_type = Text)]
@@ -92,7 +93,7 @@ impl TryFrom<StateRow> for OrganizationRegistrationStateRecord {
             })?;
         state.validate()?;
         let current = state.current()?;
-        if state.organization_id.as_str() != row.organization_id
+        if state.organization_id != row.organization_id
             || i64::try_from(state.current_generation).ok() != Some(row.current_generation)
             || current.current_outcome_id != row.current_outcome_id
         {
@@ -109,7 +110,7 @@ struct OutcomeRow {
     #[diesel(sql_type = Text)]
     outcome_id: String,
     #[diesel(sql_type = Text)]
-    organization_id: String,
+    organization_id: DidCoreId,
     #[diesel(sql_type = BigInt)]
     registration_generation: i64,
     #[diesel(sql_type = Jsonb)]
@@ -130,7 +131,7 @@ impl TryFrom<OutcomeRow> for OrganizationRegistrationOutcome {
             .validate()
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
         if outcome.registration_receipt.registration_receipt_id != row.outcome_id
-            || outcome.registration_receipt.organization_id.as_str() != row.organization_id
+            || outcome.registration_receipt.organization_id != row.organization_id
             || i64::try_from(outcome.registration_receipt.registration_generation).ok()
                 != Some(row.registration_generation)
         {
@@ -159,7 +160,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT (challenge_id) DO NOTHING",
         )
         .bind::<Text, _>(&record.challenge.challenge_id)
-        .bind::<Text, _>(record.challenge.organization_id.as_str())
+        .bind::<Text, _>(&record.challenge.organization_id)
         .bind::<Jsonb, _>(&value)
         .bind::<Timestamptz, _>(record.challenge.expires_at)
         .bind::<Timestamptz, _>(record.challenge.created_at)
@@ -187,7 +188,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
         organization_id: &DidCoreId,
     ) -> PersistenceResult<Option<OrganizationRegistrationCurrent>> {
         let mut conn = pg_conn(&self.pool).await?;
-        let Some(state) = load_state(&mut conn, organization_id.as_str(), false).await? else {
+        let Some(state) = load_state(&mut conn, organization_id, false).await? else {
             return Ok(None);
         };
         let generation = state.current()?.clone();
@@ -210,7 +211,7 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
         generation: u64,
     ) -> PersistenceResult<Option<OrganizationRegistrationGenerationRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        Ok(load_state(&mut conn, organization_id.as_str(), false)
+        Ok(load_state(&mut conn, organization_id, false)
             .await?
             .and_then(|state| state.generations.get(&generation).cloned()))
     }
@@ -232,8 +233,8 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
             let mut challenge = load_challenge(conn, &commit.challenge_id, true)
                 .await?
                 .ok_or_else(challenge_not_found)?;
-            lock_organization(conn, challenge.challenge.organization_id.as_str()).await?;
-            let organization_id = challenge.challenge.organization_id.as_str().to_owned();
+            lock_organization(conn, &challenge.challenge.organization_id).await?;
+            let organization_id = challenge.challenge.organization_id.clone();
             let mut state = load_state(conn, &organization_id, true).await?;
             let mut outcomes = load_organization_outcomes(conn, &organization_id).await?;
             let outcome = apply_organization_registration_ensure(
@@ -261,8 +262,8 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
             let mut challenge = load_challenge(conn, &commit.challenge_id, true)
                 .await?
                 .ok_or_else(challenge_not_found)?;
-            lock_organization(conn, challenge.challenge.organization_id.as_str()).await?;
-            let organization_id = challenge.challenge.organization_id.as_str().to_owned();
+            lock_organization(conn, &challenge.challenge.organization_id).await?;
+            let organization_id = challenge.challenge.organization_id.clone();
             let mut state = load_state(conn, &organization_id, true)
                 .await?
                 .ok_or_else(|| {
@@ -295,13 +296,13 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
         let expected_current_outcome_id = expected_current_outcome_id.to_owned();
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            lock_organization(conn, organization_id.as_str()).await?;
-            let mut state = load_state(conn, organization_id.as_str(), true)
+            lock_organization(conn, &organization_id).await?;
+            let mut state = load_state(conn, &organization_id, true)
                 .await?
                 .ok_or_else(|| {
                     PersistenceError::NotFound("organization registration".to_owned())
                 })?;
-            let outcomes = load_organization_outcomes(conn, organization_id.as_str()).await?;
+            let outcomes = load_organization_outcomes(conn, &organization_id).await?;
             let current = apply_organization_registration_stale(
                 &mut state,
                 &outcomes,
@@ -344,14 +345,13 @@ impl PgOrganizationRegistrationStore {
     ) -> PersistenceResult<OrganizationRegistrationOutcome> {
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            lock_organization(conn, commit.organization_id.as_str()).await?;
-            let mut state = load_state(conn, commit.organization_id.as_str(), true)
+            lock_organization(conn, &commit.organization_id).await?;
+            let mut state = load_state(conn, &commit.organization_id, true)
                 .await?
                 .ok_or_else(|| {
                     PersistenceError::NotFound("organization registration".to_owned())
                 })?;
-            let mut outcomes =
-                load_organization_outcomes(conn, commit.organization_id.as_str()).await?;
+            let mut outcomes = load_organization_outcomes(conn, &commit.organization_id).await?;
             let outcome = apply_organization_registration_lifecycle(
                 &mut state,
                 &mut outcomes,
@@ -369,7 +369,7 @@ impl PgOrganizationRegistrationStore {
 
 async fn lock_organization(
     conn: &mut diesel_async::AsyncPgConnection,
-    organization_id: &str,
+    organization_id: &DidCoreId,
 ) -> PersistenceResult<()> {
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind::<Text, _>(&format!("organization-registration:{organization_id}"))
@@ -401,7 +401,7 @@ async fn load_challenge(
 
 async fn load_state(
     conn: &mut diesel_async::AsyncPgConnection,
-    organization_id: &str,
+    organization_id: &DidCoreId,
     for_update: bool,
 ) -> PersistenceResult<Option<OrganizationRegistrationStateRecord>> {
     let suffix = if for_update { " FOR UPDATE" } else { "" };
@@ -437,7 +437,7 @@ async fn load_outcome(
 
 async fn load_organization_outcomes(
     conn: &mut diesel_async::AsyncPgConnection,
-    organization_id: &str,
+    organization_id: &DidCoreId,
 ) -> PersistenceResult<BTreeMap<String, OrganizationRegistrationOutcome>> {
     let rows = sql_query(
         "SELECT outcome_id, organization_id, registration_generation, outcome \
@@ -508,7 +508,7 @@ async fn persist_state(
             state = EXCLUDED.state, \
             updated_at = EXCLUDED.updated_at",
     )
-    .bind::<Text, _>(state.organization_id.as_str())
+    .bind::<Text, _>(&state.organization_id)
     .bind::<BigInt, _>(current_generation)
     .bind::<Text, _>(&current.current_outcome_id)
     .bind::<Jsonb, _>(&value)
@@ -539,7 +539,7 @@ async fn persist_outcomes(
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT (outcome_id) DO NOTHING",
         )
         .bind::<Text, _>(outcome_id)
-        .bind::<Text, _>(outcome.registration_receipt.organization_id.as_str())
+        .bind::<Text, _>(&outcome.registration_receipt.organization_id)
         .bind::<BigInt, _>(generation)
         .bind::<Jsonb, _>(&value)
         .bind::<Timestamptz, _>(committed_at)
@@ -564,4 +564,50 @@ fn challenge_not_found() -> PersistenceError {
     PersistenceError::Conflict(
         "organization_registration_challenge_invalid: challenge not found".to_owned(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_models_identity::{
+        OrganizationRegistrationChallenge, OrganizationRegistrationScope,
+    };
+    use arkret_wire::{Did, DidCoreId, ProofContextId, TrustDomainId, WebOrigin};
+    use chrono::{Duration, TimeZone, Utc};
+
+    use super::{ChallengeRow, OrganizationRegistrationChallengeRecord, PersistenceError};
+
+    #[test]
+    fn challenge_row_rejects_embedded_did_and_stable_id_mismatch() {
+        let created_at = Utc
+            .with_ymd_and_hms(2026, 8, 29, 0, 0, 0)
+            .single()
+            .expect("valid fixture timestamp");
+        let organization_id = DidCoreId::new("ak:did_core:webvh:zDifferentOrganization").unwrap();
+        let challenge = OrganizationRegistrationChallenge {
+            challenge_id: format!("ak:organization_registration_challenge:{}", "a".repeat(64)),
+            organization_id: organization_id.clone(),
+            did: Did::new("did:webvh:zActualOrganization:organization.example").unwrap(),
+            purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
+            nonce: "fixture_challenge_nonce_000001".to_owned(),
+            audience_id: DidCoreId::new("ak:did_core:webvh:zService").unwrap(),
+            origin: WebOrigin::new("https://service.example").unwrap(),
+            trust_domain: TrustDomainId::new("ak:trust_domain:service.example").unwrap(),
+            local_admin_subject_id: DidCoreId::new("ak:did_core:webvh:zAdmin").unwrap(),
+            requested_scopes: vec![OrganizationRegistrationScope::OrganizationProfileManage],
+            expires_at: created_at + Duration::seconds(300),
+            created_at,
+        };
+        let record = OrganizationRegistrationChallengeRecord::prepared(challenge);
+        let row = ChallengeRow {
+            challenge_id: record.challenge.challenge_id.clone(),
+            organization_id,
+            record: serde_json::to_value(&record).unwrap(),
+            consumed_request_digest: None,
+            consumed_outcome_id: None,
+            consumed_at: None,
+        };
+
+        let error = OrganizationRegistrationChallengeRecord::try_from(row).unwrap_err();
+        assert!(matches!(error, PersistenceError::SchemaViolation(_)));
+    }
 }

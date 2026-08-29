@@ -472,7 +472,11 @@ pub struct PgRealmOrganizationStore {
 }
 #[async_trait]
 impl RealmOrganizationStore for PgRealmOrganizationStore {
-    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
+    async fn link(
+        &self,
+        realm_id: &str,
+        organization_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -489,7 +493,9 @@ impl RealmOrganizationStore for PgRealmOrganizationStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>> {
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, BTreeSet<arkret_wire::DidCoreId>)>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -500,7 +506,7 @@ impl RealmOrganizationStore for PgRealmOrganizationStore {
         .load::<RealmOrganizationRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        let mut out = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut out = BTreeMap::<String, BTreeSet<arkret_wire::DidCoreId>>::new();
         for row in rows {
             out.entry(row.realm_id)
                 .or_default()
@@ -514,7 +520,7 @@ struct RealmOrganizationRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    organization_id: String,
+    organization_id: arkret_wire::DidCoreId,
 }
 pub struct PgRealmOrganizationStatementStore {
     pub pool: PgPool,
@@ -597,7 +603,7 @@ struct RealmOrganizationStatementRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    organization_id: String,
+    organization_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     relationship: String,
     #[diesel(sql_type = Text)]

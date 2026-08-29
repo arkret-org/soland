@@ -1062,7 +1062,7 @@ pub struct OrganizationPolicyRecord {
 #[derive(Clone, Debug)]
 pub struct RealmOrganizationStatementRecord {
     pub realm_id: String,
-    pub organization_id: String,
+    pub organization_id: DidCoreId,
     /// snake_case relationship: `owner` / `governance` / `sponsor` /
     /// `directory_certifier`.
     pub relationship: String,

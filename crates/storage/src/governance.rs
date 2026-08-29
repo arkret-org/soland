@@ -1,3 +1,5 @@
+use arkret_wire::DidCoreId;
+
 use super::{
     BTreeSet, OrganizationPolicyRecord, OrganizationRecord, PersistenceResult,
     RealmOrganizationStatementRecord, RetentionPolicyRecord, RetentionTombstoneRecord, async_trait,
@@ -39,14 +41,14 @@ pub trait OrganizationPolicyStore: Send + Sync {
     async fn put(&self, record: &OrganizationPolicyRecord) -> PersistenceResult<()>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<OrganizationPolicyRecord>>;
 }
-/// SOL-ORG-05 — declared `owning_organizations` hint links. These are NOT
+/// SOL-ORG-05 — declared `owning_organization_ids` hint links. These are NOT
 /// verified relationships and do not drive policy inheritance; see
 /// [`RealmOrganizationStatementStore`] for the verified statement surface.
 /// Backed by the `realm_owning_organizations` table.
 #[async_trait]
 pub trait RealmOrganizationStore: Send + Sync {
-    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>>;
+    async fn link(&self, realm_id: &str, organization_id: &DidCoreId) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<DidCoreId>)>>;
 }
 /// SOL-ORG-04 — verified `ak.realm.organization` relationship statements.
 /// Backed by the `realm_organizations` table, keyed by

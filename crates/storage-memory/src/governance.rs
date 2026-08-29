@@ -149,7 +149,7 @@ impl OrganizationPolicyStore for MemoryOrganizationPolicyStore {
     }
 }
 pub(crate) struct MemoryRealmOrganizationStore {
-    data: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    data: Arc<Mutex<BTreeMap<String, BTreeSet<arkret_wire::DidCoreId>>>>,
 }
 impl MemoryRealmOrganizationStore {
     pub(crate) fn new() -> Self {
@@ -160,16 +160,22 @@ impl MemoryRealmOrganizationStore {
 }
 #[async_trait]
 impl RealmOrganizationStore for MemoryRealmOrganizationStore {
-    async fn link(&self, realm_id: &str, organization_id: &str) -> PersistenceResult<()> {
+    async fn link(
+        &self,
+        realm_id: &str,
+        organization_id: &arkret_wire::DidCoreId,
+    ) -> PersistenceResult<()> {
         self.data
             .lock()
             .entry(realm_id.to_owned())
             .or_default()
-            .insert(organization_id.to_owned());
+            .insert(organization_id.clone());
         Ok(())
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, BTreeSet<String>)>> {
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(String, BTreeSet<arkret_wire::DidCoreId>)>> {
         Ok(self
             .data
             .lock()
@@ -178,7 +184,7 @@ impl RealmOrganizationStore for MemoryRealmOrganizationStore {
             .collect())
     }
 }
-type RealmOrganizationStatementKey = (String, String, String);
+type RealmOrganizationStatementKey = (String, arkret_wire::DidCoreId, String);
 type RealmOrganizationStatementMap =
     BTreeMap<RealmOrganizationStatementKey, RealmOrganizationStatementRecord>;
 

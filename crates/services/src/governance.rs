@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -133,9 +134,9 @@ pub trait GovernanceRecordsPort: Send + Sync {
     async fn link_realm_organization(
         &self,
         realm_id: &str,
-        organization_id: &str,
+        organization_id: &DidCoreId,
     ) -> ServiceResult<()>;
-    async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>>;
+    async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<DidCoreId>)>>;
     async fn policy_document(&self, policy_id: &str)
     -> ServiceResult<Option<PolicyDocumentRecord>>;
     async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ServiceResult<()>;
@@ -198,8 +199,8 @@ pub struct GovernanceService {
     records: Arc<dyn GovernanceRecordsPort>,
     organizations: Arc<Mutex<BTreeMap<String, OrganizationRecord>>>,
     organization_policies: Arc<Mutex<BTreeMap<String, OrganizationPolicyRecord>>>,
-    realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
-    organization_realms: Arc<Mutex<BTreeMap<String, BTreeSet<String>>>>,
+    realm_organizations: Arc<Mutex<BTreeMap<String, BTreeSet<DidCoreId>>>>,
+    organization_realms: Arc<Mutex<BTreeMap<DidCoreId, BTreeSet<String>>>>,
     retention_tombstones: Arc<Mutex<BTreeMap<String, RetentionTombstoneRecord>>>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
 }
@@ -264,7 +265,7 @@ impl GovernanceService {
     pub async fn link_realm_organization(
         &self,
         realm_id: &str,
-        organization_id: &str,
+        organization_id: &DidCoreId,
     ) -> ServiceResult<()> {
         self.records
             .link_realm_organization(realm_id, organization_id)
@@ -273,16 +274,18 @@ impl GovernanceService {
             .lock()
             .entry(realm_id.to_owned())
             .or_default()
-            .insert(organization_id.to_owned());
+            .insert(organization_id.clone());
         self.organization_realms
             .lock()
-            .entry(organization_id.to_owned())
+            .entry(organization_id.clone())
             .or_default()
             .insert(realm_id.to_owned());
         Ok(())
     }
 
-    pub async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
+    pub async fn realm_organization_links(
+        &self,
+    ) -> ServiceResult<Vec<(String, BTreeSet<DidCoreId>)>> {
         self.records.realm_organization_links().await
     }
 
@@ -324,7 +327,7 @@ impl GovernanceService {
         &self,
         organizations: impl IntoIterator<Item = OrganizationRecord>,
         policies: impl IntoIterator<Item = OrganizationPolicyRecord>,
-        links: impl IntoIterator<Item = (String, BTreeSet<String>)>,
+        links: impl IntoIterator<Item = (String, BTreeSet<DidCoreId>)>,
     ) {
         *self.organizations.lock() = organizations
             .into_iter()
@@ -335,7 +338,7 @@ impl GovernanceService {
             .map(|record| (record.organization_id.clone(), record))
             .collect();
         let realm_organizations: BTreeMap<_, _> = links.into_iter().collect();
-        let mut organization_realms = BTreeMap::<String, BTreeSet<String>>::new();
+        let mut organization_realms = BTreeMap::<DidCoreId, BTreeSet<String>>::new();
         for (realm_id, organization_ids) in &realm_organizations {
             for organization_id in organization_ids {
                 organization_realms
@@ -377,7 +380,7 @@ impl GovernanceService {
             .collect()
     }
 
-    pub fn cached_organization_realms(&self, organization_id: &str) -> Vec<String> {
+    pub fn cached_organization_realms(&self, organization_id: &DidCoreId) -> Vec<String> {
         self.organization_realms
             .lock()
             .get(organization_id)
@@ -385,7 +388,7 @@ impl GovernanceService {
             .unwrap_or_default()
     }
 
-    pub fn cached_realm_organizations(&self, realm_id: &str) -> Vec<String> {
+    pub fn cached_realm_organizations(&self, realm_id: &str) -> Vec<DidCoreId> {
         self.realm_organizations
             .lock()
             .get(realm_id)
@@ -629,11 +632,13 @@ mod tests {
         async fn link_realm_organization(
             &self,
             _realm_id: &str,
-            _organization_id: &str,
+            _organization_id: &DidCoreId,
         ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
+        async fn realm_organization_links(
+            &self,
+        ) -> ServiceResult<Vec<(String, BTreeSet<DidCoreId>)>> {
             Ok(Vec::new())
         }
         async fn policy_document(

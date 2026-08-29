@@ -253,7 +253,7 @@ pub struct ProjectionState {
     /// the structured side-band cache the verified-relationship and
     /// effective-policy reads consult.
     pub realm_organization_statements:
-        BTreeMap<(String, String, String), RealmOrganizationStatementState>,
+        BTreeMap<(String, arkret_wire::DidCoreId, String), RealmOrganizationStatementState>,
     /// G3.S1 — published MLS KeyPackages keyed by `keypackage_id`. Each
     /// row is per `(actor_id, device_id)`; the `claimed_by` / claim-window
     /// slots flip on a successful CAS claim.

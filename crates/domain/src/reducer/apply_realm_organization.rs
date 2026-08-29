@@ -108,7 +108,7 @@ impl ProjectionState {
         }
 
         let realm_id = expected_realm_id.to_string();
-        let organization_id = payload.organization_id.as_str().to_owned();
+        let organization_id = payload.organization_id.clone();
         let relationship = relationship_str(&payload).to_owned();
         let status = if payload.is_active_status() {
             "active"
@@ -178,10 +178,11 @@ impl ProjectionState {
     /// for a `(organization_id, relationship)` pair. The subject form mirrors
     /// the SDK `RealmOrganization::subject_for_effect` (`{org}::{rel}`).
     pub(crate) fn realm_organization_cell_id(
-        organization_id: &str,
+        organization_id: &arkret_wire::DidCoreId,
         relationship: &str,
     ) -> Option<arkret_identifiers::CellRef> {
-        let subject = arkret_wire::composite_subject(&[organization_id, relationship]).ok()?;
+        let subject =
+            arkret_wire::composite_subject(&[organization_id.as_str(), relationship]).ok()?;
         arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.organization.v1:{subject}"
         ))
@@ -207,7 +208,7 @@ impl ProjectionState {
 
     /// SOL-ORG-05 — the verified (active + in-window) organization
     /// relationships for `realm_id` at `now`. A revoked or expired statement
-    /// immediately drops out of this set; an `owning_organizations` declared
+    /// immediately drops out of this set; an `owning_organization_ids` declared
     /// hint never enters it.
     pub fn verified_organization_relationships(
         &self,
@@ -220,7 +221,7 @@ impl ProjectionState {
             .collect()
     }
 
-    /// SOL-ORG-05 — the verified organization DIDs whose active statement for
+    /// SOL-ORG-05 — the verified stable organization ids whose active statement for
     /// `realm_id` covers `scope` at `now`. Drives scope-gated policy
     /// inheritance: only these organizations' policies may flow into the
     /// matching effective-policy facet.
@@ -229,7 +230,7 @@ impl ProjectionState {
         realm_id: &str,
         scope: RealmOrganizationControlScope,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> Vec<String> {
+    ) -> Vec<arkret_wire::DidCoreId> {
         let scope = control_scope_str(scope);
         self.verified_organization_relationships(realm_id, now)
             .iter()
@@ -318,7 +319,7 @@ fn control_scopes_str(payload: &RealmOrganizationPayload) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use arkret_event_draft::ProjectedEventOperation as Operation;
-    use arkret_identifiers::{OperationId, RealmId};
+    use arkret_identifiers::{DidCoreId, OperationId, RealmId};
     use arkret_models_collaboration::RealmOrganizationControlScope as Scope;
     use serde_json::{Value, json};
 
@@ -330,6 +331,10 @@ mod tests {
     const ORG2: &str = "ak:did_core:webvh:z6mkorgfixtureb";
     const ORG_DID: &str = "did:webvh:z6mkorgfixturea:example.test:orgs:a";
     const ORG2_DID: &str = "did:webvh:z6mkorgfixtureb:example.test:orgs:b";
+
+    fn org_id(raw: &str) -> DidCoreId {
+        DidCoreId::new(raw).unwrap()
+    }
 
     fn now() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::parse_from_rfc3339("2026-06-25T12:00:00.000Z")
@@ -384,11 +389,11 @@ mod tests {
         ));
         let verified = state.verified_organization_relationships(REALM, now());
         assert_eq!(verified.len(), 1);
-        assert_eq!(verified[0].organization_id, ORG);
+        assert_eq!(verified[0].organization_id, org_id(ORG));
         assert_eq!(verified[0].relationship, "owner");
         // Cell written under the composite subject.
         assert!(
-            ProjectionState::realm_organization_cell_id(ORG, "owner")
+            ProjectionState::realm_organization_cell_id(&org_id(ORG), "owner")
                 .and_then(|cell| state.cell_value(&cell))
                 .is_some()
         );
@@ -413,7 +418,7 @@ mod tests {
         assert_eq!(verified.len(), 3);
         // moderation_policy scope only from the governance org.
         let mods = state.verified_organizations_with_scope(REALM, Scope::ModerationPolicy, now());
-        assert_eq!(mods, vec![ORG2.to_owned()]);
+        assert_eq!(mods, vec![org_id(ORG2)]);
     }
 
     #[test]
@@ -483,11 +488,11 @@ mod tests {
             .map(|row| row.organization_id.clone())
             .collect();
         // Exactly the active statement maps onto verified_active.
-        assert_eq!(verified, vec![ORG.to_owned()]);
+        assert_eq!(verified, vec![org_id(ORG)]);
         // The revoked statement maps onto revoked_or_expired (not verified).
         assert!(
             rows.iter()
-                .any(|row| row.organization_id == ORG2 && !row.is_effective_active(now()))
+                .any(|row| row.organization_id == org_id(ORG2) && !row.is_effective_active(now()))
         );
     }
 

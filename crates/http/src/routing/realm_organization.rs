@@ -4,10 +4,10 @@
 //! (`ak.self.realm_organization.read.list.v1`) projects the accepted
 //! `ak.realm.organization` relationship statements (active / revoked / expired,
 //! latest-per-`(organization_id, relationship)`) plus the declared
-//! `owning_organizations` hints (SOL-ORG-05) that carry no verified statement.
+//! `owning_organization_ids` hints (SOL-ORG-05) that carry no verified statement.
 //!
 //! A relationship is only verified when `lifecycle_phase=verified_active`;
-//! `declared_organization_hints` are unverified claims. This is the protocol
+//! `declared_organization_hint_ids` are unverified claims. This is the protocol
 //! read path referenced by `realm-and-space.md` §2.3.0 — soland never invents a
 //! private endpoint for it.
 //!
@@ -94,9 +94,9 @@ async fn list_realm_organizations_impl(
     let now = chrono::Utc::now();
 
     let mut relationships = Vec::new();
-    // Organization DIDs with a currently-verified statement: these are excluded
+    // Stable organization ids with a currently-verified statement: these are excluded
     // from the declared-hint list so a hint never duplicates a verified row.
-    let mut verified_org_ids: BTreeSet<String> = BTreeSet::new();
+    let mut verified_org_ids: BTreeSet<DidCoreId> = BTreeSet::new();
     {
         let projection = state.projections().snapshot();
         for row in projection.realm_organization_statements_for_realm(&realm_id) {
@@ -118,7 +118,7 @@ async fn list_realm_organizations_impl(
                 .transpose()?;
             relationships.push(RealmOrganizationRelationshipRow {
                 statement_id: row.statement_id.clone(),
-                organization_id: de_str("organization_id", &row.organization_id)?,
+                organization_id: row.organization_id.clone(),
                 relationship: de_str("relationship", &row.relationship)?,
                 status: de_str("status", &row.status)?,
                 control_scopes,
@@ -136,20 +136,19 @@ async fn list_realm_organizations_impl(
         }
     }
 
-    // SOL-ORG-05 declared `owning_organizations` hints (display surface only),
+    // SOL-ORG-05 declared `owning_organization_ids` hints (display surface only),
     // minus any organization that already has a currently-verified statement so
     // a hint never duplicates a verified row.
-    let mut declared_organization_hints: Vec<DidCoreId> = Vec::new();
-    for did in super::organizations::realm_organization_ids(state, &realm_id)
-        .iter()
-        .filter(|did| !verified_org_ids.contains(*did))
-    {
-        declared_organization_hints.push(de_str("declared_organization_hint", did)?);
+    let mut declared_organization_hint_ids: Vec<DidCoreId> = Vec::new();
+    for organization_id in super::organizations::realm_organization_ids(state, &realm_id) {
+        if !verified_org_ids.contains(&organization_id) {
+            declared_organization_hint_ids.push(organization_id);
+        }
     }
 
     json_ok(RealmOrganizationRelationshipList {
         realm_id: de_str::<RealmId>("realm_id", &realm_id)?,
-        realm_organization_relationship_rows: relationships,
-        declared_organization_hint_ids: declared_organization_hints,
+        relationships,
+        declared_organization_hint_ids,
     })
 }
