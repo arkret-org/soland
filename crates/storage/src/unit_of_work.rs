@@ -269,8 +269,19 @@ mod tests {
 #[derive(Clone, Debug)]
 pub struct AppletRecordCommit {
     pub applet_id: arkret_wire::AppletId,
+    /// The accepted managed-actor identity winner used by this installation.
+    /// `expected_record=None` is an insert-only first install; `Some` requires
+    /// the already accepted winner to remain byte-for-byte unchanged.
+    pub identity: AppletIdentityCommit,
     /// Exact durable record observed while validating the aggregate. `None`
     /// means the Applet must not exist and this mutation is an insert.
+    pub expected_record: Option<serde_json::Value>,
+    pub record: serde_json::Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct AppletIdentityCommit {
+    pub target_principal_server_id: arkret_wire::DidCoreId,
     pub expected_record: Option<serde_json::Value>,
     pub record: serde_json::Value,
 }
@@ -303,14 +314,54 @@ pub fn applet_effective_scope_key_from_record(
     applet_effective_scope_key(&scope)
 }
 
-pub fn applet_identity_from_record(
-    record: &serde_json::Value,
-) -> PersistenceResult<serde_json::Value> {
-    record.get("identity").cloned().ok_or_else(|| {
+pub fn applet_id_from_record(record: &serde_json::Value) -> PersistenceResult<&str> {
+    record
+        .get("applet_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: Applet installation record is missing applet_id".to_owned(),
+            )
+        })
+}
+
+/// Installation records are exact per-scope state only. Reject identity
+/// anchors here as well as in the typed HTTP codec and PostgreSQL CHECK so the
+/// memory and PostgreSQL adapters cannot drift into copying the accepted
+/// identity winner back into every installation.
+pub fn validate_applet_installation_record(record: &serde_json::Value) -> PersistenceResult<()> {
+    const IDENTITY_FIELDS: &[&str] = &[
+        "identity",
+        "registry_id",
+        "bot_actor_id",
+        "bot_actor_principal_server_id",
+        "bot_actor_provision_ref",
+        "bot_principal_control_realm_id",
+        "initial_package",
+        "initial_owner_actor_id",
+        "initial_effective_scope",
+        "initial_registration_event",
+        "initial_capability_grant_refs",
+        "bot_actor_provision_event",
+        "bot_pcr_genesis_event",
+        "bot_accountability_grant_event",
+        "bot_profile_event",
+        "globally_fenced_at",
+    ];
+    let object = record.as_object().ok_or_else(|| {
         PersistenceError::Conflict(
-            "schema_violation: Applet installation record is missing identity".to_owned(),
+            "schema_violation: durable Applet installation is not an object".to_owned(),
         )
-    })
+    })?;
+    if let Some(field) = IDENTITY_FIELDS
+        .iter()
+        .find(|field| object.contains_key(**field))
+    {
+        return Err(PersistenceError::Conflict(format!(
+            "schema_violation: Applet installation contains managed identity field {field}"
+        )));
+    }
+    Ok(())
 }
 
 /// Decode the canonical namespace source from a strict durable Applet record.
@@ -341,13 +392,9 @@ pub fn applet_namespaces_from_record(
 /// record. The uniqueness table is a transaction index of this set; it never
 /// accepts a separately supplied claim list.
 pub fn applet_managed_authorities_from_record(
-    record: &serde_json::Value,
+    identity: &serde_json::Value,
+    installation: &serde_json::Value,
 ) -> PersistenceResult<std::collections::BTreeSet<ManagedAuthorityClaim>> {
-    let identity = record.get("identity").ok_or_else(|| {
-        PersistenceError::Conflict(
-            "schema_violation: durable Applet record omits identity".to_owned(),
-        )
-    })?;
     let required = |field: &str| {
         identity
             .get(field)
@@ -362,7 +409,7 @@ pub fn applet_managed_authorities_from_record(
         actor_id: required("bot_actor_id")?.to_owned(),
         principal_server_id: required("bot_actor_principal_server_id")?.to_owned(),
     }]);
-    let ghosts = record
+    let ghosts = installation
         .get("ghosts")
         .and_then(serde_json::Value::as_array)
         .ok_or_else(|| {

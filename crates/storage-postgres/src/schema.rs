@@ -154,6 +154,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    applet_managed_identities (applet_id, target_principal_server_id) {
+        applet_id -> Text,
+        target_principal_server_id -> Text,
+        record -> Jsonb,
+        accepted_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     applet_installations (applet_id, effective_scope_key) {
         applet_id -> Text,
         effective_scope_key -> Text,
@@ -1846,6 +1855,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     agent_principals,
     agent_sidecar_contexts,
     agent_sidecars,
+    applet_managed_identities,
     applet_installations,
     applet_transactions,
     audit_logs,

@@ -712,46 +712,24 @@ async fn verify_with_installed_applet_registration_epoch(
             "Applet Event proof scope_ref is invalid",
         )
     })?;
-    let effective_scope_key = soland_storage::applet_effective_scope_key(&effective_scope)
-        .map_err(|_| {
-            fail(
-                "schema_violation",
-                "Applet Event proof scope_ref is invalid",
-            )
-        })?;
-    let record = state
-        .event_queries()
-        .applet(applet_id, &effective_scope_key)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %applet_id, "failed to read installed Applet proof authority");
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "Applet proof authority store is unavailable",
-            )
-        })?
-        .ok_or_else(|| {
-            fail(
-                "applet_registration_unauthorized",
-                "Applet Event proof has no installed registration",
-            )
-        })?;
-    let record: crate::routing::extensions::applet_bridge::AppletRecord =
-        serde_json::from_value(record).map_err(|error| {
-            tracing::error!(%error, %applet_id, "stored Applet proof authority is invalid");
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "stored Applet proof authority is invalid",
-            )
-        })?;
-    record.validate_stored_bindings().map_err(|error| {
-        tracing::error!(%error, %applet_id, "stored Applet proof authority bindings are invalid");
+    let record = crate::routing::extensions::applet_bridge::record::applet_record(
+        state,
+        applet_id,
+        &effective_scope,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(%error, %applet_id, "failed to read installed Applet proof authority");
         event_validation_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            "stored Applet proof authority bindings are invalid",
+            "Applet proof authority store is unavailable",
+        )
+    })?
+    .ok_or_else(|| {
+        fail(
+            "applet_registration_unauthorized",
+            "Applet Event proof has no installed registration",
         )
     })?;
     if record.revoked_at.is_some()

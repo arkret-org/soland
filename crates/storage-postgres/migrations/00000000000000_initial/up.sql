@@ -296,12 +296,34 @@ CREATE INDEX agent_membership_cleanup_incomplete_idx
     ON public.agent_membership_cleanup_intents (cleanup_due_at, cleanup_intent_digest)
     WHERE completed_at IS NULL;
 
+CREATE TABLE public.applet_managed_identities (
+    applet_id text NOT NULL,
+    target_principal_server_id text NOT NULL,
+    record jsonb NOT NULL,
+    accepted_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT applet_managed_identities_pkey PRIMARY KEY (applet_id, target_principal_server_id),
+    CONSTRAINT applet_managed_identities_record_key_check CHECK (
+        record->>'applet_id' = applet_id
+        AND record->>'bot_actor_principal_server_id' = target_principal_server_id
+    )
+);
+
 CREATE TABLE public.applet_installations (
     applet_id text NOT NULL,
     effective_scope_key text NOT NULL,
     record jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT applet_installations_pkey PRIMARY KEY (applet_id, effective_scope_key),
+    CONSTRAINT applet_installations_record_key_check CHECK (
+        record->>'applet_id' = applet_id
+        AND NOT (record ?| ARRAY[
+            'identity', 'registry_id', 'bot_actor_id', 'bot_actor_principal_server_id',
+            'bot_actor_provision_ref', 'bot_principal_control_realm_id', 'initial_package',
+            'initial_owner_actor_id', 'initial_effective_scope', 'initial_registration_event',
+            'initial_capability_grant_refs', 'bot_actor_provision_event', 'bot_pcr_genesis_event',
+            'bot_accountability_grant_event', 'bot_profile_event', 'globally_fenced_at'
+        ])
+    ),
     CONSTRAINT applet_installations_status_check CHECK ((record->>'status' = ANY (ARRAY['installed'::text, 'partially_installed'::text, 'revoking'::text, 'rejected'::text, 'revoked'::text])))
 );
 

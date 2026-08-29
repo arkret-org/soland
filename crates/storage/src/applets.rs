@@ -1,6 +1,11 @@
 use super::{PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait AppletStore: Send + Sync {
+    async fn get_identity(
+        &self,
+        applet_id: &str,
+        target_principal_server_id: &str,
+    ) -> PersistenceResult<Option<Value>>;
     async fn get(
         &self,
         applet_id: &str,
@@ -13,6 +18,17 @@ pub trait AppletStore: Send + Sync {
         expected: &Value,
         replacement: Value,
     ) -> PersistenceResult<bool>;
+    /// Atomically fences one exact installation and, iff it was the final
+    /// active scope, stamps the independent managed-identity winner.
+    async fn fence_installation(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+        target_principal_server_id: &str,
+        expected: &Value,
+        replacement: Value,
+        fenced_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<AppletInstallationFenceOutcome>;
     async fn list(&self) -> PersistenceResult<Vec<Value>>;
     async fn begin_transaction_replay(
         &self,
@@ -33,6 +49,12 @@ pub trait AppletStore: Send + Sync {
         &self,
         subject_key: &str,
     ) -> PersistenceResult<Option<AppletAuthoringPreviewRecord>>;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AppletInstallationFenceOutcome {
+    pub updated: bool,
+    pub globally_fenced: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -1212,6 +1212,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             if let Some(mutation) = request.applet_record {
+                soland_storage::validate_applet_installation_record(&mutation.record)?;
+                if let Some(expected) = mutation.expected_record.as_ref() {
+                    soland_storage::validate_applet_installation_record(expected)?;
+                }
                 let replacing = mutation.expected_record.is_some();
                 sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                     .bind::<Text, _>(mutation.applet_id.as_str())
@@ -1220,19 +1224,59 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .map_err(PersistenceError::database)?;
                 let effective_scope_key =
                     soland_storage::applet_effective_scope_key_from_record(&mutation.record)?;
-                let identity = soland_storage::applet_identity_from_record(&mutation.record)?;
-                let identity_conflict = sql_query(
-                    "SELECT EXISTS (SELECT 1 FROM applet_installations \
-                     WHERE applet_id = $1 AND record->'identity' IS DISTINCT FROM $2) AS present",
-                )
-                .bind::<Text, _>(mutation.applet_id.as_str())
-                .bind::<Jsonb, _>(&identity)
-                .get_result::<ExistsRow>(conn)
-                .await
-                .map_err(PersistenceError::database)?;
-                if identity_conflict.present {
+                if soland_storage::applet_id_from_record(&mutation.record)?
+                    != mutation.applet_id.as_str()
+                    || soland_storage::applet_id_from_record(&mutation.identity.record)?
+                        != mutation.applet_id.as_str()
+                    || mutation
+                        .identity
+                        .record
+                        .get("bot_actor_principal_server_id")
+                        .and_then(serde_json::Value::as_str)
+                        != Some(mutation.identity.target_principal_server_id.as_str())
+                {
                     return Err(PersistenceError::Conflict(
-                        "duplicate_conflict: Applet identity differs from the first accepted identity"
+                        "schema_violation: Applet identity/installation key does not match its record"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                let identity_updated = if let Some(expected_identity) =
+                    mutation.identity.expected_record.as_ref()
+                {
+                    if expected_identity != &mutation.identity.record {
+                        return Err(PersistenceError::Conflict(
+                            "duplicate_conflict: Applet identity winner changed".to_owned(),
+                        )
+                        .into());
+                    }
+                    sql_query(
+                        "UPDATE applet_managed_identities SET record = record \
+                         WHERE applet_id = $1 AND target_principal_server_id = $2 AND record = $3",
+                    )
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Text, _>(mutation.identity.target_principal_server_id.as_str())
+                    .bind::<Jsonb, _>(expected_identity)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?
+                } else {
+                    sql_query(
+                        "INSERT INTO applet_managed_identities \
+                         (applet_id, target_principal_server_id, record, accepted_at) \
+                         VALUES ($1, $2, $3, NOW()) \
+                         ON CONFLICT (applet_id, target_principal_server_id) DO NOTHING",
+                    )
+                    .bind::<Text, _>(mutation.applet_id.as_str())
+                    .bind::<Text, _>(mutation.identity.target_principal_server_id.as_str())
+                    .bind::<Jsonb, _>(&mutation.identity.record)
+                    .execute(conn)
+                    .await
+                    .map_err(PersistenceError::database)?
+                };
+                if identity_updated != 1 {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: Applet identity winner is not the accepted winner"
                             .to_owned(),
                     )
                     .into());
@@ -1250,11 +1294,19 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     }
                 }
                 let managed_authorities =
-                    soland_storage::applet_managed_authorities_from_record(&mutation.record)?;
+                    soland_storage::applet_managed_authorities_from_record(
+                        &mutation.identity.record,
+                        &mutation.record,
+                    )?;
                 let previous_managed_authorities = mutation
                     .expected_record
                     .as_ref()
-                    .map(soland_storage::applet_managed_authorities_from_record)
+                    .map(|record| {
+                        soland_storage::applet_managed_authorities_from_record(
+                            &mutation.identity.record,
+                            record,
+                        )
+                    })
                     .transpose()?
                     .unwrap_or_default();
                 if !previous_managed_authorities.is_subset(&managed_authorities) {

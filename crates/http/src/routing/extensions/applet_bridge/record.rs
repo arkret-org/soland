@@ -3,12 +3,21 @@
 use salvo::prelude::*;
 use soland_http::error::AppError;
 
-use super::types::AppletRecord;
+use super::types::{AppletIdentityRecord, AppletInstallationRecord, AppletRecord};
 use crate::state::AppState;
 
-fn decode_applet_record(value: serde_json::Value) -> Result<AppletRecord, AppError> {
-    let record: AppletRecord = serde_json::from_value(value)
-        .map_err(|error| AppError::internal(format!("stored applet record is invalid: {error}")))?;
+fn decode_applet_record(
+    identity: serde_json::Value,
+    installation: serde_json::Value,
+) -> Result<AppletRecord, AppError> {
+    let identity: AppletIdentityRecord = serde_json::from_value(identity).map_err(|error| {
+        AppError::internal(format!("stored applet identity winner is invalid: {error}"))
+    })?;
+    let installation: AppletInstallationRecord =
+        serde_json::from_value(installation).map_err(|error| {
+            AppError::internal(format!("stored applet installation is invalid: {error}"))
+        })?;
+    let record = AppletRecord::from_stored(identity, installation);
     record.validate_stored_bindings().map_err(|error| {
         AppError::internal(format!(
             "stored applet record bindings are invalid: {error}"
@@ -21,11 +30,39 @@ pub(super) fn encode_applet_record(record: &AppletRecord) -> Result<serde_json::
     record.validate_stored_bindings().map_err(|error| {
         AppError::internal(format!("Applet record bindings are invalid: {error}"))
     })?;
-    serde_json::to_value(record)
+    serde_json::to_value(record.stored_installation())
         .map_err(|error| AppError::internal(format!("Applet record serialize failed: {error}")))
 }
 
-pub(super) async fn applet_record(
+pub(super) fn encode_applet_identity(
+    identity: &AppletIdentityRecord,
+) -> Result<serde_json::Value, AppError> {
+    serde_json::to_value(identity)
+        .map_err(|error| AppError::internal(format!("Applet identity serialize failed: {error}")))
+}
+
+pub(super) async fn applet_identity(
+    state: &AppState,
+    applet_id: &str,
+    target_principal_server_id: &str,
+) -> Result<Option<AppletIdentityRecord>, AppError> {
+    state
+        .event_queries()
+        .applet_identity(applet_id, target_principal_server_id)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, %applet_id, %target_principal_server_id, "failed to read applet identity winner");
+            AppError::internal("failed to read applet identity winner")
+        })?
+        .map(|value| {
+            serde_json::from_value(value).map_err(|error| {
+                AppError::internal(format!("stored applet identity winner is invalid: {error}"))
+            })
+        })
+        .transpose()
+}
+
+pub(crate) async fn applet_record(
     state: &AppState,
     applet_id: &str,
     effective_scope: &arkret_wire::ScopeRef,
@@ -43,23 +80,41 @@ pub(super) async fn applet_record(
     else {
         return Ok(None);
     };
-    decode_applet_record(value).map(Some)
-}
-
-pub(in crate::routing::extensions) async fn applet_records(
-    state: &AppState,
-) -> Result<Vec<AppletRecord>, AppError> {
-    state
+    let identity = state
         .event_queries()
-        .applets()
+        .applet_identity(applet_id, state.service_id())
         .await
         .map_err(|error| {
-            tracing::error!(%error, "failed to list applet records");
-            AppError::internal("failed to list applet records")
+            tracing::error!(%error, %applet_id, "failed to read applet identity winner");
+            AppError::internal("failed to read applet identity winner")
         })?
-        .into_iter()
-        .map(decode_applet_record)
-        .collect()
+        .ok_or_else(|| AppError::internal("Applet installation has no identity winner"))?;
+    decode_applet_record(identity, value).map(Some)
+}
+
+pub(crate) async fn applet_records(state: &AppState) -> Result<Vec<AppletRecord>, AppError> {
+    let installations = state.event_queries().applets().await.map_err(|error| {
+        tracing::error!(%error, "failed to list applet records");
+        AppError::internal("failed to list applet records")
+    })?;
+    let mut records = Vec::with_capacity(installations.len());
+    for installation in installations {
+        let applet_id = installation
+            .get("applet_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| AppError::internal("stored applet installation omits applet_id"))?;
+        let identity = state
+            .event_queries()
+            .applet_identity(applet_id, state.service_id())
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, %applet_id, "failed to read applet identity winner");
+                AppError::internal("failed to read applet identity winner")
+            })?
+            .ok_or_else(|| AppError::internal("Applet installation has no identity winner"))?;
+        records.push(decode_applet_record(identity, installation)?);
+    }
+    Ok(records)
 }
 
 pub(super) async fn applet_record_for_realm(
@@ -114,6 +169,41 @@ pub(super) async fn persist_applet_record(
         .map_err(|error| {
             tracing::error!(%error, applet_id = %replacement.applet_id, "failed to CAS applet record");
             AppError::internal("failed to persist applet record")
+        })
+}
+
+pub(super) async fn fence_applet_record(
+    state: &AppState,
+    expected: &AppletRecord,
+    replacement: &AppletRecord,
+    fenced_at: chrono::DateTime<chrono::Utc>,
+) -> Result<soland_storage::AppletInstallationFenceOutcome, AppError> {
+    if expected.applet_id != replacement.applet_id
+        || expected.effective_scope != replacement.effective_scope
+    {
+        return Err(AppError::internal(
+            "Applet fence cannot change applet_id or effective_scope",
+        ));
+    }
+    let effective_scope_key =
+        soland_storage::applet_effective_scope_key(&replacement.effective_scope)
+            .map_err(|error| AppError::internal(format!("effective scope key failed: {error}")))?;
+    let expected_value = encode_applet_record(expected)?;
+    let replacement_value = encode_applet_record(replacement)?;
+    state
+        .event_queries()
+        .fence_applet_installation(
+            replacement.applet_id.as_str(),
+            &effective_scope_key,
+            replacement.bot_actor_principal_server_id.as_str(),
+            &expected_value,
+            replacement_value,
+            fenced_at,
+        )
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, applet_id = %replacement.applet_id, "failed to fence applet installation");
+            AppError::internal("failed to fence applet installation")
         })
 }
 

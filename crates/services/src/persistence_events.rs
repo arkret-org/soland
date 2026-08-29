@@ -765,6 +765,18 @@ fn application_applet_authoring_preview(
 
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
+    async fn applet_identity(
+        &self,
+        applet_id: &str,
+        target_principal_server_id: &str,
+    ) -> crate::ServiceResult<Option<Value>> {
+        Ok(self
+            .0
+            .applets()
+            .get_identity(applet_id, target_principal_server_id)
+            .await?)
+    }
+
     async fn applet(
         &self,
         applet_id: &str,
@@ -786,6 +798,28 @@ impl crate::events::AppletPort for PersistenceEventReader {
             .0
             .applets()
             .compare_and_swap(applet_id, effective_scope_key, expected, replacement)
+            .await?)
+    }
+    async fn fence_applet_installation(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+        target_principal_server_id: &str,
+        expected: &Value,
+        replacement: Value,
+        fenced_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::AppletInstallationFenceOutcome> {
+        Ok(self
+            .0
+            .applets()
+            .fence_installation(
+                applet_id,
+                effective_scope_key,
+                target_principal_server_id,
+                expected,
+                replacement,
+                fenced_at,
+            )
             .await?)
     }
     async fn begin_applet_transaction(
@@ -1781,6 +1815,13 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                 applet_record: command.applet_record.map(|mutation| {
                     soland_storage::AppletRecordCommit {
                         applet_id: mutation.applet_id,
+                        identity: soland_storage::AppletIdentityCommit {
+                            target_principal_server_id: mutation
+                                .identity
+                                .target_principal_server_id,
+                            expected_record: mutation.identity.expected_record,
+                            record: mutation.identity.record,
+                        },
                         expected_record: mutation.expected_record,
                         record: mutation.record,
                     }

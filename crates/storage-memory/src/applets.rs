@@ -4,6 +4,7 @@ use super::{
     async_trait,
 };
 pub(crate) struct MemoryAppletStore {
+    pub(crate) identities: Mutex<BTreeMap<(String, String), Value>>,
     pub(crate) records: Mutex<BTreeMap<(String, String), Value>>,
     transactions: Mutex<BTreeMap<(String, String, String), AppletTransactionReplayRecord>>,
     pub(crate) authoring_previews: Mutex<BTreeMap<String, AppletAuthoringPreviewRecord>>,
@@ -11,6 +12,7 @@ pub(crate) struct MemoryAppletStore {
 impl MemoryAppletStore {
     pub(crate) fn new() -> Self {
         Self {
+            identities: Mutex::new(BTreeMap::new()),
             records: Mutex::new(BTreeMap::new()),
             transactions: Mutex::new(BTreeMap::new()),
             authoring_previews: Mutex::new(BTreeMap::new()),
@@ -19,6 +21,18 @@ impl MemoryAppletStore {
 }
 #[async_trait]
 impl AppletStore for MemoryAppletStore {
+    async fn get_identity(
+        &self,
+        applet_id: &str,
+        target_principal_server_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .identities
+            .lock()
+            .get(&(applet_id.to_owned(), target_principal_server_id.to_owned()))
+            .cloned())
+    }
+
     async fn get(
         &self,
         applet_id: &str,
@@ -38,13 +52,16 @@ impl AppletStore for MemoryAppletStore {
         expected: &Value,
         replacement: Value,
     ) -> PersistenceResult<bool> {
-        if soland_storage::applet_identity_from_record(expected)?
-            != soland_storage::applet_identity_from_record(&replacement)?
+        soland_storage::validate_applet_installation_record(expected)?;
+        soland_storage::validate_applet_installation_record(&replacement)?;
+        if soland_storage::applet_id_from_record(expected)? != applet_id
+            || soland_storage::applet_id_from_record(&replacement)? != applet_id
             || soland_storage::applet_effective_scope_key_from_record(&replacement)?
                 != effective_scope_key
         {
             return Err(PersistenceError::Conflict(
-                "schema_violation: Applet CAS cannot change identity or effective_scope".to_owned(),
+                "schema_violation: Applet CAS cannot change applet_id or effective_scope"
+                    .to_owned(),
             ));
         }
         let mut records = self.records.lock();
@@ -54,6 +71,74 @@ impl AppletStore for MemoryAppletStore {
         }
         records.insert(key, replacement);
         Ok(true)
+    }
+
+    async fn fence_installation(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+        target_principal_server_id: &str,
+        expected: &Value,
+        replacement: Value,
+        fenced_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<soland_storage::AppletInstallationFenceOutcome> {
+        soland_storage::validate_applet_installation_record(expected)?;
+        soland_storage::validate_applet_installation_record(&replacement)?;
+        if soland_storage::applet_id_from_record(expected)? != applet_id
+            || soland_storage::applet_id_from_record(&replacement)? != applet_id
+            || soland_storage::applet_effective_scope_key_from_record(&replacement)?
+                != effective_scope_key
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Applet fence cannot change applet_id or effective_scope"
+                    .to_owned(),
+            ));
+        }
+        let mut identities = self.identities.lock();
+        let mut records = self.records.lock();
+        let identity_key = (applet_id.to_owned(), target_principal_server_id.to_owned());
+        let identity = identities
+            .get(&identity_key)
+            .ok_or_else(|| PersistenceError::NotFound("applet managed identity".to_owned()))?;
+        if !identity.is_object() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: Applet managed identity is not an object".to_owned(),
+            ));
+        }
+        let installation_key = (applet_id.to_owned(), effective_scope_key.to_owned());
+        if records.get(&installation_key) != Some(expected) {
+            return Ok(soland_storage::AppletInstallationFenceOutcome::default());
+        }
+        records.insert(installation_key, replacement);
+        let has_active = records.iter().any(|((candidate_applet_id, _), record)| {
+            candidate_applet_id == applet_id
+                && record
+                    .get("revoked_at")
+                    .is_none_or(serde_json::Value::is_null)
+                && matches!(
+                    record.get("status").and_then(serde_json::Value::as_str),
+                    Some("installed" | "partially_installed")
+                )
+        });
+        if has_active {
+            return Ok(soland_storage::AppletInstallationFenceOutcome {
+                updated: true,
+                globally_fenced: false,
+            });
+        }
+        identities
+            .get_mut(&identity_key)
+            .expect("identity existence validated while holding its map lock")
+            .as_object_mut()
+            .expect("identity object shape validated while holding its map lock")
+            .insert(
+                "globally_fenced_at".to_owned(),
+                serde_json::Value::String(arkret_canonical::format_timestamp_canonical(fenced_at)),
+            );
+        Ok(soland_storage::AppletInstallationFenceOutcome {
+            updated: true,
+            globally_fenced: true,
+        })
     }
 
     async fn list(&self) -> PersistenceResult<Vec<Value>> {
@@ -217,7 +302,7 @@ mod tests {
         };
         let scope_key = soland_storage::applet_effective_scope_key(&scope).unwrap();
         let original = serde_json::json!({
-            "identity": {"applet_id": applet_id},
+            "applet_id": applet_id,
             "effective_scope": scope.clone(),
             "status": "installed",
             "ghosts": []
@@ -227,7 +312,7 @@ mod tests {
             .lock()
             .insert((applet_id.to_owned(), scope_key.clone()), original.clone());
         let appended = serde_json::json!({
-            "identity": {"applet_id": applet_id},
+            "applet_id": applet_id,
             "effective_scope": scope.clone(),
             "status": "installed",
             "ghosts": [{"ghost_actor_id": "ak:did_core:webvh:z6mkghost"}],
@@ -239,7 +324,7 @@ mod tests {
                 .unwrap()
         );
         let stale_revoke = serde_json::json!({
-            "identity": {"applet_id": applet_id},
+            "applet_id": applet_id,
             "effective_scope": scope,
             "status": "revoked",
             "ghosts": []

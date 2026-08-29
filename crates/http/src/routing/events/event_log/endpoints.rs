@@ -1769,19 +1769,8 @@ async fn applet_managed_actor_pcr_access(
     actor_id: &str,
     session_service_id: &str,
 ) -> Result<Option<AppletManagedActorPcrAccess>, AppError> {
-    let records = state.event_queries().applets().await.map_err(|error| {
-        AppError::internal(format!("managed Applet actor lookup failed: {error}"))
-    })?;
-    for value in records {
-        let record: crate::routing::extensions::applet_bridge::AppletRecord =
-            serde_json::from_value(value).map_err(|error| {
-                AppError::internal(format!("stored Applet record is invalid: {error}"))
-            })?;
-        record.validate_stored_bindings().map_err(|error| {
-            AppError::internal(format!(
-                "stored Applet record bindings are invalid: {error}"
-            ))
-        })?;
+    let records = crate::routing::extensions::applet_bridge::record::applet_records(state).await?;
+    for record in records {
         let owned_by_session = record.package.service_id.as_str() == session_service_id;
         let record_active = record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed");

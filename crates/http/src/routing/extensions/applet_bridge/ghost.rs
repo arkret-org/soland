@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 
 use super::install::registration_epoch_evidence_from_event;
-use super::record::{applet_record, persist_applet_record};
+use super::record::{applet_record, fence_applet_record};
 use super::types::AppletRecord;
 use crate::state::AppState;
 
@@ -32,20 +32,23 @@ async fn revoke_applet_record_inner(
     effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<super::types::AppletRevokeRecordOutcome, AppError> {
     let mut attempts = 0_u8;
-    let record = loop {
+    let (record, globally_fenced) = loop {
         let current = applet_record(state, applet_id, effective_scope)
             .await?
             .ok_or_else(|| AppError::not_found("applet is not registered"))?;
         if current.status == "revoked" {
-            break current;
+            break (
+                current.clone(),
+                current.identity.globally_fenced_at.is_some(),
+            );
         }
         let mut replacement = current.clone();
+        let fenced_at = chrono::Utc::now();
         replacement.status = "revoked".to_owned();
-        replacement.revoked_at = Some(chrono::Utc::now());
-        // Ghost principals follow the Applet lifecycle; the Applet
-        // registration fence is the sole durable write-admission state.
-        if persist_applet_record(state, &current, &replacement).await? {
-            break replacement;
+        replacement.revoked_at = Some(fenced_at);
+        let outcome = fence_applet_record(state, &current, &replacement, fenced_at).await?;
+        if outcome.updated {
+            break (replacement, outcome.globally_fenced);
         }
         attempts += 1;
         if attempts >= 8 {
@@ -68,6 +71,7 @@ async fn revoke_applet_record_inner(
             "applet_id": record.applet_id.clone(),
             "bot_actor_id": record.bot_actor_id,
             "ghost_count": record.ghosts.len(),
+            "globally_fenced": globally_fenced,
         }),
         "accepted",
     )

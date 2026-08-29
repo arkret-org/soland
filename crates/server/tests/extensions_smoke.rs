@@ -7,6 +7,7 @@
 //! posts to each route and verifies the spec-shaped envelope.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 
 use arkret_identifiers::{AppletId, Did, EventId, Hlc, RealmId};
 use arkret_models_collaboration::events_payloads::{
@@ -1195,8 +1196,43 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     assert_eq!(bot_view["actor_id"], json!(bot_actor_id));
 }
 
-#[tokio::test]
-async fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
+/// Run the two closed-aggregate scenarios on a realistic server-sized stack.
+///
+/// Salvo's in-process `TestClient` drives request decoding, four-Event
+/// admission, response encoding, and recursive response drop in one call
+/// stack. The production server runs handlers on configurable Tokio workers;
+/// the default Windows libtest thread is only 2 MiB and overflows after the
+/// successful commit even though every admission and persistence step has
+/// completed. Keeping this scoped to the harness preserves the ordinary
+/// production runtime configuration.
+fn run_large_extensions_smoke_scenario<F, Fut>(scenario: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + 'static,
+{
+    std::thread::Builder::new()
+        .name("extensions-smoke-large-scenario".to_owned())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("large extensions smoke Tokio runtime")
+                .block_on(scenario());
+        })
+        .expect("spawn large extensions smoke scenario")
+        .join()
+        .expect("large extensions smoke scenario completes");
+}
+
+#[test]
+fn applet_ghost_actor_provision_writes_durable_four_event_unit() {
+    run_large_extensions_smoke_scenario(
+        applet_ghost_actor_provision_writes_durable_four_event_unit_scenario,
+    );
+}
+
+async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let seal_basis = seed_extension_test_seal(&state).await;
@@ -2030,8 +2066,12 @@ fn strand_id_for_realm(realm_id: &str) -> String {
         .unwrap_or_else(|_| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
-#[tokio::test]
-async fn applet_bridge_register_ghost_route_revoke_smoke() {
+#[test]
+fn applet_bridge_register_ghost_route_revoke_smoke() {
+    run_large_extensions_smoke_scenario(applet_bridge_register_ghost_route_revoke_scenario);
+}
+
+async fn applet_bridge_register_ghost_route_revoke_scenario() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let seal_basis = seed_extension_test_seal(&state).await;

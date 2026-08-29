@@ -34,8 +34,9 @@ use super::install::{
     require_realm_admin, validate_admin_install_events, validate_applet_package,
 };
 use super::record::{
-    applet_id_param, applet_record, applet_record_for_realm, applet_records, encode_applet_record,
-    ensure_not_revoked, idempotency_key, persist_applet_record, query_value,
+    applet_id_param, applet_record, applet_record_for_realm, applet_records,
+    encode_applet_identity, encode_applet_record, ensure_not_revoked, idempotency_key,
+    persist_applet_record, query_value,
 };
 use super::signature::{
     VerifiedAppletServiceSignature, require_ghost_provision_signature,
@@ -1550,6 +1551,8 @@ async fn provision_ghost_actor_endpoint(
             .clone(),
         provision.managed_actor_bundle.profile_event.clone(),
         typed_path_applet_id,
+        record.bot_actor_principal_server_id.clone(),
+        encode_applet_identity(&record.identity)?,
         producer_verification_method,
         producer_signing_key,
         expected_applet_record,

@@ -21,28 +21,29 @@ use chrono::{Duration, Utc};
 use super::{
     AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
-    AgentApprovalNonceCommit, AppletRecordCommit, AppletStore, CanonicalEventRecord,
-    ConsentCellRecord, ConsentCellStore, ConsentGrantDot, ConsentProjectionCommit,
-    ContactProjectionCommit, ContactRecord, ContactStore, ControlProposalAuthorityAckRecord,
-    ControlProposalAuthorityAckStore, DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore,
-    DeviceMessageBatchCommitOutcome, DeviceMessageBatchItemRecord, DeviceMessageBatchRecord,
-    DeviceMessageRecord, DeviceMessageStore, DeviceMessageTargetSnapshotGuard,
-    DevicePairingAuthorizationCommit, DevicePairingRecord, DevicePairingStore,
-    DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
-    DeviceRevocationTargetStatus, DeviceRevocationTransition, EventBatchCommitRequest,
-    EventCommitRequest, EventCommitUnitOfWork, EventStore, ExactWriteOutcome,
-    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
-    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
-    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition,
-    GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
-    HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore, InviteReceivePolicyStore,
-    MemberIdentityEventRecord, MemberIdentityReplacementEdge, MemberIdentityStore,
-    MemberIdentitySubjectKey, MessageRecord, MessageStore, MimiConsentCorrelationRecord,
-    MimiConsentCorrelationStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, OneTimeKeyStore, OrganizationRegistrationEnsureCommit,
-    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
-    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    AgentApprovalNonceCommit, AppletIdentityCommit, AppletRecordCommit, AppletStore,
+    CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
+    ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
+    ControlProposalAuthorityAckRecord, ControlProposalAuthorityAckStore, DeviceInventoryRecord,
+    DeviceInventoryStore, DeviceKeyStore, DeviceMessageBatchCommitOutcome,
+    DeviceMessageBatchItemRecord, DeviceMessageBatchRecord, DeviceMessageRecord,
+    DeviceMessageStore, DeviceMessageTargetSnapshotGuard, DevicePairingAuthorizationCommit,
+    DevicePairingRecord, DevicePairingStore, DeviceRevocationGateSelector,
+    DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetStatus,
+    DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+    EventStore, ExactWriteOutcome, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStore,
+    FederationOutboxTransition, GovernanceDependencySource, GovernanceDependencyStore,
+    GovernanceDependencyWrite, HandleClaimEvidenceRecord, IdempotencyRecord, IdempotencyStore,
+    InviteReceivePolicyStore, MemberIdentityEventRecord, MemberIdentityReplacementEdge,
+    MemberIdentityStore, MemberIdentitySubjectKey, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsKeyPackageClaim,
+    MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
+    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
+    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
+    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
     ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
     RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
@@ -1215,20 +1216,21 @@ fn contract_applet_record(
     install_marker: &str,
     ghosts: Vec<serde_json::Value>,
 ) -> serde_json::Value {
-    let bot_suffix = applet_id
-        .as_str()
-        .strip_prefix("ak:applet:")
-        .expect("typed Applet id has its registered prefix");
     let effective_scope = arkret_wire::ScopeRef::Realm {
         realm_id: arkret_wire::RealmId::new(contract_realm_id("applet-install"))
             .expect("contract Applet Realm id"),
     };
+    contract_applet_record_for_scope(applet_id, install_marker, effective_scope, ghosts)
+}
+
+fn contract_applet_record_for_scope(
+    applet_id: &arkret_wire::AppletId,
+    install_marker: &str,
+    effective_scope: arkret_wire::ScopeRef,
+    ghosts: Vec<serde_json::Value>,
+) -> serde_json::Value {
     serde_json::json!({
-        "identity": {
-            "applet_id": applet_id,
-            "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
-            "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
-        },
+        "applet_id": applet_id,
         "owner_actor_id": "ak:did_core:webvh:z6mkcontractowner",
         "effective_scope": effective_scope,
         "package": {"namespaces": {}},
@@ -1236,6 +1238,18 @@ fn contract_applet_record(
         "revoked_at": null,
         "install_body_digest": format!("sha256:{install_marker:0>64}"),
         "ghosts": ghosts,
+    })
+}
+
+fn contract_applet_identity(applet_id: &arkret_wire::AppletId) -> serde_json::Value {
+    let bot_suffix = applet_id
+        .as_str()
+        .strip_prefix("ak:applet:")
+        .expect("typed Applet id has its registered prefix");
+    serde_json::json!({
+        "applet_id": applet_id,
+        "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
+        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
     })
 }
 
@@ -1321,12 +1335,22 @@ fn contract_applet_batch(
     expected_record: Option<serde_json::Value>,
     record: serde_json::Value,
 ) -> EventBatchCommitRequest {
+    let identity = contract_applet_identity(applet_id);
+    let expected_identity = expected_record.as_ref().map(|_| identity.clone());
     EventBatchCommitRequest {
         events,
         agent_approval_nonce: None,
         franking_replay_nonce: None,
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
+            identity: AppletIdentityCommit {
+                target_principal_server_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:webvh:z6mkcontractservice".to_owned(),
+                )
+                .expect("contract target Principal Server id"),
+                expected_record: expected_identity,
+                record: identity,
+            },
             expected_record,
             record,
         }),
@@ -1445,6 +1469,14 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let mut fresh_retry = stale_batch;
     fresh_retry.applet_record = Some(AppletRecordCommit {
         applet_id: stale_applet_id.clone(),
+        identity: AppletIdentityCommit {
+            target_principal_server_id: arkret_wire::DidCoreId::new(
+                "ak:did_core:webvh:z6mkcontractservice".to_owned(),
+            )
+            .expect("contract target Principal Server id"),
+            expected_record: Some(contract_applet_identity(&stale_applet_id)),
+            record: contract_applet_identity(&stale_applet_id),
+        },
         expected_record: Some(committed_record),
         record: merged_record.clone(),
     });
@@ -1677,6 +1709,110 @@ pub async fn assert_applet_formal_commit_transaction_contract(
             .await
             .expect("read both concurrent Ghost registrations"),
         Some(both_record)
+    );
+
+    // The identity winner is independent of installations. Concurrently
+    // revoking the last two exact scopes must therefore serialize on that
+    // winner and persist exactly one global fence; neither adapter may leave
+    // the identity unfenced through a write-skew.
+    let fence_applet_id = contract_applet_id();
+    let left_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-left")))
+            .expect("contract left fence Realm id"),
+    };
+    let right_scope = arkret_wire::ScopeRef::Realm {
+        realm_id: arkret_wire::RealmId::new(contract_realm_id(&format!("{namespace}:fence-right")))
+            .expect("contract right fence Realm id"),
+    };
+    let left_scope_key =
+        applet_effective_scope_key(&left_scope).expect("contract left Applet effective scope key");
+    let right_scope_key = applet_effective_scope_key(&right_scope)
+        .expect("contract right Applet effective scope key");
+    let left_record =
+        contract_applet_record_for_scope(&fence_applet_id, "10", left_scope, Vec::new());
+    let right_record =
+        contract_applet_record_for_scope(&fence_applet_id, "11", right_scope, Vec::new());
+    install_contract_applet(
+        &stores,
+        namespace,
+        &contract_realm_id(&format!("{namespace}:fence-left-event")),
+        &fence_applet_id,
+        left_record.clone(),
+    )
+    .await;
+    let mut right_install = contract_applet_batch(
+        &fence_applet_id,
+        contract_applet_event_group(
+            namespace,
+            &contract_realm_id(&format!("{namespace}:fence-right-event")),
+            "fence-right-install",
+            1,
+        ),
+        None,
+        right_record.clone(),
+    );
+    right_install
+        .applet_record
+        .as_mut()
+        .expect("right install carries Applet mutation")
+        .identity
+        .expected_record = Some(contract_applet_identity(&fence_applet_id));
+    stores
+        .unit_of_work
+        .commit_event_batch(right_install)
+        .await
+        .expect("install second exact scope under the accepted identity winner");
+
+    let left_fenced_at = database_timestamp_now();
+    let right_fenced_at = left_fenced_at + chrono::Duration::milliseconds(1);
+    let mut left_replacement = left_record.clone();
+    left_replacement["status"] = serde_json::Value::String("revoked".to_owned());
+    left_replacement["revoked_at"] =
+        serde_json::Value::String(arkret_canonical::format_timestamp_canonical(left_fenced_at));
+    let mut right_replacement = right_record.clone();
+    right_replacement["status"] = serde_json::Value::String("revoked".to_owned());
+    right_replacement["revoked_at"] = serde_json::Value::String(
+        arkret_canonical::format_timestamp_canonical(right_fenced_at),
+    );
+    let target_principal_server_id = "ak:did_core:webvh:z6mkcontractservice";
+    let (left_outcome, right_outcome) = tokio::join!(
+        stores.applets.fence_installation(
+            fence_applet_id.as_str(),
+            &left_scope_key,
+            target_principal_server_id,
+            &left_record,
+            left_replacement,
+            left_fenced_at,
+        ),
+        stores.applets.fence_installation(
+            fence_applet_id.as_str(),
+            &right_scope_key,
+            target_principal_server_id,
+            &right_record,
+            right_replacement,
+            right_fenced_at,
+        )
+    );
+    let left_outcome = left_outcome.expect("fence left exact Applet scope");
+    let right_outcome = right_outcome.expect("fence right exact Applet scope");
+    assert!(left_outcome.updated && right_outcome.updated);
+    assert_eq!(
+        usize::from(left_outcome.globally_fenced) + usize::from(right_outcome.globally_fenced),
+        1,
+        "the last exact scope must persist exactly one global identity fence"
+    );
+    let fenced_identity = stores
+        .applets
+        .get_identity(fence_applet_id.as_str(), target_principal_server_id)
+        .await
+        .expect("read globally fenced Applet identity")
+        .expect("Applet identity winner remains durable after fencing");
+    assert!(
+        fenced_identity
+            .get("globally_fenced_at")
+            .and_then(serde_json::Value::as_str)
+            .is_some(),
+        "the identity winner must carry the terminal global fence"
     );
 }
 

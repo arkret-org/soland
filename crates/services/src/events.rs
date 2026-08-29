@@ -750,6 +750,11 @@ pub struct AppletAuthoringPreviewState {
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
+    async fn applet_identity(
+        &self,
+        applet_id: &str,
+        target_principal_server_id: &str,
+    ) -> ServiceResult<Option<Value>>;
     async fn applet(
         &self,
         applet_id: &str,
@@ -763,6 +768,15 @@ pub trait AppletPort: Send + Sync {
         expected: &Value,
         replacement: Value,
     ) -> ServiceResult<bool>;
+    async fn fence_applet_installation(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+        target_principal_server_id: &str,
+        expected: &Value,
+        replacement: Value,
+        fenced_at: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::AppletInstallationFenceOutcome>;
     async fn begin_applet_transaction(
         &self,
         replay: AppletTransactionReplayState,
@@ -874,6 +888,14 @@ pub struct CommitDevicePairingAuthorization {
 #[derive(Clone, Debug)]
 pub struct CommitAppletRecord {
     pub applet_id: arkret_wire::AppletId,
+    pub identity: CommitAppletIdentity,
+    pub expected_record: Option<Value>,
+    pub record: Value,
+}
+
+#[derive(Clone, Debug)]
+pub struct CommitAppletIdentity {
+    pub target_principal_server_id: arkret_wire::DidCoreId,
     pub expected_record: Option<Value>,
     pub record: Value,
 }
@@ -1545,6 +1567,15 @@ impl EventQueryService {
     ) -> ServiceResult<Option<Value>> {
         self.applets.applet(applet_id, effective_scope_key).await
     }
+    pub async fn applet_identity(
+        &self,
+        applet_id: &str,
+        target_principal_server_id: &str,
+    ) -> ServiceResult<Option<Value>> {
+        self.applets
+            .applet_identity(applet_id, target_principal_server_id)
+            .await
+    }
     pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
         self.applets.applets().await
     }
@@ -1557,6 +1588,26 @@ impl EventQueryService {
     ) -> ServiceResult<bool> {
         self.applets
             .compare_and_swap_applet(applet_id, effective_scope_key, expected, replacement)
+            .await
+    }
+    pub async fn fence_applet_installation(
+        &self,
+        applet_id: &str,
+        effective_scope_key: &str,
+        target_principal_server_id: &str,
+        expected: &Value,
+        replacement: Value,
+        fenced_at: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::AppletInstallationFenceOutcome> {
+        self.applets
+            .fence_applet_installation(
+                applet_id,
+                effective_scope_key,
+                target_principal_server_id,
+                expected,
+                replacement,
+                fenced_at,
+            )
             .await
     }
     pub async fn begin_applet_transaction(

@@ -19,6 +19,7 @@ DROP TABLE IF EXISTS agent_membership_cleanup_intents CASCADE;
 DROP TABLE IF EXISTS managed_authority_claims CASCADE;
 DROP TABLE IF EXISTS applet_namespace_claims CASCADE;
 DROP TABLE IF EXISTS applet_installations CASCADE;
+DROP TABLE IF EXISTS applet_managed_identities CASCADE;
 DROP TABLE IF EXISTS applet_transactions CASCADE;
 DROP TABLE IF EXISTS applet_authoring_previews CASCADE;
 DROP TABLE IF EXISTS audit_logs CASCADE;

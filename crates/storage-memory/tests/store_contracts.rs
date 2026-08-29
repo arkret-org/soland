@@ -1,7 +1,8 @@
 use soland_storage::contract_tests::{
-    ConsentCommitContractStores, DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    AppletFormalCommitContractStores, ConsentCommitContractStores,
+    DeviceRevocationSealSettlementStores, EventCommitContractStores,
     assert_account_status_replica_decision_table_contract,
-    assert_atomic_batch_outbox_rollback_contract,
+    assert_applet_formal_commit_transaction_contract, assert_atomic_batch_outbox_rollback_contract,
     assert_atomic_control_event_governance_dependency_contract,
     assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract, assert_device_key_store_contract,
@@ -19,6 +20,20 @@ use soland_storage::{
     SyncStoreRegistry,
 };
 use soland_storage_memory::SolandMemoryPersistenceStore;
+
+#[tokio::test]
+async fn memory_adapter_satisfies_formal_applet_commit_transaction_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_applet_formal_commit_transaction_contract(
+        AppletFormalCommitContractStores {
+            unit_of_work: &store,
+            events: store.events(),
+            applets: store.applets(),
+        },
+        &format!("memory-formal-applet-{}", uuid::Uuid::now_v7().simple()),
+    )
+    .await;
+}
 
 #[tokio::test]
 async fn memory_adapter_guards_repair_device_snapshots_atomically() {

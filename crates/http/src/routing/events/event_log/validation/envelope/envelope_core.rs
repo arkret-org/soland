@@ -1081,43 +1081,22 @@ async fn event_uses_active_applet_registration_epoch(
                 format!("Applet proof scope_ref is invalid: {error}"),
             )
         })?;
-    let effective_scope_key = soland_storage::applet_effective_scope_key(&effective_scope)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("Applet proof scope_ref is invalid: {error}"),
-            )
-        })?;
-    let record = state
-        .event_queries()
-        .applet(applet_id, &effective_scope_key)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Applet proof authority lookup failed: {error}"),
-            )
-        })?;
-    let Some(record) = record else {
-        return Ok(false);
-    };
-    let record: crate::routing::extensions::applet_bridge::AppletRecord =
-        serde_json::from_value(record).map_err(|error| {
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("stored Applet proof authority is invalid: {error}"),
-            )
-        })?;
-    record.validate_stored_bindings().map_err(|error| {
+    let record = crate::routing::extensions::applet_bridge::record::applet_record(
+        state,
+        applet_id,
+        &effective_scope,
+    )
+    .await
+    .map_err(|error| {
         event_validation_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("stored Applet proof authority bindings are invalid: {error}"),
+            format!("Applet proof authority lookup failed: {error}"),
         )
     })?;
+    let Some(record) = record else {
+        return Ok(false);
+    };
     if record.revoked_at.is_some()
         || !matches!(record.status.as_str(), "installed" | "partially_installed")
     {

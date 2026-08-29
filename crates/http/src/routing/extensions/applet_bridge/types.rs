@@ -45,12 +45,44 @@ pub struct AppletIdentityRecord {
     pub bot_pcr_genesis_event: Event,
     pub bot_accountability_grant_event: Event,
     pub bot_profile_event: Event,
+    #[serde(
+        default,
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
+    )]
+    pub globally_fenced_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Clone, Debug)]
 pub struct AppletRecord {
     pub identity: AppletIdentityRecord,
+    pub applet_id: AppletId,
+    pub owner_actor_id: DidCoreId,
+    pub portal_realm_id: RealmId,
+    pub effective_scope: ScopeRef,
+    pub capabilities: Vec<String>,
+    pub package: AppletPackage,
+    pub ghost_actors_allowed: bool,
+    pub status: String,
+    pub registered_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub idempotency_key: String,
+    pub install_body_digest: Hash,
+    pub install_id: String,
+    pub install_response: AppletInstallOutcome,
+    pub registration_event: Event,
+    pub capability_grant_events: Vec<Event>,
+    pub install_execution: Value,
+    pub revoke_execution: Option<Value>,
+    pub ghosts: Vec<GhostActorRecord>,
+}
+
+/// Exact per-scope durable projection. Managed-actor identity anchors live in
+/// the independent `(applet_id, target_principal_server_id)` winner record and
+/// are deliberately not serialized into every installation.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AppletInstallationRecord {
+    pub applet_id: AppletId,
     pub owner_actor_id: DidCoreId,
     pub portal_realm_id: RealmId,
     pub effective_scope: ScopeRef,
@@ -75,6 +107,60 @@ pub struct AppletRecord {
     #[serde(default)]
     pub revoke_execution: Option<Value>,
     pub ghosts: Vec<GhostActorRecord>,
+}
+
+impl AppletRecord {
+    pub(super) fn from_stored(
+        identity: AppletIdentityRecord,
+        installation: AppletInstallationRecord,
+    ) -> Self {
+        Self {
+            identity,
+            applet_id: installation.applet_id,
+            owner_actor_id: installation.owner_actor_id,
+            portal_realm_id: installation.portal_realm_id,
+            effective_scope: installation.effective_scope,
+            capabilities: installation.capabilities,
+            package: installation.package,
+            ghost_actors_allowed: installation.ghost_actors_allowed,
+            status: installation.status,
+            registered_at: installation.registered_at,
+            revoked_at: installation.revoked_at,
+            idempotency_key: installation.idempotency_key,
+            install_body_digest: installation.install_body_digest,
+            install_id: installation.install_id,
+            install_response: installation.install_response,
+            registration_event: installation.registration_event,
+            capability_grant_events: installation.capability_grant_events,
+            install_execution: installation.install_execution,
+            revoke_execution: installation.revoke_execution,
+            ghosts: installation.ghosts,
+        }
+    }
+
+    pub(super) fn stored_installation(&self) -> AppletInstallationRecord {
+        AppletInstallationRecord {
+            applet_id: self.applet_id.clone(),
+            owner_actor_id: self.owner_actor_id.clone(),
+            portal_realm_id: self.portal_realm_id.clone(),
+            effective_scope: self.effective_scope.clone(),
+            capabilities: self.capabilities.clone(),
+            package: self.package.clone(),
+            ghost_actors_allowed: self.ghost_actors_allowed,
+            status: self.status.clone(),
+            registered_at: self.registered_at,
+            revoked_at: self.revoked_at,
+            idempotency_key: self.idempotency_key.clone(),
+            install_body_digest: self.install_body_digest.clone(),
+            install_id: self.install_id.clone(),
+            install_response: self.install_response.clone(),
+            registration_event: self.registration_event.clone(),
+            capability_grant_events: self.capability_grant_events.clone(),
+            install_execution: self.install_execution.clone(),
+            revoke_execution: self.revoke_execution.clone(),
+            ghosts: self.ghosts.clone(),
+        }
+    }
 }
 
 impl Deref for AppletRecord {

@@ -7,7 +7,7 @@
 mod endpoints;
 mod ghost;
 mod install;
-mod record;
+pub(crate) mod record;
 mod signature;
 mod transaction;
 mod types;

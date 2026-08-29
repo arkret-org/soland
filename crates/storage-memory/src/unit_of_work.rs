@@ -808,6 +808,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut agent_approval_nonces = self.agent_approval_nonces.lock();
         let mut event_outbox_ids = self.events.event_outbox_ids.lock();
         let mut outbox = self.federation_outbox.data.lock();
+        let mut applet_identities = self.applets.identities.lock();
         let mut applets = self.applets.records.lock();
         let mut authoring_previews = self.applets.authoring_previews.lock();
         let mut pairings = self.device_pairings.data.lock();
@@ -826,6 +827,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_agent_approval_nonces = agent_approval_nonces.clone();
         let mut staged_outbox = outbox.clone();
         let mut staged_event_outbox_ids = event_outbox_ids.clone();
+        let mut staged_applet_identities = applet_identities.clone();
         let mut staged_applets = applets.clone();
         let mut staged_authoring_previews = authoring_previews.clone();
         let mut staged_pairings = pairings.clone();
@@ -1038,20 +1040,51 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         if let Some(mutation) = request.applet_record {
+            soland_storage::validate_applet_installation_record(&mutation.record)?;
+            if let Some(expected) = mutation.expected_record.as_ref() {
+                soland_storage::validate_applet_installation_record(expected)?;
+            }
+            let identity_key = (
+                mutation.applet_id.to_string(),
+                mutation.identity.target_principal_server_id.to_string(),
+            );
+            if soland_storage::applet_id_from_record(&mutation.identity.record)?
+                != mutation.applet_id.as_str()
+                || mutation
+                    .identity
+                    .record
+                    .get("bot_actor_principal_server_id")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(mutation.identity.target_principal_server_id.as_str())
+            {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: Applet identity winner key does not match its record"
+                        .to_owned(),
+                ));
+            }
+            if let Some(expected_identity) = mutation.identity.expected_record.as_ref() {
+                if &mutation.identity.record != expected_identity
+                    || staged_applet_identities.get(&identity_key) != Some(expected_identity)
+                {
+                    return Err(PersistenceError::Conflict(
+                        "duplicate_conflict: Applet identity winner changed".to_owned(),
+                    ));
+                }
+            } else if staged_applet_identities.contains_key(&identity_key) {
+                return Err(PersistenceError::Conflict(
+                    "duplicate_conflict: Applet identity winner already exists".to_owned(),
+                ));
+            } else {
+                staged_applet_identities.insert(identity_key, mutation.identity.record.clone());
+            }
             let effective_scope_key =
                 soland_storage::applet_effective_scope_key_from_record(&mutation.record)?;
             let installation_key = (mutation.applet_id.to_string(), effective_scope_key);
-            let identity = soland_storage::applet_identity_from_record(&mutation.record)?;
-            if staged_applets
-                .iter()
-                .any(|((existing_applet_id, _), record)| {
-                    existing_applet_id == mutation.applet_id.as_str()
-                        && soland_storage::applet_identity_from_record(record)
-                            .is_ok_and(|existing| existing != identity)
-                })
+            if soland_storage::applet_id_from_record(&mutation.record)?
+                != mutation.applet_id.as_str()
             {
                 return Err(PersistenceError::Conflict(
-                    "duplicate_conflict: Applet identity differs from the first accepted identity"
+                    "schema_violation: Applet installation key does not match its record"
                         .to_owned(),
                 ));
             }
@@ -1090,12 +1123,19 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     }
                 }
             }
-            let managed_authorities =
-                soland_storage::applet_managed_authorities_from_record(&mutation.record)?;
+            let managed_authorities = soland_storage::applet_managed_authorities_from_record(
+                &mutation.identity.record,
+                &mutation.record,
+            )?;
             let previous_managed_authorities = mutation
                 .expected_record
                 .as_ref()
-                .map(soland_storage::applet_managed_authorities_from_record)
+                .map(|record| {
+                    soland_storage::applet_managed_authorities_from_record(
+                        &mutation.identity.record,
+                        record,
+                    )
+                })
                 .transpose()?
                 .unwrap_or_default();
             if !previous_managed_authorities.is_subset(&managed_authorities) {
@@ -1108,8 +1148,23 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                     if existing_applet_id == mutation.applet_id.as_str() {
                         continue;
                     }
-                    if soland_storage::applet_managed_authorities_from_record(existing_record)?
-                        .contains(claim)
+                    let Some(existing_identity) =
+                        staged_applet_identities
+                            .iter()
+                            .find_map(|((applet_id, _), identity)| {
+                                (applet_id == existing_applet_id).then_some(identity)
+                            })
+                    else {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: Applet installation has no identity winner"
+                                .to_owned(),
+                        ));
+                    };
+                    if soland_storage::applet_managed_authorities_from_record(
+                        existing_identity,
+                        existing_record,
+                    )?
+                    .contains(claim)
                     {
                         return Err(PersistenceError::Conflict(
                             "applet_managed_authority_conflict".to_owned(),
@@ -1148,6 +1203,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *agent_approval_nonces = staged_agent_approval_nonces;
         *outbox = staged_outbox;
         *event_outbox_ids = staged_event_outbox_ids;
+        *applet_identities = staged_applet_identities;
         *applets = staged_applets;
         *authoring_previews = staged_authoring_previews;
         *pairings = staged_pairings;
@@ -1174,12 +1230,13 @@ mod tests {
     use chrono::{Duration, Utc};
     use soland_storage::{
         AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletAuthoringPreviewCommit,
-        AppletAuthoringPreviewRecord, AppletRecordCommit, CanonicalEventRecord,
-        DeviceMessageRecord, DeviceRevocationGateAction, DeviceRevocationGateLinearizationRequest,
-        DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
-        DeviceRevocationTransition, EventBatchCommitRequest, EventCommitRequest,
-        EventCommitUnitOfWork, EventProjectionStoreRegistry, FrankingReplayNonceCommit,
-        IdempotencyRecord, PersistenceError, ProjectionEventRecord,
+        AppletAuthoringPreviewRecord, AppletIdentityCommit, AppletRecordCommit,
+        CanonicalEventRecord, DeviceMessageRecord, DeviceRevocationGateAction,
+        DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
+        DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
+        EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
+        EventProjectionStoreRegistry, FrankingReplayNonceCommit, IdempotencyRecord,
+        PersistenceError, ProjectionEventRecord,
     };
 
     use super::stage_control_proposal_ack;
@@ -1209,22 +1266,36 @@ mod tests {
     fn test_applet_record(
         mut record: serde_json::Value,
         scope: &arkret_wire::ScopeRef,
+        applet_id: &str,
     ) -> serde_json::Value {
         let object = record.as_object_mut().unwrap();
-        let bot_actor_id = object.remove("bot_actor_id").unwrap();
-        let bot_actor_principal_server_id = object.remove("bot_actor_principal_server_id").unwrap();
-        object.insert(
-            "identity".to_owned(),
-            serde_json::json!({
-                "bot_actor_id": bot_actor_id,
-                "bot_actor_principal_server_id": bot_actor_principal_server_id,
-            }),
-        );
+        object.remove("bot_actor_id");
+        object.remove("bot_actor_principal_server_id");
+        object.insert("applet_id".to_owned(), serde_json::json!(applet_id));
         object.insert(
             "effective_scope".to_owned(),
             serde_json::to_value(scope).unwrap(),
         );
         record
+    }
+
+    fn test_applet_identity(applet_id: &str, bot_actor_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "applet_id": applet_id,
+            "bot_actor_id": bot_actor_id,
+            "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+        })
+    }
+
+    fn existing_identity_commit(identity: &serde_json::Value) -> AppletIdentityCommit {
+        AppletIdentityCommit {
+            target_principal_server_id: arkret_wire::DidCoreId::new(
+                "ak:did_core:web:soland.example".to_owned(),
+            )
+            .unwrap(),
+            expected_record: Some(identity.clone()),
+            record: identity.clone(),
+        }
     }
 
     fn test_applet_key(applet_id: &str, scope: &arkret_wire::ScopeRef) -> (String, String) {
@@ -2148,6 +2219,16 @@ mod tests {
                 "ghosts": [],
             }),
             &applet_scope,
+            &applet_id,
+        );
+        let applet_identity =
+            test_applet_identity(&applet_id, "ak:did_core:web:fixture-bot.example");
+        store.applets.identities.lock().insert(
+            (
+                applet_id.clone(),
+                "ak:did_core:web:soland.example".to_owned(),
+            ),
+            applet_identity.clone(),
         );
         store.applets.records.lock().insert(
             test_applet_key(&applet_id, &applet_scope),
@@ -2197,6 +2278,7 @@ mod tests {
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                identity: existing_identity_commit(&applet_identity),
                 expected_record: Some(original_record),
                 record: test_applet_record(
                     serde_json::json!({
@@ -2212,6 +2294,7 @@ mod tests {
                         }],
                     }),
                     &applet_scope,
+                    &applet_id,
                 ),
             }),
             applet_authoring_preview: None,
@@ -2261,7 +2344,17 @@ mod tests {
                     }],
                 }),
                 &applet_scope,
+                &applet_id,
             ),
+        );
+        let applet_identity =
+            test_applet_identity(&applet_id, "ak:did_core:web:fixture-bot.example");
+        store.applets.identities.lock().insert(
+            (
+                applet_id.clone(),
+                "ak:did_core:web:soland.example".to_owned(),
+            ),
+            applet_identity.clone(),
         );
         let request = EventBatchCommitRequest {
             events: vec![event_request(
@@ -2274,6 +2367,7 @@ mod tests {
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                identity: existing_identity_commit(&applet_identity),
                 expected_record: Some(test_applet_record(
                     serde_json::json!({
                         "status": "installed",
@@ -2288,6 +2382,7 @@ mod tests {
                         }],
                     }),
                     &applet_scope,
+                    &applet_id,
                 )),
                 record: test_applet_record(
                     serde_json::json!({
@@ -2307,6 +2402,7 @@ mod tests {
                         }],
                     }),
                     &applet_scope,
+                    &applet_id,
                 ),
             }),
             applet_authoring_preview: Some(AppletAuthoringPreviewCommit {
@@ -2358,6 +2454,7 @@ mod tests {
             franking_replay_nonce: None,
             applet_record: Some(AppletRecordCommit {
                 applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                identity: existing_identity_commit(&applet_identity),
                 expected_record: Some(test_applet_record(
                     serde_json::json!({
                         "status": "installed",
@@ -2372,6 +2469,7 @@ mod tests {
                         }],
                     }),
                     &applet_scope,
+                    &applet_id,
                 )),
                 record: test_applet_record(
                     serde_json::json!({
@@ -2391,6 +2489,7 @@ mod tests {
                         }],
                     }),
                     &applet_scope,
+                    &applet_id,
                 ),
             }),
             applet_authoring_preview: Some(AppletAuthoringPreviewCommit {
@@ -2454,7 +2553,15 @@ mod tests {
                 agent_approval_nonce: None,
                 franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
-                    applet_id: arkret_wire::AppletId::new(applet_id).unwrap(),
+                    applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                    identity: AppletIdentityCommit {
+                        target_principal_server_id: arkret_wire::DidCoreId::new(
+                            authority.principal_server_id.clone(),
+                        )
+                        .unwrap(),
+                        expected_record: None,
+                        record: test_applet_identity(&applet_id, &authority.actor_id),
+                    },
                     expected_record: None,
                     record: test_applet_record(
                         serde_json::json!({
@@ -2466,6 +2573,7 @@ mod tests {
                             "ghosts": [],
                         }),
                         &applet_scope,
+                        &applet_id,
                     ),
                 }),
                 applet_authoring_preview: None,
@@ -2492,10 +2600,10 @@ mod tests {
             "bot_actor_id": "ak:did_core:web:shared-bot.example",
             "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
         });
-        let install = |scope: arkret_wire::ScopeRef, identity: serde_json::Value| {
+        let install = |scope: arkret_wire::ScopeRef, identity: serde_json::Value, reuse: bool| {
             let event_realm_id = scope.realm_id().to_string();
             let record = serde_json::json!({
-                "identity": identity,
+                "applet_id": applet_id,
                 "effective_scope": scope.clone(),
                 "status": "installed",
                 "revoked_at": null,
@@ -2513,6 +2621,14 @@ mod tests {
                 franking_replay_nonce: None,
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
+                    identity: AppletIdentityCommit {
+                        target_principal_server_id: arkret_wire::DidCoreId::new(
+                            "ak:did_core:web:soland.example".to_owned(),
+                        )
+                        .unwrap(),
+                        expected_record: reuse.then(|| identity.clone()),
+                        record: identity,
+                    },
                     expected_record: None,
                     record,
                 }),
@@ -2523,11 +2639,11 @@ mod tests {
         let first_scope = test_applet_scope();
         let second_scope = test_applet_scope();
         store
-            .commit_event_batch(install(first_scope, identity.clone()))
+            .commit_event_batch(install(first_scope, identity.clone(), false))
             .await
             .unwrap();
         store
-            .commit_event_batch(install(second_scope.clone(), identity.clone()))
+            .commit_event_batch(install(second_scope.clone(), identity.clone(), true))
             .await
             .unwrap();
         assert_eq!(store.applets.records.lock().len(), 2);
@@ -2538,7 +2654,7 @@ mod tests {
             "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
         });
         let error = store
-            .commit_event_batch(install(test_applet_scope(), conflicting_identity))
+            .commit_event_batch(install(test_applet_scope(), conflicting_identity, true))
             .await
             .unwrap_err();
         assert_eq!(

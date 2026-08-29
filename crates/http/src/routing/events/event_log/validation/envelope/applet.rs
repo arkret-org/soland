@@ -23,48 +23,25 @@ async fn load_installed_applet_record(
     applet_id: &str,
     effective_scope: &arkret_wire::ScopeRef,
 ) -> Result<crate::routing::extensions::applet_bridge::AppletRecord, EventValidationError> {
-    let effective_scope_key =
-        soland_storage::applet_effective_scope_key(effective_scope).map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("Event effective scope is invalid: {error}"),
-            )
-        })?;
-    let record_value = state
-        .event_queries()
-        .applet(applet_id, &effective_scope_key)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %applet_id, "failed to read applet record for delegated event");
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "applet authorization store unavailable",
-            )
-        })?
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "applet_registration_unauthorized",
-                "applet_id does not identify an active installed applet",
-            )
-        })?;
-    let record: crate::routing::extensions::applet_bridge::AppletRecord =
-        serde_json::from_value(record_value).map_err(|error| {
-            tracing::error!(%error, %applet_id, "stored applet record is invalid");
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "stored applet record is invalid",
-            )
-        })?;
-    record.validate_stored_bindings().map_err(|error| {
-        tracing::error!(%error, %applet_id, "stored applet record bindings are invalid");
+    let record = crate::routing::extensions::applet_bridge::record::applet_record(
+        state,
+        applet_id,
+        effective_scope,
+    )
+    .await
+    .map_err(|error| {
+        tracing::error!(?error, %applet_id, "failed to read applet record for delegated event");
         event_validation_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            "stored applet record bindings are invalid",
+            "applet authorization store unavailable",
+        )
+    })?
+    .ok_or_else(|| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "applet_registration_unauthorized",
+            "applet_id does not identify an active installed applet",
         )
     })?;
     if record.revoked_at.is_some()
@@ -241,33 +218,18 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         event_string_field(object, &["principal_server_id"]).unwrap_or_default();
     let applet_id = event_string_field(object, &["applet_id"]);
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
-    let records = state.event_queries().applets().await.map_err(|error| {
-        tracing::error!(%error, %actor_id, "failed to enumerate managed Applet actors");
-        event_validation_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "applet authorization store unavailable",
-        )
-    })?;
-    let mut actor_core_seen = false;
-    for value in records {
-        let record: crate::routing::extensions::applet_bridge::AppletRecord =
-            serde_json::from_value(value).map_err(|error| {
-                tracing::error!(%error, "stored applet record is invalid");
-                event_validation_error(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "stored applet record is invalid",
-                )
-            })?;
-        record.validate_stored_bindings().map_err(|error| {
-            tracing::error!(%error, "stored applet record bindings are invalid");
+    let records = crate::routing::extensions::applet_bridge::record::applet_records(state)
+        .await
+        .map_err(|error| {
+            tracing::error!(?error, %actor_id, "failed to enumerate managed Applet actors");
             event_validation_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                "stored applet record bindings are invalid",
+                "applet authorization store unavailable",
             )
         })?;
+    let mut actor_core_seen = false;
+    for record in records {
         let bot_match = record.bot_actor_id.as_str() == actor_id;
         let ghost_match = record
             .ghosts

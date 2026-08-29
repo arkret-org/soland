@@ -35,3 +35,15 @@ fn agent_principal_constraints_use_spec_identifier_kinds() {
     assert!(!INITIAL_UP.contains("controller_authorization_ref LIKE (id || '#%')"));
     assert!(!INITIAL_UP.contains("controller_authorization_ref ~~ (id || '#%'"));
 }
+
+#[test]
+fn applet_identity_winner_is_independent_from_exact_scope_installations() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.applet_managed_identities"));
+    assert!(INITIAL_UP.contains("PRIMARY KEY (applet_id, target_principal_server_id)"));
+    assert!(INITIAL_UP.contains("CREATE TABLE public.applet_installations"));
+    assert!(INITIAL_UP.contains("PRIMARY KEY (applet_id, effective_scope_key)"));
+    assert!(INITIAL_UP.contains("NOT (record ?| ARRAY["));
+    assert!(INITIAL_UP.contains("'bot_actor_id'"));
+    assert!(INITIAL_UP.contains("'globally_fenced_at'"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS applet_managed_identities CASCADE"));
+}

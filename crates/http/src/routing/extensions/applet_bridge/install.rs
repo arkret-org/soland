@@ -27,7 +27,9 @@ use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_services::identity::{PinnedDidVersionStatus, SessionIdentityState as SessionRecord};
 
-use super::record::{applet_record, applet_records, encode_applet_record};
+use super::record::{
+    applet_identity, applet_record, applet_records, encode_applet_identity, encode_applet_record,
+};
 use super::types::{AppletIdentityRecord, AppletRecord};
 use crate::ids;
 use crate::state::AppState;
@@ -679,6 +681,7 @@ pub(super) async fn register_package_install(
     let package = commit.applet_package().clone();
     let typed_applet_id = package.applet_id.clone();
     let applet_id = package.applet_id.to_string();
+    let target_principal_server_id = basis.target_principal_server_id.clone();
     let realm_id = effective_scope_realm_id(&effective_scope);
     let ghost_actors_allowed =
         ghost_actors_allowed_for_install(&package, &approved_actions, actor_policy.as_ref());
@@ -700,12 +703,9 @@ pub(super) async fn register_package_install(
         );
     }
 
-    let existing_identity = applet_records(state)
-        .await?
-        .into_iter()
-        .filter(|record| record.applet_id == typed_applet_id)
-        .min_by_key(|record| record.registered_at);
-    let (identity, include_identity_events) = match commit {
+    let existing_identity =
+        applet_identity(state, &applet_id, target_principal_server_id.as_str()).await?;
+    let (identity, include_identity_events, expected_identity) = match commit {
         AppletInstallRequestBody::Create(create) => {
             if existing_identity.is_some() {
                 return Err(AppError::conflict(
@@ -743,8 +743,10 @@ pub(super) async fn register_package_install(
                     bot_pcr_genesis_event: bundle.pcr_genesis_event,
                     bot_accountability_grant_event: bundle.accountability_grant_event,
                     bot_profile_event: bundle.profile_event,
+                    globally_fenced_at: None,
                 },
                 true,
+                None,
             )
         }
         AppletInstallRequestBody::Reuse(reuse) => {
@@ -752,8 +754,14 @@ pub(super) async fn register_package_install(
                 AppError::conflict("applet identity does not exist; first install must create it")
                     .with_wire_code("applet_managed_actor_reuse_invalid")
             })?;
+            if existing.globally_fenced_at.is_some() {
+                return Err(
+                    AppError::conflict("applet managed identity is globally fenced")
+                        .with_wire_code("applet_revoked"),
+                );
+            }
             let reference = reuse.reuse_existing_managed_actor;
-            let initial_package = &existing.identity.initial_package;
+            let initial_package = &existing.initial_package;
             if package.applet_id != initial_package.applet_id
                 || package.controller_id != initial_package.controller_id
                 || package.service_id != initial_package.service_id
@@ -765,8 +773,7 @@ pub(super) async fn register_package_install(
                 || reference.accountability_grant_ref
                     != existing.bot_accountability_grant_event.event_id
                 || reference.profile_event_ref != existing.bot_profile_event.event_id
-                || reference.initial_package_bot_actor_id
-                    != existing.identity.initial_package.bot_actor_id
+                || reference.initial_package_bot_actor_id != existing.initial_package.bot_actor_id
             {
                 return Err(AppError::conflict(
                     "reuse_existing_managed_actor does not match the first accepted Applet identity",
@@ -786,9 +793,11 @@ pub(super) async fn register_package_install(
                 AppError::internal(format!("stored Bot provision payload is invalid: {error}"))
             })?;
             validate_managed_actor_current_method_evidence(state, &provision).await?;
-            (existing.identity, false)
+            let expected_identity = encode_applet_identity(&existing)?;
+            (existing, false, Some(expected_identity))
         }
     };
+    let identity_value = encode_applet_identity(&identity)?;
 
     let now = chrono::Utc::now();
     let e2ee_authorization_refs =
@@ -827,6 +836,7 @@ pub(super) async fn register_package_install(
     };
     let mut record = AppletRecord {
         identity,
+        applet_id: typed_applet_id.clone(),
         owner_actor_id: DidCoreId::new(owner_actor_id.to_owned()).map_err(|error| {
             AppError::internal(format!("validated owner actor id is invalid: {error}"))
         })?,
@@ -876,6 +886,9 @@ pub(super) async fn register_package_install(
         state,
         formal_events,
         typed_applet_id,
+        target_principal_server_id,
+        expected_identity,
+        identity_value,
         producer_verification_method,
         producer_signing_key,
         record_value,
