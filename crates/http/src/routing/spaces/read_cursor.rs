@@ -55,7 +55,7 @@ pub(super) async fn set_read_cursor(
             .read_cursors
             .values()
             .find(|marker| {
-                marker.actor_id.as_str() == session.actor
+                marker.actor_id.signing_principal_id().as_str() == session.actor
                     && marker.realm_id.as_str() == realm_id.as_str()
                     && marker.read_scope == cursor.read_scope
             })
@@ -105,7 +105,7 @@ fn validate_caller_signed_read_cursor(
             "advance_event.event.kind must be ak.read_cursor.advance",
         ));
     }
-    if event.actor_id.as_str() != actor {
+    if event.actor_id.signing_principal_id().as_str() != actor {
         return Err(AppError::param_invalid(
             "advance_event.event.actor_id must be the authenticated caller",
         ));
@@ -162,7 +162,7 @@ pub(super) async fn get_read_cursors(
         proj.read_cursors
             .values()
             .filter(|m| {
-                m.actor_id.as_str() == session.actor
+                m.actor_id.signing_principal_id().as_str() == session.actor
                     && (realm_id.is_empty() || m.realm_id.as_str() == realm_id)
             })
             .cloned()
@@ -298,7 +298,7 @@ mod tests {
     fn accepts_exact_holder_and_session_device_binding() {
         let cursor = validate_caller_signed_read_cursor(ACTOR_ID, DEVICE_ID, &signed_shape())
             .expect("valid caller-signed cursor");
-        assert_eq!(cursor.actor_id.as_str(), ACTOR_ID);
+        assert_eq!(cursor.actor_id.signing_principal_id().as_str(), ACTOR_ID);
         assert_eq!(cursor.device_id.as_str(), DEVICE_ID);
         assert_eq!(cursor.realm_id.as_str(), REALM_ID);
     }

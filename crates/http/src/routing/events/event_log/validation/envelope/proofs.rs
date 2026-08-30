@@ -55,6 +55,22 @@ pub(crate) async fn validate_event_proofs(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<arkret_wire::DidKey, EventValidationError> {
+    let event_actor = serde_json::from_value::<arkret_wire::ActorId>(
+        object.get("actor_id").cloned().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "param_missing",
+                "actor_id is required",
+            )
+        })?,
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            format!("event actor_id is invalid: {error}"),
+        )
+    })?;
     let proofs = object
         .get("proofs")
         .and_then(Value::as_array)
@@ -343,7 +359,7 @@ pub(crate) async fn validate_event_proofs(
             // delegated execution.
             let (typed_proof, actor_did, proof_binding_bytes) = event_proof_binding_bytes(
                 &proof_event_digest,
-                actor_id,
+                &event_actor,
                 &verification_method,
                 &created_at,
                 proof_object,
@@ -689,7 +705,7 @@ async fn verify_with_installed_applet_registration_epoch(
     object: &serde_json::Map<String, Value>,
     proof: &arkret_wire::ProducerEventProof,
     envelope_bytes: &[u8],
-    actor_id: &arkret_wire::DidCoreId,
+    actor_id: &arkret_wire::ActorId,
     signer_controller: &str,
     verification_method: &str,
     digest_suite: arkret_canonical::DigestSuite,
@@ -1056,14 +1072,14 @@ pub(super) fn verify_with_federated_signer_evidence(
 /// checks the generic detached-JWS profile does not.
 pub(super) fn event_proof_binding_bytes(
     event_digest: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     verification_method: &str,
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
 ) -> Result<
     (
         arkret_wire::ProducerEventProof,
-        arkret_wire::DidCoreId,
+        arkret_wire::ActorId,
         Vec<u8>,
     ),
     EventValidationError,
@@ -1086,21 +1102,14 @@ pub(super) fn event_proof_binding_bytes(
             "event proof binding fields are inconsistent",
         ));
     }
-    let actor = arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "invalid_proof",
-            format!("event actor_id is not a valid Core DidCoreId: {error}"),
-        )
-    })?;
-    let bytes = proof.canonical_binding_bytes(&actor).map_err(|error| {
+    let bytes = proof.canonical_binding_bytes(actor_id).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
             format!("proof binding canonicalization failed: {error}"),
         )
     })?;
-    Ok((proof, actor, bytes))
+    Ok((proof, actor_id.clone(), bytes))
 }
 
 #[cfg(test)]

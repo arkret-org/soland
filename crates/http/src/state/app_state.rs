@@ -329,12 +329,14 @@ pub fn development_demo_genesis_event(
         .expect("development demo genesis payload");
     arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::RealmCreate>::new(
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_did_to_core_id(
-            &Did::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
-                .expect("development demo subject DID"),
-        )
-        .expect("development demo subject projection"),
-        service_id.clone(),
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::project_did_to_core_id(
+                &Did::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
+                    .expect("development demo subject DID"),
+            )
+            .expect("development demo subject projection"),
+            service_id.clone(),
+        )),
         payload,
     )
     .expect("development demo genesis draft")
@@ -2080,7 +2082,6 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
         let AuthorizationCheck {
             actor,
-            actor_station_id,
             action,
             resource,
             realm_id,
@@ -2090,7 +2091,6 @@ impl AuthorizationPort for SolandAuthzEngine {
         } = request;
         let decision = self.check_for_authority(
             actor,
-            actor_station_id,
             action,
             resource,
             realm_id,
@@ -2114,12 +2114,8 @@ impl AuthorizationPort for SolandAuthzEngine {
         self.mark_projected_grant_revoked(grant_id);
     }
 
-    fn mark_projected_grants_revoked_for_subject(
-        &self,
-        subject: &str,
-        subject_station_id: Option<&str>,
-    ) -> usize {
-        self.mark_projected_grants_revoked_for_subject(subject, subject_station_id)
+    fn mark_projected_grants_revoked_for_subject(&self, subject: &arkret_wire::ActorId) -> usize {
+        self.mark_projected_grants_revoked_for_subject(subject)
     }
 
     fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
@@ -2128,29 +2124,26 @@ impl AuthorizationPort for SolandAuthzEngine {
 
     fn grants_for_subject(
         &self,
-        subject: &str,
-        subject_station_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject(subject, subject_station_id, realm_id)
+        self.grants_for_subject(subject, realm_id)
     }
 
     fn grants_for_subject_at(
         &self,
-        subject: &str,
-        subject_station_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
         evaluated_at: chrono::DateTime<chrono::Utc>,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_at(subject, subject_station_id, realm_id, evaluated_at)
+        self.grants_for_subject_at(subject, realm_id, evaluated_at)
     }
 
     fn grants_for_subject_all_realms(
         &self,
-        subject: &str,
-        subject_station_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_all_realms(subject, subject_station_id)
+        self.grants_for_subject_all_realms(subject)
     }
 
     fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {

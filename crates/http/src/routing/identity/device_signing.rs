@@ -146,7 +146,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             let record = state
                 .identities()
                 .find_device(FindDeviceQuery {
-                    actor_id: envelope.requester_actor_id.as_str().to_owned(),
+                    actor_id: envelope.requester_actor_id.signing_principal_id().to_string(),
                     device_id: requester_device_id.as_str().to_owned(),
                 })
                 .await
@@ -184,7 +184,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             }
             if !device_signature_kid_points_to_device_key(
                 envelope.signature.kid.as_str(),
-                envelope.requester_actor_id.as_str(),
+                envelope.requester_actor_id.signing_principal_id().as_str(),
                 device_public_key,
             ) {
                 return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
@@ -197,7 +197,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             requester_agent_key_authorize_event_id,
         } => {
             if sender_device_id.is_some()
-                || requester_agent_id != &envelope.requester_actor_id
+                || requester_agent_id != envelope.requester_actor_id.signing_principal_id()
                 || envelope.signature.kid.as_str()
                     != requester_agent_verification_method.as_str()
                 || !crate::routing::mls::current_agent_key_authorization_matches_method(
@@ -235,7 +235,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                 || envelope.signature.kid.as_str()
                     != requester_pairwise_verification_method.as_str()
                 || arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
-                    envelope.requester_actor_id.clone(),
+                    envelope.requester_actor_id.signing_principal_id().clone(),
                     requester_pairwise_verification_method.clone(),
                 )
                 .is_err()

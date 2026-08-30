@@ -237,11 +237,24 @@ pub async fn realm_lifecycle_response(
         .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
-    let members: Vec<DidCoreId> = {
+    let local_station_id = DidCoreId::new(state.service_id().to_owned())
+        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
+    let members: Vec<arkret_wire::ActorId> = {
         let realms = state.realm_directory().snapshot();
         realms
             .get(&realm_id_value)
-            .map(|realm| realm.members.iter().cloned().collect())
+            .map(|realm| {
+                realm
+                    .members
+                    .iter()
+                    .map(|member| {
+                        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                            member.clone(),
+                            local_station_id.clone(),
+                        ))
+                    })
+                    .collect()
+            })
             .unwrap_or_default()
     };
     let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
@@ -269,9 +282,9 @@ pub async fn realm_lifecycle_response(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let owner_id = DidCoreId::new(record.owner.clone()).map_err(|error| {
-        AppError::internal(format!("stored realm owner DID is invalid: {error}"))
-    })?;
+    let owner_id = serde_json::from_str::<arkret_wire::ActorId>(&record.owner)
+        .map(|actor| actor.signing_principal_id().clone())
+        .map_err(|error| AppError::internal(format!("stored realm owner is invalid: {error}")))?;
     Ok(RealmLifecycleView {
         realm_id: realm_id_value,
         owner_id,

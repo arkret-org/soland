@@ -22,8 +22,8 @@ use super::*;
 ///   requires of a Control Move.
 pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
     state: &AppState,
-    actor_id: &str,
-    station_id: &str,
+    _actor_id: &str,
+    _station_id: &str,
     realm_id: &str,
     kind: &str,
     object: &serde_json::Map<String, Value>,
@@ -134,30 +134,43 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // registration, namespace and epoch binding; selecting `executed_by` here
     // must never become a generic delegation fallback.
     let capability_subject = if object.contains_key("applet_id") {
-        object
-            .get("executed_by")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
+        serde_json::from_value::<arkret_wire::ActorId>(
+            object.get("executed_by").cloned().ok_or_else(|| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
                     arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
                     "applet-originated DataEvent requires executed_by",
                 )
-            })?
+            })?,
+        )
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("applet executed_by is invalid: {error}"),
+            )
+        })?
     } else {
-        actor_id
+        serde_json::from_value::<arkret_wire::ActorId>(object.get("actor_id").cloned().ok_or_else(
+            || {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "param_missing",
+                    "actor_id is required",
+                )
+            },
+        )?)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("actor_id is invalid: {error}"),
+            )
+        })?
     };
-    // The complete capability authority is `(subject, subject_station_id)`.
-    // Applet delegation changes only the subject to the executing service;
-    // the authority's Station remains the exact PS carried by the
-    // canonical Event. Substituting the service DID here would make the
-    // formally installed `(service_id, target_station_id)` grant
-    // permanently unreachable.
-    let capability_subject_station_id = station_id;
     let effective_by_id = effective_historical_grants_for_subject(
         &historical_grants,
-        capability_subject,
-        capability_subject_station_id,
+        &capability_subject,
         realm_id,
         auth_time,
     );
@@ -188,14 +201,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 ),
             )
         })?;
-        if stored.subject_id.as_str() != capability_subject
-            || stored
-                .subject_station_id
-                .as_ref()
-                .map(arkret_wire::DidCoreId::as_str)
-                != Some(capability_subject_station_id)
-            || stored.realm_id != realm_id
-        {
+        if stored.subject_id != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "authorization_ref_scope",
@@ -271,7 +277,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} is revoked"),
             ));
         }
-        if stored.subject_id.as_str() != capability_subject || stored.realm_id != realm_id {
+        if stored.subject_id != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
@@ -654,8 +660,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
 
 pub(super) fn effective_historical_grants_for_subject(
     grants: &std::collections::BTreeMap<String, crate::authz::Grant>,
-    actor_id: &str,
-    station_id: &str,
+    actor_id: &arkret_wire::ActorId,
     realm_id: &str,
     auth_time: chrono::DateTime<chrono::Utc>,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
@@ -663,12 +668,7 @@ pub(super) fn effective_historical_grants_for_subject(
     snapshot
         .iter()
         .filter(|grant| {
-            grant.subject_id.as_str() == actor_id
-                && grant
-                    .subject_station_id
-                    .as_ref()
-                    .map(arkret_wire::DidCoreId::as_str)
-                    == Some(station_id)
+            &grant.subject_id == actor_id
                 && grant.realm_id == realm_id
                 && !grant.revoked
                 && crate::authz::grant_scope_valid(grant).is_ok()

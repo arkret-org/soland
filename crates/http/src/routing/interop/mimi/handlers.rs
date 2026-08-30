@@ -685,7 +685,7 @@ async fn verify_mimi_consent_update_authority(
 > {
     let (session, source_id) = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
-        if session.actor != body.actor_id.as_str() {
+        if session.actor != body.actor_id.signing_principal_id().as_str() {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
@@ -768,7 +768,7 @@ async fn verify_mimi_consent_correlation(
         .is_some_and(|expires_at| expires_at <= now())
         || correlation.source_id.as_deref() != source_id
         || correlation.target_kind != "did"
-        || correlation.target_id != body.actor_id.as_str()
+        || correlation.target_id != body.actor_id.signing_principal_id().as_str()
     {
         return Err(mimi_consent_correlation_unavailable());
     }
@@ -798,7 +798,7 @@ async fn verify_mimi_consent_correlation(
                 .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
             let cell = state
                 .consents()
-                .holder_cell(&body.actor_id, &cell_id)
+                .holder_cell(body.actor_id.signing_principal_id(), &cell_id)
                 .filter(|cell| {
                     cell.peer_principal_id.as_str() == correlation.requester_id
                         && cell.consent_scope == correlation.purpose
@@ -849,10 +849,16 @@ async fn verify_mimi_consent_actor_proof(
         ))
         .with_wire_code("invalid_proof")
     })?;
-    let authority = arkret_wire::AccountId::new(
-        body.actor_id.clone(),
-        body.consent_event.event.station_id.clone(),
-    );
+    let authority = body
+        .consent_event
+        .event
+        .actor_id
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| {
+            AppError::param_invalid("MIMI consent actor must be an account")
+                .with_wire_code("invalid_proof")
+        })?;
     verify_mimi_operation_proof(
         state,
         &binding,
@@ -1114,7 +1120,12 @@ pub(super) async fn enforce_mimi_reporter_resolution(
         .map_err(|error| AppError::param_invalid(format!("invalid reporter_id DID: {error}")))?;
     if state
         .identities()
-        .account(reporter_id)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
+                AppError::param_invalid(format!("invalid reporter_id: {error}"))
+            })?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
@@ -1588,7 +1599,12 @@ mod consent_proof_tests {
     async fn consent_correlation_binds_target_peer_and_scope() {
         let state = state();
         let request = request(&state);
-        install_correlation(&state, &request, request.actor_id.as_str()).await;
+        install_correlation(
+            &state,
+            &request,
+            request.actor_id.signing_principal_id().as_str(),
+        )
+        .await;
 
         verify_mimi_consent_correlation(&state, &request, None)
             .await

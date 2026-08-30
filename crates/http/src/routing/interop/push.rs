@@ -488,7 +488,7 @@ pub(super) async fn push_notify(
             outcomes.push(
                 arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
                     device.device_id,
-                    arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale,
+                    arkret_models_integration::models_push::PushNotifyReasonCode::PushGatewayUnreachable,
                     None,
                 ),
             );

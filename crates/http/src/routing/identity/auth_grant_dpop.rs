@@ -460,7 +460,7 @@ fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let authority = grant.account_id();
-    if authority.principal_id != grant.subject_id || authority.station_id != grant.audience_id {
+    if authority != &grant.account_id || authority.station_id != grant.audience_id {
         return Err(unauthenticated(
             "session grant authority context does not match its subject/audience",
         ));
@@ -476,7 +476,7 @@ fn session_binding_from_introspection(
         // binding: top-level `device_id`/`device_binding` are the human-device
         // shape and MUST be absent, so the binding itself is the only device
         // authority to check.
-        if agent_id != &grant.subject_id {
+        if agent_id != &grant.account_id.principal_id {
             return Err(unauthenticated(
                 "agent holder binding does not match the introspected subject",
             ));
@@ -554,7 +554,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
     Ok(SessionRecord {
         token_hash,
         account_pk: None,
-        actor: grant.subject_id.to_string(),
+        actor: grant.account_id.principal_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.as_str().to_owned()),
@@ -704,7 +704,7 @@ pub(crate) fn session_from_verified_grant(
             state.service_id(),
         ),
         account_pk: None,
-        actor: grant.subject_id.to_string(),
+        actor: grant.account_id.principal_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
         session_public_key: Some(grant.session_public_key.into_string()),

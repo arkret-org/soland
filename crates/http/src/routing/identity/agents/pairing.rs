@@ -153,7 +153,12 @@ pub(super) async fn submit_agent_runtime_key_request(
     let account = state
         .identities()
         .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
-            actor_id: controller_id.clone(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(controller_id.clone()).map_err(|error| {
+                    AppError::internal(format!("controller account id is invalid: {error}"))
+                })?,
+                state.service_core_id().clone(),
+            ),
         })
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
@@ -180,7 +185,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_pk: account.pk,
+        controller_account_pk: account.account_pk.clone(),
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -241,14 +246,15 @@ pub(super) async fn submit_agent_runtime_key_request(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
-                    recipient_actor_id: arkret_identifiers::DidCoreId::new(controller_id).map_err(
-                        |error| {
+                    recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        arkret_identifiers::DidCoreId::new(controller_id).map_err(|error| {
                             AppError::internal(format!(
                                 "approval notification recipient is invalid: {error}"
                             ))
-                        },
-                    )?,
-                    controller_account_pk: account.pk,
+                        })?,
+                        state.service_core_id().clone(),
+                    )),
+                    controller_account_pk: account.account_pk,
                     recipient_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
                         .map_err(|error| {
                             AppError::internal(format!(
@@ -654,9 +660,10 @@ pub(super) async fn agent_key_pair(
                     "authorize_event.executed_by is required for delegated pairing",
                 )
             })?;
+        let controller_principal_id = controller_id.signing_principal_id().as_str();
         let controller_device_id =
-            service_pairing_controller_device_id(&body, controller_id.as_str())?;
-        controller_service_session(controller_id.as_str(), &controller_device_id, state)
+            service_pairing_controller_device_id(&body, controller_principal_id)?;
+        controller_service_session(controller_principal_id, &controller_device_id, state)
     } else {
         aa.authenticated_session(state, req).await?
     };
@@ -818,11 +825,11 @@ pub(super) fn service_pairing_controller_device_id(
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
     let agent_core = body.agent_id.clone();
-    if submission.event.actor_id != agent_core
+    if submission.event.actor_id.signing_principal_id() != &agent_core
         || submission
             .authorization_lease
             .as_ref()
-            .is_some_and(|lease| lease.actor_id != agent_core)
+            .is_some_and(|lease| lease.actor_id.signing_principal_id() != &agent_core)
     {
         return Err(AppError::capability_denied(
             "delegated pairing Event and any delayed authorization lease must name the managed Agent",
@@ -832,7 +839,7 @@ pub(super) fn service_pairing_controller_device_id(
         .event
         .executed_by
         .as_ref()
-        .map(arkret_wire::DidCoreId::as_str)
+        .map(|actor| actor.signing_principal_id().as_str())
         != Some(controller_id)
     {
         return Err(AppError::capability_denied(
@@ -1255,7 +1262,7 @@ fn ensure_current_runtime_key_request_matches(
 
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
-    recipient_actor_id: arkret_wire::DidCoreId,
+    recipient_actor_id: arkret_wire::ActorId,
     controller_account_pk: soland_storage::AccountPk,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
@@ -1270,8 +1277,10 @@ pub(super) fn account_notification_context(
             &agent_record.approval_notification_id?,
         ))
         .ok()?,
-        recipient_actor_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
-            .ok()?,
+        recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone()).ok()?,
+            arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?).ok()?,
+        )),
         controller_account_pk: agent_record.controller_account_pk.clone()?,
         recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
             .ok()?,
@@ -1319,7 +1328,7 @@ pub(super) async fn persist_terminal_account_notification(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        context.controller_account_pk.to_string(),
+        context.controller_account_pk.0.to_string(),
         context.recipient_id.to_string(),
     ));
     Ok(())

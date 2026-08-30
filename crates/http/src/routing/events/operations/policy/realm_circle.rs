@@ -57,7 +57,6 @@ pub(super) async fn validate_circle_create_policy(
                 .authorization()
                 .check(soland_services::authorization::AuthorizationCheck {
                     actor,
-                    actor_station_id: Some(operation.context.station_id.as_str()),
                     action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
                     resource: realm_id,
                     realm_id,
@@ -66,7 +65,7 @@ pub(super) async fn validate_circle_create_policy(
                     resource_facets: &[],
                 });
         if verdict.allowed
-            || members.iter().any(|member| member == actor)
+            || members.iter().any(|member| member == &actor.to_string())
             || policy_realm_member_joined(state, realm_id, actor)
         {
             return Ok(());
@@ -93,12 +92,7 @@ pub(super) async fn validate_circle_create_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.station_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -107,7 +101,6 @@ pub(super) async fn validate_circle_create_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_station_id: Some(operation.context.station_id.as_str()),
             action: arkret_wire::CapabilityActionId::CIRCLE_CREATE,
             resource: realm_id,
             realm_id,
@@ -131,8 +124,11 @@ pub(super) async fn validate_circle_management_policy(
     };
     if kind == arkret_wire::EventKind::CircleMemberState
         && operation.payload.get("membership").and_then(Value::as_str) == Some("join")
-        && let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str)
-        && !policy_realm_member_joined(state, operation.realm_id.as_str(), target)
+        && let Some(target) = operation
+            .payload
+            .get("member_id")
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+        && !policy_realm_member_joined(state, operation.realm_id.as_str(), &target)
     {
         return Err("circle_member_must_be_realm_member");
     }
@@ -179,12 +175,7 @@ pub(super) async fn validate_circle_management_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.station_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -193,7 +184,6 @@ pub(super) async fn validate_circle_management_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_station_id: Some(operation.context.station_id.as_str()),
             action,
             resource: circle_id,
             realm_id,
@@ -212,8 +202,8 @@ pub(super) async fn validate_circle_management_policy(
 ///
 /// The executing principal is an accepted envelope fact. Payload `actor_id`
 /// fields name targets and must never participate in authorization.
-pub(super) fn policy_operation_sender(operation: &Operation) -> Option<&str> {
-    Some(operation.context.sender.as_str())
+pub(super) fn policy_operation_sender(operation: &Operation) -> Option<&arkret_wire::ActorId> {
+    Some(&operation.context.sender)
 }
 
 pub(super) fn operation_circle_id(operation: &Operation) -> Option<&str> {
@@ -235,7 +225,11 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
     let Some(actor) = policy_operation_sender(operation) else {
         return false;
     };
-    let Some(target) = operation.payload.get("actor_id").and_then(Value::as_str) else {
+    let Some(target) = operation
+        .payload
+        .get("actor_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+    else {
         return false;
     };
     let membership = operation
@@ -245,7 +239,7 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
         .unwrap_or("join");
     match membership {
         "invite" | "ban" => true,
-        "join" if target == actor => {
+        "join" if target == *actor => {
             let Some(circle_id) = operation_circle_id(operation) else {
                 return false;
             };
@@ -259,16 +253,20 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
             }
             .unwrap_or(false)
         }
-        _ => target != actor,
+        _ => target != *actor,
     }
 }
 
-pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
+pub(super) fn policy_realm_member_joined(
+    state: &AppState,
+    realm_id: &str,
+    actor: &arkret_wire::ActorId,
+) -> bool {
     {
         let projection = state.projections().snapshot();
         {
             projection
-                .member(realm_id, actor)
+                .member(realm_id, &actor.to_string())
                 .map(|membership| membership.state == "join")
         }
     }
@@ -277,7 +275,7 @@ pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor
 
 pub(super) fn sidecar_circle_object_shape_is_constrained(
     _operation: &Operation,
-    _actor: &str,
+    _actor: &arkret_wire::ActorId,
     _sidecar_id: &str,
 ) -> bool {
     false

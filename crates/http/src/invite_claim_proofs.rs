@@ -106,8 +106,11 @@ fn verify_binding_proof_signature(
     let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if binding_proof.subject_id.as_str() != verification.subject_id {
+    if binding_proof.subject_account_id.principal_id.as_str() != verification.subject_id {
         return Err("binding_proof_subject_mismatch");
+    }
+    if binding_proof.subject_account_id.station_id.as_str() != service_id {
+        return Err("binding_proof_subject_station_mismatch");
     }
     if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
@@ -160,8 +163,11 @@ async fn verify_binding_proof_signature_for_state(
     let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if binding_proof.subject_id.as_str() != verification.subject_id {
+    if binding_proof.subject_account_id.principal_id.as_str() != verification.subject_id {
         return Err("binding_proof_subject_mismatch");
+    }
+    if binding_proof.subject_account_id.station_id.as_str() != service_id {
+        return Err("binding_proof_subject_station_mismatch");
     }
     if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
@@ -224,11 +230,12 @@ fn verify_subject_proof_signature(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let binding_digest = parse_binding_proof(verification.binding_proof)?
+    let binding_proof = parse_binding_proof(verification.binding_proof)?;
+    let binding_digest = binding_proof
         .canonical_digest()
         .map_err(|_| "binding_proof_digest_invalid")?;
     let transcript_body = InviteSubjectProofBody::from_wire_parts(
-        verification.subject_id,
+        binding_proof.subject_account_id,
         verification.invite_id,
         verification.realm_id,
         verification.token_commitment,
@@ -280,11 +287,12 @@ async fn verify_subject_proof_signature_for_state(
     subject_proof
         .validate()
         .map_err(|_| "subject_proof_invalid")?;
-    let binding_digest = parse_binding_proof(verification.binding_proof)?
+    let binding_proof = parse_binding_proof(verification.binding_proof)?;
+    let binding_digest = binding_proof
         .canonical_digest()
         .map_err(|_| "binding_proof_digest_invalid")?;
     let transcript_body = InviteSubjectProofBody::from_wire_parts(
-        verification.subject_id,
+        binding_proof.subject_account_id,
         verification.invite_id,
         verification.realm_id,
         verification.token_commitment,

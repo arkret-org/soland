@@ -178,7 +178,7 @@ pub(crate) async fn managed_agent_pcr_event_matches_accepted_delegation(
 ) -> Result<bool, String> {
     let Some(record) = state
         .agent_pairings()
-        .agent(event.actor_id.as_str())
+        .agent(event.actor_id.signing_principal_id().as_str())
         .await
         .map_err(|error| format!("managed Agent delegation lookup failed: {error}"))?
     else {
@@ -190,8 +190,12 @@ pub(crate) async fn managed_agent_pcr_event_matches_accepted_delegation(
                 .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
+    let controller_actor = arkret_wire::ActorId::hosted_principal(
+        controller_id,
+        event.actor_id.route_service_id().clone(),
+    );
     Ok(record.principal_control_realm_id == event.realm_id.as_str()
-        && event.executed_by.as_ref() == Some(&controller_id)
+        && event.executed_by.as_ref() == Some(&controller_actor)
         && event.authorization_ref.as_deref() == Some(record.controller_authorization_ref.as_str())
         && record.state != AgentLifecycleState::Deactivated)
 }
@@ -253,7 +257,7 @@ pub(crate) async fn verify_managed_agent_pcr_ack(
     }
     let record = state
         .agent_pairings()
-        .agent(authority.agent_id().as_str())
+        .agent(authority.agent_id().signing_principal_id().as_str())
         .await
         .map_err(|error| format!("accepted managed Agent delegation is unavailable: {error}"))?
         .ok_or_else(|| "managed Agent PCR has no accepted Agent delegation".to_owned())?;
@@ -264,7 +268,7 @@ pub(crate) async fn verify_managed_agent_pcr_ack(
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
     if record.principal_control_realm_id != event.realm_id.as_str()
-        || record_controller_id != *authority.controller_id()
+        || record_controller_id != *authority.controller_id().signing_principal_id()
         || record.controller_authorization_ref.as_str() != authority.authorization_ref()
         || record.state == AgentLifecycleState::Deactivated
     {
@@ -290,7 +294,7 @@ pub(crate) async fn verify_managed_agent_pcr_ack(
             "managed Agent PCR Ack signer is not a controller device method".to_owned()
         })?;
     if !crate::routing::federation::move_seal::session_device_verification_method_matches(
-        authority.controller_id().as_str(),
+        authority.controller_id().signing_principal_id().as_str(),
         device_id,
         &member.signature.verification_method,
     ) {

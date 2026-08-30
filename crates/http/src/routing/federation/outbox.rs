@@ -1411,7 +1411,7 @@ impl FederationDispatcher {
             if receipt.event_digest() != admission.event_digest
                 || receipt.realm_id != event.realm_id
                 || receipt.producer_accepted_at != admission.accepted_at
-                || receipt.agent_id != *signer_id
+                || receipt.agent_id != *signer_id.signing_principal_id()
                 || receipt.verification_method != admission.producer_verification_method
                 || Some(&receipt.producer_signer_resolution_evidence_ref)
                     != admission.producer_signer_resolution_evidence_ref.as_ref()
@@ -1785,7 +1785,7 @@ impl FederationDispatcher {
                     .persistence()
                     .resolve_account_status_records(
                         submitted.account_authority_id.as_str(),
-                        submitted.account_id.as_str(),
+                        &submitted.account_id.to_string(),
                         next_seq,
                         1,
                     )
@@ -1801,7 +1801,7 @@ impl FederationDispatcher {
                     .persistence()
                     .account_status_receipt(
                         submitted.account_authority_id.as_str(),
-                        submitted.account_id.as_str(),
+                        &submitted.account_id.to_string(),
                         next_seq,
                     )
                     .await
@@ -1847,7 +1847,7 @@ impl FederationDispatcher {
             .persistence()
             .resolve_account_status_records(
                 submitted.account_authority_id.as_str(),
-                submitted.account_id.as_str(),
+                &submitted.account_id.to_string(),
                 required,
                 1,
             )
@@ -1861,7 +1861,7 @@ impl FederationDispatcher {
             .persistence()
             .account_status_receipt(
                 submitted.account_authority_id.as_str(),
-                submitted.account_id.as_str(),
+                &submitted.account_id.to_string(),
                 required,
             )
             .await

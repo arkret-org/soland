@@ -213,29 +213,22 @@ async fn validate_event_envelope_with_ingress(
 
     let schema_id = event_requirements_schema_id(state, object)?;
 
-    let actor_id = event_string_field(object, &["actor_id"]).ok_or_else(|| {
+    let actor = object.get("actor_id").cloned().ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_missing",
             "actor_id is required",
         )
     })?;
-    let actor_id = arkret_wire::DidCoreId::new(actor_id).map_err(|_| {
+    let actor = serde_json::from_value::<arkret_wire::ActorId>(actor).map_err(|_| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "param_invalid",
-            "actor_id must be a Core DidCoreId",
+            "actor_id must be a complete ActorId",
         )
     })?;
-    let station_id = event_string_field(object, &["station_id"])
-        .and_then(|value| arkret_wire::DidCoreId::new(value).ok())
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "param_invalid",
-                "station_id must be a Core DidCoreId",
-            )
-        })?;
+    let actor_id = actor.signing_principal_id().clone();
+    let station_id = actor.route_service_id().clone();
     let actor_seq = object
         .get("actor_seq")
         .and_then(Value::as_u64)
@@ -863,6 +856,7 @@ async fn validate_event_envelope_with_ingress(
 
     Ok(ValidatedEventEnvelope {
         event_id,
+        actor,
         actor_id,
         device_id,
         actor_seq,

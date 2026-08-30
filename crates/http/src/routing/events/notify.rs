@@ -194,8 +194,11 @@ async fn put_notification(
             id: NotificationId::new(crate::ids::generate_notification_id())
                 .map_err(|error| format!("notification id is invalid: {error}"))?,
             schema: NotificationSchema::V1,
-            actor_id: arkret_identifiers::DidCoreId::new(recipient_id.to_owned())
-                .map_err(|error| format!("notification recipient is invalid: {error}"))?,
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new(recipient_id.to_owned())
+                    .map_err(|error| format!("notification recipient is invalid: {error}"))?,
+                state.service_core_id().clone(),
+            )),
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id: EventId::new(source_event_id.to_owned())
                     .map_err(|error| format!("notification source Event is invalid: {error}"))?,
@@ -226,7 +229,14 @@ async fn put_notification(
             .validate()
             .map_err(|error| format!("notification is invalid: {error}"))?;
         let source_actor_id = source_actor_id
-            .map(|value| DidCoreId::new(value.to_owned()))
+            .map(|value| {
+                DidCoreId::new(value.to_owned()).map(|principal_id| {
+                    arkret_wire::ActorId::hosted_principal(
+                        principal_id,
+                        state.service_core_id().clone(),
+                    )
+                })
+            })
             .transpose()
             .map_err(|error| format!("notification source actor is invalid: {error}"))?;
         Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {

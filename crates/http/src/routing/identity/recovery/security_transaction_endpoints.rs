@@ -747,7 +747,8 @@ pub(crate) async fn backup_series_erase_command(
         || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
         || plan.erase_confirmation_digest != request.erase_confirmation_digest
         || !planned_series_match
-        || request.authorization_lease.actor_id != transaction.resource.principal_id
+        || request.authorization_lease.actor_id.signing_principal_id()
+            != &transaction.resource.principal_id
         || request.authorization_lease.device_id.as_str() != session.device_id
         || request.authorization_lease.action
             != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1

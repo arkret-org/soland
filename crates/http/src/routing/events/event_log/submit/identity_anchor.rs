@@ -785,7 +785,7 @@ fn validate_identity_anchor_candidate_preconditions(
     authorize_event: &arkret_wire::Event,
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    if authorize_event.actor_id.as_str() != first.actor_id.as_str()
+    if authorize_event.actor_id.signing_principal_id().as_str() != first.actor_id.as_str()
         || authorize_event.realm_id.as_str() != first.realm_id.as_str()
         || authorize_event.actor_seq != first.actor_seq.saturating_add(1)
         || authorize_event.prev_refs.len() != 1

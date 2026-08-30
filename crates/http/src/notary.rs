@@ -165,7 +165,7 @@ impl ControlMoveRejection {
 struct AcceptedControlMove {
     event_digest: Hash,
     event: Event,
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
     effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 

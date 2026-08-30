@@ -103,9 +103,12 @@ pub(super) fn project_search_users_row(
         .get("actor_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("directory user search row missing actor_id"))?;
+    let principal_id = directory_actor_core_id(principal_id)?;
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("invalid local Station id: {error}")))?;
     Ok(UserSearchOutcome {
         handle: (!canonical.is_empty()).then_some(canonical),
-        principal_id: Some(directory_actor_core_id(principal_id)?),
+        account_id: Some(arkret_wire::AccountId::new(principal_id, station_id)),
         display_name: actor
             .get("display_name")
             .and_then(Value::as_str)

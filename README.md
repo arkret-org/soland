@@ -57,9 +57,6 @@ Operator-visible highlights:
 - **Federation idempotency `historical_only`** — cache hits after
   source-key revocation return the cached body with
   `reason_code=historical_only`; no side effects.
-- **Delivery-binding handover error codes** —
-  `delivery_binding_stale` (with `new_recipient_service_id` +
-  `handover_frontier`) and `delivery_binding_handed_over`.
 
 ## Round R2/R3 deployment requirements
 

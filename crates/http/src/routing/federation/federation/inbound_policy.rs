@@ -65,7 +65,9 @@ fn membership_authority_pair_acceptable(
         let acceptable_state = membership.state == "join"
             || (event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
                 && membership.state == "invite");
-        acceptable_state && membership.recipient_id.as_deref() == Some(station_id)
+        acceptable_state
+            && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                .is_ok_and(|actor| actor.route_service_id().as_str() == station_id)
     })
 }
 

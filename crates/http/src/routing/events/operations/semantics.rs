@@ -65,7 +65,7 @@ fn validate_key_backup_active_series_transition(
         .typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>()
         .map_err(|_| "key_backup_active_series_schema_violation")?;
     let key = (
-        record.actor_id.as_str().to_owned(),
+        record.actor_id.signing_principal_id().as_str().to_owned(),
         record.backup_kind.as_str().to_owned(),
     );
     let current = heads.get(&key).cloned().or_else(|| {
@@ -152,12 +152,12 @@ fn validate_moderation_report_provenance(
     if payload.realm_id != operation.realm_id {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
-    payload.validate_provenance(&operation.context.sender)?;
+    payload.validate_provenance(operation.context.sender.signing_principal_id())?;
     if payload.provenance
         == Some(
             arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
         )
-        && operation.context.sender.as_str() != state.service_id()
+        && operation.context.sender.signing_principal_id().as_str() != state.service_id()
     {
         return Err("MIMI facade moderation report must be authored by the local service");
     }

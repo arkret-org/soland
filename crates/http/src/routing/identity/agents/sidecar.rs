@@ -71,11 +71,15 @@ async fn authorize_sidecar_ensure(
         .flatten()
         .map(|meta| meta.owner);
     let members = realm_members_for_authz(state, realm_id);
+    let controller_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(controller.to_owned())
+            .map_err(|error| AppError::internal(format!("invalid controller id: {error}")))?,
+        state.service_core_id().clone(),
+    );
     let verdict = state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor: controller,
-            actor_station_id: Some(state.service_id()),
+            actor: &controller_actor,
             action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
             resource: realm_id,
             realm_id,
@@ -431,7 +435,8 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     match operation.event_kind.clone() {
         arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
-                || operation.context.sender.as_str() != sidecar_projection.controller_id
+                || operation.context.sender.signing_principal_id().as_str()
+                    != sidecar_projection.controller_id
                 || !device_coordinates_match(
                     operation
                         .context
@@ -668,10 +673,14 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
-    TypedEventDraft::<K>::new(scope_ref, actor_id, station_id, payload)
-        .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
-        .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
-        .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
+    TypedEventDraft::<K>::new(
+        scope_ref,
+        arkret_wire::ActorId::hosted_principal(actor_id, station_id),
+        payload,
+    )
+    .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
+    .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
+    .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
 fn sidecar_reservation_key(handle: &arkret_wire::ReservationHandle) -> String {
@@ -823,7 +832,10 @@ async fn prepare_sidecar(
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         body.source_realm_id.clone(),
-        controller_id.clone(),
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            controller_id.clone(),
+            station_id.clone(),
+        )),
     )
     .await?;
     let created_at = chrono::Utc::now();

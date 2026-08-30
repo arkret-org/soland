@@ -837,22 +837,22 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .flatten()
             .map(|(profile, _)| match profile {
                 arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => {
-                    std::iter::once(signer.actor_id.route_service_id().to_string()).collect()
+                    std::iter::once(signer.actor_id.to_string()).collect()
                 }
                 arkret_wire::notary::NotaryValue::Threshold { signers, .. }
                 | arkret_wire::notary::NotaryValue::OpenSet { signers } => signers
                     .into_iter()
-                    .map(|member| member.actor_id.route_service_id().to_string())
+                    .map(|member| member.actor_id.to_string())
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
                     signer,
                     recovery_signers,
                     ..
-                } => std::iter::once(signer.actor_id.route_service_id().to_string())
+                } => std::iter::once(signer.actor_id.to_string())
                     .chain(
                         recovery_signers
                             .into_iter()
-                            .map(|member| member.actor_id.route_service_id().to_string()),
+                            .map(|member| member.actor_id.to_string()),
                     )
                     .collect(),
             })

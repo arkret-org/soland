@@ -291,7 +291,10 @@ async fn issue_intent_leases(
         )?;
         leases.push(sign_lease_fields(
             state,
-            actor_id.clone(),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                actor_id.clone(),
+                state.service_core_id().clone(),
+            )),
             device_id.clone(),
             intent.scope_ref.clone(),
             intent.basis_ref.clone(),
@@ -338,7 +341,11 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         })?;
         (
             events[0].realm_id.as_str().to_owned(),
-            events[0].actor_id.as_str().to_owned(),
+            events[0]
+                .actor_id
+                .signing_principal_id()
+                .as_str()
+                .to_owned(),
             true,
             None,
         )
@@ -352,7 +359,11 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
     {
         (
             events[0].realm_id.as_str().to_owned(),
-            events[0].actor_id.as_str().to_owned(),
+            events[0]
+                .actor_id
+                .signing_principal_id()
+                .as_str()
+                .to_owned(),
             false,
             None,
         )
@@ -623,8 +634,9 @@ fn sign_lease(
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_did_to_core_id(&did).ok() == Some(event.actor_id.clone()))
-                .then_some(event.actor_id.clone())
+            (arkret_wire::project_did_to_core_id(&did).ok().as_ref()
+                == Some(event.actor_id.signing_principal_id()))
+            .then_some(event.actor_id.clone())
         })
         .ok_or_else(|| {
             AppError::new(
@@ -658,7 +670,7 @@ fn sign_lease(
 #[allow(clippy::too_many_arguments)]
 fn sign_lease_fields(
     state: &AppState,
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
     device_id: arkret_wire::DeviceId,
     scope_ref: arkret_wire::ScopeRef,
     basis_ref: LeaseBasisRef,

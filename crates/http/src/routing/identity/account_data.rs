@@ -332,7 +332,7 @@ async fn admit_caller_signed_account_data_set(
     }
     // The subject is the actor, so a mismatch here is what the whole change exists
     // to prevent: it would write another principal's cell.
-    if event.actor_id.as_str() != session.actor {
+    if event.actor_id.signing_principal_id().as_str() != session.actor {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "set_event.event.actor_id must be the authenticated holder",

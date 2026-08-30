@@ -45,66 +45,6 @@ fn cell_value_returns_none_for_bottom_state() {
     assert!(state.cell_value(&cell_id).is_none());
 }
 
-#[test]
-fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
-    const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    const REALM_B: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
-    const FAMILY: &str = arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1;
-
-    let mut state = ProjectionState::new();
-    for (realm_id, binding_mode) in [(REALM_A, "direct"), (REALM_B, "relay")] {
-        // The registered contract for this facet is a single `cas_register`
-        // write on the `null`-subject cell whose value is the whole payload,
-        // so the payload here IS the cell value the assertions below read.
-        let payload = serde_json::json!({"binding_mode": binding_mode});
-        let (_, cell_writes) = projected_cell_writes(
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            realm_id,
-            &payload,
-        );
-        let operation = make_operation(
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            realm_id,
-            payload,
-        );
-
-        assert_eq!(
-            cell_writes.len(),
-            1,
-            "delivery_binding_policy registers exactly one cell write"
-        );
-        assert_eq!(
-            cell_writes[0].cell_id.as_str(),
-            format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)
-        );
-        assert!(matches!(
-            state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes),
-            ProjectionEffect::RealmBootstrapFacetProjected { .. }
-        ));
-    }
-
-    assert_eq!(
-        state
-            .realm_delivery_binding_policy_cell_value(REALM_A)
-            .and_then(|value| value.get("binding_mode"))
-            .and_then(Value::as_str),
-        Some("direct")
-    );
-    assert_eq!(
-        state
-            .realm_delivery_binding_policy_cell_value(REALM_B)
-            .and_then(|value| value.get("binding_mode"))
-            .and_then(Value::as_str),
-        Some("relay")
-    );
-    let canonical_wire_cell =
-        CellRef::new(format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)).unwrap();
-    assert!(
-        state.cell(&canonical_wire_cell).is_none(),
-        "wire singleton key must not leak into the process-wide projection cache"
-    );
-}
-
 // ── Membership cache + FSM cell tests ──
 
 #[test]

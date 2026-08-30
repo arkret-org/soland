@@ -97,7 +97,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     for account in accounts {
         let localparts = state
             .identities()
-            .account_localparts(account.principal_id.as_str())
+            .account_localparts(account.pk.clone())
             .await
             .unwrap_or_default();
         for localpart in localparts {
@@ -328,11 +328,18 @@ async fn revoke_handle(
     // Operator revocation releases the durable account-localpart binding and
     // records the release in the post-release grace ledger.
     let released = handle_id.clone();
-    state
+    if let Some(owner) = state
         .identities()
-        .remove_localpart(subject_id.as_str(), &released)
+        .localpart_owner(&released)
         .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        state
+            .identities()
+            .remove_localpart(owner.account_pk, &released)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
     crate::routing::identity::account::record_handle_release(state, &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -389,7 +396,10 @@ async fn reassign_handle(
     // Target account must exist before we re-bind onto it.
     let target = state
         .identities()
-        .account(new_subject_id.as_str())
+        .account(&arkret_wire::AccountId::new(
+            new_subject_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("target subject account not found"))?;
@@ -397,16 +407,23 @@ async fn reassign_handle(
     // Detach the handle from its current holder, if a different account
     // still carries the localpart.
     if previous_subject_id != new_subject_id {
-        state
+        if let Some(owner) = state
             .identities()
-            .remove_localpart(previous_subject_id.as_str(), &localpart)
+            .localpart_owner(&localpart)
             .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            state
+                .identities()
+                .remove_localpart(owner.account_pk, &localpart)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+        }
     }
 
     state
         .identities()
-        .add_localpart(target.principal_id.as_str(), &localpart, true)
+        .add_localpart(target.pk.clone(), &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 

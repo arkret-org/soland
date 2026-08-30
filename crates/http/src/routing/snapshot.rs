@@ -107,7 +107,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
             soft_failed_digest: None,
             quarantined_digest: None,
         }),
-        created_by: service_id.clone(),
+        created_by: arkret_wire::ActorId::service(service_id.clone()),
         created_at,
         authority_binding: arkret_state::AuthorityBinding {
             authority_kind: arkret_state::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,

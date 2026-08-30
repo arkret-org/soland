@@ -597,8 +597,8 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     idempotency: EventCommitIdempotency,
     response_body: Value,
 ) -> Result<(), SubmitOneError> {
-    if managed_provision.actor_id.as_str() != service_id
-        || pcr_genesis.actor_id.as_str() != ghost_actor_id
+    if managed_provision.actor_id.signing_principal_id().as_str() != service_id
+        || pcr_genesis.actor_id.signing_principal_id().as_str() != ghost_actor_id
         || accountability.realm_id.as_str() != realm_id
         || profile.realm_id.as_str() != realm_id
     {

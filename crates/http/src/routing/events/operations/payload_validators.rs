@@ -13,13 +13,9 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
         .map_err(|_| "operation payload violates SDK artifact schema")?;
     validate_invite_create_wire_keys(&wire_payload)
         .map_err(|_| "operation payload carries unsupported fields")?;
-    let payload = operation
+    operation
         .typed_payload::<arkret_wire::event_spec::InviteCreate>()
         .map_err(|_| "operation payload violates SDK artifact schema")?;
-    payload
-        .invite_delivery_target
-        .validate()
-        .map_err(|_| "invite_delivery_target is invalid")?;
     Ok(())
 }
 
@@ -43,61 +39,15 @@ pub(crate) fn validate_invite_third_party_payload(
 }
 
 pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(), &'static str> {
-    let payload = operation
-        .payload
-        .as_object()
-        .ok_or("ak.invite.claim payload must be an object")?;
-    let invite_id =
-        payload_string(payload, "invite_id").ok_or("ak.invite.claim requires invite_id")?;
-    if arkret_identifiers::InviteId::new(invite_id).is_err() {
-        return Err("ak.invite.claim invite_id must be ak:invite:<uuidv7>");
-    }
-    let subject_id =
-        payload_string(payload, "subject_id").ok_or("ak.invite.claim requires subject_id")?;
-    if arkret_identifiers::DidCoreId::new(subject_id.clone()).is_err() {
-        return Err("ak.invite.claim subject_id must be a DID");
-    }
-    let token_commitment = payload_string(payload, "token_commitment")
-        .ok_or("ak.invite.claim requires token_commitment")?;
-    if arkret_identifiers::Hash::new(token_commitment).is_err() {
-        return Err("ak.invite.claim token_commitment must be a hash");
-    }
-    let claim_nonce =
-        payload_string(payload, "claim_nonce").ok_or("ak.invite.claim requires claim_nonce")?;
-    let binding: arkret_models_collaboration::governance::membership_invite::InviteClaimBindingProof = serde_json::from_value(
-        payload
-            .get("binding_proof")
-            .cloned()
-            .ok_or("ak.invite.claim binding_proof is required")?,
-    )
-    .map_err(|_| "ak.invite.claim binding_proof is invalid")?;
-    binding
+    let claim = operation
+        .typed_payload::<arkret_wire::event_spec::InviteClaim>()
+        .map_err(|_| "ak.invite.claim payload violates SDK artifact schema")?;
+    claim
         .validate()
-        .map_err(|_| "ak.invite.claim binding_proof is invalid")?;
-    if binding.subject_id.as_str() != subject_id {
-        return Err("binding_proof.subject_id must match subject_id");
-    }
-    if binding.realm_id != operation.realm_id {
+        .map_err(|_| "ak.invite.claim payload is invalid")?;
+    if claim.binding_proof.realm_id != operation.realm_id {
         return Err("binding_proof.realm_id must match envelope realm_id");
     }
-    if binding.audience
-        != arkret_models_collaboration::governance::membership_invite::INVITE_CLAIM_AUDIENCE
-    {
-        return Err("binding_proof.audience must be arkret.invite.claim");
-    }
-    if binding.claim_nonce != claim_nonce {
-        return Err("binding_proof.claim_nonce must match claim_nonce");
-    }
-    let subject_proof: arkret_models_collaboration::governance::membership_invite::InviteSubjectProof = serde_json::from_value(
-        payload
-            .get("subject_proof")
-            .cloned()
-            .ok_or("ak.invite.claim subject_proof is required")?,
-    )
-    .map_err(|_| "ak.invite.claim subject_proof is invalid")?;
-    subject_proof
-        .validate()
-        .map_err(|_| "ak.invite.claim subject_proof is invalid")?;
     Ok(())
 }
 

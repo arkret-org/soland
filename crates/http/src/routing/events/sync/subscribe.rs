@@ -429,13 +429,18 @@ pub(crate) async fn account_subscribe_notification_should_wake(
         if recipient_id != state.service_id() {
             return false;
         }
+        let Ok(principal_id) = arkret_wire::DidCoreId::new(session.actor.clone()) else {
+            return false;
+        };
+        let lookup_account_id =
+            arkret_wire::AccountId::new(principal_id, state.service_core_id().clone());
         return state
             .identities()
-            .account(&session.actor)
+            .account(&lookup_account_id)
             .await
             .ok()
             .flatten()
-            .is_some_and(|account| account.id.as_str() == account_id);
+            .is_some_and(|account| account.pk.0.to_string() == *account_id);
     }
     if realm_id_accessible(state, &notification.realm_id, session).await {
         return true;

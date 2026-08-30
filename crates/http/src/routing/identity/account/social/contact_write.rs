@@ -354,13 +354,20 @@ async fn holder_peer(state: &AppState, holder: &str) -> Result<ContactPeer, AppE
         .map_err(|error| AppError::internal(format!("holder Agent lookup: {error}")))?
     {
         return Ok(ContactPeer::Agent {
-            agent_id: holder_id,
-            controller_id: arkret_identifiers::DidCoreId::new(agent.controller_id)
-                .map_err(|error| AppError::internal(format!("Agent controller DID: {error}")))?,
+            actor_id: arkret_wire::ActorId::hosted_principal(
+                holder_id,
+                state.service_core_id().clone(),
+            ),
+            controller_account_id: arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new(agent.controller_id).map_err(|error| {
+                    AppError::internal(format!("Agent controller DID: {error}"))
+                })?,
+                state.service_core_id().clone(),
+            ),
         });
     }
     Ok(ContactPeer::Human {
-        principal_id: holder_id,
+        account_id: arkret_wire::AccountId::new(holder_id, state.service_core_id().clone()),
     })
 }
 
@@ -387,7 +394,6 @@ fn contact_scope_strings(scopes: &[ContactScope]) -> Vec<String> {
 
 fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     holder: &ContactPeer,
-    station_id: arkret_wire::DidCoreId,
     realm_id: RealmId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
@@ -400,7 +406,6 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
         holder.contact_actor_id(),
-        station_id,
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
@@ -630,12 +635,9 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         leaves: vec![accepted_seal.id],
     };
     let created_at = now();
-    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let event = new_unsigned_contact_event::<K>(
         &holder,
-        station_id,
         realm_id,
         frontier.next_actor_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
@@ -673,11 +675,11 @@ async fn contact_authority_realm(
     holder: &ContactPeer,
 ) -> Result<RealmId, AppError> {
     let realm_id = match holder {
-        ContactPeer::Human { principal_id } => {
+        ContactPeer::Human { account_id } => {
             let device = state
                 .identities()
                 .find_device(soland_services::identity::FindDeviceQuery {
-                    actor_id: principal_id.to_string(),
+                    actor_id: account_id.principal_id.to_string(),
                     device_id: session.device_id.clone(),
                 })
                 .await
@@ -721,7 +723,7 @@ async fn contact_authority_realm(
                         "Contact holder device authorization Event is unavailable",
                     )
                 })?;
-            if authorize_event.actor_id != principal_id.as_str()
+            if authorize_event.actor_id != account_id.principal_id.as_str()
                 || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
             {
                 return Err(AppError::new(
@@ -736,10 +738,10 @@ async fn contact_authority_realm(
                 )
             })?
         }
-        ContactPeer::Agent { agent_id, .. } => {
+        ContactPeer::Agent { actor_id, .. } => {
             state
                 .agent_pairings()
-                .agent(agent_id.as_str())
+                .agent(actor_id.signing_principal_id().as_str())
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("Contact holder Agent lookup: {error}"))
@@ -767,7 +769,7 @@ async fn contact_authority_realm(
                 "Contact account authority pair is unavailable",
             )
         })?;
-    if authority.account_id.principal_id != holder.contact_actor_id()
+    if authority.account_id.principal_id != *holder.contact_actor_id().signing_principal_id()
         || authority.pcr_realm_id != realm_id
         || authority.account_id.station_id.as_str() != state.service_id()
     {
@@ -846,8 +848,11 @@ async fn reservation_for_commit(
     Ok(reservation)
 }
 
-fn sorted_pair(left: &DidCoreId, right: &DidCoreId) -> [DidCoreId; 2] {
-    if left.as_str().as_bytes() <= right.as_str().as_bytes() {
+fn sorted_pair(
+    left: &arkret_wire::ActorId,
+    right: &arkret_wire::ActorId,
+) -> [arkret_wire::ActorId; 2] {
+    if left <= right {
         [left.clone(), right.clone()]
     } else {
         [right.clone(), left.clone()]
@@ -962,8 +967,9 @@ fn signed_current_proof(
             let proof = proof.as_producer()?;
             let (controller, _) = proof.verification_method.rsplit_once('#')?;
             let did = arkret_wire::Did::new(controller.to_owned()).ok()?;
-            (arkret_wire::project_did_to_core_id(&did).ok() == Some(event.actor_id.clone()))
-                .then_some(did)
+            (arkret_wire::project_did_to_core_id(&did).ok()
+                == Some(event.actor_id.signing_principal_id().clone()))
+            .then_some(did)
         })
         .ok_or_else(|| {
             AppError::param_invalid("Contact Event has no actor-bound proof controller")
@@ -1085,7 +1091,13 @@ async fn commit(
         return json_ok(outcome);
     }
     let reservation = reservation_for_commit(state, &session.actor, &body).await?;
-    if reservation.holder.contact_actor_id().as_str() != session.actor {
+    if reservation
+        .holder
+        .contact_actor_id()
+        .signing_principal_id()
+        .as_str()
+        != session.actor
+    {
         return Err(AppError::capability_denied(
             "Contact reservation belongs to another holder",
         ));
@@ -1103,8 +1115,8 @@ async fn commit(
             let record = state
                 .contacts()
                 .contact_any(
-                    peer.contact_actor_id(),
-                    reservation.holder.contact_actor_id(),
+                    &peer.contact_actor_id(),
+                    &reservation.holder.contact_actor_id(),
                 )
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
@@ -1207,14 +1219,18 @@ async fn plan_contact_commit(
             ..
         } => {
             let request_receipt = sign_request_receipt(state, reservation, event, digest_suite)?;
-            let same_service_target = state
-                .identities()
-                .account(peer.as_str())
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("Contact target account lookup: {error}"))
-                })?
-                .is_some();
+            let same_service_target = if let Some(peer_account_id) = peer.as_account_id() {
+                state
+                    .identities()
+                    .account(peer_account_id)
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!("Contact target account lookup: {error}"))
+                    })?
+                    .is_some()
+            } else {
+                false
+            };
             let peer_id = if same_service_target
                 || matches!(
                     introduction_evidence.as_ref(),
@@ -1627,12 +1643,9 @@ async fn plan_contact_commit(
                     .current_proofs
                     .retain(|proof| proof.issuer_id != current_proof.issuer_id);
                 bundle.current_proofs.push(current_proof.clone());
-                bundle.current_proofs.sort_by(|left, right| {
-                    left.issuer_id
-                        .as_str()
-                        .as_bytes()
-                        .cmp(right.issuer_id.as_str().as_bytes())
-                });
+                bundle
+                    .current_proofs
+                    .sort_by(|left, right| left.issuer_id.cmp(&right.issuer_id));
             }
             projection = Some(soland_services::events::CommitContactProjection {
                 record,
@@ -1690,12 +1703,9 @@ async fn plan_contact_commit(
                     .current_proofs
                     .retain(|proof| proof.issuer_id != current_proof.issuer_id);
                 bundle.current_proofs.push(current_proof.clone());
-                bundle.current_proofs.sort_by(|left, right| {
-                    left.issuer_id
-                        .as_str()
-                        .as_bytes()
-                        .cmp(right.issuer_id.as_str().as_bytes())
-                });
+                bundle
+                    .current_proofs
+                    .sort_by(|left, right| left.issuer_id.cmp(&right.issuer_id));
             }
             projection = Some(soland_services::events::CommitContactProjection {
                 record,
@@ -1922,8 +1932,8 @@ async fn prepare_contact_federation_delivery(
 
 async fn contact_request_delivery_address(
     _state: &AppState,
-    _holder: arkret_wire::DidCoreId,
-    _peer: arkret_wire::DidCoreId,
+    _holder: arkret_wire::ActorId,
+    _peer: arkret_wire::ActorId,
     _evidence: &ContactIntroductionEvidence,
 ) -> Result<Option<PeerContactAddress>, AppError> {
     // The current Contact introduction DTOs do not carry the exact five-field
@@ -1941,22 +1951,9 @@ async fn contact_introduction_service_resolution(
         ContactIntroductionEvidence::LocatorRef { principal_locator } => {
             Some(principal_locator.service_resolution.clone())
         }
-        ContactIntroductionEvidence::SharedRealm {
-            realm_id,
-            target_member_ref,
-            ..
-        } => state
-            .projections()
-            .snapshot()
-            .members_of_realm(realm_id.as_str())
-            .into_iter()
-            .find(|member| {
-                member.state == "join"
-                    && member.delivery_status.as_deref() == Some("routable")
-                    && member.membership_event_ref.as_deref() == Some(target_member_ref.as_str())
-            })
-            .and_then(|member| member.recipient_service_resolution.clone())
-            .and_then(|value| serde_json::from_value(value).ok()),
+        // Realm membership proves social context, not transport routing. The
+        // removed membership delivery binding must not be resurrected here.
+        ContactIntroductionEvidence::SharedRealm { .. } => None,
         ContactIntroductionEvidence::SameStation => state
             .current_signed_service_resolution()
             .await
@@ -1993,8 +1990,8 @@ async fn contact_service_resolution(
 
 async fn contact_record_for_lineage(
     state: &AppState,
-    holder: &DidCoreId,
-    peer: &DidCoreId,
+    holder: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
 ) -> Result<Option<ContactRecord>, AppError> {
     state
         .contacts()
@@ -2003,7 +2000,10 @@ async fn contact_record_for_lineage(
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
-fn holder_head<'a>(record: &'a ContactRecord, holder: &DidCoreId) -> Option<&'a EventId> {
+fn holder_head<'a>(
+    record: &'a ContactRecord,
+    holder: &arkret_wire::ActorId,
+) -> Option<&'a EventId> {
     if &record.requester_id == holder {
         record.request_event_ref.as_ref()
     } else {
@@ -2011,7 +2011,7 @@ fn holder_head<'a>(record: &'a ContactRecord, holder: &DidCoreId) -> Option<&'a 
     }
 }
 
-fn set_holder_head(record: &mut ContactRecord, holder: &DidCoreId, event_ref: EventId) {
+fn set_holder_head(record: &mut ContactRecord, holder: &arkret_wire::ActorId, event_ref: EventId) {
     if &record.requester_id == holder {
         record.request_event_ref = Some(event_ref);
     } else {
@@ -2019,7 +2019,11 @@ fn set_holder_head(record: &mut ContactRecord, holder: &DidCoreId, event_ref: Ev
     }
 }
 
-fn set_holder_scopes(record: &mut ContactRecord, holder: &DidCoreId, scopes: Vec<String>) {
+fn set_holder_scopes(
+    record: &mut ContactRecord,
+    holder: &arkret_wire::ActorId,
+    scopes: Vec<String>,
+) {
     if &record.requester_id == holder {
         record.granted_to_target_scopes = scopes;
     } else {
@@ -2029,7 +2033,7 @@ fn set_holder_scopes(record: &mut ContactRecord, holder: &DidCoreId, scopes: Vec
 
 fn validate_lineage_head(
     record: &ContactRecord,
-    holder: &DidCoreId,
+    holder: &arkret_wire::ActorId,
     contact_round_id: &Hash,
     version: u64,
     predecessor: &EventId,
@@ -2048,15 +2052,11 @@ fn validate_lineage_head(
     let proof_issuers = bundle
         .current_proofs
         .iter()
-        .map(|proof| proof.issuer_id.as_str())
+        .map(|proof| &proof.issuer_id)
         .collect::<std::collections::BTreeSet<_>>();
     if bundle.contact_round_id != *contact_round_id
         || bundle.current_proofs.len() != 2
-        || proof_issuers
-            != participants
-                .into_iter()
-                .map(arkret_wire::DidCoreId::as_str)
-                .collect()
+        || proof_issuers != participants.into_iter().collect()
         || bundle.current_proofs.iter().any(|proof| {
             proof.contact_round_id != bundle.contact_round_id
                 || proof.terminal
@@ -2091,11 +2091,15 @@ pub(super) async fn request(
 ) -> JsonResult<ContactOperationOutcome> {
     match body {
         ContactOperationRequestBody::Prepare(body) => {
-            let session_actor_id = DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
+            let session_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(session.actor.clone()).map_err(|error| {
+                    AppError::internal(format!("session actor invalid: {error}"))
+                })?,
+                state.service_core_id().clone(),
+            ));
             let prior = state
                 .contacts()
-                .contact_any(&session_actor_id, body.peer.contact_actor_id())
+                .contact_any(&session_actor_id, &body.peer.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
             let local_terminal_basis = prior.as_ref().and_then(|record| {
@@ -2156,7 +2160,7 @@ pub(super) async fn respond(
             let peer = body.request_receipt.core.holder.clone();
             let record = state
                 .contacts()
-                .contact_any(peer.contact_actor_id(), holder.contact_actor_id())
+                .contact_any(&peer.contact_actor_id(), &holder.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;
@@ -2165,7 +2169,7 @@ pub(super) async fn respond(
             let (_, contact_round_id) = normal_basis(&body.request_receipt)?;
             if state
                 .contacts()
-                .contact_any(holder.contact_actor_id(), peer.contact_actor_id())
+                .contact_any(&holder.contact_actor_id(), &peer.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .is_some()
@@ -2217,7 +2221,7 @@ pub(super) async fn reject(
             let peer = body.request_receipt.core.holder.clone();
             let record = state
                 .contacts()
-                .contact_any(peer.contact_actor_id(), holder.contact_actor_id())
+                .contact_any(&peer.contact_actor_id(), &holder.contact_actor_id())
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::not_found("pending Contact request not found"))?;

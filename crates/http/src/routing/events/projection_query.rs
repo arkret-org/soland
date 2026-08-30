@@ -124,6 +124,11 @@ where
         .map_err(|_| AppError::internal(format!("invalid {field} in projection state")))
 }
 
+fn parse_projection_actor(value: &str, field: &str) -> Result<arkret_wire::ActorId, AppError> {
+    serde_json::from_str(value)
+        .map_err(|_| AppError::internal(format!("invalid {field} in projection state")))
+}
+
 fn total_count(len: usize) -> Result<u64, AppError> {
     u64::try_from(len).map_err(|_| AppError::internal("projection row count overflow"))
 }
@@ -271,10 +276,7 @@ fn strand_assigned_to_relations(
                     &relation_id,
                     "assigned_to_relations.relation_id",
                 )?,
-                actor_id: parse_projection_id::<DidCoreId>(
-                    &actor_id,
-                    "assigned_to_relations.actor_id",
-                )?,
+                actor_id: parse_projection_actor(&actor_id, "assigned_to_relations.actor_id")?,
             })
         })
         .collect()
@@ -936,10 +938,7 @@ async fn list_space_container_projections(
                     .transpose()?,
                 rank: p.rank.clone(),
                 state: projection_space_state(p.state),
-                created_by: Some(parse_projection_id::<DidCoreId>(
-                    &p.created_by,
-                    "created_by",
-                )?),
+                created_by: Some(parse_projection_actor(&p.created_by, "created_by")?),
                 created_at: Some(p.created_at),
                 updated_at: p.updated_at,
                 state_changed_at: p.state_changed_at,
@@ -1004,7 +1003,7 @@ async fn list_strand_projections(
             let assigned_to_relations = strand_assigned_to_relations(&proj, &f.strand_id)?;
             let mut assigned_actor_ids = assigned_to_relations
                 .iter()
-                .map(|relation| relation.actor_id.clone())
+                .map(|relation| relation.actor_id.signing_principal_id().clone())
                 .collect::<Vec<_>>();
             assigned_actor_ids.sort();
             assigned_actor_ids.dedup();
@@ -1020,15 +1019,12 @@ async fn list_strand_projections(
                 rank,
                 assigned_actor_ids,
                 assigned_to_relations,
-                created_by: Some(parse_projection_id::<DidCoreId>(
-                    &f.created_by,
-                    "created_by",
-                )?),
+                created_by: Some(parse_projection_actor(&f.created_by, "created_by")?),
                 created_at: Some(f.created_at),
                 updated_by: f
                     .updated_by
                     .as_deref()
-                    .map(|actor| parse_projection_id::<DidCoreId>(actor, "updated_by"))
+                    .map(|actor| parse_projection_actor(actor, "updated_by"))
                     .transpose()?,
                 updated_at: f.updated_at,
                 is_default: default_strand_id.as_deref() == Some(f.strand_id.as_str()),
@@ -1462,10 +1458,7 @@ async fn list_morph_projections(
                 morph_kind: m.morph_kind.clone(),
                 state: projection_object_state(m.state),
                 title: m.title.clone(),
-                created_by: Some(parse_projection_id::<DidCoreId>(
-                    &m.created_by,
-                    "created_by",
-                )?),
+                created_by: Some(parse_projection_actor(&m.created_by, "created_by")?),
                 created_at: Some(m.created_at),
                 updated_at: m.updated_at,
                 state_changed_at: m.state_changed_at,

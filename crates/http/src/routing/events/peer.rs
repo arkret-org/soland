@@ -998,7 +998,7 @@ async fn peer_events_frontier(
         .iter()
         .map(|(actor_id, seq)| {
             Ok((
-                arkret_identifiers::DidCoreId::new(actor_id.clone())
+                serde_json::from_str::<arkret_wire::ActorId>(actor_id)
                     .map_err(|_| AppError::internal("stored frontier actor_id is invalid"))?,
                 *seq,
             ))

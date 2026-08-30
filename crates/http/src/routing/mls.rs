@@ -1303,7 +1303,10 @@ async fn peer_claim_policy_authorized(
     } else {
         state
             .identities()
-            .account(body.target_principal_id.as_str())
+            .account(&arkret_wire::AccountId::new(
+                body.target_principal_id.clone(),
+                state.service_core_id().clone(),
+            ))
             .await
             .map_err(|error| AppError::internal(format!("target authority lookup: {error}")))?
             .is_some()
@@ -1326,27 +1329,36 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
             let projection = state.projections().snapshot();
+            let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                body.requester_id.clone(),
+                arkret_wire::DidCoreId::new(source_id.to_owned())
+                    .map_err(|_| AppError::param_invalid("invalid source_id"))?,
+            ));
             if projection
-                .member(body.intended_realm_id.as_str(), body.requester_id.as_str())
-                .filter(|member| member.state == "join")
-                .and_then(|member| member.recipient_id.as_deref())
-                != Some(source_id)
+                .member(
+                    body.intended_realm_id.as_str(),
+                    &requester_actor.to_string(),
+                )
+                .is_none_or(|member| member.state != "join")
             {
                 return Ok(false);
             }
-            let is_participant = |actor_id: &str| {
+            let target_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                body.target_principal_id.clone(),
+                state.service_core_id().clone(),
+            ));
+            let is_participant = |actor_id: &arkret_wire::ActorId| {
+                let actor_key = actor_id.to_string();
                 projection
-                    .member(body.intended_realm_id.as_str(), actor_id)
+                    .member(body.intended_realm_id.as_str(), &actor_key)
                     .is_some_and(|member| member.state == "join")
                     || projection
                         .realm_states
                         .get(body.intended_realm_id.as_str())
                         .and_then(|realm| realm.owner.as_deref())
-                        == Some(actor_id)
+                        == Some(actor_key.as_str())
             };
-            if !is_participant(body.requester_id.as_str())
-                || !is_participant(body.target_principal_id.as_str())
-            {
+            if !is_participant(&requester_actor) || !is_participant(&target_actor) {
                 return Ok(false);
             }
         }
@@ -1354,8 +1366,15 @@ async fn peer_claim_policy_authorized(
             let scope = "direct_message";
             let contact = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
-                body.target_principal_id.as_str(),
-                body.requester_id.as_str(),
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    body.target_principal_id.clone(),
+                    state.service_core_id().clone(),
+                )),
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    body.requester_id.clone(),
+                    arkret_wire::DidCoreId::new(source_id.to_owned())
+                        .map_err(|_| AppError::param_invalid("invalid source_id"))?,
+                )),
                 scope,
             )
             .await?;
@@ -1374,10 +1393,17 @@ async fn peer_claim_policy_authorized(
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    body.requester_id.clone(),
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        body.requester_id.clone(),
+                        arkret_wire::DidCoreId::new(source_id.to_owned())
+                            .map_err(|_| AppError::param_invalid("invalid source_id"))?,
+                    )),
                 ),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    body.target_principal_id.clone(),
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        body.target_principal_id.clone(),
+                        state.service_core_id().clone(),
+                    )),
                 ),
             )
             .map_err(|_| peer_claim_failed())?;
@@ -1575,7 +1601,11 @@ async fn validate_welcome_peer_claim_ledger(
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
-        || welcome.claim_envelope.requester_actor_id != request.requester_id
+        || welcome.claim_envelope.requester_actor_id
+            != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                request.requester_id.clone(),
+                receipt.source_id.clone(),
+            ))
     {
         return Err("peer_claim_welcome_invalid");
     }
@@ -1943,13 +1973,18 @@ async fn claim_keypackage(
         ));
     }
     if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
+        let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            body.requester_id.clone(),
+            state.service_core_id().clone(),
+        ));
         let requester_is_current_member = state
             .projections()
             .snapshot()
-            .member(body.intended_realm_id.as_str(), body.requester_id.as_str())
-            .is_some_and(|member| {
-                member.state == "join" && member.recipient_id.as_deref() == Some(local_service_id)
-            });
+            .member(
+                body.intended_realm_id.as_str(),
+                &requester_actor.to_string(),
+            )
+            .is_some_and(|member| member.state == "join");
         if !requester_is_current_member {
             return Err(AppError::capability_denied(
                 "requester_id has no current source-side Realm membership",
@@ -1959,14 +1994,16 @@ async fn claim_keypackage(
     if body.service_binding.destination_id.as_str() != local_service_id {
         let destination = body.service_binding.destination_id.as_str();
         let snapshot = state.projections().snapshot();
+        let target_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            body.target_principal_id.clone(),
+            body.service_binding.destination_id.clone(),
+        ));
         let target_binding = snapshot
-            .member(
-                body.intended_realm_id.as_str(),
-                body.target_principal_id.as_str(),
-            )
+            .member(body.intended_realm_id.as_str(), &target_actor.to_string())
             .filter(|member| member.state == "join")
-            .and_then(|member| member.recipient_id.as_deref());
-        if target_binding != Some(destination) {
+            .and_then(|member| serde_json::from_str::<arkret_wire::ActorId>(&member.member).ok())
+            .map(|actor| actor.route_service_id().to_string());
+        if target_binding.as_deref() != Some(destination) {
             return Err(AppError::capability_denied(
                 "destination service must equal the target's current Realm delivery binding",
             ));
@@ -3815,7 +3852,7 @@ async fn verify_agent_keypackage_batch(
     let event = serde_json::from_value::<arkret_wire::Event>(accepted.envelope)
         .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
-        || event.actor_id.as_str() != principal.as_str()
+        || event.actor_id.signing_principal_id().as_str() != principal.as_str()
     {
         return Err("claim_generation_mismatch".to_owned());
     }
@@ -4006,12 +4043,14 @@ async fn ensure_pairwise_realm_affinity(
         .with_wire_code("claim_generation_mismatch"));
     }
     let snapshot = state.projections().snapshot();
+    let membership_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal.clone(),
+        arkret_wire::DidCoreId::new(expected_service_id.to_owned())
+            .map_err(|_| AppError::param_invalid("invalid expected service id"))?,
+    ));
     if snapshot
-        .member(realm_id.as_str(), principal.as_str())
-        .is_none_or(|membership| {
-            membership.state != "join"
-                || membership.recipient_id.as_deref() != Some(expected_service_id)
-        })
+        .member(realm_id.as_str(), &membership_actor.to_string())
+        .is_none_or(|membership| membership.state != "join")
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -4291,7 +4330,7 @@ async fn current_agent_keypackage_trust_binding(
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|expires_at| expires_at.with_timezone(&Utc) <= now());
     if event.kind != arkret_wire::EventKind::AgentKeyAuthorize
-        || event.actor_id.as_str() != principal.as_str()
+        || event.actor_id.signing_principal_id().as_str() != principal.as_str()
         || payload.get("agent_id").and_then(Value::as_str) != Some(principal.as_str())
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
         || expired

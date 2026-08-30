@@ -147,10 +147,18 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
 
-    let grants =
-        state
-            .authorization()
-            .grants_for_subject(&executed_by, Some(&station_id), realm_id);
+    let executed_by_actor = arkret_wire::ActorId::service(
+        arkret_wire::DidCoreId::new(executed_by.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("applet executed_by is invalid: {error}"),
+            )
+        })?,
+    );
+    let grants = state
+        .authorization()
+        .grants_for_subject(&executed_by_actor, realm_id);
     let grant = grants
         .iter()
         .find(|grant| grant.grant_id.as_str() == authorization_ref.as_str())
@@ -181,7 +189,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "authorization_ref grant does not cover this Event resource",
         ));
     }
-    if !actor_is_managed && grant.issuer_id.as_str() != actor_id {
+    if !actor_is_managed && grant.issuer_id.signing_principal_id().as_str() != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "authorization_ref_scope",
@@ -212,7 +220,23 @@ pub(super) async fn validate_applet_managed_actor_liveness(
     kind: &str,
     realm_id: &str,
 ) -> Result<bool, EventValidationError> {
-    let station_id = event_string_field(object, &["station_id"]).unwrap_or_default();
+    let event_actor = serde_json::from_value::<arkret_wire::ActorId>(
+        object.get("actor_id").cloned().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "Applet-managed actor Event requires actor_id",
+            )
+        })?,
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("Applet-managed actor Event actor_id is invalid: {error}"),
+        )
+    })?;
+    let station_id = event_actor.route_service_id().as_str();
     let applet_id = event_string_field(object, &["applet_id"]);
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
     let is_rotation = kind == arkret_wire::event_kind_str::IDENTITY_RESOLUTION_UPDATE;
@@ -253,11 +277,11 @@ pub(super) async fn validate_applet_managed_actor_liveness(
     let mut selected_scope_revoked = false;
     let mut selected_scope_live = false;
     for record in records {
-        let bot_match = record.bot_actor_id.as_str() == actor_id;
+        let bot_match = record.bot_actor_id == event_actor;
         let ghost_match = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id.as_str() == actor_id);
+            .find(|ghost| ghost.ghost_actor_id == event_actor);
         if !bot_match && ghost_match.is_none() {
             continue;
         }
@@ -290,7 +314,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                     )
                 })?;
             (
-                record.bot_actor_station_id.to_string(),
+                record.bot_actor_id.route_service_id().to_string(),
                 provision.applet_authority_ref.to_string(),
                 record.bot_principal_control_realm_id.to_string(),
             )
@@ -304,7 +328,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
                 )
             })?;
             (
-                ghost.actor_station_id.to_string(),
+                ghost.ghost_actor_id.route_service_id().to_string(),
                 provision.applet_authority_ref.to_string(),
                 ghost.principal_control_realm_id().to_string(),
             )
@@ -334,8 +358,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
         }
         selected_scope_live = true;
         let grants = state.authorization().grants_for_subject(
-            record.package.service_id.as_str(),
-            Some(&expected_server),
+            &arkret_wire::ActorId::service(record.package.service_id.clone()),
             record.portal_realm_id.as_str(),
         );
         if !bot_match
@@ -580,11 +603,11 @@ pub(super) fn applet_executor_in_subject_set(
     executed_by: &str,
 ) -> bool {
     executed_by == service_id
-        || executed_by == record.bot_actor_id.as_str()
+        || executed_by == record.bot_actor_id.signing_principal_id().as_str()
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id.as_str() == executed_by)
+            .any(|ghost| ghost.ghost_actor_id.signing_principal_id().as_str() == executed_by)
         || applet_actor_matches_exact_namespace(record, executed_by)
 }
 
@@ -592,11 +615,11 @@ pub(super) fn applet_actor_is_managed(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     actor_id: &str,
 ) -> bool {
-    actor_id == record.bot_actor_id.as_str()
+    actor_id == record.bot_actor_id.signing_principal_id().as_str()
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
+            .any(|ghost| ghost.ghost_actor_id.signing_principal_id().as_str() == actor_id)
 }
 
 pub(super) fn applet_actor_matches_exact_namespace(

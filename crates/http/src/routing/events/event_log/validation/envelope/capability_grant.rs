@@ -22,7 +22,7 @@ pub(super) fn validate_capability_grant_body(
                 )
             },
         )?;
-    if payload.grant.issuer_id.as_str() != actor_id {
+    if payload.grant.issuer_id.signing_principal_id().as_str() != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "invalid_proof",

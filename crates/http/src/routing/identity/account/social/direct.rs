@@ -4,12 +4,12 @@ use super::*;
 
 pub(crate) fn direct_pair_key(
     state: &AppState,
-    left: &str,
-    right: &str,
+    left: &arkret_wire::ActorId,
+    right: &arkret_wire::ActorId,
 ) -> Result<String, AppError> {
     let trust_domain = state.config().trust_domain.clone();
-    let left = direct_pair_key_participant(left, "actor")?;
-    let right = direct_pair_key_participant(right, "peer")?;
+    let left = direct_pair_key_participant(left);
+    let right = direct_pair_key_participant(right);
     arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain,
         left,
@@ -20,20 +20,12 @@ pub(crate) fn direct_pair_key(
 }
 
 pub(super) fn direct_pair_key_participant(
-    identity: &str,
-    role: &str,
-) -> Result<
-    arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant,
-    AppError,
-> {
-    let core_id = DidCoreId::new(identity.to_owned()).map_err(|error| {
-        AppError::internal(format!(
-            "stored direct conversation {role} core identity invalid: {error}"
-        ))
-    })?;
-    Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-        core_id,
-    ))
+    identity: &arkret_wire::ActorId,
+) -> arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant
+{
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
+        identity.clone(),
+    )
 }
 
 /// The settled coordinates for a pair.
@@ -197,16 +189,16 @@ pub(crate) async fn validate_direct_binding_operation(
         );
         "direct_conversation_binding_invalid"
     })?;
-    let issuer = operation.context.sender.as_str();
+    let issuer = &operation.context.sender;
     if !payload
         .unordered_participant_ids
         .iter()
-        .any(|participant| participant.as_str() == issuer)
+        .any(|participant| participant == issuer)
     {
         tracing::warn!(
             target: "soland_http::error",
             stage = "issuer_participant",
-            issuer,
+            issuer = %issuer,
             participants = ?payload.unordered_participant_ids,
             "direct conversation binding validation failed"
         );
@@ -241,8 +233,8 @@ pub(crate) async fn validate_direct_binding_operation(
     if payload.authorization_basis.kind
         == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact
     {
-        let left = payload.unordered_participant_ids[0].as_str();
-        let right = payload.unordered_participant_ids[1].as_str();
+        let left = &payload.unordered_participant_ids[0];
+        let right = &payload.unordered_participant_ids[1];
         // `unordered_participant_ids` is canonical pair-key order, not contact
         // request direction. Resolve both directions or a random DID ordering
         // can make the same accepted contact intermittently disappear.
@@ -252,8 +244,8 @@ pub(crate) async fn validate_direct_binding_operation(
                 tracing::warn!(
                     target: "soland_http::error",
                     %error,
-                    left,
-                    right,
+                    left = %left,
+                    right = %right,
                     "direct conversation accepted-contact lookup failed"
                 );
                 "direct_conversation_binding_invalid"
@@ -354,12 +346,9 @@ async fn validate_direct_binding_event_refs(
     )
     .map_err(|_| "direct_conversation_realm_role_invalid")?;
 
-    let creator = realm_create.actor_id.as_str();
-    let participants: Vec<&str> = payload
-        .unordered_participant_ids
-        .iter()
-        .map(arkret_identifiers::DidCoreId::as_str)
-        .collect();
+    let creator = &realm_create.actor_id;
+    let participants: Vec<&arkret_wire::ActorId> =
+        payload.unordered_participant_ids.iter().collect();
     if participants.len() != 2 || !participants.contains(&creator) {
         return Err("creator_participant");
     }
@@ -421,13 +410,15 @@ async fn validate_direct_binding_event_refs(
             }
             let record = state
                 .agent_pairings()
-                .agent(peer)
+                .agent(peer.signing_principal_id().as_str())
                 .await
                 .map_err(|_| "direct_conversation_binding_invalid")?
                 .ok_or("direct_conversation_binding_invalid")?;
             // controller-to-own-Agent fixes the founder to the controller, so the Realm creator is
             // the controller and the Agent is the peer.
-            if record.controller_id != creator || record.state != AgentLifecycleState::Active {
+            if record.controller_id != creator.signing_principal_id().as_str()
+                || record.state != AgentLifecycleState::Active
+            {
                 return Err("managed_agent_record");
             }
             let provision_refs = record
@@ -498,8 +489,8 @@ async fn accepted_direct_realm_create(
 async fn validate_direct_founder(
     state: &AppState,
     payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
-    creator: &str,
-    peer: &str,
+    creator: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
 ) -> Result<(), &'static str> {
     use arkret_models_collaboration::objects::direct_conversation::{
         DirectConversationAuthorizationKind, DirectConversationFoundingAuthority,
@@ -511,8 +502,7 @@ async fn validate_direct_founder(
         // an Agent runtime key never needs Direct Conversation founding scope.
         DirectConversationAuthorizationKind::ManagedAgentController => {
             DirectConversationFoundingAuthority::ControllerOwnedAgent {
-                controller_id: arkret_identifiers::DidCoreId::new(creator.to_owned())
-                    .map_err(|_| "direct_conversation_binding_invalid")?,
+                controller_id: creator.clone(),
             }
         }
         DirectConversationAuthorizationKind::AcceptedContact => {
@@ -524,18 +514,18 @@ async fn validate_direct_founder(
         }
     };
 
-    let [left, right]: [arkret_identifiers::DidCoreId; 2] = payload
+    let [left, right]: [arkret_wire::ActorId; 2] = payload
         .unordered_participant_ids
         .clone()
         .try_into()
         .map_err(|_| "direct_conversation_binding_invalid")?;
     let founder = direct_conversation_founder([left, right], &authority)
         .map_err(|_| "direct_conversation_founding_authority_unavailable")?;
-    if founder.as_str() != creator {
+    if &founder != creator {
         tracing::warn!(
             target: "soland_http::error",
             stage = "founder",
-            %creator,
+            creator = %creator,
             founder = %founder,
             "direct conversation Realm was not created by the derived founder"
         );
@@ -724,8 +714,8 @@ pub(crate) fn direct_founding_authority_from_contact(
 /// `temporarily_unavailable` rather than inventing an answer.
 pub(crate) async fn direct_founder_for_pair(
     state: &AppState,
-    actor: &str,
-    peer: &str,
+    actor: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
     contact: Option<&ContactRecord>,
     managed_agent: bool,
 ) -> Result<Option<String>, AppError> {
@@ -738,7 +728,7 @@ pub(crate) async fn direct_founder_for_pair(
         // an Agent runtime key never needs Direct Conversation founding scope.
         let controller = if state
             .agent_pairings()
-            .agent(peer)
+            .agent(peer.signing_principal_id().as_str())
             .await
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
             .is_some()
@@ -748,8 +738,7 @@ pub(crate) async fn direct_founder_for_pair(
             peer
         };
         DirectConversationFoundingAuthority::ControllerOwnedAgent {
-            controller_id: arkret_identifiers::DidCoreId::new(controller.to_owned())
-                .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
+            controller_id: controller.clone(),
         }
     } else {
         let Some(record) = contact else {
@@ -761,11 +750,9 @@ pub(crate) async fn direct_founder_for_pair(
         }
     };
 
-    let left = arkret_identifiers::DidCoreId::new(actor.to_owned())
-        .map_err(|error| AppError::internal(format!("actor DID invalid: {error}")))?;
-    let right = arkret_identifiers::DidCoreId::new(peer.to_owned())
-        .map_err(|error| AppError::internal(format!("peer DID invalid: {error}")))?;
-    Ok(direct_conversation_founder([left, right], &authority)
-        .ok()
-        .map(|founder| founder.to_string()))
+    Ok(
+        direct_conversation_founder([actor.clone(), peer.clone()], &authority)
+            .ok()
+            .map(|founder| founder.to_string()),
+    )
 }

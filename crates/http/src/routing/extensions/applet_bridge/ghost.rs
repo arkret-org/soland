@@ -7,7 +7,7 @@ use arkret_models_integration::{
     AppletManagedActorProvisionPayload, AppletManagedActorRole, AppletNamespaceDomain,
     GhostActorProvisionRequestBody, namespace_pattern_matches,
 };
-use arkret_wire::{CapabilityActionId, Event};
+use arkret_wire::{ActorId, CapabilityActionId, Event};
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 
@@ -80,11 +80,11 @@ async fn revoke_applet_record_inner(
         applet_id: record.applet_id.clone(),
         status: "revoked".to_owned(),
         revoked_at: now,
-        bot_actor_id: record.bot_actor_id.to_string(),
+        bot_actor_id: record.bot_actor_id.signing_principal_id().to_string(),
         ghost_actor_ids: record
             .ghosts
             .iter()
-            .map(|ghost| ghost.ghost_actor_id.to_string())
+            .map(|ghost| ghost.ghost_actor_id.signing_principal_id().to_string())
             .collect(),
     })
 }
@@ -224,7 +224,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
     })?;
     let accountability = &provision.managed_actor_bundle.accountability_grant_event;
     let profile = &provision.managed_actor_bundle.profile_event;
-    let service_actor_id = basis.service_id.clone();
+    let service_actor_id = ActorId::service(basis.service_id.clone());
     let authorization_ref = ghost_provision_authorization_ref(record)?;
     let managed_provision =
         validate_ghost_managed_actor_unit(state, record, provision, authorization_ref.as_str())
@@ -301,7 +301,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         ))
     })?;
     if grant.issuer_id != basis.service_id
-        || grant.subject_id != ghost_actor_id
+        || &grant.subject_id != ghost_actor_id.signing_principal_id()
         || grant.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || !matches!(
@@ -363,8 +363,8 @@ pub(super) async fn validate_signed_ghost_provision_events(
         AppError::internal(format!("external_ref serialization failed: {error}"))
     })?;
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
-        && actor_profile.accountable_principal_ids[0].as_str() == service_actor_id.as_str();
-    if actor_profile.principal_id.as_str() != ghost_actor_id.as_str()
+        && actor_profile.accountable_principal_ids[0].as_str() == basis.service_id.as_str();
+    if &actor_profile.principal_id != ghost_actor_id.signing_principal_id()
         || actor_profile.realm_id.as_ref() != Some(&basis.realm_id)
         || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
         || actor_profile.display_name != expected_display_name
@@ -393,8 +393,9 @@ async fn validate_ghost_managed_actor_unit(
         AppError::param_invalid("Ghost provision authoring purpose must be provision_ghost")
     })?;
     let event = &request.managed_actor_bundle.managed_actor_provision_event;
+    let service_actor_id = ActorId::service(basis.service_id.clone());
     if event.kind.as_str() != "ak.applet.managed_actor.provision"
-        || event.actor_id != basis.service_id
+        || event.actor_id != service_actor_id
         || event.applet_id.as_ref() != Some(&basis.applet_id)
         || event.realm_id != basis.realm_id
         || event.proofs.is_empty()
@@ -421,9 +422,9 @@ async fn validate_ghost_managed_actor_unit(
     if payload.actor_role != AppletManagedActorRole::Ghost
         || payload.applet_id != basis.applet_id
         || payload.service_id != basis.service_id
-        || payload.actor_id == record.package.controller_id
-        || payload.actor_id == record.package.bot_actor_id
-        || payload.actor_station_id.as_str() != state.service_id()
+        || payload.actor_id.signing_principal_id() == &record.package.controller_id
+        || payload.actor_id.signing_principal_id() == &record.package.bot_actor_id
+        || payload.actor_id.route_service_id().as_str() != state.service_id()
         || record.registration_event.event_id != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
         || payload.external_ref.as_ref() != Some(&basis.external_ref)
@@ -489,8 +490,7 @@ async fn validate_ghost_managed_actor_unit(
         .count();
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != payload.actor_id
-        || genesis.executed_by.as_ref() != Some(&basis.service_id)
-        || genesis.station_id != payload.actor_station_id
+        || genesis.executed_by.as_ref() != Some(&service_actor_id)
         || genesis.applet_id.as_ref() != Some(&basis.applet_id)
         || genesis.realm_id != expected_realm_id
         || genesis.authorization_ref.as_deref() != Some(authorization_ref)

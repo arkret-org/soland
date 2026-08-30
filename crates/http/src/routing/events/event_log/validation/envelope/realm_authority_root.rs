@@ -55,7 +55,7 @@ pub(super) fn validate_realm_authority_root_authorization(
         accepted_seal_root(state, object, realm_id)?
     };
 
-    if root.controller_id.as_str() != subject {
+    if root.controller_id.signing_principal_id().as_str() != subject {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "realm_authority_controller_mismatch",

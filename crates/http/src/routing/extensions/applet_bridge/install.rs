@@ -20,7 +20,9 @@ use arkret_models_integration::{
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
-use arkret_wire::{CapabilityActionId, Event, ResourceMatchScope, ScopeRef, WireResourceSelector};
+use arkret_wire::{
+    ActorId, CapabilityActionId, Event, ResourceMatchScope, ScopeRef, WireResourceSelector,
+};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -137,7 +139,8 @@ pub(super) fn validate_admin_install_events(
     let realm_id = basis.effective_scope.realm_id();
     let registration = &basis.registration_event;
     if registration.kind != arkret_wire::EventKind::AppletRegistration
-        || registration.actor_id.as_str() != install_actor
+        || registration.actor_id.signing_principal_id().as_str() != install_actor
+        || registration.actor_id.route_service_id() != &basis.target_station_id
         || &registration.realm_id != realm_id
         || registration.scope_ref != basis.effective_scope
         || registration.proofs.is_empty()
@@ -196,7 +199,8 @@ pub(super) fn validate_admin_install_events(
 
     for event in &basis.capability_grant_events {
         if event.kind != arkret_wire::EventKind::CapabilityGrant
-            || event.actor_id.as_str() != install_actor
+            || event.actor_id.signing_principal_id().as_str() != install_actor
+            || event.actor_id.route_service_id() != &basis.target_station_id
             || &event.realm_id != realm_id
             || event.scope_ref != basis.effective_scope
             || event.proofs.is_empty()
@@ -220,14 +224,13 @@ pub(super) fn validate_admin_install_events(
                 .with_wire_code("applet_install_plan_mismatch")
             })?;
         let grant = payload.grant;
-        if grant.issuer_id.as_str() != install_actor
+        if grant.issuer_id != event.actor_id
             || grant.realm_id.as_ref() != Some(realm_id)
             || !matches!(
                 &grant.subject,
-                CapabilitySubject::CoreDid(subject)
-                    if subject.as_str() == package.service_id.as_str()
+                CapabilitySubject::Actor(subject)
+                    if subject == &ActorId::service(package.service_id.clone())
             )
-            || grant.subject_station_id.as_ref() != Some(&basis.target_station_id)
             || grant.resources.len() != 1
             || grant.resources[0] != expected_resource
         {
@@ -286,8 +289,13 @@ fn validate_bot_managed_actor_unit(
     let provision_event = &bundle.managed_actor_provision_event;
     let package = commit.applet_package();
     let expected_applet_id = package.applet_id.clone();
+    let service_actor_id = ActorId::service(package.service_id.clone());
+    let bot_actor_id = ActorId::hosted_principal(
+        package.bot_actor_id.clone(),
+        basis.target_station_id.clone(),
+    );
     if provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
-        || provision_event.actor_id != package.service_id
+        || provision_event.actor_id != service_actor_id
         || provision_event.applet_id.as_ref() != Some(&expected_applet_id)
         || provision_event.realm_id != *basis.effective_scope.realm_id()
         || provision_event.proofs.is_empty()
@@ -315,9 +323,9 @@ fn validate_bot_managed_actor_unit(
     if provision.actor_role != AppletManagedActorRole::Bot
         || provision.applet_id != expected_applet_id
         || provision.service_id != package.service_id
-        || provision.actor_id != package.bot_actor_id
-        || provision.actor_id == package.controller_id
-        || provision.actor_station_id.as_str() != station_id
+        || provision.actor_id != bot_actor_id
+        || provision.actor_id.signing_principal_id() == &package.controller_id
+        || provision.actor_id.route_service_id().as_str() != station_id
         || provision.registration_ref != basis.registration_event.event_id
         || !grant_ids.contains(&provision.applet_authority_ref)
     {
@@ -363,9 +371,8 @@ fn validate_bot_managed_actor_unit(
         .filter(|reference| reference.role == "applet_managed_actor_provision")
         .count();
     if genesis.kind != arkret_wire::EventKind::RealmCreate
-        || genesis.actor_id != package.bot_actor_id
-        || genesis.executed_by.as_ref() != Some(&package.service_id)
-        || genesis.station_id != provision.actor_station_id
+        || genesis.actor_id != bot_actor_id
+        || genesis.executed_by.as_ref() != Some(&service_actor_id)
         || genesis.applet_id.as_ref() != Some(&expected_applet_id)
         || genesis.realm_id != expected_realm_id
         || genesis.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
@@ -398,13 +405,13 @@ fn validate_bot_managed_actor_unit(
         .filter(|reference| reference.role == "accountability")
         .count();
     if accountability.kind.as_str() != "ak.identity.accountability_grant"
-        || accountability.actor_id != package.service_id
+        || accountability.actor_id != service_actor_id
         || accountability.applet_id.as_ref() != Some(&expected_applet_id)
         || accountability.authorization_ref.as_deref()
             != Some(provision.applet_authority_ref.as_str())
         || profile.kind.as_str() != "ak.profile.create"
-        || profile.actor_id != package.bot_actor_id
-        || profile.executed_by.as_ref() != Some(&package.service_id)
+        || profile.actor_id != bot_actor_id
+        || profile.executed_by.as_ref() != Some(&service_actor_id)
         || profile.applet_id.as_ref() != Some(&expected_applet_id)
         || profile.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
         || profile_accountability_role_count != 1
@@ -720,20 +727,13 @@ pub(super) async fn register_package_install(
                 AppletIdentityRecord {
                     applet_id: package.applet_id.clone(),
                     registry_id: package.controller_id.clone(),
-                    bot_actor_id: package.bot_actor_id.clone(),
-                    bot_actor_station_id: bot_provision.actor_station_id.clone(),
+                    bot_actor_id: bot_provision.actor_id.clone(),
                     bot_actor_provision_ref: bundle.managed_actor_provision_event.event_id.clone(),
                     bot_principal_control_realm_id: RealmId::from_event_id(
                         &bundle.pcr_genesis_event.event_id,
                     ),
                     initial_package: package.clone(),
-                    initial_owner_actor_id: DidCoreId::new(owner_actor_id.to_owned()).map_err(
-                        |error| {
-                            AppError::internal(format!(
-                                "validated initial owner actor id is invalid: {error}"
-                            ))
-                        },
-                    )?,
+                    initial_owner_actor_id: registration_event.actor_id.clone(),
                     initial_effective_scope: effective_scope.clone(),
                     initial_registration_event: registration_event.clone(),
                     initial_capability_grant_refs: capability_grant_refs.clone(),
@@ -765,13 +765,12 @@ pub(super) async fn register_package_install(
                 || package.service_id != initial_package.service_id
                 || package.bot_actor_id != initial_package.bot_actor_id
                 || reference.actor_id != existing.bot_actor_id
-                || reference.actor_station_id != existing.bot_actor_station_id
                 || reference.managed_actor_provision_ref != existing.bot_actor_provision_ref
                 || reference.pcr_genesis_ref != existing.bot_pcr_genesis_event.event_id
                 || reference.accountability_grant_ref
                     != existing.bot_accountability_grant_event.event_id
                 || reference.profile_event_ref != existing.bot_profile_event.event_id
-                || reference.initial_package_bot_actor_id != existing.initial_package.bot_actor_id
+                || reference.initial_package_bot_actor_id != existing.bot_actor_id
             {
                 return Err(AppError::conflict(
                     "reuse_existing_managed_actor does not match the first accepted Applet identity",
@@ -817,7 +816,6 @@ pub(super) async fn register_package_install(
         registration_event_ref: registration_event.event_id.clone(),
         registration_epoch: package.registration_epoch.clone(),
         bot_actor_id: identity.bot_actor_id.clone(),
-        bot_actor_station_id: identity.bot_actor_station_id.clone(),
         bot_actor_provision_ref: identity.bot_actor_provision_ref.clone(),
         bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
         capability_grant_refs,
@@ -835,9 +833,7 @@ pub(super) async fn register_package_install(
     let mut record = AppletRecord {
         identity,
         applet_id: typed_applet_id.clone(),
-        owner_actor_id: DidCoreId::new(owner_actor_id.to_owned()).map_err(|error| {
-            AppError::internal(format!("validated owner actor id is invalid: {error}"))
-        })?,
+        owner_actor_id: registration_event.actor_id.clone(),
         portal_realm_id: RealmId::new(realm_id).map_err(|error| {
             AppError::internal(format!("validated portal realm id is invalid: {error}"))
         })?,
@@ -1515,16 +1511,30 @@ pub(super) fn effective_scope_realm_id(scope: &ScopeRef) -> String {
 /// `applet_registration_unauthorized`.
 pub(super) async fn require_realm_admin(
     state: &AppState,
-    actor: &str,
+    session: &SessionRecord,
     scope: &ScopeRef,
 ) -> Result<(), AppError> {
     let realm_id = effective_scope_realm_id(scope);
     let (owner, members) = realm_owner_and_members(state, &realm_id).await;
+    let actor = if let Some(account_pk) = session.account_pk.clone() {
+        let account = state
+            .identities()
+            .account_by_id(account_pk)
+            .await
+            .map_err(|error| AppError::internal(format!("session account lookup failed: {error}")))?
+            .ok_or_else(|| AppError::capability_denied("session account is unavailable"))?;
+        ActorId::account(account.account_id)
+    } else {
+        ActorId::hosted_principal(
+            DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            state.service_core_id(),
+        )
+    };
     if state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            actor_station_id: Some(state.service_id()),
+            actor: &actor,
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: &realm_id,
             realm_id: &realm_id,

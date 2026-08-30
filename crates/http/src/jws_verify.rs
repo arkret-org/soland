@@ -677,7 +677,7 @@ pub async fn verify_principal_authorized_ed25519_signature_with_account_authorit
 pub fn verify_principal_authorized_event_proof_async<'a>(
     proof: &'a arkret_wire::ProducerEventProof,
     envelope_bytes: &'a [u8],
-    actor_id: &'a arkret_wire::DidCoreId,
+    actor_id: &'a arkret_wire::ActorId,
     verification_method: &'a str,
     principal_id: &'a str,
     state: &'a AppState,
@@ -729,21 +729,16 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         let envelope: Value = serde_json::from_slice(envelope_bytes)
             .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
 
-        let station_id = envelope
-            .get("station_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| fail("principal Event has no station_id".to_owned()))?;
-        let station_id = arkret_wire::DidCoreId::new(station_id.to_owned())
-            .map_err(|error| fail(format!("principal Event server is invalid: {error}")))?;
+        let station_id = actor_id.route_service_id();
         if station_id.as_str() != state.service_id() {
             return Err(fail(
                 "principal Event is not addressed to this Station".to_owned(),
             ));
         }
-        if actor_id != &expected_principal_id {
+        if actor_id.signing_principal_id() != &expected_principal_id {
             let agent = state
                 .agent_pairings()
-                .agent(actor_id.as_str())
+                .agent(actor_id.signing_principal_id().as_str())
                 .await
                 .map_err(|error| fail(format!("managed Agent authority lookup failed: {error}")))?
                 .ok_or_else(|| {
@@ -772,7 +767,8 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 ));
             }
         }
-        let authority_key = arkret_wire::AccountId::new(expected_principal_id.clone(), station_id);
+        let authority_key =
+            arkret_wire::AccountId::new(expected_principal_id.clone(), station_id.clone());
         let durable = state
             .persistence()
             .principal_resolution_by_account_id(&authority_key)
@@ -904,7 +900,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
 pub async fn verify_registered_identity_resolution_event_proof_async(
     proof: &arkret_wire::ProducerEventProof,
     envelope_bytes: &[u8],
-    actor_id: &arkret_wire::DidCoreId,
+    actor_id: &arkret_wire::ActorId,
     verification_method: &str,
     principal_id: &str,
     state: &AppState,

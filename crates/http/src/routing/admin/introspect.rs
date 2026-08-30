@@ -115,7 +115,7 @@ fn admin_grant_from_introspection_outcome(
         )
         .with_status(StatusCode::FORBIDDEN)
     })?;
-    let principal_id = grant.subject_id;
+    let principal_id = grant.account_id.principal_id;
 
     Ok(SessionGrantIntrospection {
         active: true,

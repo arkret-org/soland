@@ -529,7 +529,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
         return;
     }
     let invite_id = claim.invite_id.as_str().to_owned();
-    let subject_id = claim.subject_id.as_str().to_owned();
+    let subject_id = claim.subject_account_id.to_string();
     let token_commitment = claim.token_commitment.as_str().to_owned();
     let claim_nonce = claim.claim_nonce.clone();
     let invites = state.realm_invites();
@@ -635,7 +635,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         return;
     }
 
-    let inviter_id = operation.context.sender.as_str();
+    let inviter_id = operation.context.sender.to_string();
     let expires_at = operation
         .payload
         .get("expires_at")
@@ -728,7 +728,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: operation.realm_id.to_string(),
-        inviter_id: inviter_id.to_owned(),
+        inviter_id,
         invitee_id: Some(invitee_id.as_str().to_owned()),
         invite_delivery_target,
         introduction_evidence_digest,
@@ -851,7 +851,7 @@ fn claim_binding_matches(
     else {
         return false;
     };
-    binding.subject_id == claim.subject_id
+    binding.subject_account_id == claim.subject_account_id
         && binding.realm_id.as_str() == record.realm_id
         && binding.claim_nonce == claim.claim_nonce
         && expires_at > now

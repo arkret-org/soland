@@ -18,7 +18,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
         }
     };
     let envelope = &welcome.claim_envelope;
-    if envelope.requester_actor_id.as_str() != actor_id {
+    if envelope.requester_actor_id.signing_principal_id().as_str() != actor_id {
         return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }
     let sender_device_id = welcome.sender_device_id.as_ref().map(|id| id.as_str());
@@ -76,7 +76,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
             recipient_device_id,
         } => (
-            welcome.recipient_principal_id.as_ref()?.as_str(),
+            welcome.recipient_principal_id.as_ref()?,
             recipient_device_id.as_str(),
         ),
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
@@ -101,22 +101,9 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
             ..
         } => return None,
     };
-    let recipient_id = state
-        .projections()
-        .snapshot()
-        .member(operation.realm_id.as_str(), recipient_actor_id)
-        .and_then(|member| member.recipient_id.clone());
-    if recipient_device_is_remote(state.service_id(), recipient_id.as_deref()) {
-        // The canonical member delivery binding assigns this recipient to a
-        // different Station. That server validates its local device
-        // record when the Welcome crosses federation ingress; treating the
-        // absent device row on the source server as revocation would make
-        // every cross-PS Welcome impossible.
-        return None;
-    }
     let device_revoked = crate::routing::identity::auth::is_device_revoked(
         state,
-        recipient_actor_id,
+        recipient_actor_id.as_str(),
         recipient_device_id,
     )
     .await;

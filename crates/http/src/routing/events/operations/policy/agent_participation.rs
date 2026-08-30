@@ -322,11 +322,14 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .object_id
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
-    let grants = state.authorization().grants_for_subject(
-        agent_id,
-        Some(operation.context.station_id.as_str()),
-        operation.realm_id.as_str(),
+    let agent = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(agent_id.to_owned())
+            .map_err(|_| "agent_act_on_behalf_actor_id_invalid")?,
+        operation.context.sender.route_service_id().clone(),
     );
+    let grants = state
+        .authorization()
+        .grants_for_subject(&agent, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
         .find(|grant| grant.grant_id == authorization_ref)
@@ -457,7 +460,7 @@ pub(super) fn operation_executed_by(operation: &Operation) -> Option<&str> {
         .context
         .executed_by
         .as_ref()
-        .map(|did| did.as_str())
+        .map(|actor| actor.signing_principal_id().as_str())
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| {
@@ -546,10 +549,10 @@ async fn operation_agent_write_context(
         return Ok(Some((agent_id, mode)));
     }
     if let Some(sender) = policy_operation_sender(operation)
-        && native_agent_exists(state, sender).await?
+        && native_agent_exists(state, sender.signing_principal_id().as_str()).await?
     {
         return Ok(Some((
-            sender.to_owned(),
+            sender.signing_principal_id().to_string(),
             autonomous_participation_mode(operation)?,
         )));
     }
@@ -599,11 +602,14 @@ pub(super) fn validate_agent_context_authorization_ref(
         .object_id
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
-    let grants = state.authorization().grants_for_subject(
-        agent_id,
-        Some(operation.context.station_id.as_str()),
-        operation.realm_id.as_str(),
+    let agent = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(agent_id.to_owned())
+            .map_err(|_| "agent_context_actor_id_invalid")?,
+        operation.context.sender.route_service_id().clone(),
     );
+    let grants = state
+        .authorization()
+        .grants_for_subject(&agent, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
         .find(|grant| grant.grant_id == authorization_ref)

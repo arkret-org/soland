@@ -257,7 +257,7 @@ fn op(
         kind.as_ref(),
         payload,
     );
-    operation.context.station_id = crate::test_event::station_id();
+    operation.context.sender.route_service_id() = crate::test_event::station_id();
     if let Some(executed_by) = executed_by {
         operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
     }

@@ -909,8 +909,10 @@ async fn produce_current_agent_signer_evidence(
         &runtime.signing_key_binding,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let agent_actor =
+        arkret_wire::ActorId::hosted_principal(agent_id.clone(), state.service_core_id().clone());
     if authorize_event.realm_id != realm_id
-        || authorize_event.actor_id != *agent_id
+        || authorize_event.actor_id != agent_actor
         || payload.verification_method != *verification_method
         || payload.public_key_digest != runtime.public_key_digest
         || payload.signing_key_binding_digest != binding_digest
@@ -1194,6 +1196,8 @@ async fn accepted_current_lifecycle(
     agent_id: &DidCoreId,
     realm_id: &RealmId,
 ) -> Result<AcceptedLifecycle, AgentSignerEvidenceQueryFailureReason> {
+    let agent_actor =
+        arkret_wire::ActorId::hosted_principal(agent_id.clone(), state.service_core_id().clone());
     let records = state
         .event_queries()
         .accepted_events()
@@ -1204,7 +1208,7 @@ async fn accepted_current_lifecycle(
         .filter_map(|record| serde_json::from_value::<Event>(record.envelope).ok())
         .filter(|event| {
             event.realm_id == *realm_id
-                && event.actor_id == *agent_id
+                && event.actor_id == agent_actor
                 && matches!(
                     event.kind,
                     arkret_wire::EventKind::RealmCreate
@@ -1465,7 +1469,11 @@ fn validate_lifecycle_witness(
     witness: &AgentLifecycleWitness,
 ) -> Result<(), arkret_signatures::agent_evidence::AgentEvidenceRejectedReason> {
     use arkret_signatures::agent_evidence::AgentEvidenceRejectedReason;
-    if witness.accepted_status_event.actor_id != witness.agent_id
+    if witness
+        .accepted_status_event
+        .actor_id
+        .signing_principal_id()
+        != &witness.agent_id
         || witness.accepted_status_event.realm_id != witness.seal.realm_id
         || witness.status != AgentLifecycleStatus::Active
     {

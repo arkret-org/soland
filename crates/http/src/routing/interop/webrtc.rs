@@ -65,7 +65,7 @@ pub(super) fn protocol_router() -> Router {
 struct IceConfigRequestContext {
     pub realm_id: RealmId,
     pub call_id: String,
-    pub actor_id: DidCoreId,
+    pub actor_id: arkret_wire::ActorId,
     pub device_id: DeviceId,
     pub turn_required: bool,
 }
@@ -111,7 +111,7 @@ async fn issue_ice_config(
     if call_id.is_empty() {
         return Err(AppError::param_missing("call_id is required"));
     }
-    let actor_id = body.actor_id.as_str();
+    let actor_id = body.actor_id.signing_principal_id().as_str();
     let device_id = body.device_id.as_str();
 
     if !is_valid_webrtc_session_id(call_id) {
@@ -508,7 +508,7 @@ async fn handle_rtc_token(
         return Err(AppError::param_invalid("invalid call_id"));
     }
     let call_id = body.call_id.clone();
-    if body.actor_id.as_str() != session.actor {
+    if body.actor_id.signing_principal_id().as_str() != session.actor {
         return Err(AppError::param_invalid(
             "actor_id must match the authenticated actor",
         ));
@@ -533,7 +533,13 @@ async fn handle_rtc_token(
     // an actor-wide ban in the durable call moderation OR-Set.
     //
     // (1) realm member.
-    if !realm_has_member(state, body.realm_id.as_str(), body.actor_id.as_str()).await {
+    if !realm_has_member(
+        state,
+        body.realm_id.as_str(),
+        body.actor_id.signing_principal_id().as_str(),
+    )
+    .await
+    {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -544,7 +550,7 @@ async fn handle_rtc_token(
     if !actor_has_call_capability(
         state,
         body.realm_id.as_str(),
-        body.actor_id.as_str(),
+        body.actor_id.signing_principal_id().as_str(),
         CapabilityActionId::CALL_JOIN,
     )
     .await
@@ -560,7 +566,7 @@ async fn handle_rtc_token(
     let call_cells = CallMediaCells::load(
         state,
         body.call_id.as_str(),
-        body.actor_id.as_str(),
+        body.actor_id.signing_principal_id().as_str(),
         body.device_id.as_str(),
     )
     .await?;
@@ -569,7 +575,7 @@ async fn handle_rtc_token(
     // token for this call's lifetime. The ban set is the durable
     // call moderation effective OR-Set; an absent cell carries
     // no bans (everyone passes).
-    if call_cells.actor_is_banned(body.actor_id.as_str()) {
+    if call_cells.actor_is_banned(body.actor_id.signing_principal_id().as_str()) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "actor was removed from the call (ban) and cannot re-issue a join token",
@@ -651,8 +657,10 @@ async fn handle_rtc_token(
             )
         })
         .unwrap_or((true, true, false));
-    let (audio_muted, video_muted) =
-        call_cells.participant_mute_override(body.actor_id.as_str(), body.device_id.as_str());
+    let (audio_muted, video_muted) = call_cells.participant_mute_override(
+        body.actor_id.signing_principal_id().as_str(),
+        body.device_id.as_str(),
+    );
     if audio_muted {
         desired_media.0 = false;
     }
@@ -666,7 +674,7 @@ async fn handle_rtc_token(
     let allow_screen_share = actor_has_call_capability(
         state,
         body.realm_id.as_str(),
-        body.actor_id.as_str(),
+        body.actor_id.signing_principal_id().as_str(),
         CapabilityActionId::CALL_SCREEN_SHARE,
     )
     .await;
@@ -1490,11 +1498,17 @@ pub(crate) async fn actor_has_call_capability(
     if root_controller_holds_action {
         return true;
     }
+    let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
+        return false;
+    };
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id,
+        state.service_core_id().clone(),
+    ));
     state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            actor_station_id: Some(state.service_id()),
+            actor: &actor_id,
             action,
             resource: realm_id,
             realm_id,

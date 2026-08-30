@@ -57,7 +57,10 @@ pub(crate) async fn set_account_lifecycle_state(
     let next_state = next_status.as_str();
     let account = state
         .identities()
-        .account(principal_id_value)
+        .account(&arkret_wire::AccountId::new(
+            principal_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let Some(account) = account else {
@@ -224,9 +227,15 @@ async fn run_account_deactivation_fanout(
     let identity_link_cache_invalidated = state
         .invalidate_cached_handle_claims_for_subject(principal_id)
         .await;
+    let account_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("invalid account principal id: {error}"))
+        })?,
+        state.service_core_id().clone(),
+    );
     let capability_cache_invalidated = state
         .authorization()
-        .mark_projected_grants_revoked_for_subject(principal_id, Some(state.service_id()));
+        .mark_projected_grants_revoked_for_subject(&account_actor);
     // §7.1 Push-route completion criterion: when a push gateway independently
     // holds registration/delivery state, the local purge above does NOT
     // complete the Push-route row — the gateway must be notified over the
@@ -511,7 +520,7 @@ pub(crate) async fn execute_account_status_erasure(
     let actor = account_id.principal_id.as_str();
     let mut account = state
         .identities()
-        .account(actor)
+        .account(account_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("erasure account not found"))?;

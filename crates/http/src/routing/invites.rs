@@ -277,7 +277,12 @@ async fn peer_invites_submit(
             trust_headers.source_trust_domain
         ),
         account_pk: None,
-        actor: delivery.invite_event.actor_id.as_str().to_owned(),
+        actor: delivery
+            .invite_event
+            .actor_id
+            .signing_principal_id()
+            .as_str()
+            .to_owned(),
         device_id: format!("peer-invite:{source_id}"),
         audience: state.service_id().clone(),
         session_public_key: None,
@@ -337,7 +342,12 @@ async fn receive_private_invite_delivery(
     // The inviter_id is the actor that signed the durable `ak.invite.create`
     // event; it is the `peer` we test `denied_subject_ids` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
-    let inviter_id = delivery.invite_event.actor_id.as_str().to_owned();
+    let inviter_id = delivery
+        .invite_event
+        .actor_id
+        .signing_principal_id()
+        .as_str()
+        .to_owned();
     let subject_id = delivery.invite_address.subject_id.clone();
     let subject = subject_id.as_str().to_owned();
 
@@ -727,7 +737,6 @@ async fn persist_private_invite_projection(
         })
         .transpose()?
         .or_else(|| Some(created_at + Duration::days(7)));
-    let invite_delivery_target = payload.get("invite_delivery_target").cloned();
     let introduction_evidence_digest = payload
         .get("introduction_evidence_digest")
         .and_then(Value::as_str)
@@ -735,9 +744,23 @@ async fn persist_private_invite_projection(
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: validated.realm_id.to_string(),
-        inviter_id: validated.actor_id.to_string(),
-        invitee_id: Some(subject.to_owned()),
-        invite_delivery_target,
+        inviter_id: validated
+            .actor
+            .as_account_id()
+            .ok_or_else(|| {
+                super::events::peer::schema_violation("invite author must be an account")
+            })?
+            .to_string(),
+        invitee_id: Some(
+            arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(subject.to_owned()).map_err(|_| {
+                    super::events::peer::schema_violation("invite subject must be a DID")
+                })?,
+                state.service_core_id().clone(),
+            )
+            .to_string(),
+        ),
+        invite_delivery_target: None,
         introduction_evidence_digest,
         third_party_invite: None,
         invite_token: crate::routing::generate_invite_token(
@@ -761,7 +784,6 @@ async fn persist_private_invite_projection(
         let exact_replay = existing.realm_id == record.realm_id
             && existing.inviter_id == record.inviter_id
             && existing.invitee_id == record.invitee_id
-            && existing.invite_delivery_target == record.invite_delivery_target
             && existing.introduction_evidence_digest == record.introduction_evidence_digest
             && existing.expires_at == record.expires_at
             && existing.created_at == record.created_at;
@@ -805,7 +827,11 @@ async fn deliver_invite_credential(
 ) -> Result<bool, AppError> {
     let subject_exists = state
         .identities()
-        .account(subject)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(subject.to_owned())
+                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1115,7 +1141,11 @@ async fn persist_invite_quarantine_entry(
 ) -> Result<bool, AppError> {
     let subject_exists = state
         .identities()
-        .account(subject)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(subject.to_owned())
+                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1330,9 +1360,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Some(requester_id) = requester_id else {
         return false;
     };
-    let Some(handle) = handle_claim.handle.clone() else {
-        return false;
-    };
+    let handle = handle_claim.handle.clone();
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
@@ -1593,7 +1621,6 @@ pub(crate) fn evaluate_contact_receive(
                 constraints,
                 handle,
                 handle_claim,
-                None,
                 resolved_by.as_ref(),
                 subject,
                 recipient_id,
@@ -1867,13 +1894,13 @@ fn handle_claim_evidence_valid(
     if handle_claim.validate().is_err() {
         return false;
     }
-    if handle_claim.handle.as_ref() != Some(handle) {
+    if &handle_claim.handle != handle {
         return false;
     }
-    if handle_claim.subject_id.as_ref().map(DidCoreId::as_str) != Some(subject) {
+    if handle_claim.subject_account_id.principal_id.as_str() != subject {
         return false;
     }
-    if handle_claim.binding_state != Some(HandleBindingState::Verified) {
+    if handle_claim.binding_state != HandleBindingState::Verified {
         return false;
     }
     if handle_claim
@@ -1946,10 +1973,7 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreI
     if trusted.is_empty() {
         return false;
     }
-    handle_claim
-        .issuer_id
-        .as_ref()
-        .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
+    trusted.iter().any(|did| did == &handle_claim.issuer_id)
 }
 
 fn resolved_by_allowed(

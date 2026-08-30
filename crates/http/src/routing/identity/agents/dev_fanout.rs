@@ -165,7 +165,11 @@ pub(super) async fn submit_provision_event(
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::param_invalid(format!("session DID core id is invalid: {error}"))
     })?;
-    if event.actor_id != session_core_id
+    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        session_core_id.clone(),
+        state.service_core_id().clone(),
+    ));
+    if event.actor_id != session_actor
         || event.realm_id.as_str() != controller_realm_id
         || payload.agent_id != *agent_id
         || payload.controller_id != session_core_id
@@ -217,11 +221,11 @@ pub(super) fn validate_durable_agent_lifecycle(
     };
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
-        || event.actor_id.as_str() != agent_id
+        || event.actor_id.signing_principal_id().as_str() != agent_id
         || event
             .executed_by
             .as_ref()
-            .map(arkret_wire::DidCoreId::as_str)
+            .map(|actor| actor.signing_principal_id().as_str())
             != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {

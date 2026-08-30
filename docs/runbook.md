@@ -13,7 +13,6 @@ operator-relevant ones:
 | `migrations_pending` (top-level on `/readyz`) | `routing::system::describe::readyz` | Soft block — wait. If it persists more than 60 s on a healthy Postgres, check the diesel boot log for a partial migration. |
 | `database_unreachable` (top-level on `/readyz`) | same | Verify `DATABASE_URL`, check Postgres logs, confirm the soland process can reach the listed host. |
 | `cross_domain_replay_rejected` | Federation intake | A peer replayed an event whose `trust_domain` does not match this deployment's `SOLAND_TRUST_DOMAIN`. Confirm the peer's `Source-Trust-Domain` header is correct. |
-| `delivery_binding_stale` | Federation handover | Recipient has rebound; the response body carries `new_recipient_service_id` + `handover_frontier`. Update the routing table. |
 | `cursor_expired` | account / events subscribe | Client cursor older than the configured window. Client must re-subscribe with `from=null`. |
 | `handle_in_grace_period` | identity handle claim | Handle was released too recently. Wait out `HANDLE_GRACE_PERIOD_SECONDS` or pick a different handle. |
 | `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` transport retries. Inspect with `soland-federation-outbox list --dead-letters`, then `inspect <id>`. |

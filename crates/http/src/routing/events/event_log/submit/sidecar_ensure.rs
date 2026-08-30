@@ -194,7 +194,10 @@ pub(crate) async fn submit_sidecar_ensure_batch(
 ) -> Result<(), SubmitOneError> {
     let actor_lock = actor_submit_lock(
         context_attach_event.realm_id.as_str(),
-        context_attach_event.actor_id.as_str(),
+        context_attach_event
+            .actor_id
+            .signing_principal_id()
+            .as_str(),
     );
     let _guard = actor_lock.lock().await;
     let mut prepared = Vec::with_capacity(usize::from(create_event.is_some()) + 1);

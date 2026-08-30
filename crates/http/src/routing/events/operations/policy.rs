@@ -46,7 +46,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .payload
         .as_object()
         .ok_or("sidecar_create_denied")?;
-    if operation.context.sender.as_str() != controller
+    if operation.context.sender.signing_principal_id().as_str() != controller
         || payload.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
         || payload.keys().any(|field| {
             !matches!(
@@ -320,7 +320,7 @@ async fn validate_agent_operation_membership(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let actor_id = operation.context.sender.as_str();
+    let actor_id = operation.context.sender.signing_principal_id().as_str();
     let record = state
         .agent_pairings()
         .agent(actor_id)

@@ -111,7 +111,7 @@ async fn send_device_messages(
     let restricted_fresh_device_verification = state.config().development_mode
         && session.session_grant.is_none()
         && body.messages.iter().all(|(principal_id, targets)| {
-            principal_id.as_str() == session.actor
+            principal_id.signing_principal_id().as_str() == session.actor
                 && targets
                     .values()
                     .all(|target| target.kind.as_str().starts_with("ak.key.verification."))
@@ -170,14 +170,14 @@ async fn send_device_messages(
                 kind: &target.kind,
                 sender_principal_id: &session.actor,
                 sender_device_id: &session.device_id,
-                recipient_principal_id: &recipient,
+                recipient_principal_id: recipient.signing_principal_id(),
                 recipient_device_id: &device_id,
                 expires_at: target.expires_at,
                 content: &target.content,
             })
             .map_err(|error| AppError::internal(error.to_string()))?;
             prepared_targets.push(PreparedDeviceMessageTarget {
-                recipient: recipient.to_string(),
+                recipient: recipient.signing_principal_id().to_string(),
                 device_id: device_id.to_string(),
                 target,
                 message_key,
@@ -522,10 +522,15 @@ pub(crate) async fn fanout_actor_private_update(
         tracing::error!(%error, actor, "failed to prune to-device messages after actor-private fanout");
     }
     if delivered > 0 {
-        match state.identities().account(actor).await {
+        let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
+            tracing::warn!(actor, "actor-private fanout actor is invalid");
+            return delivered;
+        };
+        let account_id = arkret_wire::AccountId::new(principal_id, state.service_core_id().clone());
+        match state.identities().account(&account_id).await {
             Ok(Some(account)) => {
                 let _ = state.publish_event_notification(crate::state::EventNotification::account(
-                    account.id.to_string(),
+                    account.account_id.to_string(),
                     state.service_id().clone(),
                 ));
             }

@@ -158,7 +158,14 @@ pub(crate) async fn local_account_primary_handle_claim(
     subject: &str,
     audience: &str,
 ) -> Option<Value> {
-    let account = state.identities().account(subject).await.ok().flatten()?;
+    let principal_id = DidCoreId::new(subject.to_owned()).ok()?;
+    let account_id = arkret_wire::AccountId::new(principal_id, state.service_core_id().clone());
+    let account = state
+        .identities()
+        .account(&account_id)
+        .await
+        .ok()
+        .flatten()?;
     account_primary_handle_claim_for(state, &account, audience).await
 }
 use crate::{JsonResult, json_ok};
@@ -330,10 +337,29 @@ async fn account_exists(
 ) -> Result<(), AppError> {
     state
         .identities()
-        .account(account_principal_id.as_str())
+        .account(&arkret_wire::AccountId::new(
+            account_principal_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .map(|_| ())
+        .ok_or_else(|| AppError::not_found("account not found"))
+}
+
+async fn local_account_pk(
+    state: &AppState,
+    account_principal_id: &DidCoreId,
+) -> Result<soland_storage::AccountPk, AppError> {
+    state
+        .identities()
+        .account(&arkret_wire::AccountId::new(
+            account_principal_id.clone(),
+            state.service_core_id().clone(),
+        ))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .map(|account| account.pk)
         .ok_or_else(|| AppError::not_found("account not found"))
 }
 
@@ -748,7 +774,10 @@ async fn local_account_register(
     let localpart = normalize_account_localpart_for_request(&body.handle)?;
     let account_exists = state
         .identities()
-        .account(principal_id.as_str())
+        .account(&arkret_wire::AccountId::new(
+            principal_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -829,7 +858,11 @@ async fn local_account_me(
     let session = aa.authenticated_session(state, req).await?;
     let account = state
         .identities()
-        .account(&session.actor)
+        .account(&arkret_wire::AccountId::new(
+            DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -850,10 +883,10 @@ async fn list_account_localparts(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    account_exists(state, &account_principal_id).await?;
+    let account_pk = local_account_pk(state, &account_principal_id).await?;
     let records = state
         .identities()
-        .account_localparts(account_principal_id.as_str())
+        .account_localparts(account_pk)
         .await
         .map_err(localpart_persistence_error)?;
     let primary_localpart = records
@@ -881,18 +914,18 @@ async fn add_account_localpart(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    account_exists(state, &account_principal_id).await?;
+    let account_pk = local_account_pk(state, &account_principal_id).await?;
     let body = body.into_inner();
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
         .identities()
-        .account_localparts(account_principal_id.as_str())
+        .account_localparts(account_pk.clone())
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
     let record = state
         .identities()
-        .add_localpart(account_principal_id.as_str(), &localpart, primary)
+        .add_localpart(account_pk, &localpart, primary)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
@@ -927,7 +960,7 @@ async fn update_account_localpart(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    account_exists(state, &account_principal_id).await?;
+    let account_pk = local_account_pk(state, &account_principal_id).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let body = body.into_inner();
     if body.is_primary != Some(true) {
@@ -937,7 +970,7 @@ async fn update_account_localpart(
     }
     let record = state
         .identities()
-        .set_primary_localpart(account_principal_id.as_str(), &localpart)
+        .set_primary_localpart(account_pk, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     append_audit_log(
@@ -970,11 +1003,11 @@ async fn delete_account_localpart(
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_account_localparts_bearer(state, req)?;
     let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    account_exists(state, &account_principal_id).await?;
+    let account_pk = local_account_pk(state, &account_principal_id).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
         .identities()
-        .account_localparts(account_principal_id.as_str())
+        .account_localparts(account_pk.clone())
         .await
         .map_err(localpart_persistence_error)?;
     let removed_primary = before
@@ -982,13 +1015,13 @@ async fn delete_account_localpart(
         .any(|record| record.localpart == localpart && record.is_primary);
     state
         .identities()
-        .remove_localpart(account_principal_id.as_str(), &localpart)
+        .remove_localpart(account_pk.clone(), &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary
         && let Some(replacement) = state
             .identities()
-            .account_localparts(account_principal_id.as_str())
+            .account_localparts(account_pk.clone())
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()
@@ -996,7 +1029,7 @@ async fn delete_account_localpart(
     {
         state
             .identities()
-            .set_primary_localpart(account_principal_id.as_str(), &replacement.localpart)
+            .set_primary_localpart(account_pk, &replacement.localpart)
             .await
             .map_err(localpart_persistence_error)?;
     }
@@ -1049,7 +1082,11 @@ async fn account_viewer_impl(
     let session = aa.authenticated_session(state, req).await?;
     let account = state
         .identities()
-        .account(&session.actor)
+        .account(&arkret_wire::AccountId::new(
+            DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("not found"))?;
@@ -1112,7 +1149,10 @@ async fn project_account(
     .await?;
     let existing = state
         .identities()
-        .account(principal_id.as_str())
+        .account(&arkret_wire::AccountId::new(
+            principal_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(existing_account) = existing {
@@ -1235,7 +1275,11 @@ async fn update_profile(
     let body = body.into_inner();
     let account_exists = state
         .identities()
-        .account(&session.actor)
+        .account(&arkret_wire::AccountId::new(
+            DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1263,7 +1307,9 @@ async fn update_profile(
         &event.kind,
         &profile_id,
     );
-    body.validate_authoring_context(&principal_id, &pcr_realm_id, accepted_basis, digest_suite)
+    let account_id =
+        arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id().clone());
+    body.validate_authoring_context(&account_id, &pcr_realm_id, accepted_basis, digest_suite)
         .map_err(|error| AppError::param_invalid(format!("profile_event: {error}")))?;
     let event_digest = Hash::new(event.event_digest_with_digest_suite(digest_suite).map_err(
         |error| AppError::param_invalid(format!("profile_event: invalid Event digest: {error}")),
@@ -1752,17 +1798,27 @@ async fn direct_conversation_resolve(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let peer_descriptor = &body.peer;
-    if peer_descriptor.contact_actor_id().as_str() == session.actor {
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+        state.service_core_id().clone(),
+    ));
+    if peer_descriptor.contact_actor_id() == actor {
         return Err(AppError::param_invalid("invalid direct conversation peer"));
     }
-    let peer = peer_descriptor.contact_actor_id().as_str().to_owned();
-    if let ContactPeer::Agent { controller_id, .. } = peer_descriptor {
-        let record =
-            state.agent_pairings().agent(&peer).await.map_err(|error| {
-                AppError::internal(format!("managed Agent lookup failed: {error}"))
-            })?;
+    let peer = peer_descriptor.contact_actor_id();
+    if let ContactPeer::Agent {
+        controller_account_id,
+        ..
+    } = peer_descriptor
+    {
+        let record = state
+            .agent_pairings()
+            .agent(peer.signing_principal_id().as_str())
+            .await
+            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?;
         if record.as_ref().map(|record| record.controller_id.as_str())
-            != Some(controller_id.as_str())
+            != Some(controller_account_id.principal_id.as_str())
         {
             return Err(direct_resolve_precondition(
                 arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
@@ -1776,12 +1832,16 @@ async fn direct_conversation_resolve(
     // coordinates exist, a scope/lifecycle change suspends sending but must
     // not make those coordinates disappear.
     let scope = "direct_message";
-    let managed_agent_basis =
-        managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?;
+    let managed_agent_basis = managed_agent_direct_authorization_basis(
+        state,
+        &session.actor,
+        peer.signing_principal_id().as_str(),
+    )
+    .await?;
     let contact = if managed_agent_basis.is_some() {
         None
     } else {
-        let contact = direct_contact_for_pair(state, &session.actor, &peer).await?;
+        let contact = direct_contact_for_pair(state, &actor, &peer).await?;
         if contact.is_none() {
             return Err(direct_resolve_precondition(
                 arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
@@ -1797,10 +1857,10 @@ async fn direct_conversation_resolve(
     let accepted_contact = if managed_agent_basis.is_some() {
         None
     } else {
-        accepted_contact_for_pair(state, &session.actor, &peer, scope).await?
+        accepted_contact_for_pair(state, &actor, &peer, scope).await?
     };
 
-    let pair_key = direct_pair_key(state, &session.actor, &peer)?;
+    let pair_key = direct_pair_key(state, &actor, &peer)?;
     let pair_key_hash = Hash::new(pair_key.clone())
         .map_err(|error| AppError::internal(format!("direct pair key invalid: {error}")))?;
 
@@ -1860,7 +1920,7 @@ async fn direct_conversation_resolve(
             .member(&binding.realm_id, &session.actor)
             .is_none_or(|member| member.state != "join")
             || projection
-                .member(&binding.realm_id, &peer)
+                .member(&binding.realm_id, peer.signing_principal_id().as_str())
                 .is_none_or(|member| member.state != "join")
         {
             return json_ok(DirectConversationResolveOutcome::Suspended {
@@ -1871,7 +1931,8 @@ async fn direct_conversation_resolve(
             });
         }
         if state.account_lifecycle_state(&session.actor) != "active"
-            || (managed_agent_basis.is_none() && state.account_lifecycle_state(&peer) != "active")
+            || (managed_agent_basis.is_none()
+                && state.account_lifecycle_state(peer.signing_principal_id().as_str()) != "active")
         {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
@@ -1910,7 +1971,7 @@ async fn direct_conversation_resolve(
         if managed_agent_basis.is_some() {
             let agent_active = state
                 .agent_pairings()
-                .agent(&peer)
+                .agent(peer.signing_principal_id().as_str())
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("managed Agent lookup failed: {error}"))
@@ -1957,7 +2018,7 @@ async fn direct_conversation_resolve(
     // never grants create authority to the non-founder — there is no timeout fallback or takeover.
     let founder = direct_founder_for_pair(
         state,
-        &session.actor,
+        &actor,
         &peer,
         contact.as_ref(),
         managed_agent_basis.is_some(),
@@ -2022,8 +2083,8 @@ async fn direct_conversation_resolve(
 
 async fn direct_contact_for_pair(
     state: &AppState,
-    actor: &str,
-    peer: &str,
+    actor: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
 ) -> Result<Option<ContactRecord>, AppError> {
     let mut records = Vec::new();
     for (requester_id, target) in [(actor, peer), (peer, actor)] {

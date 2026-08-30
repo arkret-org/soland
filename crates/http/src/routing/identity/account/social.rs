@@ -118,7 +118,13 @@ pub(crate) async fn contact_continuity_checkpoint(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let peer = body.peer.contact_actor_id();
-    if peer.as_str() == session.actor {
+    let principal_id = DidCoreId::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
+    let holder = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        state.service_core_id().clone(),
+    ));
+    if peer == holder {
         return Err(AppError::param_invalid(
             "continuity checkpoint peer must differ from the holder",
         ));
@@ -126,8 +132,6 @@ pub(crate) async fn contact_continuity_checkpoint(
     let request_hash = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(format!("checkpoint request digest: {error}")))?;
     let replay_key = format!("contact-checkpoint:{}", body.idempotency_key.as_str());
-    let principal_id = DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?;
     if let Some(stored) = state
         .jobs()
         .idempotency_record(&principal_id, &replay_key)
@@ -149,7 +153,7 @@ pub(crate) async fn contact_continuity_checkpoint(
             == arkret_models_collaboration::contact_operations::ContactContinuityCheckpointStatus::Pending
             && let Some(record) = state
                 .contacts()
-                .contact_any(&principal_id, &peer)
+                .contact_any(&holder, &peer)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
             && let Some(evidence) =
@@ -165,7 +169,7 @@ pub(crate) async fn contact_continuity_checkpoint(
     }
     let record = state
         .contacts()
-        .contact_any(&principal_id, &peer)
+        .contact_any(&holder, &peer)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::new(ErrorCode::NotFound, "Contact lineage not found"))?;
@@ -205,13 +209,14 @@ pub(crate) async fn contact_continuity_checkpoint(
                 })
             })?;
         let peer_id = peer_id.clone();
+        let peer_principal_id = peer.signing_principal_id().clone();
+        let peer_account_id = peer.as_account_id().cloned().unwrap_or_else(|| {
+            arkret_wire::AccountId::new(peer_principal_id.clone(), peer_id.clone())
+        });
         let contact_address =
             arkret_models_collaboration::governance::peer_contact::PeerContactAddress::station(
-                peer.clone(),
-                arkret_wire::AccountId {
-                    principal_id: peer.clone(),
-                    station_id: peer_id.clone(),
-                },
+                peer_principal_id,
+                peer_account_id,
                 peer_id.clone(),
                 service_resolution,
             );
@@ -338,12 +343,17 @@ pub(crate) async fn list_contacts(
 ) -> JsonResult<ContactList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("invalid session actor: {error}")))?,
+        state.service_core_id().clone(),
+    ));
     let records = state
         .contacts()
-        .contacts_for_actor(&session.actor)
+        .contacts_for_actor(&actor_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let contacts = contact_list_rows(state, &session.actor, records).await?;
+    let contacts = contact_list_rows(state, &actor_id, records).await?;
     json_ok(ContactList {
         contacts,
         has_more: false,
@@ -356,11 +366,9 @@ fn optional_contact_event_ref(value: &Option<EventId>) -> Option<EventId> {
 }
 async fn contact_list_rows(
     state: &AppState,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     records: Vec<ContactRecord>,
 ) -> Result<Vec<ContactListRow>, AppError> {
-    let actor_id = DidCoreId::new(actor.to_owned())
-        .map_err(|error| AppError::internal(format!("invalid Contact actor id: {error}")))?;
     let mut rows: BTreeMap<String, ContactListRow> = BTreeMap::new();
     let mut selected = BTreeMap::<String, (ContactState, chrono::DateTime<chrono::Utc>)>::new();
     let mut records = records;
@@ -370,7 +378,7 @@ async fn contact_list_rows(
             .then_with(|| left.contact_round_id.cmp(&right.contact_round_id))
     });
     for record in records {
-        let peer = if record.requester_id == actor_id {
+        let peer = if record.requester_id == *actor {
             record.target_id.clone()
         } else {
             record.requester_id.clone()
@@ -381,18 +389,23 @@ async fn contact_list_rows(
         };
         let peer_model = if let Some(agent) = state
             .agent_pairings()
-            .agent(peer.as_str())
+            .agent(peer.signing_principal_id().as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         {
             ContactPeer::Agent {
-                agent_id: peer.clone(),
-                controller_id: arkret_identifiers::DidCoreId::new(agent.controller_id)
-                    .expect("stored Agent controller DID is validated"),
+                actor_id: peer.clone(),
+                controller_account_id: arkret_wire::AccountId::new(
+                    arkret_identifiers::DidCoreId::new(agent.controller_id)
+                        .expect("stored Agent controller DID is validated"),
+                    peer.route_service_id().clone(),
+                ),
             }
         } else {
             ContactPeer::Human {
-                principal_id: peer.clone(),
+                account_id: peer.as_account_id().cloned().ok_or_else(|| {
+                    AppError::internal("stored human Contact peer is not an account actor")
+                })?,
             }
         };
         let request_receipt = if row_state == ContactState::PendingIncoming {
@@ -422,7 +435,7 @@ async fn contact_list_rows(
             let current_version = record
                 .version
                 .ok_or_else(|| AppError::internal("accepted Contact has no lineage version"))?;
-            let predecessor = if record.requester_id == actor_id {
+            let predecessor = if record.requester_id == *actor {
                 record.request_event_ref.as_ref()
             } else {
                 record.response_event_ref.as_ref()
@@ -448,7 +461,7 @@ async fn contact_list_rows(
             response_event_ref: optional_contact_event_ref(&record.response_event_ref),
             tombstone_event_ref: optional_contact_event_ref(&record.tombstone_event_ref),
             next_prepare_input,
-            granted_to_peer_scopes: if record.requester_id == actor_id {
+            granted_to_peer_scopes: if record.requester_id == *actor {
                 &record.granted_to_target_scopes
             } else {
                 &record.granted_to_requester_scopes
@@ -456,7 +469,7 @@ async fn contact_list_rows(
             .iter()
             .filter_map(|scope| contact_scope_model(scope))
             .collect(),
-            granted_by_peer_scopes: if record.requester_id == actor_id {
+            granted_by_peer_scopes: if record.requester_id == *actor {
                 &record.granted_to_requester_scopes
             } else {
                 &record.granted_to_target_scopes
@@ -484,7 +497,7 @@ async fn contact_list_rows(
         };
         let candidate_order = (row_state, record.updated_at);
         if selected
-            .get(peer.as_str())
+            .get(&peer.to_string())
             .is_none_or(|current| contact_candidate_replaces(*current, candidate_order))
         {
             selected.insert(peer.to_string(), candidate_order);
@@ -497,28 +510,24 @@ async fn contact_list_rows(
             row.bidirectional_scopes =
                 intersection(&row.granted_to_peer_scopes, &row.granted_by_peer_scopes);
             row.effective_scopes = Some(row.bidirectional_scopes.clone());
-            row.direct_conversation =
-                direct_pair_key(state, actor, row.peer.contact_actor_id().as_str())
-                    .ok()
-                    .and_then(|pair_key| {
-                        // §5.7 — a pair holding two distinct endorsements is frozen,
-                        // and neither side may be presented as the conversation.
-                        if direct_binding_conflict(state, &pair_key) {
-                            return state
-                                .contacts()
-                                .direct_bindings_for_pair(&pair_key)
-                                .and_then(|bindings| bindings.any_endorsed())
-                                .map(|binding| {
-                                    direct_summary(
-                                        binding,
-                                        DirectConversationSummaryState::Suspended,
-                                    )
-                                });
-                        }
-                        active_direct_binding(state, &pair_key).map(|binding| {
-                            direct_summary(binding, DirectConversationSummaryState::Found)
-                        })
-                    });
+            row.direct_conversation = direct_pair_key(state, actor, &row.peer.contact_actor_id())
+                .ok()
+                .and_then(|pair_key| {
+                    // §5.7 — a pair holding two distinct endorsements is frozen,
+                    // and neither side may be presented as the conversation.
+                    if direct_binding_conflict(state, &pair_key) {
+                        return state
+                            .contacts()
+                            .direct_bindings_for_pair(&pair_key)
+                            .and_then(|bindings| bindings.any_endorsed())
+                            .map(|binding| {
+                                direct_summary(binding, DirectConversationSummaryState::Suspended)
+                            });
+                    }
+                    active_direct_binding(state, &pair_key).map(|binding| {
+                        direct_summary(binding, DirectConversationSummaryState::Found)
+                    })
+                });
             row
         })
         .collect::<Vec<_>>();
@@ -536,7 +545,7 @@ async fn contact_list_rows(
         }
         let Some(record) = state
             .agent_pairings()
-            .agent(row.peer.contact_actor_id().as_str())
+            .agent(row.peer.contact_actor_id().signing_principal_id().as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         else {
@@ -545,7 +554,7 @@ async fn contact_list_rows(
         if record.state != AgentLifecycleState::Active {
             continue;
         }
-        if record.controller_id == actor {
+        if record.controller_id == actor.signing_principal_id().as_str() {
             continue;
         }
         let Some(controller) =
@@ -576,7 +585,7 @@ async fn contact_list_rows(
             .entry(controller.to_string())
             .or_default()
             .push(ContactAgentProjection {
-                agent_id: row.peer.contact_actor_id().clone(),
+                agent_id: row.peer.contact_actor_id().signing_principal_id().clone(),
                 controller_id: controller,
                 display_name,
                 agent_slug,
@@ -584,10 +593,10 @@ async fn contact_list_rows(
                 direct_conversation: row.direct_conversation.clone(),
             });
     }
-    out.retain(|row| !agent_peers.contains(row.peer.contact_actor_id().as_str()));
+    out.retain(|row| !agent_peers.contains(&row.peer.contact_actor_id().to_string()));
     for row in &mut out {
         row.contact_agent_projections = agents_by_controller
-            .remove(row.peer.contact_actor_id().as_str())
+            .remove(&row.peer.contact_actor_id().to_string())
             .unwrap_or_default();
         row.contact_agent_projections.sort_by(|left, right| {
             left.display_name
@@ -616,9 +625,12 @@ async fn contact_list_rows(
 /// unknown value implies a migration / partial-write / writer bug; read
 /// paths fail soft (skip the row) and write outcomes surface an internal
 /// error rather than panicking and taking down the whole endpoint.
-fn directional_contact_state(actor: &str, record: &ContactRecord) -> Option<ContactState> {
+fn directional_contact_state(
+    actor: &arkret_wire::ActorId,
+    record: &ContactRecord,
+) -> Option<ContactState> {
     Some(match record.status.as_str() {
-        "pending" if record.requester_id.as_str() == actor => ContactState::PendingOutgoing,
+        "pending" if &record.requester_id == actor => ContactState::PendingOutgoing,
         "pending" => ContactState::PendingIncoming,
         "accepted" => ContactState::Accepted,
         "rejected" => ContactState::Rejected,
@@ -685,16 +697,12 @@ fn intersection(
 
 pub(crate) async fn accepted_contact_for_pair(
     state: &AppState,
-    actor: &str,
-    peer: &str,
+    actor: &arkret_wire::ActorId,
+    peer: &arkret_wire::ActorId,
     scope: &str,
 ) -> Result<Option<ContactRecord>, AppError> {
-    let actor = DidCoreId::new(actor.to_owned())
-        .map_err(|error| AppError::internal(format!("invalid Contact actor id: {error}")))?;
-    let peer = DidCoreId::new(peer.to_owned())
-        .map_err(|error| AppError::internal(format!("invalid Contact peer id: {error}")))?;
     let mut records = Vec::new();
-    for (requester_id, target_id) in [(&actor, &peer), (&peer, &actor)] {
+    for (requester_id, target_id) in [(actor, peer), (peer, actor)] {
         if let Some(contact) = state
             .contacts()
             .contact_any(requester_id, target_id)

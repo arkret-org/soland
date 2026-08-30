@@ -195,7 +195,7 @@ pub(super) async fn fence_applet_record(
         .fence_applet_installation(
             replacement.applet_id.as_str(),
             &effective_scope_key,
-            replacement.bot_actor_station_id.as_str(),
+            replacement.bot_actor_id.route_service_id().as_str(),
             &expected_value,
             replacement_value,
             fenced_at,
