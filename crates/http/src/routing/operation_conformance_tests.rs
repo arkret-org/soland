@@ -45,6 +45,12 @@ fn operation(index: usize, kind: impl AsRef<str>, payload: Value) -> Operation {
 #[test]
 fn builtin_operation_conformance_vectors_cover_registry() {
     let state = test_state();
+    let account_actor = |principal: &str| {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(principal.to_owned()).unwrap(),
+            crate::test_event::station_id(),
+        ))
+    };
     let vectors = vec![
         OperationVector {
             name: "message create",
@@ -111,7 +117,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "relation_kind": "blocks",
                     "from_ref": "ak:strand:AUtQ1IrDq4bUl2tchpqyVaLFC99If4UbReAATcBFDUhp",
                     "to_ref": "ak:morph:AQ-DRvjAp7PmXKkjoqk8vbmRDFZoSMbThbqNN0j6guzb",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                     "created_at": "2026-08-18T00:00:00.000Z"
                 }
             }),
@@ -150,28 +156,26 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "member state join",
             kind: arkret_wire::EventKind::MemberState,
-            // membership_payload: membership=join additionally requires realm_id, actor_id,
-            // delivery_status; delivery_status=routable would further require
-            // delivery_binding, so use unroutable to stay minimal.
-            payload: json!({"realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K", "actor_id": "ak:did_core:web:alice.example", "membership": "join", "delivery_status": "unroutable"}),
+            // Membership names an exact Station-bound actor; routing follows that identity.
+            payload: json!({"realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K", "member_id": account_actor("ak:did_core:web:alice.example"), "membership": "join"}),
             valid: true,
         },
         OperationVector {
             name: "member state leave",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "ak:did_core:web:alice.example", "membership": "leave"}),
+            payload: json!({"member_id": account_actor("ak:did_core:web:alice.example"), "membership": "leave"}),
             valid: true,
         },
         OperationVector {
             name: "member state ban",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "ak:did_core:web:bob.example", "membership": "ban"}),
+            payload: json!({"member_id": account_actor("ak:did_core:web:bob.example"), "membership": "ban"}),
             valid: true,
         },
         OperationVector {
             name: "member state knock",
             kind: arkret_wire::EventKind::MemberState,
-            payload: json!({"actor_id": "ak:did_core:web:bob.example", "membership": "knock"}),
+            payload: json!({"member_id": account_actor("ak:did_core:web:bob.example"), "membership": "knock"}),
             valid: true,
         },
         OperationVector {
@@ -180,7 +184,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({
                 "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
-                "actor_id": "ak:did_core:web:alice.example",
+                "actor_id": account_actor("ak:did_core:web:alice.example"),
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "read_scope": {"kind": "realm"},
@@ -195,7 +199,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({
                 "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
-                "actor_id": "ak:did_core:web:alice.example",
+                "actor_id": account_actor("ak:did_core:web:alice.example"),
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "read_scope": {"kind": "realm"},
@@ -278,7 +282,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "schema": "ak.schema.strand.v1",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "tracks": {"discussion": {}},
-                "created_by": "ak:did_core:web:alice.example",
+                "created_by": account_actor("ak:did_core:web:alice.example"),
                 "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Launch"}
             }}),
@@ -355,7 +359,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "schema_refs": ["ak.schema.morph.v1"],
                 "morph_kind": "task",
                 "stage": "draft",
-                "created_by": "ak:did_core:web:alice.example",
+                "created_by": account_actor("ak:did_core:web:alice.example"),
                 "created_at": "2026-05-20T00:00:00.000Z",
                 "metadata": {"title": "Backfill"}
             }}),

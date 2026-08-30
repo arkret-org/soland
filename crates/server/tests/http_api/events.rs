@@ -1165,7 +1165,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     let join_rule = serde_json::to_value(&bootstrap_unit[3]).unwrap();
     let history_access = serde_json::to_value(&bootstrap_unit[4]).unwrap();
     let discovery = serde_json::to_value(&bootstrap_unit[5]).unwrap();
-    let delivery_binding = serde_json::to_value(&bootstrap_unit[6]).unwrap();
+    let creator_membership = serde_json::to_value(&bootstrap_unit[6]).unwrap();
     let member_state = serde_json::to_value(&bootstrap_unit[7]).unwrap();
 
     // The old shape of this case — a signed producer effect disagreeing with its
@@ -1189,7 +1189,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         join_rule.clone(),
         history_access.clone(),
         discovery.clone(),
-        delivery_binding.clone(),
+        creator_membership.clone(),
         malformed_member_state,
     ]);
     let mut mismatch_response = TestClient::post("http://server/_arkret/self/events")
@@ -1237,7 +1237,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
                 join_rule.clone(),
                 history_access.clone(),
                 discovery.clone(),
-                delivery_binding.clone(),
+                creator_membership.clone(),
                 member_state.clone()
             ])
         }))
@@ -1367,7 +1367,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     );
     assert!(
         resolve_body.get("join_candidates").is_none(),
-        "an unroutable bootstrap member has no delivery-binding source and must not be advertised as a join candidate: {resolve_body}"
+        "a bootstrap without an exact routable member account must not be advertised as a join candidate: {resolve_body}"
     );
     assert_eq!(
         resolve_body["realm_preview"]["title"], "Bootstrap effects realm",

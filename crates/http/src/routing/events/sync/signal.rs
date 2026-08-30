@@ -459,16 +459,11 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         envelope.realm_id.as_str().to_owned(),
         sender_actor.to_string(),
     );
-    let sender = projection
+    projection
         .members
         .get(&membership_key)
         .filter(|membership| membership.state == "join")
         .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
-    if sender_actor.route_service_id().as_str() != source_id {
-        return Err(signal_invalid(
-            "source service is not the sender current delivery binding",
-        ));
-    }
 
     let seal = state
         .projections()

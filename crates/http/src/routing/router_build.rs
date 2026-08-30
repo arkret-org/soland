@@ -263,7 +263,7 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
         //   1. `server_ops_router` — soland-local admin endpoints
         //      (server/status, accounts, devices, moderation/queue).
         //   2. `admin_router`  — operator surface (notary / multisig /
-        //      bottom / seal-dag / gc-candidates / delivery-binding /
+        //      bottom / seal-dag / gc-candidates /
         //      moderation sub-actions). Registered BEFORE the collection so
         //      the concrete `/_soland/admin/bottom` wins over `{resource}`.
         //   3. `router`        — collection (`/_soland/admin/{resource}`),

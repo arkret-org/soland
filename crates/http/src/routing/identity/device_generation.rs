@@ -155,11 +155,10 @@ fn accepted_authorization_binds_authority_tuple(
         .map(|(principal_id, station_id)| {
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
         });
-    serde_json::from_str::<arkret_wire::ActorId>(event_actor_id)
-        .ok()
-        .as_ref()
-        == expected_actor.as_ref()
-        && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
+    expected_actor.is_some_and(|expected_actor| {
+        serde_json::from_str::<arkret_wire::ActorId>(event_actor_id)
+            .is_ok_and(|actor_id| actor_id == expected_actor)
+    }) && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
         && event_device_id == Some(device_id)
 }
 
@@ -294,14 +293,11 @@ fn reanchor_unit_fingerprint(
     records: &[AcceptedEvent],
 ) -> Option<String> {
     let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)?;
+    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(&reanchor.actor_id).ok()?;
+    let station_id = actor_id.as_account_id()?.station_id.as_str();
     Some(format!(
         "{}\u{0}{}\u{0}{}",
-        reanchor
-            .envelope
-            .pointer("/station_id")
-            .and_then(Value::as_str)?,
-        reanchor.canonical_digest,
-        authorize.canonical_digest,
+        station_id, reanchor.canonical_digest, authorize.canonical_digest,
     ))
 }
 
@@ -345,16 +341,24 @@ pub async fn quarantined_generation_event_digests(
     state: &AppState,
     principal_id: &str,
 ) -> Result<BTreeSet<String>, ServiceError> {
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            ServiceError::SchemaViolation(format!("principal id is invalid: {error}"))
+        })?,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            ServiceError::Internal(format!("local Station id is invalid: {error}"))
+        })?,
+    ));
     let records = state
         .event_queries()
-        .accepted_events_for_actor(principal_id)
+        .accepted_events_for_actor(&actor_id.to_string())
         .await
         .map_err(|error| ServiceError::internal(error.to_string()))?
         .into_iter()
         .map(persistence_event_record)
         .collect::<Vec<_>>();
     Ok(quarantined_generation_event_digests_from_records(
-        principal_id,
+        &actor_id.to_string(),
         &records,
     ))
 }
@@ -376,13 +380,12 @@ fn persistence_event_record(record: soland_services::events::AcceptedEvent) -> A
 }
 
 fn quarantined_generation_event_digests_from_records(
-    principal_id: &str,
+    actor_id: &str,
     records: &[AcceptedEvent],
 ) -> BTreeSet<String> {
     let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
     for record in records.iter().filter(|record| {
-        record.actor_id == principal_id
-            && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
+        record.actor_id == actor_id && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
     }) {
         let Some(new_generation) = record
             .envelope
@@ -661,10 +664,20 @@ mod tests {
         assert_eq!(binding.1, 3);
     }
 
+    fn fixture_account_actor() -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(
+                "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
+            )
+            .unwrap(),
+            arkret_identifiers::DidCoreId::new(TUPLE_STATION.to_owned()).unwrap(),
+        ))
+    }
+
     fn record(id: &str, kind: &str, digest: &str, envelope: Value) -> AcceptedEvent {
         AcceptedEvent {
             event_id: id.to_owned(),
-            actor_id: "ak:did_core:webvh:z6mkfixture:alice.example".to_owned(),
+            actor_id: fixture_account_actor().to_string(),
             actor_seq: 1,
             realm_id: None,
             kind: kind.to_owned(),
@@ -679,7 +692,7 @@ mod tests {
 
     #[test]
     fn same_height_siblings_and_causal_successors_are_all_quarantined() {
-        let principal = "ak:did_core:webvh:z6mkfixture:alice.example";
+        let actor = fixture_account_actor().to_string();
         let reanchor_a = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         let authorize_a = "ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1";
         let reanchor_b = "ak:event:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
@@ -691,7 +704,7 @@ mod tests {
                 reanchor_a,
                 "ak.device.reanchor",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                json!({"station_id": "ak:did_core:webvh:z6mkservera", "payload": {
+                json!({"payload": {
                     "new_device_generation": 2,
                 }}),
             ),
@@ -705,7 +718,7 @@ mod tests {
                 reanchor_b,
                 "ak.device.reanchor",
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                json!({"station_id": "ak:did_core:webvh:z6mkserverb", "payload": {
+                json!({"payload": {
                     "new_device_generation": 2,
                 }}),
             ),
@@ -725,7 +738,7 @@ mod tests {
                 higher,
                 "ak.device.reanchor",
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                json!({"station_id": "ak:did_core:webvh:z6mkservera", "payload": {
+                json!({"payload": {
                     "new_device_generation": 3,
                 }}),
             ),
@@ -736,7 +749,7 @@ mod tests {
                 json!({"prev_refs": [higher]}),
             ),
         ];
-        let quarantined = quarantined_generation_event_digests_from_records(principal, &records);
+        let quarantined = quarantined_generation_event_digests_from_records(&actor, &records);
         assert_eq!(quarantined.len(), 5);
         assert!(
             quarantined.contains(

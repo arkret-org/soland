@@ -62,7 +62,7 @@ pub struct ContactRecord {
     pub message: Option<String>,
     pub peer_host_id: Option<DidCoreId>,
     /// Exact carrier retained from the verified introduction or shared-Realm
-    /// delivery binding. It is re-verified before routing and is not a cached
+    /// Station route. It is re-verified before routing and is not a cached
     /// endpoint authority.
     pub peer_service_resolution: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,

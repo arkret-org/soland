@@ -99,13 +99,6 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
             "applet-originated delegated Event requires executed_by",
         )
     })?;
-    let station_id = event_string_field(object, &["station_id"]).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "applet-originated Event requires station_id",
-        )
-    })?;
     let authorization_ref =
         event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
             event_validation_error(

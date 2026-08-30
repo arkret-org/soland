@@ -664,7 +664,7 @@ pub(super) async fn peer_event_fanout_records(
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let mut peers = dynamic_peer_event_targets(state, parsed).await?;
     // A standalone member join is evaluated before its projection becomes
-    // visible, so the joining member's own delivery binding cannot appear in
+    // visible, so the joining member's Station route cannot appear in
     // `dynamic_peer_event_targets` yet. Treat the accepted Event as the
     // authority witness for that exact target, matching the atomic Realm
     // bootstrap path above.

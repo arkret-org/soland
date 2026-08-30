@@ -2005,7 +2005,7 @@ async fn claim_keypackage(
             .map(|actor| actor.route_service_id().to_string());
         if target_binding.as_deref() != Some(destination) {
             return Err(AppError::capability_denied(
-                "destination service must equal the target's current Realm delivery binding",
+                "destination Station must match the exact target account in the Realm",
             ));
         }
         let body_value = serde_json::to_value(&body)

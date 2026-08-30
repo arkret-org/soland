@@ -743,9 +743,8 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     match invites.put(record).await {
         Ok(()) => {
             // Invite creation advances only the membership lifecycle
-            // `leave -> invite`. The delivery address is private invite/join
-            // input, not an effective member delivery binding; that binding is
-            // materialized only by the later accepted join transition.
+            // `leave -> invite`. The invite's exact AccountId does not grant
+            // membership or participate in Realm fanout until an accepted join.
             project_invite_creation(state, operation, invitee_id.as_str());
             tracing::info!(
                 invite_id = %invite_id,

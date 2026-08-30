@@ -119,7 +119,7 @@ pub fn server_ops_router() -> Router {
 pub fn admin_router() -> Router {
     // Deployment-local operator surface served at the bare `/admin/*`
     // namespace (notary / seal-DAG / bottom repair / multisig /
-    // gc-candidates / delivery-binding / moderation). Realm-scoped
+    // gc-candidates / moderation). Realm-scoped
     // operations use `/admin/realms/{realm_id}`; Space containers are
     // reserved for `/admin/spaces/*`. Per arkret-spec
     // `service-http-binding.md` §2.1 the `/admin/*` namespace is

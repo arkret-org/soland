@@ -10,7 +10,7 @@ use super::common::*;
 
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
 const PEER_SOURCE_ID: &str = "ak:did_core:web:remote.example";
-const PEER_DELIVERY_FRONTIER: &str = "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD";
+const PEER_MEMBERSHIP_FRONTIER: &str = "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD";
 
 fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(
@@ -18,7 +18,7 @@ fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningK
     ))
 }
 
-async fn seed_peer_delivery_binding(state: &AppState) {
+async fn seed_peer_station_membership(state: &AppState) {
     for verification_method in [
         format!("{PEER_SOURCE_DID}#authorization-lease-key"),
         format!("{PEER_SOURCE_DID}#notary-key"),
@@ -41,7 +41,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     )
     .await;
     let now = Utc::now();
-    let alice = fixture_actor_core_id("did:web:alice.example").to_string();
+    let alice = account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string();
     state.test_projection().lock().members.insert(
         (test_realm_id().to_owned(), alice.clone()),
         soland_domain::reducer::SolandMembershipState {
@@ -49,25 +49,24 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            membership_event_ref: Some(PEER_MEMBERSHIP_FRONTIER.to_owned()),
             invited_at: None,
             joined_at: now,
             updated_at: now,
             reason: None,
         },
     );
-    // The destination binding is a Realm-wide receiver frontier, distinct
-    // from Alice's exact origin authority pair. Keep a local routable member
-    // on that frontier so the inbound destination is current while Alice is
-    // hosted by the authenticated remote Station.
+    // Realm fanout includes a local account as well as Alice's remote account.
+    // Neither identity can be rebound to a different Station.
+    let bob = account_actor("did:web:bob.example", state.service_id()).to_string();
     state.test_projection().lock().members.insert(
-        (test_realm_id().to_owned(), "did:web:bob.example".to_owned()),
+        (test_realm_id().to_owned(), bob.clone()),
         soland_domain::reducer::SolandMembershipState {
-            member: "did:web:bob.example".to_owned(),
+            member: bob,
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
+            membership_event_ref: Some(PEER_MEMBERSHIP_FRONTIER.to_owned()),
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -84,7 +83,9 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
         .await
         .expect("demo Realm actor frontier")
         .into_iter()
-        .filter(|record| record.actor_id == fixture_actor_core_id("did:web:alice.example").as_str())
+        .filter(|record| {
+            record.actor_id == account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string()
+        })
         .collect::<Vec<_>>();
     let actor_seq = actor_records
         .iter()
@@ -392,7 +393,7 @@ fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
 
 async fn peer_events_submit_quarantines_actor_seq_sibling_overflow_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     let now = Utc::now();
     let predecessor = signed_event_envelope(
         "ak:event:AXx4wC556lXwN4bfK5rMlo6C9Jkdc_q-uTB7ttoKni5M",
@@ -460,7 +461,7 @@ fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
 
 async fn peer_events_submit_verifies_digest_against_the_received_wire_body_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     let event = signed_event_after_current_alice_frontier(
         &state,
         "ak:event:AaFr4C2IJ5G05kC7Vl1e-d6hWLhI-zf6AZe1lQFN4cvc",
@@ -508,7 +509,7 @@ fn peer_events_submit_accepts_online_event_without_offline_evidence() {
 
 async fn peer_events_submit_accepts_online_event_without_offline_evidence_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     let event = signed_event_after_current_alice_frontier(
         &state,
         "ak:event:AUUkvj_F0wukYtvsEeUOQ7O3tCgjDXllP-2iVm3-4JpR",
@@ -660,7 +661,7 @@ fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     let mut event = signed_event_envelope(
         "ak:event:AT0-O1Lz_4TR4jP-WqsC73_oH0Y7LB2vuZS-dmyhifFh",
         1,
@@ -714,7 +715,7 @@ fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
 
 async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
     // Realm must explicitly authorize the receiving service to see it. This
     // keeps the assertion focused on foreign-domain member relay acceptance.
@@ -759,7 +760,7 @@ fn peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance() 
 
 async fn peer_events_submit_preflights_poll_prerequisites_before_durable_acceptance_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     authorize_test_plaintext_message_service(&state, "did:web:alice.example", test_realm_id())
         .await;
 
@@ -868,7 +869,7 @@ fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
 
 async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state).await;
+    seed_peer_station_membership(&state).await;
     let welcome_event_id = "ak:event:AeKCyaUbw70FHlzkWyBOZi9ZQYsRpG1NIAp9Yjv7Tofa";
     let welcome_event = event_envelope(
         welcome_event_id,
@@ -1347,7 +1348,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_id: &str, member_
         .unwrap();
     put_event_record(
         state,
-        member_binding_event(
+        member_account_event(
             "ak:event:AWOy3SEshibYHuXWgX09nbOW8yvqtRV769ZsokfmH7Ao",
             member_did,
             source_id,
@@ -1358,17 +1359,18 @@ async fn seed_peer_read_authorization(state: &AppState, source_id: &str, member_
     .await;
 }
 
-fn member_binding_event(event_id: &str, member_did: &str, source_id: &str, seq: u64) -> Value {
+fn account_actor(principal_did: &str, station_id: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(principal_did),
+        arkret_identifiers::DidCoreId::new(station_id.to_owned()).unwrap(),
+    ))
+}
+
+fn member_account_event(event_id: &str, member_did: &str, source_id: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
-        "actor_id": member_did,
+        "member_id": account_actor(member_did, source_id),
         "membership": "join",
-        "role": "member",
-        "delivery_status": "routable",
-        "delivery_binding": {
-            "recipient_id": source_id,
-            "binding_source": "explicit",
-            "delivery_binding_frontier": "ak:frontier:peer-read-test"
-        }
+        "role": "member"
     });
     event_envelope(
         event_id,

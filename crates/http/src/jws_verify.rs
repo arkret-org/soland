@@ -528,12 +528,11 @@ async fn principal_authorized_device_binding_with_account_authority_async(
             ))
         })?
         .ok_or_else(|| fail("principal device authorization Event is unavailable".to_owned()))?;
-    let authorize_station_id = authorize_event
-        .envelope
-        .get("station_id")
-        .and_then(Value::as_str);
-    if authorize_event.actor_id != authority.principal_id.as_str()
-        || authorize_station_id != Some(authority.station_id.as_str())
+    let expected_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        authority.principal_id.clone(),
+        authority.station_id.clone(),
+    ));
+    if authorize_event.actor_id != expected_actor.to_string()
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
     {
@@ -855,7 +854,8 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             .ok_or_else(|| {
                 fail("principal device authorization Event is unavailable".to_owned())
             })?;
-        if authorize_event.actor_id != expected_principal_id.as_str()
+        let expected_actor = arkret_wire::ActorId::account(authority_key.clone());
+        if authorize_event.actor_id != expected_actor.to_string()
             || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
             || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
         {

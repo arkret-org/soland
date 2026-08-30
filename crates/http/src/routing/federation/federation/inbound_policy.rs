@@ -99,7 +99,11 @@ mod tests {
     fn membership(state: &str, station_id: &str) -> soland_domain::reducer::SolandMembershipState {
         let now = chrono::Utc::now();
         soland_domain::reducer::SolandMembershipState {
-            member: "ak:did_core:web:alice.example".to_owned(),
+            member: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                arkret_wire::DidCoreId::new(station_id.to_owned()).unwrap(),
+            ))
+            .to_string(),
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
             state: state.to_owned(),
             role: "member".to_owned(),

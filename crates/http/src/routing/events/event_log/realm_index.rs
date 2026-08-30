@@ -16,21 +16,31 @@ pub(super) fn realm_create_actor_is_creator(
     object: &serde_json::Map<String, Value>,
     actor: &str,
 ) -> bool {
-    object.get("actor_id").and_then(Value::as_str) == Some(actor)
+    object
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .is_some_and(|author| author.signing_principal_id().as_str() == actor)
 }
 
-/// True when a `ak.invite.create` event is signed by its own inviter_id. The
-/// inviter_id is the payload `inviter_id`; the top-level `actor_id` is the
-/// signer. Used to admit a
-/// cross-PS invite delivery on a recipient PS that does not host the realm.
+/// True when an invite is authored by its exact inviter AccountId.
+/// Used to admit private delivery on a recipient Station outside the Realm.
 pub(super) fn invite_create_actor_is_inviter(
     object: &serde_json::Map<String, Value>,
     actor: &str,
 ) -> bool {
     let inviter_id = object
         .get("payload")
-        .and_then(|payload| payload.get("inviter_id").and_then(Value::as_str));
-    inviter_id.is_some_and(|inviter_id| inviter_id == actor)
+        .and_then(|payload| payload.get("inviter_account_id"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok());
+    let author = object
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+    author.zip(inviter_id).is_some_and(|(author, inviter)| {
+        author.signing_principal_id().as_str() == actor && author.as_account_id() == Some(&inviter)
+    })
 }
 
 /// True when a `ak.member.state` event is a self-authored join-policy entry by
@@ -63,14 +73,17 @@ pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: 
     if !is_knock && !is_gate_proof_join {
         return false;
     }
-    // `membership_payload` names the subject `actor_id` and is
-    // `additionalProperties:false`; an omitted `actor_id` means the Event
-    // author is the subject.
-    payload
+    let author = object
         .get("actor_id")
-        .and_then(Value::as_str)
-        .map(|target| target == actor)
-        .unwrap_or(true)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+    let member = payload
+        .get("member_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+    author.zip(member).is_some_and(|(author, member)| {
+        author == member && author.signing_principal_id().as_str() == actor
+    })
 }
 
 pub(super) async fn member_join_accepts_pending_invite(
@@ -92,8 +105,8 @@ pub(super) async fn member_join_accepts_pending_invite(
         return false;
     };
     // `event-payload.schema.json#/$defs/invite_accept_payload` is
-    // `additionalProperties:false` over `{invite_id, delivery_status,
-    // delivery_binding}`: the accepting subject is the Event actor, so there is
+    // `additionalProperties:false` over `{invite_id}`: the accepting subject
+    // is the exact Station-bound Event actor, so there is
     // no payload actor field to read, and `invite_id` is the only target
     // carrier (`invite_ref` belongs to `membership_payload`, a different kind).
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
@@ -343,9 +356,17 @@ mod tests {
     const ALICE: &str = "ak:did_core:web:alice.example";
     const BOB: &str = "ak:did_core:web:bob.example";
 
+    fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal_id.to_owned()).unwrap(),
+            crate::test_event::station_id(),
+        ))
+    }
+
     fn member_state(payload: Value) -> serde_json::Map<String, Value> {
         json!({
             "kind": arkret_wire::EventKind::MemberState.as_str(),
+            "actor_id": account_actor(ALICE),
             "payload": payload,
         })
         .as_object()
@@ -353,16 +374,28 @@ mod tests {
         .clone()
     }
 
-    /// `event-payload.schema.json#/$defs/membership_payload` names the subject
-    /// `actor_id`; the canonical positive is a self-authored knock.
+    /// A self-authored knock names the exact member ActorId, including Station.
     #[test]
-    fn member_self_knock_reads_only_actor_id() {
+    fn member_self_knock_requires_exact_member_actor() {
         assert!(member_self_knock(
-            &member_state(json!({"membership": "knock", "actor_id": ALICE})),
+            &member_state(json!({"membership": "knock", "member_id": account_actor(ALICE)})),
             ALICE
         ));
         assert!(!member_self_knock(
-            &member_state(json!({"membership": "knock", "actor_id": BOB})),
+            &member_state(json!({"membership": "knock", "member_id": account_actor(BOB)})),
+            ALICE
+        ));
+        let other_account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(ALICE.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example".to_owned())
+                .unwrap(),
+        ));
+        assert!(!member_self_knock(
+            &member_state(json!({"membership": "knock", "member_id": other_account})),
+            ALICE
+        ));
+        assert!(!member_self_knock(
+            &member_state(json!({"membership": "knock", "actor_id": ALICE})),
             ALICE
         ));
     }
@@ -371,7 +404,8 @@ mod tests {
     /// acceptance path has its own canonical event.
     #[test]
     fn member_self_knock_only_applies_to_member_state() {
-        let mut object = member_state(json!({"membership": "knock", "actor_id": ALICE}));
+        let mut object =
+            member_state(json!({"membership": "knock", "member_id": account_actor(ALICE)}));
         object.insert(
             "kind".to_owned(),
             json!(arkret_wire::EventKind::InviteAccept.as_str()),

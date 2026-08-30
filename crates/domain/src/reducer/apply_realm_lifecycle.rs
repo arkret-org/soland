@@ -541,7 +541,7 @@ impl ProjectionState {
     /// Restore an already-accepted canonical membership Event into the
     /// reducer's structured cache.
     ///
-    /// Admission policy, delivery binding and gate checks ran before the Event
+    /// Admission policy, exact member identity and gate checks ran before the Event
     /// became canonical. Hydration must materialize that accepted truth rather
     /// than re-evaluate it against a partially rebuilt policy projection.
     pub fn restore_accepted_membership(

@@ -141,8 +141,7 @@ pub(super) async fn submit_identity_anchor_batch(
             "PCR genesis is accepted only through the registered peer relay",
         ));
     }
-    let lock_actor = event_string_field_from_value(&envelopes[0], "actor_id")
-        .ok_or_else(|| unit_error("identity anchor Event requires actor_id"))?;
+    let lock_actor = typed_create.actor_id.to_string();
     // The bootstrap head is an `ak.realm.create`, which carries no wire
     // `realm_id`: resolve it the SDK way rather than reading a flat field that
     // is absent by construction.
@@ -161,7 +160,7 @@ pub(super) async fn submit_identity_anchor_batch(
     } else {
         Some(RealmBootstrapBatchContext {
             realm_id: lock_realm.clone(),
-            actor_id: lock_actor.clone(),
+            actor_id: typed_create.actor_id.signing_principal_id().to_string(),
             digest_algorithm: None,
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
@@ -290,7 +289,7 @@ pub(super) async fn submit_identity_anchor_batch(
         && existing.iter().any(|record| {
             record.kind == arkret_wire::EventKind::RealmCreate.as_str()
                 && (record.realm_id.as_deref() == Some(first.realm_id.as_str())
-                    || (record.actor_id == first.actor_id.as_str()
+                    || (record.actor_id == first.actor.to_string()
                         && record
                             .envelope
                             .pointer("/payload/object/purpose")
@@ -944,7 +943,7 @@ fn validate_self_principal_pcr_bootstrap_context(
         .ok_or_else(|| unit_error("typed PCR genesis authorize is not registration anchored"))?;
     Ok(RealmBootstrapBatchContext {
         realm_id: create.realm_id.to_string(),
-        actor_id: create.actor_id.to_string(),
+        actor_id: create.actor_id.signing_principal_id().to_string(),
         digest_algorithm: Some(create_payload.object.digest_algorithm.as_str().to_owned()),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         identity_anchor_candidate_device: Some(candidate),
@@ -1117,16 +1116,10 @@ fn conflicting_reanchor_slot(
     else {
         return Vec::new();
     };
-    let Some(station_id) = reanchor_envelope
-        .pointer("/station_id")
-        .and_then(Value::as_str)
-    else {
-        return Vec::new();
-    };
     let mut evidence = existing
         .iter()
         .filter(|record| {
-            record.actor_id == reanchor.actor_id.as_str()
+            record.actor_id == reanchor.actor.to_string()
                 && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
         })
         .filter(|record| {
@@ -1137,15 +1130,10 @@ fn conflicting_reanchor_slot(
             if candidate_generation != Some(new_generation) {
                 return false;
             }
-            let candidate_station_id = record
-                .envelope
-                .pointer("/station_id")
-                .and_then(Value::as_str);
             let candidate_authorize_digest =
                 soland_services::events::paired_replacement_authorize(record, existing)
                     .map(|paired| paired.canonical_digest.as_str());
-            candidate_station_id != Some(station_id)
-                || record.canonical_digest != reanchor.canonical_digest
+            record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
         .flat_map(|record| {
@@ -1169,7 +1157,7 @@ async fn validate_unit_relationships(
     envelopes: &[Value],
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    if first.actor_id != second.actor_id || first.realm_id != second.realm_id {
+    if first.actor != second.actor || first.realm_id != second.realm_id {
         return Err(unit_error(
             "identity anchor unit Events must share actor_id and principal-control realm_id",
         ));
@@ -1387,7 +1375,7 @@ async fn validate_reanchor_actor_frontier(
         })?;
     let (max_actor_seq, expected_heads) = preserved_actor_frontier(
         &records,
-        reanchor.actor_id.as_str(),
+        &reanchor.actor.to_string(),
         reanchor.realm_id.as_str(),
         &covered_digests,
     )
@@ -1660,7 +1648,7 @@ pub(super) fn canonical_record(
 ) -> AcceptedEvent {
     AcceptedEvent {
         event_id: parsed.event_id.to_string(),
-        actor_id: parsed.actor_id.to_string(),
+        actor_id: parsed.actor.to_string(),
         actor_seq: parsed.actor_seq,
         realm_id: Some(parsed.realm_id.to_string()),
         kind: parsed.kind.clone(),
@@ -2354,7 +2342,10 @@ mod tests {
         }
         AcceptedEvent {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
-            actor_id: "ak:did_core:webvh:z6mkfixture".to_owned(),
+            actor_id: crate::test_actor_id(
+                &arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+            )
+            .to_string(),
             actor_seq,
             realm_id: Some("ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX".to_owned()),
             kind: envelope["kind"].as_str().unwrap().to_owned(),
@@ -2436,7 +2427,10 @@ mod tests {
         .collect();
         let (max_seq, heads) = preserved_actor_frontier(
             &records,
-            "ak:did_core:webvh:z6mkfixture",
+            &crate::test_actor_id(
+                &arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+            )
+            .to_string(),
             "ak:realm:AdZf1JIkIqUGbzF-sa3XnY2sN0Lumj76eBVunzVt_-yX",
             &covered,
         )
