@@ -222,9 +222,9 @@ async fn verify_inbound_applet_service_signature(
         .transpose()?
         .map_or_else(|| applet_id_param(req), Ok)?;
     if header_source != source_id {
-        return Err(applet_signature_error_invalid(format!(
-            "Source-Service-ID header does not match the signed body binding"
-        )));
+        return Err(applet_signature_error_invalid(
+            "Source-Service-ID header does not match the signed body binding".to_owned(),
+        ));
     }
     let scope_selector = signed_applet_scope_selector(&request_body, scope_carrier)?;
 

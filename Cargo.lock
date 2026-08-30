@@ -5385,7 +5385,6 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tracing",
- "url",
  "uuid",
 ]
 

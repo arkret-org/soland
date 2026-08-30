@@ -11,8 +11,8 @@ description = "Development-only fixtures and helpers for Soland integration test
 publish = false
 
 [dependencies]
-arkret-canonical.workspace = true
 arkret-bootstrap.workspace = true
+arkret-canonical.workspace = true
 arkret-event-draft = { workspace = true, features = ["test-support"] }
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
@@ -34,8 +34,8 @@ rand_core = "0.6.4"
 serde_json.workspace = true
 sha2.workspace = true
 soland-domain = { version = "0.3.0", path = "../domain" }
-soland-services = { version = "0.3.0", path = "../services" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
+soland-services = { version = "0.3.0", path = "../services" }
 soland-storage = { version = "0.3.0", path = "../storage" }
 soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = ["fault-injection"] }
 

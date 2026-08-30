@@ -82,6 +82,10 @@ pub fn effective_policy_for_realm(
 }
 
 pub trait EventSealCommitPort: Send + Sync {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
+    )]
     fn commit_if_frontier(
         &self,
         seal: &Seal,
@@ -1555,6 +1559,10 @@ impl ProjectionService {
         arkret_state::live_digest_suite_from_state(&predecessor_state)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
+    )]
     pub fn commit_event_seal_if_frontier(
         &self,
         seal: &Seal,

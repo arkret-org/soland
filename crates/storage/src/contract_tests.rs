@@ -42,8 +42,8 @@ use super::{
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, OneTimeKeyStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    OrganizationRegistrationTerminalReason, PeerClaimTerminalTransition,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
     ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
     RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
@@ -3998,30 +3998,30 @@ pub async fn assert_last_resort_claim_ledger_contract(
     let terminal_outcome = terminal_source.outcome.as_ref().expect("terminal outcome");
     assert!(
         store
-            .transition_peer_claim_terminal(
-                &terminal_source.source_id,
-                &terminal_source.claim_request_id,
-                &terminal_source.request_digest,
-                &serde_json::json!({"response": {"claims": ["drift"]}}),
-                "revoked",
-                &serde_json::json!({"receipt": "terminal"}),
-                19_000,
-            )
+            .transition_peer_claim_terminal(PeerClaimTerminalTransition {
+                source_id: &terminal_source.source_id,
+                claim_request_id: &terminal_source.claim_request_id,
+                request_digest: &terminal_source.request_digest,
+                expected_outcome: &serde_json::json!({"response": {"claims": ["drift"]}}),
+                terminal_state: "revoked",
+                terminal_receipt: &serde_json::json!({"receipt": "terminal"}),
+                now_unix_ms: 19_000,
+            },)
             .await
             .expect("reject terminal outcome drift")
             .is_none()
     );
     let terminal_receipt = serde_json::json!({"receipt": "terminal"});
     let terminal = store
-        .transition_peer_claim_terminal(
-            &terminal_source.source_id,
-            &terminal_source.claim_request_id,
-            &terminal_source.request_digest,
-            terminal_outcome,
-            "revoked",
-            &terminal_receipt,
-            19_000,
-        )
+        .transition_peer_claim_terminal(PeerClaimTerminalTransition {
+            source_id: &terminal_source.source_id,
+            claim_request_id: &terminal_source.claim_request_id,
+            request_digest: &terminal_source.request_digest,
+            expected_outcome: terminal_outcome,
+            terminal_state: "revoked",
+            terminal_receipt: &terminal_receipt,
+            now_unix_ms: 19_000,
+        })
         .await
         .expect("transition source mirror terminally")
         .expect("existing claimed source mirror must transition");
@@ -4032,15 +4032,15 @@ pub async fn assert_last_resort_claim_ledger_contract(
     assert_eq!(terminal.terminal_receipt, Some(terminal_receipt.clone()));
     assert!(
         store
-            .transition_peer_claim_terminal(
-                &terminal_source.source_id,
-                &terminal_source.claim_request_id,
-                &terminal_source.request_digest,
-                terminal_outcome,
-                "revoked",
-                &terminal_receipt,
-                19_500,
-            )
+            .transition_peer_claim_terminal(PeerClaimTerminalTransition {
+                source_id: &terminal_source.source_id,
+                claim_request_id: &terminal_source.claim_request_id,
+                request_digest: &terminal_source.request_digest,
+                expected_outcome: terminal_outcome,
+                terminal_state: "revoked",
+                terminal_receipt: &terminal_receipt,
+                now_unix_ms: 19_500,
+            },)
             .await
             .expect("replay terminal source transition")
             .is_none()

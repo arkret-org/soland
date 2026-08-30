@@ -688,8 +688,8 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     state
         .publish_event_notification(EventNotification::epoch_rotation(
             realm_id_str.clone(),
-            Some(serde_json::json!({"epoch": 6})),
-            serde_json::json!({"epoch": 7}),
+            Some(serde_json::json!(6)),
+            serde_json::json!(7),
         ))
         .expect("publish epoch rotation");
     tokio::time::sleep(std::time::Duration::from_millis(WS_SIGNAL_POLL_MS)).await;
@@ -711,7 +711,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
             } if channel_id == "events-1" => {
                 event_control_seen = payload["kind"] == "epoch_rotation"
                     && payload["payload"].get("previous_epoch").is_none()
-                    && payload["payload"]["new_epoch"] == serde_json::json!({"epoch": 7});
+                    && payload["payload"]["new_epoch"] == serde_json::json!(7);
             }
             _ => {}
         }

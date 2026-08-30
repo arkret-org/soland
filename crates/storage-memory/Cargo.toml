@@ -23,19 +23,19 @@ arkret-models-identity.workspace = true
 arkret-models-integration.workspace = true
 arkret-state.workspace = true
 arkret-wire.workspace = true
-async-trait = {workspace = true}
-chrono = {workspace = true,features = ["serde"]}
-parking_lot = {workspace = true}
-serde_json = {workspace = true}
-soland-storage = {workspace = true}
-uuid = {workspace = true,features = ["v4", "v7", "serde"]}
+async-trait = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+parking_lot = { workspace = true }
+serde_json = { workspace = true }
+soland-storage = { workspace = true }
+uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
-arkret-signatures = {workspace = true, features = ["collaboration"]}
-arkret-wire = {workspace = true,features = ["test-support"]}
+arkret-signatures = { workspace = true, features = ["collaboration"] }
+arkret-wire = { workspace = true, features = ["test-support"] }
 ed25519-dalek.workspace = true
-soland-storage = {workspace = true,features = ["test-support"]}
-tokio = {workspace = true,features = ["macros", "rt-multi-thread"]}
+soland-storage = { workspace = true, features = ["test-support"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 
 [lints]
 workspace = true

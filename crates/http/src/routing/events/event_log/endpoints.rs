@@ -1999,6 +1999,10 @@ async fn applet_managed_actor_pcr_access(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_test_module,
+    reason = "the focused regression tests stay adjacent to their private access-merging helper"
+)]
 mod applet_managed_actor_pcr_access_tests {
     use super::*;
 

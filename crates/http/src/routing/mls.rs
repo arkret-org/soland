@@ -2330,13 +2330,15 @@ pub(crate) async fn capture_relayed_keypackage_claim_query(
         if state
             .mls_key_packages()
             .transition_peer_claim_terminal(
-                state.service_id(),
-                request.claim_request_id.as_str(),
-                &record.request_digest,
-                expected_outcome,
-                state_name,
-                &terminal_receipt_value,
-                now().timestamp_millis(),
+                soland_services::events::PeerClaimTerminalTransitionCommand {
+                    source_id: state.service_id(),
+                    claim_request_id: request.claim_request_id.as_str(),
+                    request_digest: &record.request_digest,
+                    expected_outcome,
+                    terminal_state: state_name,
+                    terminal_receipt: &terminal_receipt_value,
+                    now_unix_ms: now().timestamp_millis(),
+                },
             )
             .await
             .map_err(|error| error.to_string())?

@@ -1409,26 +1409,20 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransitionCommand<'_>,
     ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
         Ok(self
             .0
             .mls_key_packages()
-            .transition_peer_claim_terminal(
-                source_id,
-                claim_request_id,
-                request_digest,
-                expected_outcome,
-                terminal_state,
-                terminal_receipt,
-                now_unix_ms,
-            )
+            .transition_peer_claim_terminal(soland_storage::PeerClaimTerminalTransition {
+                source_id: transition.source_id,
+                claim_request_id: transition.claim_request_id,
+                request_digest: transition.request_digest,
+                expected_outcome: transition.expected_outcome,
+                terminal_state: transition.terminal_state,
+                terminal_receipt: transition.terminal_receipt,
+                now_unix_ms: transition.now_unix_ms,
+            })
             .await?
             .map(application_peer_claim))
     }

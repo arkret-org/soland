@@ -9,12 +9,12 @@ homepage.workspace = true
 authors.workspace = true
 publish = false
 
-[dependencies]
-serde_json.workspace = true
-
 [[bin]]
 name = "check_layering"
 path = "src/bin/check_layering.rs"
+
+[dependencies]
+serde_json.workspace = true
 
 [lints]
 workspace = true

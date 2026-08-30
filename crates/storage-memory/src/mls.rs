@@ -2,9 +2,10 @@ use super::{
     BTreeMap, DeviceRevocationGateStatus, MlsCommitEpochAdvance, MlsCommitEpochRecord,
     MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
-    MlsWelcomeStore, Mutex, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
-    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    PersistenceResult, Uuid, Value, VecDeque, async_trait, mls_epoch_key,
+    MlsWelcomeStore, Mutex, PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, Uuid, Value,
+    VecDeque, async_trait, mls_epoch_key,
 };
 
 #[derive(Default)]
@@ -457,14 +458,17 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
 
     async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransition<'_>,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let PeerClaimTerminalTransition {
+            source_id,
+            claim_request_id,
+            request_digest,
+            expected_outcome,
+            terminal_state,
+            terminal_receipt,
+            now_unix_ms,
+        } = transition;
         if !matches!(terminal_state, "expired" | "revoked") {
             return Ok(None);
         }

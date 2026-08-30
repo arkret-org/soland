@@ -10,31 +10,30 @@ authors.workspace = true
 description = "Pure deterministic domain rules and projections for Soland."
 
 [dependencies]
-arkret-canonical = {workspace = true}
-arkret-event-draft = {workspace = true}
-arkret-hlc = {workspace = true}
-arkret-identifiers = {workspace = true}
-arkret-lattice-registry = {workspace = true}
-arkret-mls = {workspace = true}
-arkret-models-collaboration = {workspace = true}
-arkret-models-crypto = {workspace = true}
-arkret-models-identity = {workspace = true}
-arkret-policy = {workspace = true}
-arkret-schema = {workspace = true,features = ["embedded-artifacts"]}
-arkret-state = {workspace = true}
-arkret-wire = {workspace = true}
-base64 = {workspace = true}
-chrono = {workspace = true,features = ["serde"]}
-parking_lot = {workspace = true}
-serde = {workspace = true,features = ["derive"]}
-serde_json = {workspace = true}
-thiserror = {workspace = true}
-tracing = {workspace = true}
-url = {workspace = true}
+arkret-canonical = { workspace = true }
+arkret-event-draft = { workspace = true }
+arkret-hlc = { workspace = true }
+arkret-identifiers = { workspace = true }
+arkret-lattice-registry = { workspace = true }
+arkret-mls = { workspace = true }
+arkret-models-collaboration = { workspace = true }
+arkret-models-crypto = { workspace = true }
+arkret-models-identity = { workspace = true }
+arkret-policy = { workspace = true }
+arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
+arkret-state = { workspace = true }
+arkret-wire = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true, features = ["serde"] }
+parking_lot = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
-uuid = {workspace = true,features = ["v7"]}
+uuid = { workspace = true, features = ["v7"] }
 
 [lints]
 workspace = true

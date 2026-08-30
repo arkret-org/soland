@@ -425,6 +425,10 @@ fn managed_actor_installation_selects_event(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_test_module,
+    reason = "the focused regression tests stay adjacent to their private scope-selection helper"
+)]
 mod managed_actor_scope_selection_tests {
     use super::managed_actor_installation_selects_event;
 

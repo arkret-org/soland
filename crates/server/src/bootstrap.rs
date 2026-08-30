@@ -72,15 +72,11 @@ pub async fn resolve_and_build_persistence(
         )
     })?;
     let persistence = PersistenceHandle::new(Arc::new(PgPersistenceStore::new(pool.clone())));
-    let key_store: Option<Arc<dyn KeyStore>> = if let Some(key_store) = config
+    let key_store: Option<Arc<dyn KeyStore>> = config
         .key_store
         .open(SERVICE_IDENTITY_KEYSTORE_APP)
         .map_err(|error| anyhow::anyhow!("opening service identity KeyStore failed: {error}"))?
-    {
-        Some(Arc::from(key_store))
-    } else {
-        None
-    };
+        .map(Arc::from);
 
     retry_service_identity(config, persistence, key_store).await
 }

@@ -50,7 +50,7 @@ fn decode_lower_hex_32(value: &str) -> Option<[u8; EVENT_DIGEST_BYTES]> {
         return None;
     }
     let mut output = [0_u8; EVENT_DIGEST_BYTES];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let nibble = |byte: u8| match byte {
             b'0'..=b'9' => byte - b'0',
             b'a'..=b'f' => byte - b'a' + 10,

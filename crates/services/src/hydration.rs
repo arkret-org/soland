@@ -1274,49 +1274,6 @@ pub fn reconcile_hydrated_agent_memberships(
     }
 }
 
-#[cfg(test)]
-mod agent_membership_reconcile_tests {
-    use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
-    use arkret_wire::PrincipalAuthorityKey;
-
-    use super::*;
-    use crate::events::DirectoryProvenance;
-
-    #[test]
-    fn removed_controller_cascades_to_bound_agent_during_hydration() {
-        let realm_id =
-            RealmId::new("ak:realm:AQXbKRls_Ty4E6MhnCM67pDwRngRQcn7i9AW0UjrkPMI").unwrap();
-        let controller = DidCoreId::new("ak:did_core:web:controller.example").unwrap();
-        let agent = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
-        let mut entry =
-            RealmDirectoryEntry::new(realm_id.clone(), "realm", DirectoryProvenance::LocalOnly);
-        entry.members.insert(agent.clone());
-        let mut realms = RealmDirectoryIndex::new();
-        realms.upsert(entry);
-
-        let mut projection = ProjectionState::default();
-        projection.agent_membership_bindings.insert(
-            (realm_id.to_string(), agent.to_string()),
-            AgentControllerMembershipBinding {
-                controller_authority: PrincipalAuthorityKey {
-                    principal_id: controller,
-                    principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
-                        .unwrap(),
-                },
-                controller_membership_generation_ref: arkret_identifiers::EventId::new(
-                    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
-                )
-                .unwrap(),
-                controller_terminal_event_ref: None,
-            },
-        );
-
-        reconcile_hydrated_agent_memberships(&mut realms, &projection);
-
-        assert!(!realms.get(&realm_id).unwrap().members.contains(&agent));
-    }
-}
-
 /// Replay the canonical Realm profile singleton into the restart directory.
 ///
 /// The directory is an index, so its display fields must be reconstructed from
@@ -1622,4 +1579,47 @@ pub fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
 
 pub fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
+}
+
+#[cfg(test)]
+mod agent_membership_reconcile_tests {
+    use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
+    use arkret_wire::PrincipalAuthorityKey;
+
+    use super::*;
+    use crate::events::DirectoryProvenance;
+
+    #[test]
+    fn removed_controller_cascades_to_bound_agent_during_hydration() {
+        let realm_id =
+            RealmId::new("ak:realm:AQXbKRls_Ty4E6MhnCM67pDwRngRQcn7i9AW0UjrkPMI").unwrap();
+        let controller = DidCoreId::new("ak:did_core:web:controller.example").unwrap();
+        let agent = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        let mut entry =
+            RealmDirectoryEntry::new(realm_id.clone(), "realm", DirectoryProvenance::LocalOnly);
+        entry.members.insert(agent.clone());
+        let mut realms = RealmDirectoryIndex::new();
+        realms.upsert(entry);
+
+        let mut projection = ProjectionState::default();
+        projection.agent_membership_bindings.insert(
+            (realm_id.to_string(), agent.to_string()),
+            AgentControllerMembershipBinding {
+                controller_authority: PrincipalAuthorityKey {
+                    principal_id: controller,
+                    principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
+                        .unwrap(),
+                },
+                controller_membership_generation_ref: arkret_identifiers::EventId::new(
+                    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
+                )
+                .unwrap(),
+                controller_terminal_event_ref: None,
+            },
+        );
+
+        reconcile_hydrated_agent_memberships(&mut realms, &projection);
+
+        assert!(!realms.get(&realm_id).unwrap().members.contains(&agent));
+    }
 }

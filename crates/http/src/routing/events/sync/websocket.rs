@@ -200,7 +200,7 @@ pub(crate) fn advertise_websocket_binding(
     };
     description.transport_bindings.push(
         arkret_models_discovery::TransportBinding::Websocket {
-            base_url: base_url,
+            base_url,
             extension_profile_required:
                 arkret_models_discovery::websocket_binding::WebSocketBindingProfile::BindingWebsocketV1,
             subprotocol:

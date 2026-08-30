@@ -67,7 +67,7 @@ pub async fn projected_event_page_for_realms_in_direction(
         .into_iter()
         .take(end)
         .rev()
-        .filter(|event| event_is_visible(event))
+        .filter(event_is_visible)
         .take(limit.saturating_add(1))
         .collect::<Vec<_>>();
     {
@@ -159,7 +159,7 @@ pub async fn projected_event_page_for_realms_through(
         .into_iter()
         .skip(start)
         .take(end - start)
-        .filter(|event| event_is_visible(event))
+        .filter(event_is_visible)
         .take(limit.saturating_add(1))
         .collect::<Vec<_>>();
     {

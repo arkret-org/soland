@@ -1861,6 +1861,16 @@ pub struct PeerKeyPackageClaimCommand<'a> {
     pub ledger: &'a PeerKeyPackageClaimLedgerState,
 }
 
+pub struct PeerClaimTerminalTransitionCommand<'a> {
+    pub source_id: &'a str,
+    pub claim_request_id: &'a str,
+    pub request_digest: &'a str,
+    pub expected_outcome: &'a Value,
+    pub terminal_state: &'a str,
+    pub terminal_receipt: &'a Value,
+    pub now_unix_ms: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimResult {
     Claimed(Box<MlsKeyPackageState>),
@@ -1937,13 +1947,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransitionCommand<'_>,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>>;
     async fn key_packages(&self) -> ServiceResult<Vec<MlsKeyPackageState>>;
@@ -2092,24 +2096,10 @@ impl MlsKeyPackageService {
     }
     pub async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransitionCommand<'_>,
     ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
-            .transition_peer_claim_terminal(
-                source_id,
-                claim_request_id,
-                request_digest,
-                expected_outcome,
-                terminal_state,
-                terminal_receipt,
-                now_unix_ms,
-            )
+            .transition_peer_claim_terminal(transition)
             .await
     }
     pub async fn transition_peer_claim_consumed(

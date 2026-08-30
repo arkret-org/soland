@@ -13,6 +13,101 @@ fn canonical_body(value: &impl serde::Serialize) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical account workflow body")
 }
 
+async fn seal_accepted_invite_create(
+    state: &AppState,
+    invite_event_id: &arkret_identifiers::EventId,
+    predecessor_basis: &arkret_wire::SealBasis,
+) {
+    let record = state
+        .test_persistence()
+        .events()
+        .get(invite_event_id.as_str())
+        .await
+        .expect("accepted invite Event lookup")
+        .expect("accepted invite Event");
+    let event: arkret_wire::Event =
+        serde_json::from_value(record.envelope).expect("accepted invite Event envelope");
+    assert_eq!(event.kind, arkret_wire::EventKind::InviteCreate);
+    let move_id = arkret_identifiers::Hash::new(record.canonical_digest)
+        .expect("accepted invite Move digest");
+    let writes = state
+        .test_projection()
+        .lock()
+        .project_registered_cell_writes(&event, record.digest_suite)
+        .expect("accepted invite registered projection");
+    let mut post_state = state
+        .test_effective_state_at(&predecessor_basis.leaves, &event.realm_id)
+        .expect("invite predecessor state");
+    let mut ops_by_cell: std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+    > = std::collections::BTreeMap::new();
+    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
+    for write in writes {
+        let effects = arkret_state::resolve_projected_write(
+            &write,
+            &event.realm_id,
+            &post_state,
+            registry.as_ref(),
+        )
+        .expect("resolve accepted invite write");
+        for effect in effects {
+            assert!(!effect.recovery_reset, "invite create cannot reset cells");
+            ops_by_cell.entry(effect.cell_id).or_default().push(
+                arkret_state::lattice::ordered_log::IssuedOp {
+                    issuer_id: event.actor_id.clone(),
+                    op: arkret_state::lattice::SealedOp::new(move_id.clone(), effect.op),
+                },
+            );
+        }
+    }
+
+    let mut sealed_ops = Vec::new();
+    for (cell, ops) in ops_by_cell {
+        assert!(
+            !post_state.contains_key(&cell),
+            "invite create fixture must initialize new cells"
+        );
+        let binding = registry
+            .resolve(&event.realm_id, &cell)
+            .expect("invite cell family is registered");
+        post_state.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+        );
+        sealed_ops.extend(ops.into_iter().map(|op| (cell.clone(), op)));
+    }
+    let state_root =
+        arkret_state::state::compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
+            .expect("invite successor state root");
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_did(),
+        state.service_verification_method("notary-key").unwrap(),
+    );
+    let hlc = arkret_identifiers::Hlc::new(format!(
+        "{:012x}-0001-aabbccdd",
+        event.created_at.timestamp_millis().max(0) as u64 + 1
+    ))
+    .expect("invite successor HLC");
+    let seal = arkret_wire::Seal::sign_single(
+        event.realm_id.clone(),
+        predecessor_basis.leaves.clone(),
+        vec![move_id],
+        state_root,
+        hlc,
+        arkret_canonical::DigestSuite::Sha256,
+        &signer,
+    )
+    .expect("accepted invite successor Seal");
+    state
+        .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .expect("persist accepted invite successor Seal");
+    state
+        .test_append_sealed_effects(&event.realm_id, &seal.id, &sealed_ops)
+        .expect("persist accepted invite sealed effects");
+}
+
 async fn create_and_dispatch_local_realm_invite(
     state: &AppState,
     alice_token: &str,
@@ -77,7 +172,7 @@ async fn create_and_dispatch_local_realm_invite(
         &mut invite_event,
     )
     .await;
-    invite_event["seal_basis"] = seal_basis;
+    invite_event["seal_basis"] = seal_basis.clone();
     resign_canonical_event(&mut invite_event);
     let invite_event_id =
         arkret_identifiers::EventId::new(authored_event_id(&invite_event).to_owned())
@@ -94,6 +189,9 @@ async fn create_and_dispatch_local_realm_invite(
         submitted["status"], "accepted",
         "invite create: {submitted}"
     );
+    let seal_basis: arkret_wire::SealBasis =
+        serde_json::from_value(seal_basis).expect("fixture invite predecessor Seal basis");
+    seal_accepted_invite_create(state, &invite_event_id, &seal_basis).await;
 
     let dispatch = SelfInviteDispatchRequestBody {
         schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
@@ -1208,7 +1306,10 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(invite_resolve["realm_preview"]["realm_id"], invite_realm_id);
+    assert_eq!(
+        invite_resolve["realm_preview"]["realm_id"], invite_realm_id,
+        "invite resolve response: {invite_resolve}"
+    );
 
     let listed_realm = seed_test_realm(
         &state,

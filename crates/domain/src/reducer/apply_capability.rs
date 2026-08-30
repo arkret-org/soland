@@ -1981,7 +1981,6 @@ impl ProjectionState {
 /// holds effective `ak.realm.owner`. These cases pin the boundaries of what
 /// that does and does not confer, because every one of them is a place where a
 /// plausible-looking widening silently hands out authority nobody granted.
-
 #[cfg(test)]
 #[path = "apply_capability_tests.rs"]
 mod tests;

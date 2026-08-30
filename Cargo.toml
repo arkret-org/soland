@@ -1,17 +1,17 @@
-﻿[workspace]
+[workspace]
 resolver = "3"
 members = [
-    "xtask",
     "crates/contracts",
     "crates/domain",
-    "crates/services",
     "crates/http",
     "crates/keystore-keygen",
-    "crates/test-support",
+    "crates/server",
+    "crates/services",
     "crates/storage",
     "crates/storage-memory",
     "crates/storage-postgres",
-    "crates/server",
+    "crates/test-support",
+    "xtask",
 ]
 default-members = ["crates/server"]
 
@@ -42,39 +42,38 @@ unimplemented = "deny"
 [workspace.dependencies]
 anyhow = "1.0.102"
 arc-swap = "1.9.1"
-async-stream = "0.3.6"
-async-trait = "0.1.89"
-base64 = "0.22.1"
-bs58 = "0.5.1"
-bytes = "1.11.1"
-chrono = "0.4.45"
 arkret = { version = "0.3.0", path = "../arkret-rust-sdk/crates/sdk", default-features = false }
-arkret-hlc = { version = "0.3.0", path = "../arkret-rust-sdk/crates/hlc", default-features = false }
-arkret-event-draft = { version = "0.3.0", path = "../arkret-rust-sdk/crates/event-draft", default-features = false }
 arkret-bootstrap = { version = "0.3.0", path = "../arkret-rust-sdk/crates/bootstrap", default-features = false }
 arkret-canonical = { version = "0.3.0", path = "../arkret-rust-sdk/crates/canonical", default-features = false }
 arkret-crypto = { version = "0.3.0", path = "../arkret-rust-sdk/crates/crypto", default-features = false }
 arkret-egress-policy = { version = "0.3.0", path = "../arkret-rust-sdk/crates/egress-policy", default-features = false }
 arkret-egress-reqwest = { version = "0.3.0", path = "../arkret-rust-sdk/crates/egress-reqwest", default-features = false }
+arkret-event-draft = { version = "0.3.0", path = "../arkret-rust-sdk/crates/event-draft", default-features = false }
+arkret-hlc = { version = "0.3.0", path = "../arkret-rust-sdk/crates/hlc", default-features = false }
 arkret-http-client = { version = "0.3.0", path = "../arkret-rust-sdk/crates/http-client", default-features = false, features = ["tls-rustls"] }
 arkret-identifiers = { version = "0.3.0", path = "../arkret-rust-sdk/crates/identifiers", default-features = false }
 arkret-identity = { version = "0.3.0", path = "../arkret-rust-sdk/crates/identity", default-features = false }
 arkret-keystore = { version = "0.3.0", path = "../arkret-rust-sdk/crates/keystore", default-features = false }
 arkret-lattice-registry = { version = "0.3.0", path = "../arkret-rust-sdk/crates/lattice-registry", default-features = false }
 arkret-mls = { version = "0.3.0", path = "../arkret-rust-sdk/crates/mls", default-features = false }
-arkret-models-crypto = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-crypto", default-features = false }
 arkret-models-collaboration = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-collaboration", default-features = false }
+arkret-models-crypto = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-crypto", default-features = false }
 arkret-models-discovery = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-discovery", default-features = false }
-arkret-models-integration = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-integration", default-features = false }
 arkret-models-identity = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-identity", default-features = false }
+arkret-models-integration = { version = "0.3.0", path = "../arkret-rust-sdk/crates/models-integration", default-features = false }
 arkret-policy = { version = "0.3.0", path = "../arkret-rust-sdk/crates/policy", default-features = false }
-arkret-push-policy = { version = "0.3.0", path = "../arkret-rust-sdk/crates/push-policy", default-features = false }
 arkret-rate-limit = { version = "0.3.0", path = "../arkret-rust-sdk/crates/rate-limit", default-features = false }
 arkret-schema = { version = "0.3.0", path = "../arkret-rust-sdk/crates/schema", default-features = false }
 arkret-server = { version = "0.3.0", path = "../arkret-rust-sdk/crates/server", default-features = false }
 arkret-signatures = { version = "0.3.0", path = "../arkret-rust-sdk/crates/signatures", default-features = false }
 arkret-state = { version = "0.3.0", path = "../arkret-rust-sdk/crates/state", default-features = false }
 arkret-wire = { version = "0.3.0", path = "../arkret-rust-sdk/crates/wire", default-features = false }
+async-stream = "0.3.6"
+async-trait = "0.1.89"
+base64 = "0.22.1"
+bs58 = "0.5.1"
+bytes = "1.11.1"
+chrono = "0.4.45"
 deadpool = "0.13"
 diesel = "2.3.10"
 diesel-async = "0.9"
@@ -100,23 +99,22 @@ rustls = { version = "0.23.41", default-features = false, features = ["ring", "s
 salvo = { version = "=0.96.0", default-features = false, features = ["rfc9457"] }
 salvo-oapi = { version = "=0.96.0", default-features = false, features = ["rfc9457"] }
 serde = "1.0.228"
-serde_json = "1.0.150"
 serde-saphyr = "0.0.29"
+serde_json = "1.0.150"
 sha2 = "0.11.0"
 soland-contracts = { version = "0.3.0", path = "crates/contracts" }
 soland-domain = { version = "0.3.0", path = "crates/domain" }
-soland-services = { version = "0.3.0", path = "crates/services" }
 soland-http = { version = "0.3.0", path = "crates/http" }
-soland-test-support = { version = "0.3.0", path = "crates/test-support" }
+soland-services = { version = "0.3.0", path = "crates/services" }
 soland-storage = { version = "0.3.0", path = "crates/storage" }
 soland-storage-memory = { version = "0.3.0", path = "crates/storage-memory" }
 soland-storage-postgres = { version = "0.3.0", path = "crates/storage-postgres" }
-url = "2.5"
+soland-test-support = { version = "0.3.0", path = "crates/test-support" }
 subtle = "2.6.1"
 thiserror = "2"
 tokio = "1.52.3"
-tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tokio-postgres = "0.7.17"
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
 tracing = "0.1.44"
 tracing-appender = "0.2.5"
 tracing-opentelemetry = { version = "0.33.0", default-features = false }

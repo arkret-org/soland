@@ -8,6 +8,26 @@ use soland_http::state::{AppState, RealmDirectoryEntry};
 use soland_storage::RealmMetaRecord;
 use soland_test_support::AppStateTestExt as _;
 
+fn run_large_stack_async_test<F, Fut>(test: F)
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + 'static,
+{
+    std::thread::Builder::new()
+        .name("account-data-sync-test".to_owned())
+        .stack_size(16 * 1024 * 1024)
+        .spawn(move || {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("build account-data sync test runtime")
+                .block_on(test());
+        })
+        .expect("spawn account-data sync test thread")
+        .join()
+        .expect("account-data sync test thread panicked");
+}
+
 fn test_event_signer_did() -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
     format!(
@@ -672,336 +692,341 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     assert_eq!(latest.envelope["payload"]["tombstone"], true);
 }
 
-#[tokio::test]
-async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_actor = test_event_signer_did();
-    let alice_actor_core = actor_core_id(&alice_actor);
-    let alice_desktop = dev_token(
-        state.clone(),
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "Alice Desktop",
-    )
-    .await;
-    let alice_phone = dev_token(
-        state.clone(),
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000002",
-        "Alice Phone",
-    )
-    .await;
-    let bob = dev_token(
-        state.clone(),
-        "did:web:bob.example",
-        "ak:device:01904100-0000-7000-8000-b0b000000001",
-        "Bob",
-    )
-    .await;
-    let realm_id = create_plaintext_realm(state.clone(), &alice_actor, "Blocklist Fixture").await;
-    add_realm_member(
-        state.clone(),
-        &alice_desktop,
-        &realm_id,
-        "did:web:bob.example",
-    )
-    .await;
+#[test]
+fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
+    run_large_stack_async_test(|| async {
+        let state = soland_test_support::app_state(test_config());
+        let alice_actor = test_event_signer_did();
+        let alice_actor_core = actor_core_id(&alice_actor);
+        let alice_desktop = dev_token(
+            state.clone(),
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "Alice Desktop",
+        )
+        .await;
+        let alice_phone = dev_token(
+            state.clone(),
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000002",
+            "Alice Phone",
+        )
+        .await;
+        let bob = dev_token(
+            state.clone(),
+            "did:web:bob.example",
+            "ak:device:01904100-0000-7000-8000-b0b000000001",
+            "Bob",
+        )
+        .await;
+        let realm_id =
+            create_plaintext_realm(state.clone(), &alice_actor, "Blocklist Fixture").await;
+        add_realm_member(
+            state.clone(),
+            &alice_desktop,
+            &realm_id,
+            "did:web:bob.example",
+        )
+        .await;
 
-    let plaintext_blocklist = json!({
-        "version": 1,
-        "entries": [{
-            "target": {
-                "kind": "actor",
-                "did": "did:web:bob.example"
-            },
-            "mode": "block",
-            "applies_to": ["messages", "mentions", "notifications"],
-            "created_at": "2026-05-21T00:00:00.000Z"
-        }]
-    });
-    let put = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_id,
-        "ak.account_data.set",
-        json!({
-            "key": "ak.account.blocklist",
-            "expected_revision": 0,
-            "holder_id": alice_actor_core.as_str(),
-            "body": plaintext_blocklist,
-            "updated_at": "2026-05-21T00:00:00.000Z",
-        }),
-    )
-    .await;
-    // Asserting only "not accepted" would pass for any error at all, including
-    // one raised before the payload was ever looked at. The floor this case
-    // exists for is `discovery/client-preferences.md` §3.5: `ak.account.blocklist`
-    // is a registered encrypted account-data key, so the carrier — not just the
-    // outcome — is what has to fail.
-    assert_eq!(
-        put["type"], "https://arkret.org/problems/schema_violation",
-        "plaintext blocklist must be rejected: {put}"
-    );
-    assert!(
-        put["detail"]
-            .as_str()
-            .is_some_and(|message| message.contains("encrypted")),
-        "plaintext blocklist must be rejected by the encrypted-carrier floor, \
+        let plaintext_blocklist = json!({
+            "version": 1,
+            "entries": [{
+                "target": {
+                    "kind": "actor",
+                    "did": "did:web:bob.example"
+                },
+                "mode": "block",
+                "applies_to": ["messages", "mentions", "notifications"],
+                "created_at": "2026-05-21T00:00:00.000Z"
+            }]
+        });
+        let put = submit_actor_private_event(
+            state.clone(),
+            &alice_desktop,
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            &realm_id,
+            "ak.account_data.set",
+            json!({
+                "key": "ak.account.blocklist",
+                "expected_revision": 0,
+                "holder_id": alice_actor_core.as_str(),
+                "body": plaintext_blocklist,
+                "updated_at": "2026-05-21T00:00:00.000Z",
+            }),
+        )
+        .await;
+        // Asserting only "not accepted" would pass for any error at all, including
+        // one raised before the payload was ever looked at. The floor this case
+        // exists for is `discovery/client-preferences.md` §3.5: `ak.account.blocklist`
+        // is a registered encrypted account-data key, so the carrier — not just the
+        // outcome — is what has to fail.
+        assert_eq!(
+            put["type"], "https://arkret.org/problems/schema_violation",
+            "plaintext blocklist must be rejected: {put}"
+        );
+        assert!(
+            put["detail"]
+                .as_str()
+                .is_some_and(|message| message.contains("encrypted")),
+            "plaintext blocklist must be rejected by the encrypted-carrier floor, \
          not by an unrelated error: {put}"
-    );
+        );
 
-    let encrypted_blocklist = encrypted_account_data_value(
-        &alice_actor_core,
-        "ak.account.blocklist",
-        &plaintext_blocklist,
-    );
-    let put = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_id,
-        "ak.account_data.set",
-        json!({
-            "key": "ak.account.blocklist",
-            "expected_revision": 0,
-            "holder_id": alice_actor_core.as_str(),
-            "body": encrypted_blocklist.clone(),
-            "updated_at": "2026-05-21T00:00:00.000Z",
-        }),
-    )
-    .await;
-    assert_eq!(
-        put["status"], "accepted",
-        "encrypted blocklist event: {put}"
-    );
-    let stored_account_data = state
-        .test_persistence()
-        .account_data()
-        .list_for_actor(alice_actor_core.as_str())
-        .await
-        .unwrap();
-    assert!(
-        stored_account_data
+        let encrypted_blocklist = encrypted_account_data_value(
+            &alice_actor_core,
+            "ak.account.blocklist",
+            &plaintext_blocklist,
+        );
+        let put = submit_actor_private_event(
+            state.clone(),
+            &alice_desktop,
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            &realm_id,
+            "ak.account_data.set",
+            json!({
+                "key": "ak.account.blocklist",
+                "expected_revision": 0,
+                "holder_id": alice_actor_core.as_str(),
+                "body": encrypted_blocklist.clone(),
+                "updated_at": "2026-05-21T00:00:00.000Z",
+            }),
+        )
+        .await;
+        assert_eq!(
+            put["status"], "accepted",
+            "encrypted blocklist event: {put}"
+        );
+        let stored_account_data = state
+            .test_persistence()
+            .account_data()
+            .list_for_actor(alice_actor_core.as_str())
+            .await
+            .unwrap();
+        assert!(
+            stored_account_data
+                .iter()
+                .any(|record| record.account_data_key == "ak.account.blocklist"),
+            "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
+        );
+        let stale = submit_actor_private_event(
+            state.clone(),
+            &alice_desktop,
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            &realm_id,
+            "ak.account_data.set",
+            json!({
+                "key": "ak.account.blocklist",
+                "expected_revision": 0,
+                "holder_id": alice_actor_core.as_str(),
+                "body": encrypted_account_data_value(
+                    &alice_actor_core,
+                    "ak.account.blocklist",
+                    &json!({"version": 1, "entries": []}),
+                ),
+                "updated_at": "2026-05-21T00:00:01.000Z",
+            }),
+        )
+        .await;
+        assert_eq!(
+            stale["type"], "https://arkret.org/problems/cas_conflict",
+            "{stale}"
+        );
+        assert_eq!(stale["account_data_key"], "ak.account.blocklist");
+        assert_eq!(stale["current_revision"], 1);
+        assert_eq!(stale["current_entry"]["content"], encrypted_blocklist);
+        let current = state
+            .test_persistence()
+            .account_data()
+            .get(alice_actor_core.as_str(), "ak.account.blocklist")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(current.revision, 1);
+        assert_eq!(current.payload, encrypted_blocklist);
+
+        let phone_sync = account_subscribe_frame(
+            state.clone(),
+            &alice_phone,
+            "catchup=true&set_presence=online",
+        )
+        .await;
+        let phone_account_data = account_data_entry(&phone_sync, "ak.account.blocklist")
+            .expect("blocklist account_data visible to Alice's sibling device");
+        assert_eq!(phone_account_data["payload"]["body"], encrypted_blocklist);
+
+        let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
+            .add_header("authorization", format!("Bearer {alice_phone}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+                true,
+            )
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        let phone_events = phone_messages["messages"].as_array().unwrap();
+        let blocklist_event = phone_events
             .iter()
-            .any(|record| record.account_data_key == "ak.account.blocklist"),
-        "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
-    );
-    let stale = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_id,
-        "ak.account_data.set",
-        json!({
-            "key": "ak.account.blocklist",
-            "expected_revision": 0,
-            "holder_id": alice_actor_core.as_str(),
-            "body": encrypted_account_data_value(
-                &alice_actor_core,
-                "ak.account.blocklist",
-                &json!({"version": 1, "entries": []}),
-            ),
-            "updated_at": "2026-05-21T00:00:01.000Z",
-        }),
-    )
-    .await;
-    assert_eq!(
-        stale["type"], "https://arkret.org/problems/cas_conflict",
-        "{stale}"
-    );
-    assert_eq!(stale["account_data_key"], "ak.account.blocklist");
-    assert_eq!(stale["current_revision"], 1);
-    assert_eq!(stale["current_entry"]["content"], encrypted_blocklist);
-    let current = state
-        .test_persistence()
-        .account_data()
-        .get(alice_actor_core.as_str(), "ak.account.blocklist")
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(current.revision, 1);
-    assert_eq!(current.payload, encrypted_blocklist);
+            .find(|event| event["kind"] == "ak.account.blocklist.update")
+            .expect("blocklist update fanout reaches Alice's sibling device");
+        assert_eq!(
+            blocklist_event["content"]["account_data_key"],
+            "ak.account.blocklist"
+        );
+        assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);
 
-    let phone_sync = account_subscribe_frame(
-        state.clone(),
-        &alice_phone,
-        "catchup=true&set_presence=online",
-    )
-    .await;
-    let phone_account_data = account_data_entry(&phone_sync, "ak.account.blocklist")
-        .expect("blocklist account_data visible to Alice's sibling device");
-    assert_eq!(phone_account_data["payload"]["body"], encrypted_blocklist);
-
-    let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
-        .add_header("authorization", format!("Bearer {alice_phone}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
-            true,
-        )
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let phone_events = phone_messages["messages"].as_array().unwrap();
-    let blocklist_event = phone_events
-        .iter()
-        .find(|event| event["kind"] == "ak.account.blocklist.update")
-        .expect("blocklist update fanout reaches Alice's sibling device");
-    assert_eq!(
-        blocklist_event["content"]["account_data_key"],
-        "ak.account.blocklist"
-    );
-    assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);
-
-    let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
-            true,
-        )
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(bob_messages["messages"].as_array().unwrap().is_empty());
+        let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
+            .add_header("authorization", format!("Bearer {bob}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+                true,
+            )
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(bob_messages["messages"].as_array().unwrap().is_empty());
+    });
 }
 
-#[tokio::test]
-async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
-    let state = soland_test_support::app_state(test_config());
-    let alice_actor = test_event_signer_did();
-    let alice_actor_core = actor_core_id(&alice_actor);
-    let alice_desktop = dev_token(
-        state.clone(),
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "Alice Desktop",
-    )
-    .await;
-    let alice_phone = dev_token(
-        state.clone(),
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000002",
-        "Alice Phone",
-    )
-    .await;
-    let bob = dev_token(
-        state.clone(),
-        "did:web:bob.example",
-        "ak:device:01904100-0000-7000-8000-b0b000000001",
-        "Bob",
-    )
-    .await;
-    let realm_a = create_plaintext_realm(state.clone(), &alice_actor, "Parent Realm").await;
-    let realm_b = create_plaintext_realm(state.clone(), &alice_actor, "Discussion Realm").await;
-    let event_a = "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml";
-    let event_b = "ak:event:AQ5uuUVXlrGqR79MEUmEPOIMYQIdRhgBIsTAtH3mgNpC";
+#[test]
+fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
+    run_large_stack_async_test(|| async {
+        let state = soland_test_support::app_state(test_config());
+        let alice_actor = test_event_signer_did();
+        let alice_actor_core = actor_core_id(&alice_actor);
+        let alice_desktop = dev_token(
+            state.clone(),
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "Alice Desktop",
+        )
+        .await;
+        let alice_phone = dev_token(
+            state.clone(),
+            &alice_actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000002",
+            "Alice Phone",
+        )
+        .await;
+        let bob = dev_token(
+            state.clone(),
+            "did:web:bob.example",
+            "ak:device:01904100-0000-7000-8000-b0b000000001",
+            "Bob",
+        )
+        .await;
+        let realm_a = create_plaintext_realm(state.clone(), &alice_actor, "Parent Realm").await;
+        let realm_b = create_plaintext_realm(state.clone(), &alice_actor, "Discussion Realm").await;
+        let event_a = "ak:event:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQmeD6Ml";
+        let event_b = "ak:event:AQ5uuUVXlrGqR79MEUmEPOIMYQIdRhgBIsTAtH3mgNpC";
 
-    let marker_a = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_a,
-        "ak.read_cursor.advance",
-        read_cursor_payload(
+        let marker_a = submit_actor_private_event(
+            state.clone(),
+            &alice_desktop,
             &alice_actor,
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_a,
-            event_a,
-            "019041000000-0001-a11ce001",
-        ),
-    )
-    .await;
-    assert_eq!(
-        marker_a["status"], "accepted",
-        "marker_a response: {marker_a}"
-    );
+            "ak.read_cursor.advance",
+            read_cursor_payload(
+                &alice_actor,
+                "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                &realm_a,
+                event_a,
+                "019041000000-0001-a11ce001",
+            ),
+        )
+        .await;
+        assert_eq!(
+            marker_a["status"], "accepted",
+            "marker_a response: {marker_a}"
+        );
 
-    let marker_b = submit_actor_private_event(
-        state.clone(),
-        &alice_desktop,
-        &alice_actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        &realm_b,
-        "ak.read_cursor.advance",
-        read_cursor_payload(
+        let marker_b = submit_actor_private_event(
+            state.clone(),
+            &alice_desktop,
             &alice_actor,
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
             &realm_b,
-            event_b,
-            "019041000000-0001-a11ce002",
-        ),
-    )
-    .await;
-    assert_eq!(
-        marker_b["status"], "accepted",
-        "marker_b response: {marker_b}"
-    );
-
-    let markers_a = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_a));
-    assert_eq!(markers_a.len(), 1);
-    assert_eq!(markers_a[0]["position"]["event_id"], event_a);
-    assert_eq!(markers_a[0]["realm_id"], realm_a);
-    assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");
-
-    let markers_b = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_b));
-    assert_eq!(markers_b.len(), 1);
-    assert_eq!(markers_b[0]["position"]["event_id"], event_b);
-    assert_eq!(markers_b[0]["realm_id"], realm_b);
-
-    let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
-        .add_header("authorization", format!("Bearer {alice_phone}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
-            true,
+            "ak.read_cursor.advance",
+            read_cursor_payload(
+                &alice_actor,
+                "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                &realm_b,
+                event_b,
+                "019041000000-0001-a11ce002",
+            ),
         )
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let read_cursor_fanouts = phone_messages["messages"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|event| event["kind"] == "ak.read_cursor.update")
-        .collect::<Vec<_>>();
-    assert_eq!(read_cursor_fanouts.len(), 2);
-    assert!(read_cursor_fanouts.iter().any(|event| {
-        event["content"]["realm_id"] == realm_a
-            && event["content"]["position"]["event_id"] == event_a
-    }));
-    assert!(read_cursor_fanouts.iter().any(|event| {
-        event["content"]["realm_id"] == realm_b
-            && event["content"]["position"]["event_id"] == event_b
-    }));
+        .await;
+        assert_eq!(
+            marker_b["status"], "accepted",
+            "marker_b response: {marker_b}"
+        );
 
-    let bob_actor_core = actor_core_id("did:web:bob.example");
-    let bob_markers = projected_read_markers(&state, bob_actor_core.as_str(), None);
-    assert!(bob_markers.is_empty());
-    let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
-        .add_header("authorization", format!("Bearer {bob}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
-            true,
-        )
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(bob_messages["messages"].as_array().unwrap().is_empty());
+        let markers_a = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_a));
+        assert_eq!(markers_a.len(), 1);
+        assert_eq!(markers_a[0]["position"]["event_id"], event_a);
+        assert_eq!(markers_a[0]["realm_id"], realm_a);
+        assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");
+
+        let markers_b = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_b));
+        assert_eq!(markers_b.len(), 1);
+        assert_eq!(markers_b[0]["position"]["event_id"], event_b);
+        assert_eq!(markers_b[0]["realm_id"], realm_b);
+
+        let phone_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
+            .add_header("authorization", format!("Bearer {alice_phone}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+                true,
+            )
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        let read_cursor_fanouts = phone_messages["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["kind"] == "ak.read_cursor.update")
+            .collect::<Vec<_>>();
+        assert_eq!(read_cursor_fanouts.len(), 2);
+        assert!(read_cursor_fanouts.iter().any(|event| {
+            event["content"]["realm_id"] == realm_a
+                && event["content"]["position"]["event_id"] == event_a
+        }));
+        assert!(read_cursor_fanouts.iter().any(|event| {
+            event["content"]["realm_id"] == realm_b
+                && event["content"]["position"]["event_id"] == event_b
+        }));
+
+        let bob_actor_core = actor_core_id("did:web:bob.example");
+        let bob_markers = projected_read_markers(&state, bob_actor_core.as_str(), None);
+        assert!(bob_markers.is_empty());
+        let bob_messages: Value = TestClient::get("http://server/_arkret/self/device_messages")
+            .add_header("authorization", format!("Bearer {bob}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_DEVICE_MESSAGES_READ_LIST_V1,
+                true,
+            )
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(bob_messages["messages"].as_array().unwrap().is_empty());
+    });
 }
 
 #[tokio::test]

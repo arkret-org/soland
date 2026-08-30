@@ -1403,7 +1403,7 @@ mod tests {
         assert!(
             state
                 .consents()
-                .holder_cells(&DidCoreId::new(HOLDER.to_owned()).unwrap())
+                .holder_cells(DidCoreId::new(HOLDER.to_owned()).unwrap())
                 .is_empty()
         );
     }
@@ -1563,7 +1563,7 @@ mod tests {
         assert_eq!(
             state
                 .consents()
-                .holder_cells(&DidCoreId::new(HOLDER.to_owned()).unwrap())
+                .holder_cells(DidCoreId::new(HOLDER.to_owned()).unwrap())
                 .len(),
             1
         );
@@ -1698,8 +1698,8 @@ mod tests {
             state
                 .consents()
                 .holder_cell(
-                    &DidCoreId::new(HOLDER.to_owned()).unwrap(),
-                    &consent_cell_id_for_consent_id(CONSENT_ID).unwrap(),
+                    DidCoreId::new(HOLDER.to_owned()).unwrap(),
+                    consent_cell_id_for_consent_id(CONSENT_ID).unwrap(),
                 )
                 .expect("committed cell is published to the runtime projection")
                 .revoked_dots

@@ -862,7 +862,7 @@ fn seal_dependency_contract_availability(
     };
     receipt.signature.payload_digest = arkret_identifiers::Hash::new(arkret_canonical::digest(
         arkret_canonical::DigestSuite::Sha256,
-        &receipt.canonical_signature_payload_bytes().unwrap(),
+        receipt.canonical_signature_payload_bytes().unwrap(),
     ))
     .unwrap();
     let content_digest = receipt

@@ -4,10 +4,10 @@ use super::{
     BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis,
     MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value, async_trait, ids,
-    json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
+    PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value,
+    async_trait, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -606,14 +606,17 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
 
     async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransition<'_>,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let PeerClaimTerminalTransition {
+            source_id,
+            claim_request_id,
+            request_digest,
+            expected_outcome,
+            terminal_state,
+            terminal_receipt,
+            now_unix_ms,
+        } = transition;
         if !matches!(terminal_state, "expired" | "revoked") {
             return Ok(None);
         }

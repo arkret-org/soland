@@ -305,6 +305,16 @@ pub struct PeerKeyPackageClaimAttempt<'a> {
     pub ledger: &'a PeerKeyPackageClaimLedgerRecord,
 }
 
+pub struct PeerClaimTerminalTransition<'a> {
+    pub source_id: &'a str,
+    pub claim_request_id: &'a str,
+    pub request_digest: &'a str,
+    pub expected_outcome: &'a Value,
+    pub terminal_state: &'a str,
+    pub terminal_receipt: &'a Value,
+    pub now_unix_ms: i64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum PeerKeyPackageClaimAttemptResult {
     Claimed(Box<MlsKeyPackageRow>),
@@ -462,13 +472,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// state/digest/outcome drift, or a non-terminal target.
     async fn transition_peer_claim_terminal(
         &self,
-        source_id: &str,
-        claim_request_id: &str,
-        request_digest: &str,
-        expected_outcome: &Value,
-        terminal_state: &str,
-        terminal_receipt: &Value,
-        now_unix_ms: i64,
+        transition: PeerClaimTerminalTransition<'_>,
     ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     /// Close expired peer claim audits atomically. Ordinary single-use claims
     /// revoke their KeyPackage and return its id; last-resort claims only move

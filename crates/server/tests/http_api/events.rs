@@ -482,7 +482,7 @@ async fn seed_agent_grant_session(
 }
 
 fn assert_agent_scope_denied(body: &Value, scope: &str) {
-    assert_eq!(problem_code(&body), "capability_denied", "{body}");
+    assert_eq!(problem_code(body), "capability_denied", "{body}");
     assert!(
         body["detail"]
             .as_str()

@@ -1182,12 +1182,17 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                         "duplicate_conflict: Applet identity winner changed".to_owned(),
                     ));
                 }
-            } else if staged_applet_identities.contains_key(&identity_key) {
-                return Err(PersistenceError::Conflict(
-                    "duplicate_conflict: Applet identity winner already exists".to_owned(),
-                ));
             } else {
-                staged_applet_identities.insert(identity_key, mutation.identity.record.clone());
+                match staged_applet_identities.entry(identity_key) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(mutation.identity.record.clone());
+                    }
+                    std::collections::btree_map::Entry::Occupied(_) => {
+                        return Err(PersistenceError::Conflict(
+                            "duplicate_conflict: Applet identity winner already exists".to_owned(),
+                        ));
+                    }
+                }
             }
             let effective_scope_key =
                 soland_storage::applet_effective_scope_key_from_record(&mutation.record)?;
@@ -2666,19 +2671,20 @@ mod tests {
 
         let accepted = store.commit_event(request.clone()).await.unwrap();
         assert!(accepted.event_inserted);
-        let stored_acks = store.events.control_proposal_acks.lock();
-        assert_eq!(
-            stored_acks
-                .get(&proposal_digest)
-                .map(|ack| ack.proposal_digest.as_str()),
-            Some(proposal_digest.as_str()),
-            "durable Ack must be indexed by the canonical proposal digest"
-        );
-        assert!(
-            !stored_acks.contains_key(&proposal_event_id),
-            "the EventId must never become the internal proposal-Ack key"
-        );
-        drop(stored_acks);
+        {
+            let stored_acks = store.events.control_proposal_acks.lock();
+            assert_eq!(
+                stored_acks
+                    .get(&proposal_digest)
+                    .map(|ack| ack.proposal_digest.as_str()),
+                Some(proposal_digest.as_str()),
+                "durable Ack must be indexed by the canonical proposal digest"
+            );
+            assert!(
+                !stored_acks.contains_key(&proposal_event_id),
+                "the EventId must never become the internal proposal-Ack key"
+            );
+        }
         assert!(matches!(
             store.device_revocations.gate_status(&selector).await.unwrap(),
             DeviceRevocationGateStatus::Pending { ref blocking_proposal_digest }

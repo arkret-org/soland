@@ -20,19 +20,13 @@ test-support = [
 [dependencies]
 anyhow.workspace = true
 arc-swap.workspace = true
-async-stream.workspace = true
-async-trait.workspace = true
-base64.workspace = true
-bs58.workspace = true
-bytes.workspace = true
-chrono = { workspace = true, features = ["serde"] }
 arkret.workspace = true
-arkret-canonical.workspace = true
-arkret-event-draft = { workspace = true, features = ["openapi"] }
 arkret-bootstrap.workspace = true
+arkret-canonical.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data", "secret-share"] }
 arkret-egress-policy.workspace = true
 arkret-egress-reqwest.workspace = true
+arkret-event-draft = { workspace = true, features = ["openapi"] }
 arkret-hlc.workspace = true
 arkret-http-client.workspace = true
 arkret-identifiers.workspace = true
@@ -40,10 +34,10 @@ arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
 arkret-mls.workspace = true
 arkret-models-collaboration = { workspace = true, features = ["openapi"] }
-arkret-models-discovery = { workspace = true, features = ["openapi"] }
-arkret-models-integration = { workspace = true, features = ["openapi"] }
 arkret-models-crypto = { workspace = true, features = ["openapi"] }
+arkret-models-discovery = { workspace = true, features = ["openapi"] }
 arkret-models-identity = { workspace = true, features = ["openapi"] }
+arkret-models-integration = { workspace = true, features = ["openapi"] }
 arkret-policy.workspace = true
 arkret-rate-limit.workspace = true
 arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
@@ -51,6 +45,12 @@ arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "service-identity", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["openapi"] }
 arkret-wire.workspace = true
+async-stream.workspace = true
+async-trait.workspace = true
+base64.workspace = true
+bs58.workspace = true
+bytes.workspace = true
+chrono = { workspace = true, features = ["serde"] }
 ed25519-dalek.workspace = true
 floria-contracts.workspace = true
 futures-util.workspace = true
@@ -63,13 +63,13 @@ rand.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["form", "json", "rustls"] }
 salvo = { workspace = true, default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "oapi", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "rustls", "websocket"] }
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
 serde-saphyr.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
+soland-contracts = { workspace = true, features = ["openapi"] }
+soland-domain.workspace = true
 soland-services.workspace = true
 soland-storage.workspace = true
-soland-domain.workspace = true
-soland-contracts = { workspace = true, features = ["openapi"] }
 subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -82,8 +82,8 @@ zeroize = { workspace = true, features = ["derive"] }
 arkret-event-draft = { workspace = true, features = ["test-support"] }
 rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
-soland-services = { workspace = true, features = ["test-support"] }
 soland-domain.workspace = true
+soland-services = { workspace = true, features = ["test-support"] }
 soland-storage-memory.workspace = true
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["test-util"] }

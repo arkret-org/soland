@@ -59,14 +59,35 @@ fn authored_call_id() -> String {
     arkret_identifiers::CallId::from_event_id(&event_id).to_string()
 }
 
-fn device_message_target(kind: &str, content: Value) -> Value {
+fn device_message_target(kind: &str, mut content: Value) -> Value {
+    let expires_at = chrono::Utc::now() + chrono::Duration::minutes(10);
+    if kind == "ak.key.verification.request" {
+        let content = content
+            .as_object_mut()
+            .expect("key verification fixture content is an object");
+        content
+            .entry("transaction_id")
+            .or_insert_with(|| Value::String(uuid::Uuid::now_v7().to_string()));
+        content.entry("from_device_id").or_insert_with(|| {
+            Value::String("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())
+        });
+        content
+            .entry("methods")
+            .or_insert_with(|| serde_json::json!(["ak.key.verification.sas_v1"]));
+        content.entry("timestamp").or_insert_with(|| {
+            Value::String(arkret_canonical::format_timestamp_canonical(
+                chrono::Utc::now(),
+            ))
+        });
+        content.entry("expires_at").or_insert_with(|| {
+            Value::String(arkret_canonical::format_timestamp_canonical(expires_at))
+        });
+    }
     serde_json::json!({
         "device_message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
-        "expires_at": arkret_canonical::format_timestamp_canonical(
-            chrono::Utc::now() + chrono::Duration::minutes(10)
-        ),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
     })
 }
 
@@ -372,18 +393,18 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     bind_pair_authorize_predecessor(&mut pair_body, &predecessor);
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
-        "from_device": new_device,
+        "from_device_id": new_device,
         "timestamp": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         "expires_at": arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(10)
         ),
-        "methods": ["ak.sas.v1", "ak.qr.v1"],
+        "methods": ["ak.key.verification.sas_v1", "ak.key.verification.qr_v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "7H2K9M4Q",
         "new_device_pubkey": pair_body["new_device_pubkey"],
         "challenge_proof": pair_body["challenge_proof"],
         "challenge_transcript": pair_body["challenge_transcript"],
-        "gate_audience": "http://server",
+        "gate_audience_uri": "http://server",
         "request_canonical_digest": format!("sha256:{}", "a".repeat(64)),
         "device_metadata": {
             "display_name": "Alice Browser",
@@ -415,7 +436,11 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let subscribe =
         account_subscribe_frame(state.clone(), Some(&existing_token), "catchup=true").await;
     let subscribe_messages = subscribe["to_device"]["messages"].as_array().unwrap();
-    assert_eq!(subscribe_messages.len(), 1);
+    assert_eq!(
+        subscribe_messages.len(),
+        1,
+        "subscribe response: {subscribe}"
+    );
     assert_eq!(subscribe_messages[0]["kind"], "ak.key.verification.request");
     assert_eq!(subscribe_messages[0]["sender_principal_id"], actor_core);
     assert_eq!(subscribe_messages[0]["sender_device_id"], new_device);
@@ -539,7 +564,7 @@ async fn to_device_capacity_eviction_sets_lost_watermark_body() {
         .unwrap();
     assert_eq!(pulled["lost"], true);
     let messages = pulled["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), 2);
+    assert_eq!(messages.len(), 2, "device messages response: {pulled}");
     assert_eq!(messages[0]["content"]["seq"], 2);
     assert_eq!(messages[1]["content"]["seq"], 3);
     assert!(

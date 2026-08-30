@@ -255,16 +255,15 @@ async fn install_endpoint(
         &basis.effective_scope,
     )
     .await?
-    {
-        if exact_successful_install_replay(
+        && exact_successful_install_replay(
             &existing.idempotency_key,
             existing.install_body_digest.as_str(),
             &idempotency_key,
             &body_digest,
-        )? {
-            res.status_code(StatusCode::OK);
-            return json_ok(existing.install_response);
-        }
+        )?
+    {
+        res.status_code(StatusCode::OK);
+        return json_ok(existing.install_response);
     }
     authoring_request.validate_bindings().map_err(|error| {
         AppError::param_invalid(format!("install authoring request is invalid: {error}"))

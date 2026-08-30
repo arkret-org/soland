@@ -581,7 +581,7 @@ pub fn describe(
         extra: Default::default(),
     };
 
-    let description = ServiceDescribe {
+    ServiceDescribe {
         service_id: service_id.clone(),
         service_resolution: service_resolution.clone(),
         trust_domain: trust_domain
@@ -882,8 +882,7 @@ pub fn describe(
         snapshot_frontier: Vec::new(),
         last_materialized_at: None,
         extensions: Default::default(),
-    };
-    description
+    }
 }
 
 pub fn now() -> DateTime<Utc> {

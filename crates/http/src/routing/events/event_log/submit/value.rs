@@ -2778,6 +2778,44 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
+            if parsed.kind == arkret_wire::EventKind::RealmLink.as_str() {
+                let target_realm_id = operation
+                    .payload
+                    .get("target_realm_id")
+                    .and_then(Value::as_str)
+                    .expect("validated Realm Link target_realm_id");
+                let link_kind = operation
+                    .payload
+                    .get("link_kind")
+                    .and_then(Value::as_str)
+                    .expect("validated Realm Link link_kind");
+                let status = operation
+                    .payload
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .expect("validated Realm Link status");
+                if let Err(reason) =
+                    soland_domain::reducer::realm_links::check_realm_link_admissible(
+                        &proj,
+                        operation.realm_id.as_str(),
+                        target_realm_id,
+                        link_kind,
+                        status,
+                    )
+                {
+                    let code = if reason == arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION {
+                        "failed_precondition"
+                    } else {
+                        "schema_violation"
+                    };
+                    return Err(SubmitOneError::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        code,
+                        reason,
+                    )
+                    .with_details(serde_json::json!({"reason_code": reason})));
+                }
+            }
             if let Some(reason) = state
                 .projections()
                 .preflight_capability_rejection(operation, &projected_cell_writes)

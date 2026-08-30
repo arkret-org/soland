@@ -819,6 +819,10 @@ mod tests {
             SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS,
             SIGNAL_SUBSCRIBE_POLL_MS
         );
-        assert!(SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS < super::super::SUBSCRIBE_RECONNECT_AFTER_MS);
+        const {
+            assert!(
+                SIGNAL_SUBSCRIBE_RECONNECT_AFTER_MS < super::super::SUBSCRIBE_RECONNECT_AFTER_MS
+            );
+        }
     }
 }

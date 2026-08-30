@@ -560,6 +560,10 @@ async fn submit_projection_event(
     accepted_event_id
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the integration helper mirrors the full signed Event submission envelope"
+)]
 async fn submit_projection_event_with_causal_refs(
     state: AppState,
     token: &str,
@@ -610,6 +614,10 @@ async fn submit_projection_event_result(
     .await
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the integration helper mirrors the full signed Event submission envelope"
+)]
 async fn submit_projection_event_result_with_causal_refs(
     state: AppState,
     token: &str,

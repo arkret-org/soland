@@ -223,7 +223,11 @@ async fn submit_link(
     TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&submission)
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(&submission)
+                .expect("canonical Realm Link submission"),
+        )
         .send(&app_from_state(state))
         .await
 }

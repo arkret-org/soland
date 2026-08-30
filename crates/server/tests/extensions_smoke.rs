@@ -2541,6 +2541,10 @@ async fn install_applet_package(
     .await
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the integration fixture exposes each independently varied authoring boundary"
+)]
 async fn signed_install_events(
     state: &AppState,
     package: &AppletPackage,

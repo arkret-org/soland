@@ -33,6 +33,10 @@ pub struct StateResolutionStores {
 }
 
 pub trait EventSealCommitStore: Send + Sync {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the transaction boundary keeps every frontier precondition and durable write explicit"
+    )]
     fn commit_if_frontier(
         &self,
         seal: &Seal,
