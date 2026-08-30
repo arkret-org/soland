@@ -498,13 +498,14 @@ pub trait ContactPort: Send + Sync {
 pub trait InviteReceivePolicyPort: Send + Sync {
     async fn save_policy(
         &self,
+        account_id: &AccountId,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> ServiceResult<()>;
     async fn policies(
         &self,
     ) -> ServiceResult<
         Vec<(
-            String,
+            AccountId,
             arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
         )>,
     >;
@@ -517,7 +518,7 @@ pub struct ContactService {
     runtime_invite_policies: Arc<
         Mutex<
             BTreeMap<
-                String,
+                arkret_wire::AccountId,
                 arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
             >,
         >,
@@ -578,12 +579,16 @@ impl ContactService {
 
     pub async fn save_invite_policy(
         &self,
+        account_id: &AccountId,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> ServiceResult<()> {
-        self.invite_policies.save_policy(policy.clone()).await?;
+        soland_storage::validate_invite_policy_account(account_id, &policy)?;
+        self.invite_policies
+            .save_policy(account_id, policy.clone())
+            .await?;
         self.runtime_invite_policies
             .lock()
-            .insert(policy.subject_id.to_string(), policy);
+            .insert(account_id.clone(), policy);
         Ok(())
     }
 
@@ -591,7 +596,7 @@ impl ContactService {
         &self,
         policies: impl IntoIterator<
             Item = (
-                String,
+                AccountId,
                 arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
             ),
         >,
@@ -601,10 +606,10 @@ impl ContactService {
 
     pub fn invite_policy(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>
     {
-        self.runtime_invite_policies.lock().get(subject_id).cloned()
+        self.runtime_invite_policies.lock().get(account_id).cloned()
     }
 
     /// or_set add for one accepted `ak.direct_conversation.bound` Event.
@@ -1950,6 +1955,7 @@ pub struct AgentSessionState {
 #[derive(Clone, Debug)]
 pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
+    pub account_id: AccountId,
     pub issuer_id: arkret_identifiers::DidCoreId,
     /// Scopes the Account Authority bound into the presented grant. They are
     /// the only wire-visible statement about what the grant was authorized

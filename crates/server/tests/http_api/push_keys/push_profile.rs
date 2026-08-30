@@ -806,7 +806,7 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member_body() {
     );
     assert_eq!(
         relayed[0].sender_actor_id,
-        fixture_actor_core_id(ALICE).as_str()
+        envelope.sender_actor_id.to_string()
     );
     assert_eq!(relayed[0].sender_device_id, ALICE_DEVICE);
     assert_eq!(
@@ -894,7 +894,13 @@ async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed_bo
 
     let delivered = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert_eq!(delivered.len(), 1, "Bob receives the Signal once");
-    assert_eq!(delivered[0].sender_actor_id, fixture_actor_core_id(ALICE));
+    assert_eq!(
+        delivered[0].sender_actor_id,
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            fixture_actor_core_id(ALICE),
+            soland_test_support::fixture_station_id()
+        ))
+    );
 
     let repeat = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert!(
@@ -1120,7 +1126,10 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
     );
     assert_eq!(
         bob_delivered[0].sender_actor_id,
-        fixture_actor_core_id(ALICE)
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            fixture_actor_core_id(ALICE),
+            soland_test_support::fixture_station_id()
+        ))
     );
 }
 

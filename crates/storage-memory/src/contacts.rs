@@ -148,7 +148,7 @@ pub(crate) struct MemoryInviteReceivePolicyStore {
     pub(crate) data: Arc<
         Mutex<
             BTreeMap<
-                String,
+                arkret_wire::AccountId,
                 arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
             >,
         >,
@@ -165,20 +165,20 @@ impl MemoryInviteReceivePolicyStore {
 impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
     async fn get(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     > {
-        Ok(self.data.lock().get(subject_id).cloned())
+        Ok(self.data.lock().get(account_id).cloned())
     }
 
     async fn put(
         &self,
+        account_id: &arkret_wire::AccountId,
         policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> PersistenceResult<()> {
-        self.data
-            .lock()
-            .insert(policy.subject_id.as_str().to_owned(), policy.clone());
+        soland_storage::validate_invite_policy_account(account_id, policy)?;
+        self.data.lock().insert(account_id.clone(), policy.clone());
         Ok(())
     }
 
@@ -186,7 +186,7 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
         &self,
     ) -> PersistenceResult<
         Vec<(
-            String,
+            arkret_wire::AccountId,
             arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
         )>,
     > {
@@ -194,7 +194,7 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
             .data
             .lock()
             .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
+            .map(|(account, policy)| (account.clone(), policy.clone()))
             .collect())
     }
 }
@@ -269,6 +269,45 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[tokio::test]
+    async fn invite_policy_is_scoped_to_the_complete_account() {
+        use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
+        let store = MemoryInviteReceivePolicyStore::new();
+        let principal = DidCoreId::new("ak:did_core:web:holder.example".to_owned()).unwrap();
+        let first_account = arkret_wire::AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:first-station.example".to_owned()).unwrap(),
+        );
+        let second_account = arkret_wire::AccountId::new(
+            principal,
+            DidCoreId::new("ak:did_core:web:second-station.example".to_owned()).unwrap(),
+        );
+        let first = InviteReceivePolicy::spec_default(first_account.clone());
+        let second = InviteReceivePolicy::spec_default(second_account.clone());
+        store.put(&first_account, &first).await.unwrap();
+        assert_eq!(
+            store.get(&first_account).await.unwrap(),
+            Some(first.clone())
+        );
+        assert_eq!(store.get(&second_account).await.unwrap(), None);
+        assert!(store.put(&second_account, &first).await.is_err());
+        store.put(&second_account, &second).await.unwrap();
+        assert_eq!(store.get(&first_account).await.unwrap(), Some(first));
+        assert_eq!(store.get(&second_account).await.unwrap(), Some(second));
+        let snapshot = store.snapshot_all().await.unwrap();
+        assert_eq!(snapshot.len(), 2);
+        assert!(
+            snapshot
+                .iter()
+                .any(|(account_id, _)| account_id == &first_account)
+        );
+        assert!(
+            snapshot
+                .iter()
+                .any(|(account_id, _)| account_id == &second_account)
+        );
+    }
 
     fn verified_mirror() -> ContactVerifiedMirrorRecord {
         ContactVerifiedMirrorRecord {

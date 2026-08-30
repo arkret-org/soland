@@ -544,7 +544,7 @@ async fn agent_session_without_stream_scope_cannot_subscribe_events_body() {
     let (state, presentation) =
         seed_agent_grant_session("scope-denied-stream", &["ak.self.events.read.scan.v1"]).await;
     let subscribe_url = format!(
-        "http://server/_arkret/self/events/subscribe?realms={}&catchup=false&max_duration_ms=100",
+        "http://server/_arkret/self/events/subscribe?realm_ids={}&catchup=false&max_duration_ms=100",
         demo_realm_id()
     );
 
@@ -1004,7 +1004,8 @@ async fn events_describe_and_single_event_submit_work_body() {
 
     let listed: Value = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({
-            "actor_ids": [fixture_actor_core_id("did:web:alice.example")],
+            "actor_ids": [arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                fixture_actor_core_id("did:web:alice.example"), state.service_core_id().clone()))],
             "limit": 20
         }))
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1583,7 +1584,10 @@ async fn cursor_syntax_failures_pin_param_invalid_with_invalid_cursor_reason_bod
     // failures).
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    let actor_core = fixture_actor_core_id("did:web:alice.example");
+    let actor_core = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id("did:web:alice.example"),
+        state.service_core_id().clone(),
+    ));
 
     // ak.self.events.read.scan.v1 — `after` in canonical QUERY content.
     let mut rejected = TestClient::query("http://server/_arkret/self/events")
@@ -1706,7 +1710,11 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
         assert!(sent["operation_id"].as_str().is_some());
     }
 
-    let read_body = serde_json::json!({"limit": 1, "actor_ids": [actor_core]});
+    let actor_selector = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        actor_core,
+        state.service_core_id().clone(),
+    ));
+    let read_body = serde_json::json!({"limit": 1, "actor_ids": [actor_selector]});
     let query_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&read_body)
@@ -1730,7 +1738,9 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
 
     let second_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"limit": 1, "actor_ids": [actor_core], "before": prev_cursor}))
+        .json(
+            &serde_json::json!({"limit": 1, "actor_ids": [actor_selector], "before": prev_cursor}),
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

@@ -59,7 +59,7 @@ pub trait ContactStore: Send + Sync {
     async fn list_for_actor(&self, actor_id: &ActorId) -> PersistenceResult<Vec<ContactRecord>>;
     async fn delete(&self, requester_id: &ActorId, target_id: &ActorId) -> PersistenceResult<()>;
 }
-/// Durable backing for per-subject private `invite_receive_policy` overrides
+/// Durable backing for per-account private `invite_receive_policy` overrides
 /// (spec `sync/invite-addressing.md` §5). The in-memory
 /// `AppState::invite_receive_policies` map remains the working projection; this
 /// store hydrates it on boot and is written through on policy changes
@@ -69,22 +69,39 @@ pub trait ContactStore: Send + Sync {
 pub trait InviteReceivePolicyStore: Send + Sync {
     async fn get(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     >;
     async fn put(
         &self,
+        account_id: &arkret_wire::AccountId,
         policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> PersistenceResult<()>;
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<
         Vec<(
-            String,
+            arkret_wire::AccountId,
             arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
         )>,
     >;
+}
+
+/// Bind a policy to the complete authenticated storage owner, including its
+/// Station coordinate. A caller cannot write another Account's policy payload.
+pub fn validate_invite_policy_account(
+    account_id: &arkret_wire::AccountId,
+    policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+) -> PersistenceResult<()> {
+    if &policy.account_id != account_id {
+        return Err(super::PersistenceError::SchemaViolation(
+            "invite receive policy does not match its Account owner".to_owned(),
+        ));
+    }
+    account_id
+        .validate()
+        .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))
 }
 /// Durable backing for the holder-private consent-cell projection (spec
 /// `consent-model.md` sections 3 to 5), keyed by `(holder, cell_id)` because

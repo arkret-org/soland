@@ -406,7 +406,7 @@ fn signal_record(
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
-        sender_actor_id: sender.signing_principal_id().clone(),
+        sender_actor_id: sender.clone(),
         sender_device_id: arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),

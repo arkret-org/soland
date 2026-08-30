@@ -208,7 +208,9 @@ async fn admit_signal(
 
     // The sending device is the authenticated one. A Signal proof names the
     // device, so a session may not relay another device's envelope.
-    if envelope.sender_actor_id.as_str() != session.actor {
+    let authenticated_actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    if envelope.sender_actor_id != authenticated_actor {
         return Err(AppError::capability_denied(
             "signal sender_actor_id must match the bearer session actor",
         ));
@@ -329,7 +331,7 @@ async fn verify_signal_device_proof(
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
-            envelope.sender_actor_id.as_str(),
+            envelope.sender_actor_id.signing_principal_id().as_str(),
             envelope.sender_device_id.as_str(),
         )
         .await
@@ -351,8 +353,8 @@ async fn verify_signal_device_proof(
         ));
     }
     // §1 — `verification_method` is the directory lookup key and the SDK's
-    // shared structural contract has already required it to equal
-    // `{sender_actor_id}#{sender_device_id}` verbatim. That equality is never
+    // shared structural contract already binds its principal and device.
+    // That structural binding is never
     // the authorization: the key material verified against comes from the
     // accepted device directory row (`signing_key_did`), not from anything the
     // envelope carries.
@@ -402,7 +404,7 @@ async fn verify_signal_agent_proof(
     envelope: &SignalEnvelope,
     actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
-    let sender_actor_id = envelope.sender_actor_id.clone();
+    let sender_actor_id = envelope.sender_actor_id.signing_principal_id().clone();
     let record =
         crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(state, actor)
             .await
@@ -473,17 +475,12 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     }
 
     let projection = state.projections().snapshot();
-    let source = arkret_wire::DidCoreId::new(source_id.to_owned())
-        .map_err(|_| signal_invalid("source service id is invalid"))?;
-    let sender_actor = crate::routing::federation::federation::joined_actor_for_principal_route(
-        state,
-        envelope.realm_id.as_str(),
-        &envelope.sender_actor_id,
-        &source,
-    )
-    .ok_or_else(|| {
-        signal_invalid("signal sender has no unambiguous joined Actor at its source Station")
-    })?;
+    let sender_actor = envelope.sender_actor_id.clone();
+    if sender_actor.route_service_id().as_str() != source_id {
+        return Err(signal_invalid(
+            "Signal sender route does not match the authenticated source Station",
+        ));
+    }
     let membership_key = (
         envelope.realm_id.as_str().to_owned(),
         sender_actor.to_string(),

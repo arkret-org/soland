@@ -17,9 +17,7 @@ use arkret_models_collaboration::governance::grant_constraint::{
     GrantConstraintKind as WireGrantConstraintKind,
     GrantConstraintSubkind as WireGrantConstraintSubkind,
 };
-use arkret_models_collaboration::governance::invite_addressing::{
-    InviteDelivery, InviteDeliveryTarget,
-};
+use arkret_models_collaboration::governance::invite_addressing::InviteDelivery;
 use arkret_models_collaboration::governance::operation_wire::Invite;
 use arkret_wire::{
     AccountDataKey, AccountId, ActorId, AuthzDecision, DidCoreId, Facet, InviteState,

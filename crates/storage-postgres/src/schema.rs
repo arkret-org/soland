@@ -695,10 +695,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    invite_receive_policies (subject_id) {
-        subject_id -> Text,
+    invite_receive_policies (account_pk) {
+        account_pk -> Int8,
         policy_payload -> Jsonb,
-        denied_subject_ids -> Array<Nullable<Text>>,
         updated_at -> Timestamptz,
     }
 }
@@ -1812,6 +1811,7 @@ diesel::table! {
 
 diesel::joinable!(account_localparts -> accounts (account_pk));
 diesel::joinable!(account_lifecycle -> accounts (account_pk));
+diesel::joinable!(invite_receive_policies -> accounts (account_pk));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));

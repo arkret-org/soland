@@ -15,7 +15,7 @@ const AGENT_CLEANUP_ALERT_AFTER_HOURS: i64 = 1;
 struct FrozenControllerMembership {
     authority: arkret_wire::AccountId,
     generation: arkret_wire::EventId,
-    agent_ids: Vec<arkret_wire::DidCoreId>,
+    agent_ids: Vec<arkret_wire::ActorId>,
 }
 
 fn cascade_error(
@@ -134,13 +134,27 @@ fn frozen_controller_membership(
                 && binding.controller_membership_generation_ref == generation
                 && projection.effective_agent_membership_base(bound_realm_id, agent_id)
         })
-        .filter_map(|((_, agent_id), _)| {
-            serde_json::from_str::<arkret_wire::ActorId>(agent_id)
-                .ok()
-                .map(|actor| actor.signing_principal_id().clone())
+        .map(|((_, agent_id), _)| {
+            serde_json::from_str::<arkret_wire::ActorId>(agent_id).map_err(|error| {
+                cascade_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("invalid frozen Agent ActorId: {error}"),
+                )
+            })
         })
-        .collect::<Vec<_>>();
-    agent_ids.sort();
+        .collect::<Result<Vec<_>, _>>()?;
+    if agent_ids
+        .iter()
+        .any(|actor| !matches!(actor, arkret_wire::ActorId::HostedPrincipal { .. }))
+    {
+        return Err(cascade_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "frozen Agent membership must bind a hosted-principal ActorId",
+        ));
+    }
+    agent_ids.sort_by_cached_key(ToString::to_string);
     agent_ids.dedup();
     if agent_ids.len() > MAX_AGENT_MEMBERSHIP_CASCADE_TRANSITIONS {
         return Err(cascade_error(
@@ -158,16 +172,16 @@ fn frozen_controller_membership(
 
 fn transition_agent_ids(
     transitions: &[arkret_wire::EventInitialSubmission],
-) -> Vec<arkret_wire::DidCoreId> {
+) -> Vec<arkret_wire::ActorId> {
     transitions
         .iter()
-        .map(|submission| submission.event.actor_id.signing_principal_id().clone())
+        .map(|submission| submission.event.actor_id.clone())
         .collect()
 }
 
 fn require_exact_agent_set(
-    submitted: &[arkret_wire::DidCoreId],
-    expected: &[arkret_wire::DidCoreId],
+    submitted: &[arkret_wire::ActorId],
+    expected: &[arkret_wire::ActorId],
 ) -> Result<(), SubmitOneError> {
     if submitted != expected {
         return Err(cascade_error(
@@ -1078,7 +1092,7 @@ async fn submit_federated_cascade_after_transport_validation(
             let submitted = submission
                 .agent_transitions
                 .iter()
-                .map(|transition| transition.event.actor_id.signing_principal_id().clone())
+                .map(|transition| transition.event.actor_id.clone())
                 .collect::<Vec<_>>();
             require_exact_agent_set(&submitted, &frozen.agent_ids)?;
             prepared.push(
@@ -1223,7 +1237,7 @@ async fn submit_federated_cascade_after_transport_validation(
             let submitted = submission
                 .agent_transitions
                 .iter()
-                .map(|transition| transition.event.actor_id.signing_principal_id().clone())
+                .map(|transition| transition.event.actor_id.clone())
                 .collect::<Vec<_>>();
             require_exact_agent_set(&submitted, &record.expected_agent_ids)?;
             for transition in &submission.agent_transitions {
@@ -1662,8 +1676,14 @@ mod tests {
     #[test]
     fn exact_agent_set_requires_the_canonical_sorted_complete_set() {
         let expected = vec![
-            core("ak:did_core:web:agent-a.example"),
-            core("ak:did_core:web:agent-b.example"),
+            arkret_wire::ActorId::hosted_principal(
+                core("ak:did_core:web:agent-a.example"),
+                core("ak:did_core:web:station.example"),
+            ),
+            arkret_wire::ActorId::hosted_principal(
+                core("ak:did_core:web:agent-b.example"),
+                core("ak:did_core:web:station.example"),
+            ),
         ];
         assert!(require_exact_agent_set(&expected, &expected).is_ok());
         assert!(require_exact_agent_set(&expected[..1], &expected).is_err());
@@ -1671,6 +1691,12 @@ mod tests {
             require_exact_agent_set(&[expected[1].clone(), expected[0].clone()], &expected)
                 .is_err()
         );
+        let mut different_station = expected.clone();
+        different_station[0] = arkret_wire::ActorId::hosted_principal(
+            core("ak:did_core:web:agent-a.example"),
+            core("ak:did_core:web:other-station.example"),
+        );
+        assert!(require_exact_agent_set(&different_station, &expected).is_err());
     }
 
     #[test]

@@ -286,8 +286,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     assert_eq!(decrypted.payload_sequence, 1);
     assert_eq!(decrypted.event_id.as_str(), target_event_id);
     assert_eq!(
-        decrypted.actor_id.signing_principal_id(),
-        &delivered.sender_actor_id,
+        &decrypted.actor_id, &delivered.sender_actor_id,
         "§2.1 — the outer sender_actor_id MUST equal the plaintext actor_id"
     );
 }

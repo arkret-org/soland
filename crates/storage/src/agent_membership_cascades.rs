@@ -10,7 +10,7 @@ pub enum AgentMembershipCascadeCommit {
     AtomicSelfLeave {
         controller_transition_event_id: EventId,
         agent_transition_event_ids: Vec<EventId>,
-        expected_agent_ids: Vec<arkret_wire::DidCoreId>,
+        expected_agent_ids: Vec<arkret_wire::ActorId>,
     },
     EmergencyTerminal {
         record: Box<AgentCleanupRecord>,

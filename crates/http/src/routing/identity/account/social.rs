@@ -283,12 +283,19 @@ pub(crate) async fn get_invite_receive_policy(
     // tombstones and invite receive policy are independent state machines.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let actor_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
+    let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+        state, &session,
+    )
+    .await?;
+    if account_id.station_id != state.service_core_id() {
+        return Err(AppError::capability_denied(
+            "invite receive policy is owned by another Station",
+        ));
+    }
     let policy = state
         .contacts()
-        .invite_policy(&session.actor)
-        .unwrap_or_else(|| InviteReceivePolicy::spec_default(actor_id));
+        .invite_policy(&account_id)
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(account_id));
     json_ok(policy)
 }
 
@@ -307,21 +314,24 @@ pub(crate) async fn set_invite_receive_policy(
     req: &mut Request,
     body: JsonBody<InviteReceivePolicy>,
 ) -> JsonResult<InviteReceivePolicy> {
-    // Spec invite-addressing.md §5 — the subject may only set its own
-    // policy: `subject_id` MUST equal the session actor.
+    // The holder may only replace the exact authenticated Station account policy.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy = body.into_inner();
-    if policy.subject_id.as_str() != session.actor {
+    let account_id = crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+        state, &session,
+    )
+    .await?;
+    if policy.account_id != account_id || account_id.station_id != state.service_core_id() {
         return Err(AppError::capability_denied(
-            "invite_receive_policy.subject_id must equal the session actor",
+            "invite_receive_policy.account_id must equal the authenticated Station account",
         ));
     }
     // Write through to durable storage so the override survives restarts
     // (hydrated back into the in-memory map by `AppState::hydrate`).
     state
         .contacts()
-        .save_invite_policy(policy.clone())
+        .save_invite_policy(&account_id, policy.clone())
         .await
         .map_err(|error| {
             tracing::error!(%error, actor = %session.actor, "failed to persist invite_receive_policy");

@@ -116,7 +116,10 @@ async fn create_and_dispatch_local_realm_invite(
     seal_basis: Value,
 ) {
     let bob_core = fixture_actor_core_id("did:web:bob.example");
-    let mut receive_policy = InviteReceivePolicy::spec_default(bob_core.clone());
+    let mut receive_policy = InviteReceivePolicy::spec_default(arkret_wire::AccountId::new(
+        bob_core.clone(),
+        state.service_core_id().clone(),
+    ));
     receive_policy
         .holder_allowed_introduction_kinds
         .push("same_station".to_owned());

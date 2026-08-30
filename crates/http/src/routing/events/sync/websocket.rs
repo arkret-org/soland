@@ -1286,6 +1286,22 @@ async fn handle_client_frame(
             {
                 return Err(channel_rejection(channel_id, &error.message));
             }
+            if let WebSocketOpenParameters::Events(parameters) = &parameters {
+                let actors = parameters
+                    .actor_ids
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>();
+                let actors = canonical_actor_selectors(&actors)
+                    .map_err(|error| channel_rejection(channel_id, &error.message))?;
+                if parameters.realm_ids.as_ref().is_none_or(Vec::is_empty) {
+                    authorize_actor_only_selectors(state, Some(session), &actors)
+                        .await
+                        .map_err(|error| channel_rejection(channel_id, &error.message))?;
+                }
+            }
             match connection
                 .admit_open(&frame)
                 .map_err(|error| channel_rejection(channel_id, &error.to_string()))?
@@ -1566,6 +1582,14 @@ async fn run_events_channel(
         .flatten()
         .map(|actor| actor.to_string())
         .collect::<BTreeSet<_>>();
+    let scope_realms = parameters
+        .realm_ids
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    let actor_only = scope_realms.is_empty();
     let mut accessible: Vec<String> = Vec::new();
     let requested_realms = match parameters.realm_ids.filter(|realms| !realms.is_empty()) {
         Some(realms) => realms,
@@ -1582,7 +1606,7 @@ async fn run_events_channel(
             accessible.push(realm);
         }
     }
-    if accessible.is_empty() {
+    if accessible.is_empty() && !actor_only {
         let payload = WebSocketChannelControlPayload::Events(Box::new(events_unauthorized_frame()));
         if let Ok(frame) = WebSocketServerFrame::channel_control(channel_id.clone(), &payload) {
             sender.send_durable(frame).await;
@@ -1590,7 +1614,7 @@ async fn run_events_channel(
         return WebSocketClosedReason::Unauthorized;
     }
     let realm_filter: BTreeSet<String> = accessible.iter().cloned().collect();
-    let filter_digest = websocket_events_filter_digest(&accessible, &actor_filter);
+    let filter_digest = events_subscribe_filter_digest(&scope_realms, &actor_filter);
 
     // The live receiver is installed before the `opened` acknowledgement and
     // before replay, so nothing can land in either admission-to-producer or
@@ -1622,7 +1646,15 @@ async fn run_events_channel(
         None => None,
     };
 
-    let replay_upper_bound = match (catchup, resume_event_id.as_deref()) {
+    let actor_replay = if actor_only && catchup {
+        match actor_subscription_replay(&state, &actor_filter, resume_event_id.as_deref()).await {
+            Ok(replay) => replay,
+            Err(_) => return events_resync(&sender, &channel_id).await,
+        }
+    } else {
+        None
+    };
+    let replay_upper_bound = match (catchup && !actor_only, resume_event_id.as_deref()) {
         (true, Some(cursor)) => {
             match projected_event_replay_upper_bound(&state, &realm_filter, cursor).await {
                 Ok(upper_bound) => upper_bound,
@@ -1637,6 +1669,33 @@ async fn run_events_channel(
 
     let mut replayed_event_ids: BTreeSet<String> = BTreeSet::new();
     let mut replay_cursor: Option<String> = None;
+    if let Some((events, has_more)) = actor_replay {
+        if has_more {
+            return events_resync(&sender, &channel_id).await;
+        }
+        for event in events {
+            let cursor = sync_token_for_events_query(
+                &state,
+                Some(&session),
+                &filter_digest,
+                event.event_id.as_str(),
+            )
+            .await;
+            replayed_event_ids.insert(event.event_id.to_string());
+            if !emit_events_event(
+                &sender,
+                &channel_id,
+                event.realm_id.as_str(),
+                &cursor,
+                &event,
+            )
+            .await
+            {
+                return WebSocketClosedReason::Error;
+            }
+            replay_cursor = Some(cursor);
+        }
+    }
     if let Some(upper_bound) = replay_upper_bound.as_deref() {
         let page = projected_event_page_for_realms_through(
             &state,
@@ -1668,9 +1727,7 @@ async fn run_events_channel(
                 );
                 return events_resync(&sender, &channel_id).await;
             };
-            if !actor_filter.is_empty()
-                && !actor_filter.contains(envelope.actor_id.signing_principal_id().as_str())
-            {
+            if !actor_filter.is_empty() && !actor_filter.contains(&envelope.actor_id.to_string()) {
                 continue;
             }
             let cursor = sync_token_for_events_query(
@@ -1715,7 +1772,13 @@ async fn run_events_channel(
             Err(RecvError::Lagged(_)) => return events_resync(&sender, &channel_id).await,
             Err(RecvError::Closed) => return WebSocketClosedReason::Completed,
         };
-        if !active_realms.contains(&notification.realm_id) {
+        if !active_realms.contains(&notification.realm_id)
+            && !(actor_only
+                && matches!(
+                    &notification.kind,
+                    crate::state::EventNotificationKind::Event { .. }
+                ))
+        {
             continue;
         }
         let realm_id = notification.realm_id.clone();
@@ -1727,12 +1790,13 @@ async fn run_events_channel(
                 if replayed_event_ids.contains(&cursor) {
                     continue;
                 }
-                if !projection_event_value_visible_to_session(
-                    &state,
-                    &event_payload,
-                    Some(&session),
-                )
-                .await
+                if !actor_only
+                    && !projection_event_value_visible_to_session(
+                        &state,
+                        &event_payload,
+                        Some(&session),
+                    )
+                    .await
                 {
                     continue;
                 }
@@ -1756,9 +1820,16 @@ async fn run_events_channel(
                     continue;
                 };
                 if !actor_filter.is_empty()
-                    && !actor_filter.contains(envelope.actor_id.signing_principal_id().as_str())
+                    && !actor_filter.contains(&envelope.actor_id.to_string())
                 {
                     continue;
+                }
+                if actor_only
+                    && authorize_actor_only_selectors(&state, Some(&session), &actor_filter)
+                        .await
+                        .is_err()
+                {
+                    return WebSocketClosedReason::Unauthorized;
                 }
                 if !emit_events_event(&sender, &channel_id, &realm_id, &live_cursor, &envelope)
                     .await
@@ -1816,26 +1887,6 @@ async fn run_events_channel(
             | crate::state::EventNotificationKind::Account { .. } => continue,
         }
     }
-}
-
-fn websocket_events_filter_digest(
-    accessible_realms: &[String],
-    actors: &BTreeSet<String>,
-) -> String {
-    if actors.is_empty() {
-        return events_subscribe_filter_digest(accessible_realms);
-    }
-    let realms = accessible_realms
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    sync_filter_digest(Some(&json!({
-        "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
-        "realms": realms,
-        "actors": actors,
-    })))
 }
 
 /// Emit one events `data` frame; `false` means the channel is finished.

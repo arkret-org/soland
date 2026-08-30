@@ -370,7 +370,7 @@ fn signal_envelope(
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id: realm },
-        sender_actor_id: arkret_identifiers::DidCoreId::new(sender_actor.to_owned()).unwrap(),
+        sender_actor_id: roster_actor(sender_actor),
         sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
@@ -417,7 +417,7 @@ fn signal_record(
     soland_storage::SignalRelayRecord {
         realm_id: envelope.realm_id.as_str().to_owned(),
         scope_ref: envelope.scope_ref.clone(),
-        sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+        sender_actor_id: envelope.sender_actor_id.to_string(),
         sender_device_id: envelope.sender_device_id.as_str().to_owned(),
         signal_class: envelope.signal_class,
         envelope_digest: envelope.envelope_digest().unwrap().as_str().to_owned(),

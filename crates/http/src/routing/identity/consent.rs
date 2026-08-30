@@ -28,6 +28,10 @@ use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentRequestOutcome,
     ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
 };
+use arkret_models_collaboration::governance::invite_addressing::{
+    InviteQuarantine, InviteQuarantineInvalidation, InviteQuarantineInvalidationReason,
+    InviteQuarantineInvalidationScope,
+};
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
@@ -1083,46 +1087,54 @@ async fn plan_invite_quarantine_invalidation(
     let Some(existing) = existing else {
         return Ok(None);
     };
-    let Some(entries) = existing.payload.get("entries").and_then(Value::as_array) else {
-        return Ok(None);
-    };
+    let account_id = arkret_wire::AccountId::new(
+        DidCoreId::new(holder.to_owned()).map_err(|error| {
+            ConsentRejection::internal(format!("invalid quarantine holder: {error}"))
+        })?,
+        state.service_core_id().clone(),
+    );
+    let mut quarantine: InviteQuarantine = serde_json::from_value(existing.payload.clone())
+        .map_err(|error| {
+            ConsentRejection::internal(format!("invalid invite quarantine cell: {error}"))
+        })?;
+    quarantine.validate_holder(&account_id).map_err(|error| {
+        ConsentRejection::internal(format!("invite quarantine binding: {error}"))
+    })?;
     let mut removed = 0usize;
-    let retained = entries
-        .iter()
-        .filter(|entry| {
-            let should_remove = quarantine_entry_matches_consent_revoke(entry, peer);
-            if should_remove {
-                removed += 1;
-            }
-            !should_remove
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    quarantine.quarantine_entries.retain(|entry| {
+        let matches_peer = entry.source_peer_principal_id.as_str() == peer;
+        if matches_peer {
+            removed += 1;
+        }
+        !matches_peer && entry.expires_at > revoked_at
+    });
     if removed == 0 {
         return Ok(None);
     }
-    let mut object = existing.payload.as_object().cloned().unwrap_or_default();
-    object.insert(
-        "schema".to_owned(),
-        Value::String(crate::routing::invites::INVITE_QUARANTINE_SCHEMA.to_owned()),
-    );
-    object.insert("entries".to_owned(), Value::Array(retained));
-    object.insert("updated_at".to_owned(), json!(revoked_at));
-    object.insert(
-        "last_invalidation".to_owned(),
-        json!({
-            "reason": "consent_revoke",
-            "peer_principal_id": peer,
-            "consent_scope": consent_scope,
-            "revoked_at": revoked_at,
-            "removed_entries": removed,
-        }),
-    );
+    quarantine.updated_at = revoked_at;
+    quarantine.last_invalidation = Some(InviteQuarantineInvalidation {
+        reason: InviteQuarantineInvalidationReason::ConsentRevoke,
+        peer_principal_id: DidCoreId::new(peer.to_owned()).map_err(|error| {
+            ConsentRejection::internal(format!("invalid revoked peer: {error}"))
+        })?,
+        consent_scope: if consent_scope == "any" {
+            InviteQuarantineInvalidationScope::Any
+        } else {
+            InviteQuarantineInvalidationScope::Invite
+        },
+        revoked_at,
+        removed_entries: removed as u64,
+    });
+    quarantine.validate_holder(&account_id).map_err(|error| {
+        ConsentRejection::internal(format!("invite quarantine binding: {error}"))
+    })?;
     let record = AccountDataState {
         actor_id: holder.to_owned(),
         account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
         revision: existing.revision + 1,
-        payload: Value::Object(object),
+        payload: serde_json::to_value(quarantine).map_err(|error| {
+            ConsentRejection::internal(format!("invite quarantine encode: {error}"))
+        })?,
         tombstone: false,
         updated_at: revoked_at,
     };
@@ -1134,22 +1146,6 @@ async fn plan_invite_quarantine_invalidation(
         },
         removed,
     )))
-}
-
-fn quarantine_entry_matches_consent_revoke(entry: &Value, peer: &str) -> bool {
-    let pending = entry
-        .get("status")
-        .and_then(Value::as_str)
-        .is_none_or(|status| status == "pending_review");
-    let invite_scope = entry
-        .get("consent_scope")
-        .and_then(Value::as_str)
-        .is_none_or(|scope| scope == "invite");
-    let peer_matches = entry
-        .get("source_peer_principal_id")
-        .and_then(Value::as_str)
-        == Some(peer);
-    pending && invite_scope && peer_matches
 }
 
 /// Record the eager invalidation a committed revoke performed.
@@ -1617,12 +1613,22 @@ mod tests {
             account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
             revision: 1,
             payload: json!({
-                "schema": crate::routing::invites::INVITE_QUARANTINE_SCHEMA,
-                "entries": [{
+                "schema": "ak.schema.invite_quarantine.v1",
+                "quarantine_entries": [{
                     "entry_digest": format!("sha256:{}", "a".repeat(64)),
                     "status": "pending_review",
+                    "account_id": { "principal_id": HOLDER, "station_id": state.service_id() },
+                    "source_id": state.service_id(),
                     "consent_scope": "invite",
                     "source_peer_principal_id": PEER,
+                    "introduction_kind": "explicit_address",
+                    "effective_kind": "explicit_address",
+                    "trust_tier": "low",
+                    "invite_event_digest": format!("sha256:{}", "b".repeat(64)),
+                    "request_digest": format!("sha256:{}", "c".repeat(64)),
+                    "idempotency_key_digest": format!("sha256:{}", "d".repeat(64)),
+                    "received_at": updated_at,
+                    "expires_at": updated_at + chrono::Duration::days(1),
                 }],
                 "updated_at": updated_at,
             }),
@@ -1647,7 +1653,8 @@ mod tests {
         assert_eq!(removed, 1);
         assert_eq!(cas.expected_revision, 1);
         assert_eq!(cas.record.revision, 2);
-        assert_eq!(cas.record.payload["entries"], json!([]));
+        assert_eq!(cas.record.payload["quarantine_entries"], json!([]));
+        assert!(cas.record.payload.get("entries").is_none());
         // Planning is read-only: the durable cell only changes with the Event.
         assert_eq!(
             state

@@ -872,8 +872,10 @@ pub struct CommitContactProjection {
     /// pending-incoming verification window. Same-service delivery has no
     /// federation outbox hop, so this must commit with the shared slot.
     pub verified_mirror: Option<soland_storage::ContactVerifiedMirrorRecord>,
-    pub invite_policy:
-        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+    pub invite_policy: Option<(
+        arkret_wire::AccountId,
+        arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    )>,
 }
 
 #[derive(Clone, Debug)]

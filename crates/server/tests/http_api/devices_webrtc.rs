@@ -1728,7 +1728,7 @@ async fn call_signal_not_delivered_after_ttl_expiry_body() {
         .append(soland_storage::SignalRelayRecord {
             realm_id: demo_realm_id().to_owned(),
             scope_ref: expired.scope_ref.clone(),
-            sender_actor_id: expired.sender_actor_id.as_str().to_owned(),
+            sender_actor_id: expired.sender_actor_id.to_string(),
             sender_device_id: expired.sender_device_id.as_str().to_owned(),
             signal_class: expired.signal_class,
             envelope_digest: expired.envelope_digest().unwrap().as_str().to_owned(),

@@ -1380,7 +1380,8 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
     // account query replay -> SDK model/digest/proof verifier.
     let app = app_from_state(state.clone());
     let mut replay_response = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"actor_ids": [controller_id], "limit": 100}))
+        .json(&serde_json::json!({"actor_ids": [arkret_wire::ActorId::account(
+            arkret_wire::AccountId::new(controller_id, state.service_core_id().clone()))], "limit": 100}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
