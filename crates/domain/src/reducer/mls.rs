@@ -459,9 +459,10 @@ pub fn apply_remove_proposal(state: &mut ProjectionState, op: &Operation) -> Pro
         return reject("mls_proposal_base_epoch_missing");
     };
     let Some(target_actor_id) = payload
-        .get("target_principal_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+        .get("target_actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .map(|actor| actor.to_string())
     else {
         return reject("mls_remove_proposal_target_missing");
     };

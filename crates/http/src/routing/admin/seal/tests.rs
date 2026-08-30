@@ -53,7 +53,7 @@ fn notary_value_from_cell_reads_authoritative_single_signer_form() {
     assert_eq!(j["notary"]["kind"], "single_signer");
     assert_eq!(
         j["notary"]["signer"]["actor_id"],
-        "ak:did_core:web:alice.example"
+        json!({"kind": "service", "service_id": "ak:did_core:web:alice.example"})
     );
     assert_eq!(j["revocation_freshness_window_ms"], 60000);
 }

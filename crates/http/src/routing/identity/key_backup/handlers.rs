@@ -34,7 +34,6 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
 
 pub(super) async fn enforce_key_backup_series_chain_typed(
     state: &AppState,
-    actor_id: &str,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
     let series_id = backup.series_id.as_str();
@@ -47,7 +46,7 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         .map(|backup_id| backup_id.as_str().to_owned());
     let snapshot = state
         .key_backups()
-        .backups_for_actor(actor_id)
+        .backups_for_actor(&backup.actor_id.to_string())
         .await
         .map_err(|error| {
             AppError::internal(format!("key backup series chain lookup failed: {error}"))
@@ -134,11 +133,11 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
 
 pub(super) fn key_backup_idempotent_retry(
     existing: Option<&Value>,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     incoming: &Value,
 ) -> Result<bool, AppError> {
     if let Some(existing) = existing
-        && existing.get("actor_id").and_then(Value::as_str) != Some(actor_id)
+        && !backup_actor_matches(existing, actor_id)
     {
         return Err(
             AppError::capability_denied("backup_id is already owned by a different actor")
@@ -184,7 +183,7 @@ pub(super) async fn owned_key_backup_snapshot(
     // deleted.
     let snapshot = state
         .key_backups()
-        .backups_for_actor(actor_id)
+        .backups_for_actor(&local_backup_actor(state, actor_id)?.to_string())
         .await
         .map_err(|error| {
             AppError::internal(format!("key backup snapshot lookup failed: {error}"))
@@ -266,7 +265,8 @@ pub(super) async fn put_key_backup(
         }
         None => {}
     }
-    validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
+    let account_actor = local_backup_actor(state, &session.actor)?;
+    validate_key_backup_body_typed(&typed_backup_id, &account_actor, &backup)?;
     enforce_recovery_policy_ref_typed(state, &session.actor, &backup).await?;
     if backup.encryption.recipient_method == KeyBackupRecipientMethod::RecoveryPublicKey {
         validate_current_recovery_recipient(state, &backup, chrono::Utc::now()).await?;
@@ -278,7 +278,7 @@ pub(super) async fn put_key_backup(
         .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?;
-    let duplicate = key_backup_idempotent_retry(existing.as_ref(), &session.actor, &backup_value)?;
+    let duplicate = key_backup_idempotent_retry(existing.as_ref(), &account_actor, &backup_value)?;
     if duplicate {
         let outcome = KeysBackupsReplaceOutcome {
             status: KeyBackupPutStatus::Duplicate,
@@ -295,7 +295,7 @@ pub(super) async fn put_key_backup(
         .await;
         return json_ok(outcome);
     }
-    enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
+    enforce_key_backup_series_chain_typed(state, &backup).await?;
     state
         .key_backups()
         .store_backup(backup_id.clone(), backup_value)
@@ -415,7 +415,7 @@ async fn list_key_backups_impl(
     }
     let mut backups: Vec<Value> = state
         .key_backups()
-        .backups_for_actor(&session.actor)
+        .backups_for_actor(&local_backup_actor(state, &session.actor)?.to_string())
         .await
         .map_err(|error| {
             tracing::error!(%error, actor = %session.actor, "failed to list encrypted key backups");
@@ -479,7 +479,7 @@ pub(super) async fn unlock_key_backup(
     else {
         return Err(AppError::not_found("key backup not found"));
     };
-    if backup.get("actor_id").and_then(Value::as_str) != Some(&session.actor) {
+    if !backup_actor_matches(&backup, &local_backup_actor(state, &session.actor)?) {
         return Err(AppError::not_found("key backup not found"));
     }
     // The path `backup_id` and `proof.backup_id` MUST match: the envelope is
@@ -602,12 +602,13 @@ pub(super) async fn delete_key_backup(
         }
     }
 
+    let account_actor = local_backup_actor(state, &session.actor)?;
     let owned_backup = state
         .key_backups()
         .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
-        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(&session.actor));
+        .filter(|backup| backup_actor_matches(backup, &account_actor));
     let Some(backup) = owned_backup else {
         // spec `keys_backups_delete_outcome` models `deleted: const true` only;
         // a backup that does not exist (or is not owned by this actor) cannot be

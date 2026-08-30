@@ -711,14 +711,20 @@ mod tests {
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const CREATE_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
+    fn account_actor(principal: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(principal.to_owned()).unwrap(),
+            DidCoreId::new(STATION.to_owned()).unwrap(),
+        ))
+    }
+
     fn circle_create_event(object: Value) -> Event {
         serde_json::from_value(json!({
             "event_id": CREATE_EVENT,
             "kind": arkret_wire::EventKind::CircleCreate,
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
-            "actor_id": ACTOR,
-            "station_id": STATION,
+            "actor_id": account_actor(ACTOR),
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -744,7 +750,7 @@ mod tests {
             "history_access": "since_join",
             "encryption_profile": "mls_rfc9420",
             "state": "active",
-            "created_by": ACTOR,
+            "created_by": account_actor(ACTOR),
             "created_at": "2026-07-06T00:00:00.000Z",
         })
     }
@@ -791,8 +797,7 @@ mod tests {
             "kind": arkret_wire::EventKind::CircleMemberState,
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
-            "actor_id": actor,
-            "station_id": STATION,
+            "actor_id": account_actor(actor),
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -809,7 +814,7 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": CIRCLE,
-                "actor_id": BOB,
+                "member_id": account_actor(BOB),
                 "membership": "join",
             }),
         );
@@ -827,7 +832,7 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": "ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy",
-                "actor_id": BOB,
+                "member_id": account_actor(BOB),
                 "membership": "join",
             }),
         );
@@ -841,7 +846,7 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": CIRCLE,
-                "actor_id": BOB,
+                "member_id": account_actor(BOB),
                 "membership": "leave",
                 "expected_membership": "join",
             }),
@@ -857,7 +862,7 @@ mod tests {
     fn member_delete_rejects_each_unsigned_path_rebinding() {
         let payload = json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "leave",
         });
         let event = member_state_event(ACTOR, payload.clone());
@@ -873,7 +878,7 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": CIRCLE,
-                "actor_id": BOB,
+                "member_id": account_actor(BOB),
                 "membership": "ban",
             }),
         );
@@ -884,7 +889,7 @@ mod tests {
             ACTOR,
             json!({
                 "circle_id": CIRCLE,
-                "actor_id": BOB,
+                "member_id": account_actor(BOB),
                 "membership": "leave",
             }),
         );

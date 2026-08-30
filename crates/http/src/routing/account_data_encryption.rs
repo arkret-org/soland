@@ -183,7 +183,7 @@ pub(crate) fn validate_encrypted_account_data_value(
 pub(crate) fn validate_encrypted_account_data_value_for_actor(
     account_data_key: &str,
     value: &Value,
-    expected_actor_id: Option<&str>,
+    expected_actor_id: Option<&arkret_wire::ActorId>,
 ) -> Result<(), AccountDataEncryptionError> {
     if encrypted_account_data_prefix(account_data_key).is_none() {
         return Ok(());
@@ -289,7 +289,7 @@ fn field_is_forbidden_plaintext(field: &str) -> bool {
 fn validate_encrypted_carrier(
     account_data_key: &str,
     value: &Value,
-    expected_actor_id: Option<&str>,
+    expected_actor_id: Option<&arkret_wire::ActorId>,
 ) -> Result<(), AccountDataEncryptionError> {
     validate_encrypted_envelope_metadata(account_data_key, value, expected_actor_id)
 }
@@ -297,18 +297,14 @@ fn validate_encrypted_carrier(
 fn validate_encrypted_envelope_metadata(
     account_data_key: &str,
     value: &Value,
-    expected_actor_id: Option<&str>,
+    expected_actor_id: Option<&arkret_wire::ActorId>,
 ) -> Result<(), AccountDataEncryptionError> {
     let envelope: AccountDataEncryptedValue = serde_json::from_value(value.clone())
         .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?;
-    let expected_actor_id = expected_actor_id
-        .map(|value| arkret_wire::DidCoreId::new(value.to_owned()))
-        .transpose()
-        .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)?
-        .unwrap_or_else(|| envelope.aad.actor_id.clone());
+    let expected_actor_id = expected_actor_id.unwrap_or(&envelope.aad.actor_id);
     arkret_crypto::account_data_crypto::validate_account_data_encrypted_value(
         &envelope,
-        &expected_actor_id,
+        expected_actor_id,
         account_data_key,
     )
     .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
@@ -325,8 +321,8 @@ mod tests {
     }
 
     fn encrypted_envelope(account_data_key: &str) -> Value {
-        let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
-            .expect("test actor core id");
+        let actor_id =
+            crate::test_account_actor(&arkret_wire::Did::new("did:web:alice.example").unwrap());
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
@@ -364,7 +360,9 @@ mod tests {
         let error = validate_encrypted_account_data_value_for_actor(
             private_key(),
             &encrypted_envelope(private_key()),
-            Some("did:web:bob.example"),
+            Some(&crate::test_account_actor(
+                &arkret_wire::Did::new("did:web:bob.example").unwrap(),
+            )),
         )
         .unwrap_err();
         assert_eq!(error, AccountDataEncryptionError::InvalidEnvelopeMetadata);

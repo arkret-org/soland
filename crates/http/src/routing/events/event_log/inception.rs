@@ -103,7 +103,11 @@ pub(super) fn principal_control_genesis_shape(
             .and_then(|payload| payload.pointer("/object/purpose"))
             .and_then(Value::as_str)
             == Some("principal_control")
-        && object.get("actor_id").and_then(Value::as_str) == Some(actor_id)
+        && object
+            .get("actor_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+            .is_some_and(|actor| actor.signing_principal_id().as_str() == actor_id)
 }
 
 fn anchor_refs(object: &serde_json::Map<String, Value>) -> Vec<(&str, &str, bool)> {

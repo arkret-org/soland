@@ -218,7 +218,7 @@ fn snapshot_event_set_leaf(
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         event_digest: arkret_identifiers::Hash::new(record.canonical_digest.clone())
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-        actor_id: arkret_identifiers::DidCoreId::new(record.actor_id.clone())
+        actor_id: serde_json::from_str::<arkret_wire::ActorId>(&record.actor_id)
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
         actor_seq: record.actor_seq,
         hlc: event_hlc_or_received_at(state, record)?,

@@ -137,10 +137,13 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
         .get("holder_id")
         .and_then(Value::as_str)
         .ok_or("account_data.set requires holder_id")?;
+    if owner != operation.context.sender.signing_principal_id().as_str() {
+        return Err("account_data.set holder_id must match the authenticated actor");
+    }
     crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
         key,
         &operation.payload,
-        Some(owner),
+        Some(&operation.context.sender),
     )
     .map_err(|error| error.message())
 }

@@ -2342,7 +2342,7 @@ mod tests {
         }
         AcceptedEvent {
             event_id: envelope["event_id"].as_str().unwrap().to_owned(),
-            actor_id: crate::test_actor_id(
+            actor_id: crate::test_account_actor(
                 &arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
             )
             .to_string(),
@@ -2427,7 +2427,7 @@ mod tests {
         .collect();
         let (max_seq, heads) = preserved_actor_frontier(
             &records,
-            &crate::test_actor_id(
+            &crate::test_account_actor(
                 &arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
             )
             .to_string(),

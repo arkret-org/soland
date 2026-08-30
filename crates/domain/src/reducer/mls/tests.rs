@@ -9,6 +9,13 @@ use serde_json::json;
 use super::*;
 use crate::reducer::{MlsEffect, ProjectionEffect, ProjectionState};
 
+fn fixture_actor(principal_id: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal_id.to_owned()).unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+    ))
+}
+
 fn op_at(secs: i64, object_kind: impl AsRef<str>, mut payload: serde_json::Value) -> Operation {
     if let Some(payload) = payload.as_object_mut()
         && let Some(accepted_event_id) = payload.remove("accepted_event_id")
@@ -130,7 +137,7 @@ fn welcome_payload() -> Value {
             "destination_id": "ak:did_core:web:server.example",
             "request": {
                 "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
-                "target_principal_id": "ak:did_core:web:bob.example",
+                "target_actor_id": fixture_actor("ak:did_core:web:bob.example"),
                 "requester_id": "ak:did_core:web:alice.example",
                 "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
                 "mls_group_id": "mls-group-abc",
@@ -224,7 +231,7 @@ fn publish_projection(
         keypackage_ref: id.to_owned(),
         keypackage_digest: arkret_canonical::sha256_digest(&key_package_bytes),
         owner_account_pk: 1,
-        actor_id: actor.to_owned(),
+        actor_id: fixture_actor(actor).to_string(),
         device_id: Some(device.to_owned()),
         lifetime: KeyPackageLifetimeProjection {
             not_before: 1,
@@ -960,7 +967,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
         realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
         circle_id: None,
         mls_group_ref: Some("mls-group-abc".to_owned()),
-        actor_id: "ak:did_core:web:alice.example".to_owned(),
+        actor_id: fixture_actor("ak:did_core:web:alice.example").to_string(),
         device_id: Some("ak:device:lost".to_owned()),
         membership_frontier: vec![revoke_event.to_owned()],
         trigger_membership: "device_revoke".to_owned(),
@@ -978,7 +985,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                     "base_epoch": 0,
                     "proposal_type": "remove",
                     "proposal_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                    "target_principal_id": "ak:did_core:web:alice.example",
+                    "target_actor_id": fixture_actor("ak:did_core:web:alice.example"),
                     "target_device_id": "ak:device:lost",
                 }),
             )
@@ -1033,7 +1040,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
             realm_id: "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1".to_owned(),
             circle_id: None,
             mls_group_ref: Some("mls-group-abc".to_owned()),
-            actor_id: target.to_owned(),
+            actor_id: fixture_actor(target).to_string(),
             device_id: None,
             membership_frontier: vec![frontier.to_owned()],
             trigger_membership: "realm_member_remove".to_owned(),
@@ -1051,7 +1058,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                         "base_epoch": 0,
                         "proposal_type": "remove",
                         "proposal_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
-                        "target_principal_id": target,
+                        "target_actor_id": fixture_actor(target),
                     }),
                 )
             ),

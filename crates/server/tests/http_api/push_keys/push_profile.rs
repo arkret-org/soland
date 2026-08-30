@@ -1064,7 +1064,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],
-                    &fixture_actor_core_id(bob),
+                    &arkret_wire::ActorId::account(arkret_wire::AccountId::new(fixture_actor_core_id(bob), state.service_core_id())),
                     "ak.account.blocklist",
                     &serde_json::json!({"entries": [{"target": ALICE}]}),
                     [10u8; 24],

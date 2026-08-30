@@ -92,13 +92,21 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         return validate_applet_registration_is_live(state, &applet_id, realm_id, &effective_scope)
             .await;
     }
-    let executed_by = event_string_field(object, &["executed_by"]).ok_or_else(|| {
+    let executed_by = object.get("executed_by").cloned().ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
             "applet-originated delegated Event requires executed_by",
         )
     })?;
+    let executed_by_actor =
+        serde_json::from_value::<arkret_wire::ActorId>(executed_by).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("applet executed_by is invalid: {error}"),
+            )
+        })?;
     let authorization_ref =
         event_string_field(object, &["authorization_ref"]).ok_or_else(|| {
             event_validation_error(
@@ -124,7 +132,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
     let package = &record.package;
-    if !applet_executor_in_subject_set(&record, package.service_id.as_str(), &executed_by) {
+    if !applet_executor_in_subject_set(&record, package.service_id.as_str(), &executed_by_actor) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "applet_namespace_mismatch",
@@ -140,15 +148,6 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         ));
     }
 
-    let executed_by_actor = arkret_wire::ActorId::service(
-        arkret_wire::DidCoreId::new(executed_by.clone()).map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("applet executed_by is invalid: {error}"),
-            )
-        })?,
-    );
     let grants = state
         .authorization()
         .grants_for_subject(&executed_by_actor, realm_id);
@@ -196,7 +195,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         package,
         grant,
         &applet_id,
-        &executed_by,
+        executed_by_actor.signing_principal_id().as_str(),
     )
     .await?;
     Ok(())
@@ -593,15 +592,19 @@ pub(super) fn applet_delegation_binding_reason(
 pub(super) fn applet_executor_in_subject_set(
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
     service_id: &str,
-    executed_by: &str,
+    executed_by: &arkret_wire::ActorId,
 ) -> bool {
-    executed_by == service_id
-        || executed_by == record.bot_actor_id.signing_principal_id().as_str()
+    matches!(executed_by, arkret_wire::ActorId::Service { service_id: executor } if executor.as_str() == service_id)
+        || executed_by == &record.bot_actor_id
         || record
             .ghosts
             .iter()
-            .any(|ghost| ghost.ghost_actor_id.signing_principal_id().as_str() == executed_by)
-        || applet_actor_matches_exact_namespace(record, executed_by)
+            .any(|ghost| &ghost.ghost_actor_id == executed_by)
+        || (executed_by.route_service_id().as_str() == service_id
+            && applet_actor_matches_exact_namespace(
+                record,
+                executed_by.signing_principal_id().as_str(),
+            ))
 }
 
 pub(super) fn applet_actor_is_managed(

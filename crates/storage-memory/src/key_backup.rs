@@ -36,7 +36,13 @@ impl KeyBackupStore for MemoryKeyBackupStore {
             .backups
             .lock()
             .values()
-            .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(actor_id))
+            .filter(|backup| {
+                backup
+                    .get("actor_id")
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+                    .is_some_and(|owner| owner.to_string() == actor_id)
+            })
             .cloned()
             .collect())
     }

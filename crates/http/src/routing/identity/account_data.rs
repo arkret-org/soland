@@ -158,7 +158,7 @@ fn validate_readable_account_data_key(account_data_key: &str) -> Result<(), AppE
 }
 
 fn validate_private_account_data_content_for_actor(
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     account_data_key: &str,
     content: &Value,
 ) -> Result<(), AppError> {
@@ -499,7 +499,13 @@ async fn put_account_data(
                 "set_event payload must carry body or encrypted_payload",
             )
         })?;
-    validate_private_account_data_content_for_actor(&session.actor, &account_data_key, &content)?;
+    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::capability_denied(format!("invalid account principal: {error}"))
+        })?,
+        state.service_core_id(),
+    ));
+    validate_private_account_data_content_for_actor(&account_actor, &account_data_key, &content)?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
     // filling the row with megabytes of base64.
@@ -865,8 +871,8 @@ mod tests {
     }
 
     fn encrypted_envelope(account_data_key: &str) -> Value {
-        let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
-            .expect("test actor core id");
+        let actor_id =
+            crate::test_account_actor(&arkret_wire::Did::new("did:web:alice.example").unwrap());
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],

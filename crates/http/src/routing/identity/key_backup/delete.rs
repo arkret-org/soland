@@ -162,12 +162,13 @@ async fn require_owned_backup(
     backup_id: &str,
     actor_id: &str,
 ) -> Result<Value, AppError> {
+    let account_actor = local_backup_actor(state, actor_id)?;
     state
         .key_backups()
         .backup(backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
-        .filter(|backup| backup.get("actor_id").and_then(Value::as_str) == Some(actor_id))
+        .filter(|backup| backup_actor_matches(backup, &account_actor))
         .ok_or_else(|| AppError::not_found("key backup not found"))
 }
 
@@ -447,7 +448,12 @@ async fn verify_principal_signing_delete(
         .ok_or_else(|| {
             AppError::capability_denied("principal proof authorization Event is unavailable")
         })?;
-    if authorize_event.actor_id != challenge.principal_id.as_str()
+    if authorize_event.actor_id
+        != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            challenge.principal_id.clone(),
+            challenge.service_id.clone(),
+        ))
+        .to_string()
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
     {
@@ -743,7 +749,7 @@ fn quorum_verification_method_matches(
 }
 
 pub(super) fn ensure_key_backup_delete_is_series_tail(
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     backup: &Value,
     owned_backups: &[Value],
 ) -> Result<(), AppError> {
@@ -759,7 +765,7 @@ pub(super) fn ensure_key_backup_delete_is_series_tail(
         return Ok(());
     }
     for existing in owned_backups {
-        if existing.get("actor_id").and_then(Value::as_str) != Some(actor_id) {
+        if !backup_actor_matches(existing, actor_id) {
             continue;
         }
         if existing.get("series_id").and_then(Value::as_str) != Some(series_id) {
@@ -792,5 +798,9 @@ pub(super) async fn ensure_key_backup_delete_allowed(
     backup: &Value,
 ) -> Result<(), AppError> {
     let owned_backups = owned_key_backup_snapshot(state, actor_id).await?;
-    ensure_key_backup_delete_is_series_tail(actor_id, backup, &owned_backups)
+    ensure_key_backup_delete_is_series_tail(
+        &local_backup_actor(state, actor_id)?,
+        backup,
+        &owned_backups,
+    )
 }

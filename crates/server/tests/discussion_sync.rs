@@ -681,7 +681,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         .expect("fixture actor DID projects to a core id");
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": actor, "realm_id": realm_id}))
+            .json(&serde_json::json!({"actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(actor.clone(), state.service_core_id())), "realm_id": realm_id}))
             .add_header("authorization", format!("Bearer {token}"), true)
             .add_header(
                 "Arkret-Operation",

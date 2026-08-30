@@ -38,7 +38,7 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let object = payload.as_object_mut().expect("test payload object");
     object
         .entry("sender".to_owned())
-        .or_insert_with(|| Value::String(ISSUER.to_owned()));
+        .or_insert_with(|| serde_json::to_value(actor(ISSUER)).unwrap());
     // The registered or_set dot is `ak:event:<event_id>:<write_index>`, so a
     // fixture Operation owes the full producer Event token injected by the
     // submit path. An Event-derived grant must be the byte-for-byte retyping of
@@ -76,7 +76,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
             "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
             "grant": {
                 "realm_id": REALM,
-                "issuer_id": ISSUER,
+                "issuer_id": actor(ISSUER),
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
@@ -84,7 +84,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                     "controller_epoch_at_issuance": 0,
                     "authority_generation": 0
                 }],
-                "subject": SUBJECT,
+                "subject": actor(SUBJECT),
                 "actions": actions,
                 "resources": resources,
             }
@@ -209,7 +209,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                 "event_id": GRANT_ID.replacen("ak:grant:", "ak:event:", 1),
                 "grant": {
                     "realm_id": REALM,
-                    "issuer_id": ISSUER,
+                    "issuer_id": actor(ISSUER),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -217,7 +217,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": SUBJECT,
+                    "subject": actor(SUBJECT),
                     "actions": ["ak.circle.member.manage"],
                     "resources": [{ "kind": "circle", "realm_id": REALM, "circle_id": CIRCLE_A }],
                     "constraints": [{

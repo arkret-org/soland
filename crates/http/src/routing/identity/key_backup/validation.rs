@@ -39,7 +39,7 @@ pub(super) fn key_backup_to_value(backup: &KeyBackup) -> Result<Value, AppError>
 
 pub(super) fn validate_key_backup_body_typed(
     backup_id: &BackupId,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
     backup
@@ -51,7 +51,7 @@ pub(super) fn validate_key_backup_body_typed(
             "path backup_id must match body backup_id",
         ));
     }
-    if backup.actor_id.as_str() != actor_id {
+    if &backup.actor_id != actor_id {
         return Err(AppError::capability_denied(
             "backup actor_id must match authenticated actor",
         ));
@@ -398,7 +398,7 @@ pub(super) async fn validate_current_recovery_recipient(
 ) -> Result<(), AppError> {
     let policy = state
         .recovery_policies()
-        .active_policy(backup.actor_id.as_str())
+        .active_policy(backup.actor_id.signing_principal_id().as_str())
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {

@@ -1059,13 +1059,15 @@ async fn event_uses_active_applet_registration_epoch(
     else {
         return Ok(false);
     };
-    let signer_id = object
+    let signer = object
         .get("executed_by")
-        .and_then(Value::as_str)
-        .or_else(|| object.get("actor_id").and_then(Value::as_str));
-    let Some(signer_id) = signer_id else {
+        .or_else(|| object.get("actor_id"))
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+    let Some(signer) = signer else {
         return Ok(false);
     };
+    let signer_id = signer.signing_principal_id().as_str();
     let Some(method_controller) = verification_method.split_once('#').map(|(root, _)| root) else {
         return Ok(false);
     };
@@ -1116,9 +1118,11 @@ async fn event_uses_active_applet_registration_epoch(
                     format!("stored Applet registration Event is invalid: {error}"),
                 )
             })?;
-    Ok(package.service_id.as_str() == signer_id
-        && package.webhook_auth.key_ref.as_str() == verification_method
-        && evidence.contains_signing_key(verification_method))
+    Ok(
+        signer == arkret_wire::ActorId::service(package.service_id.clone())
+            && package.webhook_auth.key_ref.as_str() == verification_method
+            && evidence.contains_signing_key(verification_method),
+    )
 }
 
 /// Run the registry cell contract for every reducer-input kind whose registry

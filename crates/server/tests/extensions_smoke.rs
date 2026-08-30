@@ -212,6 +212,10 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(demo_realm_id()).unwrap();
+    let admin_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap()).unwrap(),
+        state.service_core_id(),
+    ));
     {
         let mut projection = state.test_projection().lock();
         let genesis = projection
@@ -248,12 +252,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
             )),
         );
-        let authority_root = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-            arkret_wire::ActorId::service(
-                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
-                    .unwrap(),
-            ),
-        );
+        let authority_root =
+            arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(admin_actor.clone());
         projection.realm_null_subject_cells.insert(
             (
                 demo_realm_id().to_owned(),
@@ -305,10 +305,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ))
     .unwrap();
     let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer_id: arkret_wire::ActorId::service(
-            arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
-                .unwrap(),
-        ),
+        issuer_id: admin_actor.clone(),
         op: arkret_state::lattice::SealedOp::new(
             admin_grant_move_id.clone(),
             arkret_wire::LatticeOp {
@@ -318,8 +315,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "grant_id": EXTENSION_ADMIN_GRANT_ID,
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": demo_realm_id(),
-                    "issuer_id": "ak:did_core:web:alice.example",
-                    "issuer_station_id": state.service_id(),
+                    "issuer_id": admin_actor,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": demo_realm_id(),
@@ -327,8 +323,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": "ak:did_core:web:alice.example",
-                    "subject_station_id": state.service_id(),
+                    "subject": admin_actor,
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",

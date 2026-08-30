@@ -284,7 +284,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     let backup_kind = record.backup_kind.as_str().to_owned();
     let series_exists = state
         .key_backups()
-        .backups_for_actor(record.actor_id.signing_principal_id().as_str())
+        .backups_for_actor(&record.actor_id.to_string())
         .await
         .map_err(|_| "key_backup_active_series_authority_unavailable")?
         .iter()

@@ -483,7 +483,10 @@ fn account_data_encrypted_value(
     serde_json::to_value(
         arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
             &[7u8; 32],
-            &fixture_actor_core_id(actor_id),
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                fixture_actor_core_id(actor_id),
+                soland_test_support::fixture_station_id(),
+            )),
             account_data_key,
             plaintext,
             [nonce_byte; 24],

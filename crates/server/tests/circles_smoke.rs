@@ -35,14 +35,24 @@ const ALICE: &str = "ak:did_core:web:alice.example";
 const BOB: &str = "ak:did_core:web:bob.example";
 const MALLORY: &str = "ak:did_core:web:mallory.example";
 
+fn member_actor(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(principal.to_owned()).unwrap(),
+        soland_test_support::fixture_station_id(),
+    ))
+}
+
+fn member_key(principal: &str) -> String {
+    member_actor(principal).to_string()
+}
+
 fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let kind = kind.as_ref();
     let object = payload.get_mut("object").and_then(Value::as_object_mut);
     let sender = object
         .as_ref()
         .and_then(|object| object.get("created_by"))
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+        .cloned();
     let producer_event_id = object
         .as_ref()
         .and_then(|object| object.get("id"))
@@ -75,7 +85,7 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
             .as_object_mut()
             .expect("test payload object")
             .entry("sender")
-            .or_insert_with(|| Value::String(sender));
+            .or_insert(sender);
     }
     arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
@@ -144,9 +154,9 @@ fn seed_encrypted_realm(
 fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, actor: &str) {
     let now = chrono::Utc::now();
     state.members.insert(
-        (realm_id.to_owned(), actor.to_owned()),
+        (realm_id.to_owned(), member_key(actor)),
         SolandMembershipState {
-            member: actor.to_owned(),
+            member: member_key(actor),
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -178,7 +188,7 @@ fn circle_create_writes_projection() {
                     "join_rule": "invite",
                     "history_access": "since_join",
                     "encryption_profile": "mls_rfc9420",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -212,7 +222,7 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
                     "realm_id": REALM_A,
                     "title": "Plaintext Ops",
                     "encryption_profile": "none",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -254,7 +264,7 @@ fn circle_content_floor_below_realm_rejected() {
                     "title": "Below-floor Ops",
                     "encryption_profile": "mls_rfc9420",
                     "content_encryption_floor": "allow_plaintext",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -282,7 +292,7 @@ fn circle_update_rejects_encryption_profile_patch() {
                     "realm_id": REALM_A,
                     "title": "Ops",
                     "encryption_profile": "mls_rfc9420",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -298,7 +308,7 @@ fn circle_update_rejects_encryption_profile_patch() {
                 "patch": {
                     "encryption_profile": "none"
                 },
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
             }),
         ),
         &hlc,
@@ -328,7 +338,7 @@ fn circle_member_must_be_realm_member() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Ops",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -341,9 +351,9 @@ fn circle_member_must_be_realm_member() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor_id": BOB,
+                "member_id": member_actor(BOB),
                 "membership": "join",
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
             }),
         ),
         &hlc,
@@ -366,9 +376,9 @@ fn circle_member_must_be_realm_member() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor_id": BOB,
+                "member_id": member_actor(BOB),
                 "membership": "join",
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
                 "manage_capability_verified": true,
             }),
         ),
@@ -377,10 +387,13 @@ fn circle_member_must_be_realm_member() {
     assert!(matches!(
         accepted,
         ProjectionEffect::CircleMemberStateChanged { ref member, ref target_state, .. }
-            if member == BOB && target_state == "join"
+            if member == &member_key(BOB) && target_state == "join"
     ));
     let circle = state.circle(CIRCLE_A).expect("circle live");
-    assert!(circle.members.contains(BOB), "Bob is now a Circle member");
+    assert!(
+        circle.members.contains(&member_key(BOB)),
+        "Bob is now a Circle member"
+    );
 }
 
 #[test]
@@ -399,7 +412,7 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Private Ops",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -415,16 +428,16 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor_id": BOB,
+                "member_id": member_actor(BOB),
                 "membership": "join",
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
                 "manage_capability_verified": true,
             }),
         ),
         &hlc,
     );
     assert!(
-        state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
+        state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(BOB)),
         "joined Circle member should see Circle-scoped content"
     );
 
@@ -434,9 +447,9 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor_id": BOB,
+                "member_id": member_actor(BOB),
                 "membership": "leave",
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
             }),
         ),
         &hlc,
@@ -444,12 +457,15 @@ fn circle_member_remove_updates_active_set_and_scope_visibility() {
     assert!(matches!(
         removed,
         ProjectionEffect::CircleMemberStateChanged { ref member, ref target_state, .. }
-            if member == BOB && target_state == "leave"
+            if member == &member_key(BOB) && target_state == "leave"
     ));
     let circle = state.circle(CIRCLE_A).expect("circle live");
-    assert!(!circle.members.contains(BOB), "Bob left the joined set");
     assert!(
-        !state.circle_scope_visible_to_actor(CIRCLE_A, BOB),
+        !circle.members.contains(&member_key(BOB)),
+        "Bob left the joined set"
+    );
+    assert!(
+        !state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(BOB)),
         "removed Circle member must not see new Circle-scoped content"
     );
 }
@@ -471,7 +487,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
                         "id": circle_id,
                         "realm_id": REALM_A,
                         "title": "Private Ops",
-                        "created_by": ALICE,
+                        "created_by": member_actor(ALICE),
                         "encryption_profile": encryption_profile,
                     }
                 }),
@@ -484,16 +500,16 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
                 REALM_A,
                 json!({
                     "circle_id": circle_id,
-                    "actor_id": BOB,
+                    "member_id": member_actor(BOB),
                     "membership": "join",
-                    "sender": ALICE,
+                    "sender": member_actor(ALICE),
                     "manage_capability_verified": true,
                 }),
             ),
             &hlc,
         );
         assert!(
-            state.circle_scope_visible_to_actor(circle_id, BOB),
+            state.circle_scope_visible_to_actor(circle_id, &member_key(BOB)),
             "fixture should start with Bob joined in {circle_id}"
         );
     }
@@ -503,9 +519,9 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
             arkret_wire::EventKind::MemberState,
             REALM_A,
             json!({
-                "actor_id": BOB,
+                "member_id": member_actor(BOB),
                 "membership": target_membership,
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
             }),
         ),
         &hlc,
@@ -513,11 +529,11 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
     assert!(matches!(
         effect,
         ProjectionEffect::MembershipChanged { ref member, ref action, .. }
-            if member == BOB && action == target_membership
+            if member == &member_key(BOB) && action == target_membership
     ));
     for circle_id in [CIRCLE_A, CIRCLE_B] {
         assert!(
-            !state.circle_scope_visible_to_actor(circle_id, BOB),
+            !state.circle_scope_visible_to_actor(circle_id, &member_key(BOB)),
             "parent Realm {target_membership} must remove Bob from Circle {circle_id}"
         );
     }
@@ -529,7 +545,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
     let obligation = &state.pending_mls_removals[0];
     assert_eq!(obligation.realm_id, REALM_A);
     assert_eq!(obligation.circle_id.as_deref(), Some(CIRCLE_A));
-    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.actor_id, member_key(BOB));
     assert_eq!(obligation.trigger_membership, target_membership);
 }
 
@@ -560,7 +576,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Private Ops",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -579,9 +595,9 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
                 REALM_A,
                 json!({
                     "circle_id": CIRCLE_A,
-                    "actor_id": actor,
+                    "member_id": member_actor(actor),
                     "membership": "join",
-                    "sender": sender,
+                    "sender": member_actor(sender),
                     "manage_capability_verified": true,
                 }),
             ),
@@ -619,7 +635,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
             json!({
                 "event_id": "ak:event:AfaoXo0TmLK2gbcvCoXuTQMlnz-bWxdaHyOiyqXbYfG6",
                 "strand_id": STRAND_X,
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
                 "content": {
                     "body": "circle-only ciphertext placeholder",
                     "encrypted": true
@@ -636,8 +652,8 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
         message.content["scope_circle_id"], CIRCLE_A,
         "projection must derive Circle scope from the Strand so sync/event readers can filter"
     );
-    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, ALICE));
-    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, BOB));
+    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(ALICE)));
+    assert!(state.circle_scope_visible_to_actor(CIRCLE_A, &member_key(BOB)));
     assert!(
         !state.circle_scope_visible_to_actor(CIRCLE_A, MALLORY),
         "Realm member outside the Circle must not be eligible for Circle-scoped content"
@@ -660,7 +676,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
                     "realm_id": REALM_A,
                     "title": "Private Ops",
                     "join_rule": "public",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -672,9 +688,9 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
             REALM_A,
             json!({
                 "circle_id": CIRCLE_A,
-                "actor_id": ALICE,
+                "member_id": member_actor(ALICE),
                 "membership": "join",
-                "sender": ALICE,
+                "sender": member_actor(ALICE),
             }),
         ),
         &hlc,
@@ -691,7 +707,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
                     "morph_kind": "task",
                     "metadata": { "title": "Circle task" },
                     "scope_circle_id": CIRCLE_A,
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -725,7 +741,7 @@ fn strand_scope_circle_id_rejects_cross_realm() {
                     "id": CIRCLE_B,
                     "realm_id": REALM_B,
                     "title": "B-Circle",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),
@@ -771,7 +787,7 @@ fn circle_tombstone_hides_from_read_helper() {
                     "id": CIRCLE_A,
                     "realm_id": REALM_A,
                     "title": "Ops",
-                    "created_by": ALICE,
+                    "created_by": member_actor(ALICE),
                 }
             }),
         ),

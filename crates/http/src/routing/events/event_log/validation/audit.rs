@@ -43,7 +43,11 @@ pub(super) fn validate_audit_accessed_payload(
         return Ok(());
     }
     let payload = audit_accessed_payload(object)?;
-    if object.get("actor_id").and_then(Value::as_str) != Some(payload.writer_actor_id.as_str()) {
+    let writer = object
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
+    if !writer.is_some_and(|writer| writer.signing_principal_id() == &payload.writer_actor_id) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",

@@ -19,6 +19,12 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
 fn dev_proof_envelope() -> serde_json::Map<String, Value> {
     let mut object = serde_json::Map::new();
     object.insert(
+        "actor_id".to_owned(),
+        json!(crate::test_account_actor(
+            &arkret_wire::Did::new("did:web:alice.example").unwrap()
+        )),
+    );
+    object.insert(
         "proofs".to_owned(),
         json!([{
             "type": "dev-proof",
@@ -1291,6 +1297,13 @@ const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGf
 const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
 const DATA_EVENT_STATION: &str = "ak:did_core:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
+
+fn data_event_account(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal.to_owned()).unwrap(),
+        arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
+    ))
+}
 /// The MLS group named by every E2EE fixture ciphertext.
 fn data_event_placeholder_seal_id() -> arkret_identifiers::SealId {
     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap()
@@ -1389,8 +1402,7 @@ fn historical_data_event_grant_value(
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": DATA_EVENT_REALM,
-        "issuer_id": issuer,
-        "issuer_station_id": DATA_EVENT_STATION,
+        "issuer_id": data_event_account(issuer),
         "issuer_authority_refs": [{
             "kind": "realm_root",
             "realm_id": DATA_EVENT_REALM,
@@ -1398,8 +1410,7 @@ fn historical_data_event_grant_value(
             "controller_epoch_at_issuance": 0,
             "authority_generation": 0
         }],
-        "subject": subject,
-        "subject_station_id": DATA_EVENT_STATION,
+        "subject": data_event_account(subject),
         "actions": [action],
         "resources": [DATA_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
@@ -1427,8 +1438,7 @@ fn insert_historical_data_event_grant(
         state,
         grant_id,
         action,
-        DATA_EVENT_ACTOR,
-        DATA_EVENT_STATION,
+        data_event_account(DATA_EVENT_ACTOR),
         revoked,
     )
 }
@@ -1437,8 +1447,7 @@ fn insert_historical_data_event_grant_for_subject(
     state: &AppState,
     grant_id: &str,
     action: &str,
-    subject: &str,
-    subject_station_id: &str,
+    subject: arkret_wire::ActorId,
     revoked: bool,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
@@ -1452,12 +1461,12 @@ fn insert_historical_data_event_grant_for_subject(
     let mut value = historical_data_event_grant_value(
         grant_id,
         action,
-        subject,
+        subject.signing_principal_id().as_str(),
         "ak:did_core:web:owner.example",
         revoked,
         None,
     );
-    value["subject_station_id"] = json!(subject_station_id);
+    value["subject"] = json!(subject);
     let op = arkret_wire::LatticeOp {
         op_type: arkret_wire::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000999".to_owned()),
@@ -1654,6 +1663,7 @@ fn data_event_object_with_refs(
     grants: Vec<String>,
 ) -> serde_json::Map<String, Value> {
     json!({
+        "actor_id": data_event_account(DATA_EVENT_ACTOR),
         "seal_ref": seal_ref,
         "created_at": "2026-05-08T00:02:00.000Z",
         "refs": grants
@@ -1829,8 +1839,9 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         &state,
         grant_id,
         "ak.message.create",
-        APPLET_SERVICE,
-        DATA_EVENT_STATION,
+        arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new(APPLET_SERVICE.to_owned()).unwrap(),
+        ),
         false,
     );
     let mut object = data_event_object_with_refs(&seal_ref, vec![]);
@@ -1838,7 +1849,12 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         "applet_id".to_owned(),
         json!("ak:applet:01904100-0000-7000-8000-000000000001"),
     );
-    object.insert("executed_by".to_owned(), json!(APPLET_SERVICE));
+    object.insert(
+        "executed_by".to_owned(),
+        json!(arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new(APPLET_SERVICE.to_owned()).unwrap()
+        )),
+    );
     object.insert("authorization_ref".to_owned(), json!(grant_id));
 
     validate_data_event_capability_refs(

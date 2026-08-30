@@ -159,7 +159,10 @@ pub fn build_realm_basis(
         fixture_id_domain,
     } = options;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
-    let issuer = DidCoreId::new(subject.to_owned()).map_err(|error| error.to_string())?;
+    let issuer = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        DidCoreId::new(subject.to_owned()).map_err(|error| error.to_string())?,
+        DidCoreId::new(station_id.to_owned()).map_err(|error| error.to_string())?,
+    ));
     let genesis_move = fixture_move_id(
         fixture_id_domain,
         realm_id,
@@ -312,7 +315,7 @@ pub fn build_realm_basis(
                 value: Some(
                     serde_json::to_value(
                         arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                            arkret_wire::ActorId::service(issuer.clone()),
+                            issuer.clone(),
                         ),
                     )
                     .map_err(|error| error.to_string())?,
@@ -549,9 +552,13 @@ fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
     }
 }
 
-fn issued_op(issuer: &DidCoreId, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
+fn issued_op(
+    issuer: &arkret_wire::ActorId,
+    move_id: &Hash,
+    op: arkret_wire::LatticeOp,
+) -> IssuedOp {
     IssuedOp {
-        issuer_id: arkret_wire::ActorId::service(issuer.clone()),
+        issuer_id: issuer.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
     }
 }
@@ -564,14 +571,16 @@ fn grant_body(
     actions: &[String],
     constraints: Option<Value>,
 ) -> Result<Value, String> {
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        DidCoreId::new(subject.to_owned()).map_err(|error| error.to_string())?,
+        DidCoreId::new(station_id.to_owned()).map_err(|error| error.to_string())?,
+    ));
     let mut body = serde_json::json!({
         "grant_id": grant_id,
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
-        "issuer_id": subject,
-        "issuer_station_id": station_id,
-        "subject": subject,
-        "subject_station_id": station_id,
+        "issuer_id": actor,
+        "subject": actor,
         "actions": actions,
         "issuer_authority_refs": [{
             "kind": "realm_root",

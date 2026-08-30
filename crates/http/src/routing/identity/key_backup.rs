@@ -60,6 +60,26 @@ pub(crate) fn admin_router() -> Router {
 }
 
 const KEY_BACKUP_CLASSES: &[&str] = &["secret_storage", "mls_history"];
+
+fn local_backup_actor(
+    state: &AppState,
+    principal_id: &str,
+) -> Result<arkret_wire::ActorId, AppError> {
+    Ok(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            AppError::capability_denied(format!("invalid account principal: {error}"))
+        })?,
+        state.service_core_id(),
+    )))
+}
+
+fn backup_actor_matches(backup: &Value, actor_id: &arkret_wire::ActorId) -> bool {
+    backup
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .is_some_and(|owner| &owner == actor_id)
+}
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::DidCoreId;
@@ -70,6 +90,13 @@ mod tests {
     const ACTOR: &str = "ak:did_core:web:alice.example";
     const BACKUP_ID: &str = "ak:backup:01964137-0000-7000-8000-000000000001";
     const DEVICE_ID: &str = "ak:device:01964137-0000-7000-8000-000000000001";
+
+    fn backup_account_actor(principal_id: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(principal_id.to_owned()).unwrap(),
+            crate::test_event::station_id(),
+        ))
+    }
 
     fn validate_key_backup_body(
         backup_id: &str,
@@ -82,7 +109,7 @@ mod tests {
             ))
         })?;
         let backup = typed_key_backup_body(body)?;
-        validate_key_backup_body_typed(&typed_backup_id, actor_id, &backup)
+        validate_key_backup_body_typed(&typed_backup_id, &backup_account_actor(actor_id), &backup)
     }
 
     fn typed_key_backup_body(body: &Value) -> Result<KeyBackup, AppError> {
@@ -96,7 +123,7 @@ mod tests {
     fn key_backup_body(backup_kind: &str, encryption: Value) -> Value {
         let mut body = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": ACTOR,
+            "actor_id": backup_account_actor(ACTOR),
             "device_id": DEVICE_ID,
             "backup_kind": backup_kind,
             "backup_version": "kb_1",
@@ -309,11 +336,12 @@ mod tests {
     fn duplicate_backup_id_rejects_cross_actor_overwrite() {
         let existing = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": "ak:did_core:web:bob.example"
+            "actor_id": backup_account_actor("ak:did_core:web:bob.example")
         });
 
-        let err = key_backup_idempotent_retry(Some(&existing), ACTOR, &existing)
-            .expect_err("other actor must not overwrite backup_id");
+        let err =
+            key_backup_idempotent_retry(Some(&existing), &backup_account_actor(ACTOR), &existing)
+                .expect_err("other actor must not overwrite backup_id");
 
         assert_eq!(err.code, ErrorCode::CapabilityDenied);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
@@ -323,30 +351,46 @@ mod tests {
     fn duplicate_backup_id_accepts_same_actor_retry() {
         let existing = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": ACTOR
+            "actor_id": backup_account_actor(ACTOR)
         });
 
-        let duplicate = key_backup_idempotent_retry(Some(&existing), ACTOR, &existing)
-            .expect("same actor idempotent retry is allowed");
+        let duplicate =
+            key_backup_idempotent_retry(Some(&existing), &backup_account_actor(ACTOR), &existing)
+                .expect("same actor idempotent retry is allowed");
 
         assert!(duplicate);
+    }
+
+    #[test]
+    fn duplicate_backup_id_rejects_same_principal_at_another_station() {
+        let owner = backup_account_actor(ACTOR);
+        let other_account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(ACTOR.to_owned()).unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example".to_owned()).unwrap(),
+        ));
+        let existing = json!({"backup_id": BACKUP_ID, "actor_id": owner});
+        assert!(!backup_actor_matches(&existing, &other_account));
+        let error = key_backup_idempotent_retry(Some(&existing), &other_account, &existing)
+            .expect_err("Station change creates a distinct account, not an overwrite authority");
+        assert_eq!(error.code, ErrorCode::CapabilityDenied);
     }
 
     #[test]
     fn duplicate_backup_id_rejects_different_content() {
         let existing = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": ACTOR,
+            "actor_id": backup_account_actor(ACTOR),
             "ciphertext": "first"
         });
         let incoming = json!({
             "backup_id": BACKUP_ID,
-            "actor_id": ACTOR,
+            "actor_id": backup_account_actor(ACTOR),
             "ciphertext": "second"
         });
 
-        let err = key_backup_idempotent_retry(Some(&existing), ACTOR, &incoming)
-            .expect_err("same id with different content must conflict");
+        let err =
+            key_backup_idempotent_retry(Some(&existing), &backup_account_actor(ACTOR), &incoming)
+                .expect_err("same id with different content must conflict");
 
         assert_eq!(err.code, ErrorCode::DuplicateConflict);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
