@@ -51,7 +51,7 @@ pub(crate) struct CanonicalEventRow {
     #[diesel(sql_type = Binary)]
     pub(crate) digest: Vec<u8>,
     #[diesel(sql_type = Text)]
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: String,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
     #[diesel(sql_type = Nullable<Text>)]
@@ -158,7 +158,7 @@ struct StoredEventIdentityRow {
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Text)]
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: String,
     #[diesel(sql_type = BigInt)]
     actor_seq: i64,
     #[diesel(sql_type = Nullable<Text>)]
