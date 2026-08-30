@@ -22,6 +22,10 @@ mod cba_capability_cell_tests {
 
     use super::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
 
+    fn actor(value: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
+    }
+
     #[test]
     fn engine_grant_reads_registry_projected_wrapper() {
         let grant_id = "ak:grant:AVrFZlvgUn-7TZ-JmuAqj5zeywh7lJ6SQmpb3MNF95Q7";
@@ -33,8 +37,7 @@ mod cba_capability_cell_tests {
                 "grant": {
                     "id": grant_id,
                     "realm_id": realm_id,
-                    "issuer_id": "ak:did_core:web:owner.example",
-                    "issuer_station_id": "ak:did_core:web:owner.example",
+                    "issuer_id": actor("ak:did_core:web:owner.example"),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": realm_id,
@@ -42,8 +45,7 @@ mod cba_capability_cell_tests {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": "ak:did_core:web:owner.example",
-                    "subject_station_id": "ak:did_core:web:owner.example",
+                    "subject": actor("ak:did_core:web:owner.example"),
                     "actions": ["ak.realm.admin"],
                     "resources": [{
                         "kind": "realm",
@@ -75,10 +77,8 @@ mod cba_capability_cell_tests {
     fn engine_grant_retains_field_and_track_constraints_without_alias_conversion() {
         let body = json!({
             "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
-            "issuer_id": "ak:did_core:web:owner.example",
-            "issuer_station_id": "ak:did_core:web:owner.example",
-            "subject": "ak:did_core:web:writer.example",
-            "subject_station_id": "ak:did_core:web:writer.example",
+            "issuer_id": actor("ak:did_core:web:owner.example"),
+            "subject": actor("ak:did_core:web:writer.example"),
             "actions": ["ak.strand.update"],
             "resources": [{
                 "kind": "strand",
@@ -138,7 +138,7 @@ mod agent_key_tests {
     #[test]
     fn agent_and_service_high_risk_grants_require_finite_expiry() {
         let high_risk = json!({
-            "subject": AGENT,
+            "subject": actor(AGENT),
             "actions": ["ak.capability.revoke"],
             "resources": [{"kind": "realm", "realm_id": REALM}]
         });
@@ -148,7 +148,7 @@ mod agent_key_tests {
         );
 
         let low_risk = json!({
-            "subject": AGENT,
+            "subject": actor(AGENT),
             "actions": ["ak.reaction.add"],
             "resources": [{"kind": "realm", "realm_id": REALM}]
         });
@@ -161,15 +161,23 @@ mod agent_key_tests {
     fn op(event_kind: EventKind, mut payload: serde_json::Value) -> Operation {
         const OPERATION_ID: &str = "ak:operation:01970000-0000-7000-8000-0000000000ff";
         let issuer = payload
-            .get("grant")
-            .and_then(|grant| grant.get("issuer_id"))
+            .get("sender")
             .and_then(serde_json::Value::as_str)
-            .unwrap_or(REALM_OWNER)
-            .to_owned();
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                payload
+                    .get("grant")
+                    .and_then(|grant| grant.get("issuer_id"))
+                    .and_then(|value| {
+                        serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                    })
+                    .map(|actor| actor.signing_principal_id().to_string())
+            })
+            .unwrap_or_else(|| REALM_OWNER.to_owned());
         let object = payload.as_object_mut().expect("test payload object");
         object
             .entry("sender".to_owned())
-            .or_insert_with(|| serde_json::Value::String(issuer));
+            .or_insert_with(|| serde_json::Value::String(issuer.clone()));
         if let Some(accepted_event_id) = object.remove("accepted_event_id") {
             object.insert("event_id".to_owned(), accepted_event_id);
         }
@@ -184,6 +192,7 @@ mod agent_key_tests {
             event_kind,
             payload,
         );
+        operation.context.sender = actor(&issuer);
         if let Some(accepted_scope_ref) = accepted_scope_ref {
             operation.context.accepted_scope_ref =
                 serde_json::from_value(accepted_scope_ref).unwrap();
@@ -207,7 +216,7 @@ mod agent_key_tests {
             "grant": {
                 "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
-                "issuer_id": issuer,
+                "issuer_id": actor(issuer),
                 "issuer_authority_refs": [{
                     "kind": "realm_root",
                     "realm_id": REALM,
@@ -215,8 +224,7 @@ mod agent_key_tests {
                     "controller_epoch_at_issuance": 0,
                     "authority_generation": 0
                 }],
-                "subject": subject,
-                "subject_station_id": subject,
+                "subject": actor(subject),
                 "actions": actions,
                 "resources": resources,
             }
@@ -959,6 +967,10 @@ mod authority_cycle_tests {
     const G_B: &str = "ak:grant:AVi9st41v9B8lGcU9SB244GCIBji2eJm4HrPJo16jLcS";
     const G_C: &str = "ak:grant:AdWiF-Xct4sJV_hkG8VRIEzHTssfJ4YBilfE98t_Perb";
 
+    fn actor(value: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
+    }
+
     /// A re-grant: same `ak.capability.grant` kind as a root issue, with a
     /// `grant` authority ref instead of a `realm_root` one. That ref type is
     /// the only thing that distinguishes the two.
@@ -986,9 +998,8 @@ mod authority_cycle_tests {
                 .to_string(),
                 "sender": "ak:did_core:web:alice.example",
                 "grant": {
-                    "issuer_id": "ak:did_core:web:alice.example",
-                    "subject": "ak:did_core:web:alice.example",
-                    "subject_station_id": "ak:did_core:web:alice.example",
+                    "issuer_id": actor("ak:did_core:web:alice.example"),
+                    "subject": actor("ak:did_core:web:alice.example"),
                     "issuer_authority_refs": [
                         { "kind": "grant", "grant_id": authority_grant_id }
                     ],
@@ -1015,7 +1026,7 @@ mod authority_cycle_tests {
                 "event_id": grant_id.replacen("ak:grant:", "ak:event:", 1),
                 "sender": issuer,
                 "grant": {
-                    "issuer_id": issuer,
+                    "issuer_id": actor(issuer),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1023,8 +1034,7 @@ mod authority_cycle_tests {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": subject,
-                    "subject_station_id": subject,
+                    "subject": actor(subject),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1206,9 +1216,7 @@ mod authority_cycle_tests {
                 "max_authority_depth": 0
             }]),
         );
-        terminal_child.payload["grant"]["subject"] = json!("ak:did_core:web:alice.example");
-        terminal_child.payload["grant"]["subject_station_id"] =
-            json!("ak:did_core:web:alice.example");
+        terminal_child.payload["grant"]["subject"] = json!(actor("ak:did_core:web:alice.example"));
         let accepted = proj.apply_capability_grant(&terminal_child, chrono::Utc::now());
         assert!(matches!(
             accepted,
@@ -1397,90 +1405,6 @@ mod authority_cycle_tests {
     }
 }
 
-mod federation_revoke_fanout_tests {
-    use arkret_event_draft::ProjectedEventOperation as Operation;
-    use arkret_identifiers::{OperationId, RealmId};
-    use serde_json::json;
-
-    use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
-
-    const REALM: &str = "ak:realm:AfCwsnvdJeIf2T8CEXlUwnunThfVLY8R2SI54sTEapiS";
-    const OTHER_REALM: &str = "ak:realm:ARib7U2kHFo1ErdwrDDP0057R6D3jtBM74RcEz4Pw4Jy";
-    const OWNER: &str = "ak:did_core:web:alice.example";
-    const PEER_SERVICE_ID: &str = "ak:did_core:web:beta.example";
-    const GRANT: &str = "ak:grant:AZqtjPe_dBMbCiO1AaO3pl249mYTX42jAeK7WbxsUOP_";
-    const OWNER_GRANT: &str = "ak:grant:AftcsV-S3Qgkuf_flS2xTzy_TzSq42hZip4BUCG8D6qv";
-
-    fn capability_op(
-        operation_id: &str,
-        kind: impl AsRef<str>,
-        mut payload: serde_json::Value,
-    ) -> Operation {
-        let object = payload.as_object_mut().expect("test payload object");
-        object
-            .entry("sender".to_owned())
-            .or_insert_with(|| serde_json::Value::String(OWNER.to_owned()));
-        object.entry("event_id".to_owned()).or_insert_with(|| {
-            serde_json::Value::String(super::fixture_event_id_for_operation(operation_id))
-        });
-        arkret_event_draft::test_support::raw_projected_operation(
-            OperationId::new(operation_id.to_owned()).unwrap(),
-            RealmId::new(REALM.to_owned()).unwrap(),
-            kind.as_ref(),
-            payload,
-        )
-    }
-
-    fn seed_realm_authority(state: &mut ProjectionState) {
-        let now = chrono::Utc::now();
-        crate::reducer::tests::install_realm_authority_root(state, REALM, OWNER);
-        state.realm_states.insert(
-            REALM.to_owned(),
-            SolandRealmState {
-                realm_id: REALM.to_owned(),
-                owner: Some(OWNER.to_owned()),
-                title: None,
-                deleted: false,
-                archived: false,
-                frozen: false,
-                freeze_expires_at: None,
-                created_at: now,
-                updated_at: now,
-                trust_domain: None,
-                terminal_state: None,
-                successor_realm_id: None,
-                default_strand_id: None,
-            },
-        );
-        let owner_grant = capability_op(
-            "ak:operation:01970000-0000-7000-8000-0000000000a0",
-            arkret_wire::EventKind::CapabilityGrant,
-            json!({
-                "event_id": OWNER_GRANT.replacen("ak:grant:", "ak:event:", 1),
-                "grant": {
-                    "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-                    "realm_id": REALM,
-                    "issuer_id": OWNER,
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": REALM,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
-                    "subject": OWNER,
-                    "actions": ["ak.realm.admin"],
-                    "resources": [{ "kind": "realm", "realm_id": REALM }],
-                }
-            }),
-        );
-        assert!(matches!(
-            state.apply_capability_grant(&owner_grant, now),
-            ProjectionEffect::CapabilityGrantProjected { .. }
-        ));
-    }
-}
-
 mod realm_owner_authority_tests {
     use arkret_event_draft::ProjectedEventOperation as Operation;
     use arkret_identifiers::{OperationId, RealmId};
@@ -1517,7 +1441,7 @@ mod realm_owner_authority_tests {
                 "grant": {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
-                    "issuer_id": issuer,
+                    "issuer_id": actor(issuer),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1525,7 +1449,7 @@ mod realm_owner_authority_tests {
                         "controller_epoch_at_issuance": 0,
                         "authority_generation": 0
                     }],
-                    "subject": subject,
+                    "subject": actor(subject),
                     "actions": actions,
                     "resources": [{
                         "kind": "realm",

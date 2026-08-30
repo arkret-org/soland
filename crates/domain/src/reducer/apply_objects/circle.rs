@@ -415,15 +415,14 @@ impl ProjectionState {
                 reason: "circle_member_state_missing_circle_id".to_owned(),
             };
         };
-        let Some(actor) = payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
+        let Ok(member_id) = serde_json::from_value::<arkret_wire::ActorId>(
+            payload.get("member_id").cloned().unwrap_or(Value::Null),
+        ) else {
             return ProjectionEffect::Rejected {
                 reason: "circle_member_state_missing_actor".to_owned(),
             };
         };
+        let actor = member_id.to_string();
         let target_state = payload
             .get("membership")
             .and_then(Value::as_str)

@@ -121,6 +121,11 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
         &hlc,
     );
 
+    let subject = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(SUBJECT).unwrap(),
+        arkret_identifiers::DidCoreId::new(SUBJECT_STATION).unwrap(),
+    ))
+    .to_string();
     assert!(matches!(
         effect,
         ProjectionEffect::InviteStateChanged {
@@ -128,11 +133,11 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
             ref state,
             ref invitee_id,
             ..
-        } if invite_id == INVITE && state == "claimed" && invitee_id.as_deref() == Some(SUBJECT)
+        } if invite_id == INVITE && state == "claimed" && invitee_id.as_deref() == Some(subject.as_str())
     ));
     let invite = state.invites.get(INVITE).expect("invite projected");
     assert_eq!(invite.state, "claimed");
-    assert_eq!(invite.invitee_id.as_deref(), Some(SUBJECT));
+    assert_eq!(invite.invitee_id.as_deref(), Some(subject.as_str()));
     assert!(
         invite
             .claim_nonces
@@ -152,7 +157,7 @@ fn invite_claim_converts_third_party_invite_to_claimed_invite() {
     );
     assert!(third_party_invite.token_salt_id.is_none());
     let member = state
-        .member(REALM, SUBJECT)
+        .member(REALM, &subject)
         .expect("claimed subject should have an invite membership proposal");
     assert_eq!(member.state, "invite");
 }
@@ -260,8 +265,12 @@ fn invite_claim_rejects_invite_bound_service_without_current_policy_allowlist() 
         rejected,
         ProjectionEffect::Rejected { ref reason } if reason == "verification_service_not_authorized"
     ));
+    let subject = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(SUBJECT).unwrap(),
+        arkret_identifiers::DidCoreId::new(SUBJECT_STATION).unwrap(),
+    ));
     assert!(
-        state.member(REALM, SUBJECT).is_none(),
+        state.member(REALM, &subject.to_string()).is_none(),
         "missing current Realm allowlist must not create membership proposal"
     );
 }

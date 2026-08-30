@@ -11,10 +11,11 @@ fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::Date
     let mut state = ProjectionState::new();
     let base = Utc.with_ymd_and_hms(2026, 6, 19, 8, 0, 0).unwrap();
     for actor in [ALICE, BOB] {
+        let actor = account_actor_string(actor);
         state.members.insert(
-            (REALM.to_owned(), actor.to_owned()),
+            (REALM.to_owned(), actor.clone()),
             SolandMembershipState {
-                member: actor.to_owned(),
+                member: actor,
                 realm_id: REALM.to_owned(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
@@ -46,7 +47,7 @@ fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::Date
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: ALICE.to_owned(),
+            created_by: account_actor_string(ALICE),
             created_at: base,
             updated_by: None,
             updated_at: None,
@@ -85,7 +86,7 @@ fn circle_history_uses_current_join_boundary() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "invite",
             "sender": ALICE,
         }),
@@ -101,7 +102,7 @@ fn circle_history_uses_current_join_boundary() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
@@ -113,8 +114,9 @@ fn circle_history_uses_current_join_boundary() {
         ProjectionEffect::CircleMemberStateChanged { .. }
     ));
 
-    assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at - Duration::seconds(1)));
-    assert!(state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at));
+    let bob = account_actor_string(BOB);
+    assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, &bob, join_at - Duration::seconds(1)));
+    assert!(state.circle_scope_visible_to_actor_at(CIRCLE, &bob, join_at));
 }
 
 #[test]
@@ -127,7 +129,7 @@ fn realm_leave_cascades_to_circle_history_membership() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
@@ -138,13 +140,14 @@ fn realm_leave_cascades_to_circle_history_membership() {
         state.apply(&join, &hlc),
         ProjectionEffect::CircleMemberStateChanged { .. }
     ));
-    assert!(state.circle_scope_visible_to_actor_at(CIRCLE, BOB, join_at));
+    let bob = account_actor_string(BOB);
+    assert!(state.circle_scope_visible_to_actor_at(CIRCLE, &bob, join_at));
 
     let mut leave = make_operation(
         arkret_wire::EventKind::MemberState,
         REALM,
         serde_json::json!({
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "leave",
             "sender": BOB,
         }),
@@ -155,11 +158,11 @@ fn realm_leave_cascades_to_circle_history_membership() {
         ProjectionEffect::MembershipChanged { .. }
     ));
 
-    assert!(!state.circles[CIRCLE].members.contains(BOB));
-    assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, BOB, leave_at));
+    assert!(!state.circles[CIRCLE].members.contains(&bob));
+    assert!(!state.circle_scope_visible_to_actor_at(CIRCLE, &bob, leave_at));
     assert_eq!(
         state
-            .circle_membership(CIRCLE, BOB)
+            .circle_membership(CIRCLE, &bob)
             .map(|m| m.state.as_str()),
         Some("leave")
     );
@@ -179,7 +182,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
             group_id: group_id.to_owned(),
             effective_scope,
             epoch: 2,
-            leader_actor_id: ALICE.to_owned(),
+            leader_actor_id: account_actor_string(ALICE),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
             genesis_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
             committed_at: base.timestamp(),
@@ -199,7 +202,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
         arkret_wire::EventKind::MemberState,
         REALM,
         serde_json::json!({
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "leave",
             "sender": BOB,
         }),
@@ -217,7 +220,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
     assert_eq!(obligation.realm_id, REALM);
     assert_eq!(obligation.circle_id, None);
     assert_eq!(obligation.mls_group_ref.as_deref(), Some(group_id));
-    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.actor_id, account_actor_string(BOB));
     assert_eq!(obligation.membership_frontier, vec![expected_frontier]);
     assert_eq!(obligation.trigger_membership, "leave");
     assert_eq!(obligation.triggered_at, leave_at);
@@ -231,16 +234,15 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
             .unwrap();
     let controller_authority = arkret_wire::AccountId {
         principal_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
-        station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example")
-            .unwrap(),
+        station_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
     };
     state
         .members
-        .get_mut(&(REALM.to_owned(), ALICE.to_owned()))
+        .get_mut(&(REALM.to_owned(), account_actor_string(ALICE)))
         .unwrap()
         .membership_event_ref = Some(controller_generation.to_string());
     state.agent_membership_bindings.insert(
-        (REALM.to_owned(), BOB.to_owned()),
+        (REALM.to_owned(), account_actor_string(BOB)),
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
             controller_authority,
             controller_membership_generation_ref: controller_generation,
@@ -248,7 +250,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         },
     );
     state.agent_lifecycles.insert(
-        BOB.to_owned(),
+        account_actor_string(BOB),
         arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
     );
     state
@@ -256,12 +258,12 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         .get_mut(CIRCLE)
         .unwrap()
         .members
-        .insert(BOB.to_owned());
+        .insert(account_actor_string(BOB));
     state.circle_memberships.insert(
-        (CIRCLE.to_owned(), BOB.to_owned()),
+        (CIRCLE.to_owned(), account_actor_string(BOB)),
         CircleMembershipState {
             circle_id: CIRCLE.to_owned(),
-            member: BOB.to_owned(),
+            member: account_actor_string(BOB),
             state: "join".to_owned(),
             invited_at: None,
             joined_at: base,
@@ -269,22 +271,24 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         },
     );
 
-    assert!(state.effective_agent_membership_base(REALM, BOB));
+    let alice = account_actor_string(ALICE);
+    let bob = account_actor_string(BOB);
+    assert!(state.effective_agent_membership_base(REALM, &bob));
     state
         .members
-        .get_mut(&(REALM.to_owned(), ALICE.to_owned()))
+        .get_mut(&(REALM.to_owned(), alice))
         .unwrap()
         .state = "leave".to_owned();
 
-    assert!(!state.effective_agent_membership_base(REALM, BOB));
+    assert!(!state.effective_agent_membership_base(REALM, &bob));
     assert_eq!(
-        state.members[&(REALM.to_owned(), BOB.to_owned())].state,
+        state.members[&(REALM.to_owned(), bob.clone())].state,
         "join"
     );
-    assert!(state.circles[CIRCLE].members.contains(BOB));
+    assert!(state.circles[CIRCLE].members.contains(&bob));
     assert_eq!(
         state
-            .circle_membership(CIRCLE, BOB)
+            .circle_membership(CIRCLE, &bob)
             .map(|membership| membership.state.as_str()),
         Some("join")
     );
@@ -301,7 +305,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "join",
             "sender": ALICE,
             "manage_capability_verified": true,
@@ -318,7 +322,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
-            "actor_id": BOB,
+            "member_id": account_actor(BOB),
             "membership": "leave",
             "sender": BOB,
         }),
@@ -337,7 +341,7 @@ fn circle_member_leave_enqueues_mls_remove_obligation() {
         obligation.mls_group_ref.as_deref(),
         Some("ak:mls:group:circle")
     );
-    assert_eq!(obligation.actor_id, BOB);
+    assert_eq!(obligation.actor_id, account_actor_string(BOB));
     assert_eq!(obligation.trigger_membership, "leave");
     assert_eq!(obligation.triggered_at, leave_at);
 }
@@ -348,8 +352,8 @@ fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
     {
         let circle = state.circles.get_mut(CIRCLE).unwrap();
         circle.mls_group_ref = Some("ak:mls:group:circle".to_owned());
-        circle.members.insert(ALICE.to_owned());
-        circle.members.insert(BOB.to_owned());
+        circle.members.insert(account_actor_string(ALICE));
+        circle.members.insert(account_actor_string(BOB));
     }
     let tombstone_at = base + Duration::minutes(40);
     let mut tombstone = make_operation(
@@ -375,7 +379,10 @@ fn circle_tombstone_enqueues_mls_remove_obligations_for_active_members() {
         .map(|obligation| obligation.actor_id.as_str())
         .collect::<Vec<_>>();
     removed.sort();
-    assert_eq!(removed, vec![ALICE, BOB]);
+    assert_eq!(
+        removed,
+        vec![account_actor_string(ALICE), account_actor_string(BOB)]
+    );
     assert!(state.pending_mls_removals.iter().all(|obligation| {
         obligation.realm_id == REALM
             && obligation.circle_id.as_deref() == Some(CIRCLE)

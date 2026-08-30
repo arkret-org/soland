@@ -23,7 +23,9 @@ mod strand_morph;
 pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
     let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
     let descriptor = arkret_wire::NotarySignerDescriptor {
-        actor_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
+        actor_id: arkret_wire::ActorId::service(
+            arkret_wire::project_did_to_core_id(&did).unwrap(),
+        ),
         verification_method: arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap(),
         key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,
@@ -37,6 +39,22 @@ pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
     };
     descriptor.validate().unwrap();
     arkret_wire::NotaryValue::single_signer(descriptor)
+}
+
+pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
+    let principal_id = arkret_identifiers::DidCoreId::new(principal_id).unwrap();
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        principal_id,
+    ))
+}
+
+pub(super) fn account_actor_string(principal_id: &str) -> String {
+    account_actor(principal_id).to_string()
+}
+
+pub(super) fn actor_cell_subject(actor: &arkret_wire::ActorId) -> String {
+    arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap()
 }
 
 /// Materialize the registered genesis authority-root cell for a Realm.

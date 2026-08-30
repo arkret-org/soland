@@ -36,7 +36,7 @@ pub fn ed25519_notary_signer_descriptor(
     public_key: &[u8; 32],
 ) -> Result<NotarySignerDescriptor, String> {
     let descriptor = NotarySignerDescriptor {
-        actor_id,
+        actor_id: arkret_wire::ActorId::service(actor_id),
         verification_method,
         key_kind: NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: NotaryJoseAlgorithm::Ed25519,

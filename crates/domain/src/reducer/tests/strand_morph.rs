@@ -481,7 +481,7 @@ fn strand_position_events_touch_projection_without_changing_state() {
     );
     assert_eq!(
         state.strands[strand_id].updated_by.as_deref(),
-        Some("ak:did_core:web:alice.example")
+        Some(account_actor_string("ak:did_core:web:alice.example").as_str())
     );
 
     // ak.strand.reorder — same family, same effect.

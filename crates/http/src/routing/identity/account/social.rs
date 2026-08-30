@@ -554,14 +554,20 @@ async fn contact_list_rows(
         if record.state != AgentLifecycleState::Active {
             continue;
         }
-        if record.controller_id == actor.signing_principal_id().as_str() {
-            continue;
-        }
-        let Some(controller) =
-            arkret_identifiers::DidCoreId::new(record.controller_id.clone()).ok()
+        let ContactPeer::Agent {
+            actor_id,
+            controller_account_id,
+        } = &row.peer
         else {
             continue;
         };
+        if record.controller_id != controller_account_id.principal_id.as_str() {
+            continue;
+        }
+        let controller_actor = arkret_wire::ActorId::account(controller_account_id.clone());
+        if &controller_actor == actor {
+            continue;
+        }
         let display_name = record
             .display_name
             .as_deref()
@@ -582,11 +588,11 @@ async fn contact_list_rows(
             .and_then(|value| BlobRef::new(value.to_owned()).ok());
         agent_peers.insert(row.peer.contact_actor_id().to_string());
         agents_by_controller
-            .entry(controller.to_string())
+            .entry(controller_actor.to_string())
             .or_default()
             .push(ContactAgentProjection {
-                agent_id: row.peer.contact_actor_id().signing_principal_id().clone(),
-                controller_id: controller,
+                actor_id: actor_id.clone(),
+                controller_account_id: controller_account_id.clone(),
                 display_name,
                 agent_slug,
                 avatar_blob_ref,
@@ -598,16 +604,11 @@ async fn contact_list_rows(
         row.contact_agent_projections = agents_by_controller
             .remove(&row.peer.contact_actor_id().to_string())
             .unwrap_or_default();
-        row.contact_agent_projections.sort_by(|left, right| {
-            left.display_name
-                .as_deref()
-                .unwrap_or(left.agent_id.as_str())
-                .cmp(
-                    right
-                        .display_name
-                        .as_deref()
-                        .unwrap_or(right.agent_id.as_str()),
-                )
+        row.contact_agent_projections.sort_by_key(|projection| {
+            projection
+                .display_name
+                .clone()
+                .unwrap_or_else(|| projection.actor_id.to_string())
         });
     }
     out.sort_by(|left, right| {

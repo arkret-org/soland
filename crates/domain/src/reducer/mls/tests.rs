@@ -108,7 +108,10 @@ fn welcome_payload() -> Value {
             "keypackage_digest": keypackage_digest,
             "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
             "claim_id": "claim-01",
-            "requester_actor_id": "ak:did_core:web:alice.example",
+            "requester_actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:server.example").unwrap(),
+            )),
             "requester_device_id": "ak:device:0196419b-0000-7000-8000-000000000001",
             "requester_device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
             "welcome_digest": arkret_canonical::sha256_digest(b"opaque-welcome-bytes"),
@@ -887,7 +890,11 @@ fn commit_epoch_in_order_succeeds() {
             group_id: "mls-group-abc".to_owned(),
             effective_scope: realm_scope(),
             epoch: 2,
-            leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
+            leader_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            ))
+            .to_string(),
             creator_device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             genesis_event_ref,
             committed_at: 501,

@@ -1194,7 +1194,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     if !matches!(
         notary,
         arkret_wire::notary::NotaryValue::SingleSigner { ref signer, .. }
-            if signer.actor_id == *event.actor_id.signing_principal_id()
+            if signer.actor_id == event.actor_id
     ) {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
             "current notary is not single_signer with principal actor authority",

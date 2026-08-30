@@ -99,7 +99,7 @@ fn redaction_hides_message() {
         .get("ak:message:AR8FzptqPhujyMqtDIr2CTaKC301-QQGktovEDdHy_6R")
         .cloned()
         .unwrap();
-    assert_eq!(cell.by, "ak:did_core:web:alice");
+    assert_eq!(cell.by, account_actor_string("ak:did_core:web:alice"));
     assert_eq!(cell.reason.as_deref(), Some("wrong room"));
 }
 
@@ -144,7 +144,7 @@ fn mal14_tombstone_visible_to_author() {
     assert!(view.content.is_some(), "author should see original content");
     // Tombstone metadata is also present.
     let r = view.redaction.unwrap();
-    assert_eq!(r.by, "ak:did_core:web:alice");
+    assert_eq!(r.by, account_actor_string("ak:did_core:web:alice"));
     assert_eq!(r.reason.as_deref(), Some("policy:auto"));
 }
 
@@ -263,21 +263,18 @@ fn membership_join_leave() {
 
     let join_payload = serde_json::json!({
         "realm_id": realm_id,
-        "actor_id": "ak:did_core:web:bob",
+        "member_id": account_actor("ak:did_core:web:bob"),
         "membership": "join"
     });
     let (_, join_writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &join_payload);
     let mut join = make_operation(arkret_wire::EventKind::MemberState, realm_id, join_payload);
-    join.context.sender = arkret_wire::ActorId::service(
-        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new("did:web:bob").unwrap())
-            .unwrap(),
-    );
+    join.context.sender = account_actor("ak:did_core:web:bob");
     state.apply_projected(&join, &join_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
     let leave_payload = serde_json::json!({
-        "actor_id": "ak:did_core:web:bob",
+        "member_id": account_actor("ak:did_core:web:bob"),
         "membership": "leave"
     });
     let (_, leave_writes) = projected_cell_writes(
@@ -286,10 +283,7 @@ fn membership_join_leave() {
         &leave_payload,
     );
     let mut leave = make_operation(arkret_wire::EventKind::MemberState, realm_id, leave_payload);
-    leave.context.sender = arkret_wire::ActorId::service(
-        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new("did:web:bob").unwrap())
-            .unwrap(),
-    );
+    leave.context.sender = account_actor("ak:did_core:web:bob");
     state.apply_projected(&leave, &leave_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }

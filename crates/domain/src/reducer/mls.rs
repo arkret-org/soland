@@ -1092,10 +1092,6 @@ fn validate_welcome_trust_binding(
             .get("created_at")
             .and_then(Value::as_str)
             .is_none_or(str::is_empty)
-        || envelope
-            .get("requester_actor_id")
-            .and_then(Value::as_str)
-            .is_none_or(str::is_empty)
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }

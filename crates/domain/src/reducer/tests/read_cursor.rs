@@ -17,7 +17,7 @@ fn cursor_operation(
     relation: Option<&str>,
 ) -> Operation {
     let mut payload = serde_json::json!({
-        "actor_id": ACTOR_ID,
+        "actor_id": account_actor(ACTOR_ID),
         "device_id": format!(
             "ak:device:01964137-0000-7000-8000-{device_suffix:012x}"
         ),

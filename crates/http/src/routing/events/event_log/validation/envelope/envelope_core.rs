@@ -162,6 +162,16 @@ async fn validate_event_envelope_with_ingress(
             format!("session actor is invalid: {error}"),
         )
     })?;
+    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        session_actor_id.clone(),
+        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Station id is invalid: {error}"),
+            )
+        })?,
+    ));
     validate_event_critical_features(state, object)?;
     // `effective_scope` is reducer output and is intentionally absent from
     // the closed SDK Event DTO. Reject it from the raw envelope before
@@ -574,9 +584,9 @@ async fn validate_event_envelope_with_ingress(
     let is_authorized_internal_adapter = internal_admission
         .is_some_and(|admission| admission.authorizes_realm_membership_bypass(session, object));
     let membership_subject = if ephemeral_pairwise_author || managed_actor {
-        actor_id.as_str()
+        actor.to_string()
     } else {
-        session_actor_id.as_str()
+        session_actor.to_string()
     };
     // An Applet-managed actor is an independent principal. Its immutable
     // provision and live Applet authority grant do not make it a member of the
@@ -600,7 +610,7 @@ async fn validate_event_envelope_with_ingress(
         && !is_identity_anchor_authorize
         && !is_identity_anchor_reanchor
         && !is_authorized_internal_adapter
-        && !realm_has_member(state, realm_id.as_str(), membership_subject).await
+        && !realm_has_member(state, realm_id.as_str(), &membership_subject).await
     {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
