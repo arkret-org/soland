@@ -484,25 +484,27 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     }
     {
         let projection = state.projections().snapshot();
-        if projection
+        if !projection
             .member(realm_id, actor)
             .is_some_and(|member| member.state == "join")
         {
+            return false;
+        }
+        if projection
+            .agent_membership_binding(realm_id, actor)
+            .is_none()
+        {
             return true;
         }
-        let principal_id = actor_typed.signing_principal_id().as_str();
-        if projection
-            .agent_membership_binding(realm_id, principal_id)
-            .is_some()
-            && !projection.effective_agent_membership_base(realm_id, principal_id)
-        {
+        if !projection.effective_agent_membership_base(realm_id, actor) {
             return false;
         }
     }
-    if let Ok(Some(agent)) = state
-        .agent_pairings()
-        .agent(actor_typed.signing_principal_id().as_str())
-        .await
+    if matches!(&actor_typed, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id())
+        && let Ok(Some(agent)) = state
+            .agent_pairings()
+            .agent(actor_typed.signing_principal_id().as_str())
+            .await
         && crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
             state,
             &agent,
@@ -514,9 +516,9 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     {
         return false;
     }
-    // The directory is a principal-only discovery index. It cannot prove
-    // membership of this Account at this Station (nor of a hosted Actor).
-    false
+    // Only the exact projected member and its effective Agent binding prove
+    // membership. Principal-only directory entries are not authority.
+    true
 }
 
 pub async fn realm_visible_to_for_entry(
@@ -1081,6 +1083,42 @@ mod tests {
             .await,
             None
         );
+    }
+
+    #[tokio::test]
+    async fn joined_agent_cannot_bypass_an_ineffective_controller_binding() {
+        let state = test_state();
+        let actor = arkret_wire::ActorId::hosted_principal(
+            DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
+            state.service_core_id(),
+        );
+        let actor_key = actor.to_string();
+        let now = chrono::Utc::now();
+        state.test_projection().lock().members.insert(
+            (LIFECYCLE_REALM.to_owned(), actor_key.clone()),
+            soland_domain::reducer::SolandMembershipState {
+                member: actor_key.clone(),
+                realm_id: LIFECYCLE_REALM.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                membership_event_ref: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+        state.test_projection().lock().agent_membership_bindings.insert(
+            (LIFECYCLE_REALM.to_owned(), actor_key.clone()),
+            arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
+                controller_account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(LIFECYCLE_ACTOR).unwrap(), state.service_core_id()),
+                controller_membership_generation_ref: arkret_identifiers::EventId::new(
+                    "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim").unwrap(),
+                controller_terminal_event_ref: None,
+            },
+        );
+        assert!(!realm_has_member_by_id(&state, LIFECYCLE_REALM, &actor_key).await);
     }
 
     #[tokio::test]

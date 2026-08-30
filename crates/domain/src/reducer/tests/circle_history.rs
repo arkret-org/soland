@@ -229,6 +229,19 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
 #[test]
 fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let (mut state, _hlc, base) = seed_state("since_join");
+    let bob_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(BOB).unwrap(),
+        arkret_wire::DidCoreId::new(ALICE).unwrap(),
+    );
+    let bob = bob_actor.to_string();
+    let mut member = state
+        .members
+        .remove(&(REALM.to_owned(), account_actor_string(BOB)))
+        .unwrap();
+    member.member = bob.clone();
+    state
+        .members
+        .insert((REALM.to_owned(), bob.clone()), member);
     let controller_generation =
         arkret_identifiers::EventId::new("ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim")
             .unwrap();
@@ -242,7 +255,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         .unwrap()
         .membership_event_ref = Some(controller_generation.to_string());
     state.agent_membership_bindings.insert(
-        (REALM.to_owned(), account_actor_string(BOB)),
+        (REALM.to_owned(), bob.clone()),
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
             controller_account_id,
             controller_membership_generation_ref: controller_generation,
@@ -250,7 +263,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         },
     );
     state.agent_lifecycles.insert(
-        account_actor_string(BOB),
+        BOB.to_owned(),
         arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
     );
     state
@@ -258,12 +271,12 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         .get_mut(CIRCLE)
         .unwrap()
         .members
-        .insert(account_actor_string(BOB));
+        .insert(bob.clone());
     state.circle_memberships.insert(
-        (CIRCLE.to_owned(), account_actor_string(BOB)),
+        (CIRCLE.to_owned(), bob.clone()),
         CircleMembershipState {
             circle_id: CIRCLE.to_owned(),
-            member: account_actor_string(BOB),
+            member: bob.clone(),
             state: "join".to_owned(),
             invited_at: None,
             joined_at: base,
@@ -272,8 +285,13 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     );
 
     let alice = account_actor_string(ALICE);
-    let bob = account_actor_string(BOB);
     assert!(state.effective_agent_membership_base(REALM, &bob));
+    assert!(!state.effective_agent_membership_base(REALM, BOB));
+    let foreign_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(BOB).unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station").unwrap(),
+    );
+    assert!(!state.effective_agent_membership_base(REALM, &foreign_actor.to_string()));
     state
         .members
         .get_mut(&(REALM.to_owned(), alice))

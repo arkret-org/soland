@@ -2574,7 +2574,6 @@ mod tests {
         )
         .unwrap();
         let actor_did = arkret_identifiers::Did::new("did:webvh:z6mkalice:alice.example").unwrap();
-        let actor_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
         let scope_ref = arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         };
