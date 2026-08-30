@@ -4067,8 +4067,9 @@ mod tests {
     ) -> RequestAcceptanceReceipt {
         serde_json::from_value(json!({
             "core": {
-                "holder": {"kind": "human", "principal_id": holder},
-                "peer": {"kind": "human", "principal_id": peer},
+                "holder": {"kind": "human", "account_id": {"principal_id": holder, "station_id": issuer}},
+                "peer": {"kind": "human", "account_id": {"principal_id": peer,
+                    "station_id": if peer == ALICE { ALICE_SERVICE } else { BOB_SERVICE }}},
                 "slot_version": 1,
                 "request_event_ref": event_ref,
                 "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
@@ -4099,7 +4100,7 @@ mod tests {
         let source_id = "ak:did_core:web:remote.local"; // requester_id's home PS
 
         let payload = json!({
-            "peer": {"kind": "human", "principal_id": target},
+            "peer": {"kind": "human", "account_id": {"principal_id": target, "station_id": state.service_id()}},
             "granted_to_peer_scopes": ["direct_message"],
             "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
             "message": "hi from across the federation",
@@ -4107,8 +4108,8 @@ mod tests {
         let request_event_ref = "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
         let request_receipt: RequestAcceptanceReceipt = serde_json::from_value(json!({
             "core": {
-                "holder": {"kind": "human", "principal_id": requester_id},
-                "peer": {"kind": "human", "principal_id": target},
+                "holder": {"kind": "human", "account_id": {"principal_id": requester_id, "station_id": source_id}},
+                "peer": {"kind": "human", "account_id": {"principal_id": target, "station_id": state.service_id()}},
                 "slot_version": 1,
                 "request_event_ref": request_event_ref,
                 "source_checkpoint": format!("sha256:{}", "c".repeat(64)),
@@ -4380,7 +4381,7 @@ mod tests {
             },
             "current_proof": {
                 "contact_round_id": format!("sha256:{}", "9".repeat(64)),
-                "issuer_id": ALICE,
+                "issuer_id": account_actor(ALICE, ALICE_SERVICE),
                 "terminal": false,
                 "head_event_ref": "ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N",
                 "accepted_frontier": ["ak:event:ARbUzETAsZ3suuQ0GSmBWTsNjmUnTEEl_ZnDOUWRPm-N"],

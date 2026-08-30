@@ -1291,8 +1291,9 @@ mod tests {
             "kind": kind,
             "realm_id": HOLDER_PCR,
             "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
-            "actor_id": actor,
-            "station_id": "ak:did_core:web:soland.test",
+            "actor_id": {"kind": "account", "account_id": {
+                "principal_id": actor, "station_id": "ak:did_core:web:soland.test"
+            }},
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],

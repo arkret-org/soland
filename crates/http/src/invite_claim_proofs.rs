@@ -17,7 +17,7 @@ use crate::state::AppState;
 pub(crate) struct InviteClaimProofVerification<'a> {
     pub invite_id: &'a str,
     pub realm_id: &'a str,
-    pub subject_id: &'a str,
+    pub subject_account_id: arkret_wire::AccountId,
     pub token_commitment: &'a str,
     pub claim_nonce: &'a str,
     pub binding_proof: &'a Value,
@@ -45,9 +45,13 @@ pub(crate) async fn verify_invite_claim_proofs_for_operation(
     let Some(invite_id) = trimmed_string(payload.get("invite_id")) else {
         return Err("invite_id_required");
     };
-    let Some(subject_id) = trimmed_string(payload.get("subject_id")) else {
-        return Err("subject_id_required");
-    };
+    let subject_account_id: arkret_wire::AccountId = serde_json::from_value(
+        payload
+            .get("subject_account_id")
+            .cloned()
+            .ok_or("subject_account_id_required")?,
+    )
+    .map_err(|_| "subject_account_id_invalid")?;
     let Some(token_commitment) = trimmed_string(payload.get("token_commitment")) else {
         return Err("token_commitment_required");
     };
@@ -64,7 +68,7 @@ pub(crate) async fn verify_invite_claim_proofs_for_operation(
     let verification = InviteClaimProofVerification {
         invite_id,
         realm_id: operation.realm_id.as_str(),
-        subject_id,
+        subject_account_id,
         token_commitment,
         claim_nonce,
         binding_proof,
@@ -106,11 +110,8 @@ fn verify_binding_proof_signature(
     let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if binding_proof.subject_account_id.principal_id.as_str() != verification.subject_id {
+    if binding_proof.subject_account_id != verification.subject_account_id {
         return Err("binding_proof_subject_mismatch");
-    }
-    if binding_proof.subject_account_id.station_id.as_str() != service_id {
-        return Err("binding_proof_subject_station_mismatch");
     }
     if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
@@ -163,11 +164,8 @@ async fn verify_binding_proof_signature_for_state(
     let method = binding_proof.verification_method.as_str();
     crate::jws_verify::validate_verification_method_controller(service_id, method)
         .map_err(|_| "binding_proof_method_invalid")?;
-    if binding_proof.subject_account_id.principal_id.as_str() != verification.subject_id {
+    if binding_proof.subject_account_id != verification.subject_account_id {
         return Err("binding_proof_subject_mismatch");
-    }
-    if binding_proof.subject_account_id.station_id.as_str() != service_id {
-        return Err("binding_proof_subject_station_mismatch");
     }
     if binding_proof.realm_id.as_str() != verification.realm_id {
         return Err("binding_proof_realm_mismatch");
@@ -253,7 +251,7 @@ fn verify_subject_proof_signature(
 
     let public_key = resolve_current_ed25519_key(
         resolver,
-        verification.subject_id,
+        verification.subject_account_id.principal_id.as_str(),
         subject_proof.verification_method.as_str(),
     )
     .map_err(|_| "subject_proof_method_not_current")?;
@@ -310,7 +308,7 @@ async fn verify_subject_proof_signature_for_state(
 
     let public_key = resolve_current_ed25519_key_for_state(
         state,
-        verification.subject_id,
+        verification.subject_account_id.principal_id.as_str(),
         subject_proof.verification_method.as_str(),
     )
     .await
@@ -483,7 +481,10 @@ mod tests {
         InviteClaimProofVerification {
             invite_id: INVITE,
             realm_id: REALM,
-            subject_id: SUBJECT,
+            subject_account_id: arkret_wire::AccountId::new(
+                SUBJECT.parse().unwrap(),
+                "ak:did_core:web:subject-station.example".parse().unwrap(),
+            ),
             token_commitment: TOKEN_A,
             claim_nonce: NONCE,
             binding_proof,
@@ -507,7 +508,10 @@ mod tests {
         let mut binding_proof = json!({
             "verification_id": SERVICE,
             "verification_method": SERVICE_METHOD,
-            "subject_id": SUBJECT,
+            "subject_account_id": {
+                "principal_id": SUBJECT,
+                "station_id": "ak:did_core:web:subject-station.example"
+            },
             "realm_id": REALM,
             "audience": INVITE_CLAIM_AUDIENCE,
             "claim_nonce": NONCE,
@@ -540,7 +544,7 @@ mod tests {
         let transcript_body = InviteSubjectProofBody::from_wire_parts(
             arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new(SUBJECT).unwrap(),
-                arkret_wire::DidCoreId::new(SERVICE).unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:subject-station.example").unwrap(),
             ),
             invite_id,
             REALM,
@@ -578,6 +582,30 @@ mod tests {
         let verification = base_verification(&binding_proof, &subject_proof);
 
         verify_invite_claim_proofs(&resolver, &verification).unwrap();
+    }
+
+    #[test]
+    fn same_principal_at_another_station_cannot_reuse_claim_proofs() {
+        let service_key = SigningKey::from_bytes(&[11u8; 32]);
+        let subject_key = SigningKey::from_bytes(&[22u8; 32]);
+        let resolver = StubResolver::default()
+            .with_method(SERVICE_DID, SERVICE_METHOD, &service_key)
+            .with_method(SUBJECT_DID, SUBJECT_CURRENT_METHOD, &subject_key);
+        let binding_proof = signed_binding_proof(&service_key, TOKEN_A, INVITE, INVITE_DIGEST);
+        let subject_proof = signed_subject_proof(
+            &subject_key,
+            SUBJECT_CURRENT_METHOD,
+            &binding_proof,
+            TOKEN_A,
+            INVITE,
+        );
+        let mut verification = base_verification(&binding_proof, &subject_proof);
+        verification.subject_account_id.station_id =
+            "ak:did_core:web:other-station.example".parse().unwrap();
+        assert_eq!(
+            verify_invite_claim_proofs(&resolver, &verification),
+            Err("binding_proof_subject_mismatch")
+        );
     }
 
     #[test]
