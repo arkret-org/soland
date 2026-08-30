@@ -29,7 +29,7 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use arkret_identifiers::{CircleId, DidCoreId, EventId, RealmId};
+use arkret_identifiers::{CircleId, EventId, RealmId};
 use arkret_models_collaboration::governance::circle::{
     CircleCreateRequestBody, CircleList, CircleMemberDeleteRequestBody, CircleMemberRequestBody,
     CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,

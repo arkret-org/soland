@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{DidCoreId, RealmId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::membership_invite::InviteClaimPayload;
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;

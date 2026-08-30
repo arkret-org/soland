@@ -11,7 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_identifiers::{DidCoreId, RealmId, SpaceId};
+use arkret_identifiers::{RealmId, SpaceId};
 use arkret_models_collaboration::governance::realm_governance::RealmLifecycleView;
 use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
