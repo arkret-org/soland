@@ -60,7 +60,7 @@ pub(super) fn sidecar_failed_precondition(
 
 async fn authorize_sidecar_ensure(
     state: &AppState,
-    controller: &str,
+    session: &SessionRecord,
     realm_id: &str,
 ) -> Result<(), AppError> {
     let owner = state
@@ -71,11 +71,13 @@ async fn authorize_sidecar_ensure(
         .flatten()
         .map(|meta| meta.owner);
     let members = realm_members_for_authz(state, realm_id);
-    let controller_actor = arkret_wire::ActorId::hosted_principal(
-        arkret_wire::DidCoreId::new(controller.to_owned())
-            .map_err(|error| AppError::internal(format!("invalid controller id: {error}")))?,
-        state.service_core_id().clone(),
-    );
+    let controller_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    if controller_actor.as_account_id().is_none() {
+        return Err(sidecar_create_denied(
+            "Sidecar controller must be an Account",
+        ));
+    }
     let verdict = state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
@@ -98,7 +100,7 @@ async fn authorize_sidecar_ensure(
             "ak.self.agent.sidecar.command.ensure.v1 denied by policy",
         ));
     }
-    if realm_member_joined(state, realm_id, controller) {
+    if realm_member_joined(state, realm_id, &controller_actor.to_string()) {
         return Ok(());
     }
     Err(sidecar_create_denied(
@@ -107,33 +109,28 @@ async fn authorize_sidecar_ensure(
 }
 
 fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
-    let realms = state.realm_directory().snapshot();
-    RealmId::new(realm_id.to_owned())
-        .ok()
-        .and_then(|id| realms.get(&id).cloned())
-        .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-        .unwrap_or_default()
+    state
+        .projections()
+        .snapshot()
+        .members_of_realm(realm_id)
+        .into_iter()
+        .map(|member| member.member.clone())
+        .filter(|actor| realm_member_joined(state, realm_id, actor))
+        .collect()
 }
 
 pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    let in_realm_directory = {
-        let realms = state.realm_directory().snapshot();
-        RealmId::new(realm_id.to_owned())
-            .ok()
-            .and_then(|id| realms.get(&id).cloned())
+    if serde_json::from_str::<arkret_wire::ActorId>(actor).is_err() {
+        return false;
     }
-    .and_then(|realm| {
-        arkret_wire::DidCoreId::new(actor.to_owned())
-            .ok()
-            .map(|did| realm.members.contains(&did))
-    })
-    .unwrap_or(false);
-    in_realm_directory
-        || state
-            .projections()
-            .snapshot()
-            .member(realm_id, actor)
-            .is_some_and(|membership| membership.state == "join")
+    let projection = state.projections().snapshot();
+    projection
+        .member(realm_id, actor)
+        .is_some_and(|membership| membership.state == "join")
+        && (projection
+            .agent_membership_binding(realm_id, actor)
+            .is_none()
+            || projection.effective_agent_membership_base(realm_id, actor))
 }
 
 fn validate_sidecar_context_projection(
@@ -180,40 +177,55 @@ fn validate_sidecar_context_projection(
 pub(crate) async fn derive_sidecar_desired_agent_ids(
     state: &AppState,
     realm_id: &str,
-    controller: &str,
+    controller: &arkret_wire::AccountId,
 ) -> Result<Vec<String>, AppError> {
     let records = state
         .agent_pairings()
-        .agents_for_controller(controller)
+        .agents_for_controller(controller.principal_id.as_str())
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
-    let desired = records
-        .iter()
-        .filter(|record| {
-            agent_record_is_desired_sidecar_member(state, realm_id, controller, record)
-        })
-        .map(|record| record.id.clone())
-        .collect::<BTreeSet<_>>();
+    let mut desired = BTreeSet::new();
+    for record in &records {
+        if agent_record_is_desired_sidecar_member(state, realm_id, controller, record).await? {
+            desired.insert(record.id.clone());
+        }
+    }
     Ok(desired.into_iter().collect())
 }
 
-fn agent_record_is_desired_sidecar_member(
+async fn agent_record_is_desired_sidecar_member(
     state: &AppState,
     realm_id: &str,
-    controller: &str,
+    controller: &arkret_wire::AccountId,
     record: &AgentPrincipalRecord,
-) -> bool {
+) -> Result<bool, AppError> {
     let agent_id = record.id.as_str();
-    record.controller_id == controller
-        && record.state == AgentLifecycleState::Active
-        && realm_member_joined(state, realm_id, agent_id)
-        && {
+    if record.controller_id != controller.principal_id.as_str()
+        || record.state != AgentLifecycleState::Active
+    {
+        return Ok(false);
+    }
+    let account = crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
+        state, record,
+    )
+    .await?;
+    if &account != controller {
+        return Ok(false);
+    }
+    let agent_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(agent_id)
+            .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?,
+        account.station_id,
+    );
+    Ok(
+        realm_member_joined(state, realm_id, &agent_actor.to_string()) && {
             let projection = state.projections().snapshot();
             !matches!(
                 projection.agent_lifecycles.get(agent_id),
                 Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
             ) && projection.agent_has_authorized_key(agent_id)
-        }
+        },
+    )
 }
 
 fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppError> {
@@ -307,12 +319,31 @@ fn sidecar_mls_binding_for_desired(
     })
 }
 
+fn sidecar_controller_account(
+    state: &AppState,
+    record: &AgentSidecarRecord,
+) -> Result<arkret_wire::AccountId, AppError> {
+    let projection = state.projections().snapshot();
+    let sidecar = projection
+        .sidecars
+        .get(&record.sidecar_id)
+        .filter(|sidecar| sidecar.realm_id == record.realm_id)
+        .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
+    let actor = serde_json::from_str::<arkret_wire::ActorId>(&sidecar.controller_id)
+        .map_err(|_| AppError::internal("Sidecar controller Actor is invalid"))?;
+    actor
+        .as_account_id()
+        .filter(|account| account.principal_id.as_str() == record.controller_id)
+        .cloned()
+        .ok_or_else(|| AppError::internal("Sidecar controller Account binding is invalid"))
+}
+
 pub(crate) async fn expected_sidecar_mls_binding(
     state: &AppState,
     record: &AgentSidecarRecord,
 ) -> Result<SidecarMlsBinding, AppError> {
-    let desired =
-        derive_sidecar_desired_agent_ids(state, &record.realm_id, &record.controller_id).await?;
+    let controller = sidecar_controller_account(state, record)?;
+    let desired = derive_sidecar_desired_agent_ids(state, &record.realm_id, &controller).await?;
     let desired_typed = typed_agent_ids(&desired)?;
     let projection = state.projections().snapshot();
     sidecar_mls_binding_for_desired(record, &desired_typed, &projection)
@@ -325,7 +356,6 @@ pub(crate) async fn expected_sidecar_mls_binding(
 /// Sidecar existence.
 pub(crate) fn validate_sidecar_exchange_control_event(
     state: &AppState,
-    actor_id: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if operation.event_kind.as_str() != arkret_wire::EventKind::AgentSidecarExchangeControl.as_str()
@@ -348,7 +378,7 @@ pub(crate) fn validate_sidecar_exchange_control_event(
         .ok_or(REASON)?;
     let normalized_context_ref =
         serde_json::to_value(&payload.source_context_ref).map_err(|_| REASON)?;
-    if actor_id != sidecar.controller_id
+    if operation.context.sender.to_string() != sidecar.controller_id
         || sidecar.realm_id != operation.realm_id.as_str()
         || !projection.sidecar_contexts.values().any(|context| {
             context.sidecar_id == payload.sidecar_id.as_str()
@@ -435,8 +465,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     match operation.event_kind.clone() {
         arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
-                || operation.context.sender.signing_principal_id().as_str()
-                    != sidecar_projection.controller_id
+                || operation.context.sender.to_string() != sidecar_projection.controller_id
                 || !device_coordinates_match(
                     operation
                         .context
@@ -503,6 +532,11 @@ fn controller_device_completed_group_join(
     controller_device_id: &str,
     group_id: &str,
 ) -> bool {
+    if !serde_json::from_str::<arkret_wire::ActorId>(controller_id)
+        .is_ok_and(|actor| actor.as_account_id().is_some())
+    {
+        return false;
+    }
     projection.mls_welcomes.values().flatten().any(|welcome| {
         welcome.group_id == group_id
             && welcome.recipient_actor_id == controller_id
@@ -533,10 +567,17 @@ fn epoch_matches_sidecar_binding(
 async fn sidecar_view(
     state: &AppState,
     record: &AgentSidecarRecord,
-    controller_device_id: &str,
+    session: &SessionRecord,
 ) -> Result<AgentSidecarView, AppError> {
+    let controller_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    let controller_account = sidecar_controller_account(state, record)?;
+    if controller_actor.as_account_id() != Some(&controller_account) {
+        return Err(AppError::not_found("Sidecar not found"));
+    }
+    let controller_device_id = session.device_id.as_str();
     let desired =
-        derive_sidecar_desired_agent_ids(state, &record.realm_id, &record.controller_id).await?;
+        derive_sidecar_desired_agent_ids(state, &record.realm_id, &controller_account).await?;
     let desired_typed = typed_agent_ids(&desired)?;
     let projection = state.projections().snapshot();
     let expected_binding = sidecar_mls_binding_for_desired(record, &desired_typed, &projection)?;
@@ -552,13 +593,24 @@ async fn sidecar_view(
         .max_by_key(|row| row.epoch);
     let epoch_binding_current =
         epoch_row.is_some_and(|row| epoch_matches_sidecar_binding(row, &expected_binding));
+    let genesis_actor = if let Some(row) = epoch_row {
+        state
+            .event_queries()
+            .canonical_event(&row.genesis_event_ref)
+            .await
+            .map_err(|error| AppError::internal(format!("Sidecar genesis lookup: {error}")))?
+            .and_then(|event| serde_json::from_str::<arkret_wire::ActorId>(&event.actor_id).ok())
+    } else {
+        None
+    };
     let controller_device_ready = epoch_binding_current
         && !controller_device_id.is_empty()
         && epoch_row.is_some_and(|row| {
-            device_coordinates_match(Some(&row.creator_device_id), controller_device_id)
+            (genesis_actor.as_ref() == Some(&controller_actor)
+                && device_coordinates_match(Some(&row.creator_device_id), controller_device_id))
                 || controller_device_completed_group_join(
                     &projection,
-                    &record.controller_id,
+                    &controller_actor.to_string(),
                     controller_device_id,
                     &row.group_id,
                 )
@@ -663,8 +715,7 @@ fn sidecar_event_draft(
 
 fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
-    actor_id: arkret_wire::DidCoreId,
-    station_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
@@ -673,14 +724,10 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
-    TypedEventDraft::<K>::new(
-        scope_ref,
-        arkret_wire::ActorId::hosted_principal(actor_id, station_id),
-        payload,
-    )
-    .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
-    .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
-    .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
+    TypedEventDraft::<K>::new(scope_ref, actor_id, payload)
+        .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
+        .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
+        .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
 fn sidecar_reservation_key(handle: &arkret_wire::ReservationHandle) -> String {
@@ -762,12 +809,7 @@ async fn prepare_sidecar(
             "Sidecar controller_id must match the authenticated session",
         ));
     }
-    authorize_sidecar_ensure(
-        state,
-        body.controller_id.as_str(),
-        body.source_realm_id.as_str(),
-    )
-    .await?;
+    authorize_sidecar_ensure(state, session, body.source_realm_id.as_str()).await?;
     let context_ref = sidecar_context_for_realm(&body.source_realm_id, &body.context_ref);
     validate_sidecar_context_projection(state, &context_ref)?;
     let normalized_context_ref = serde_json::to_value(&body.context_ref).map_err(|error| {
@@ -822,20 +864,15 @@ async fn prepare_sidecar(
         });
     }
 
-    let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
-    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
+    let controller_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let digest_suite = state
         .projections()
         .realm_digest_suite(body.source_realm_id.as_str());
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         body.source_realm_id.clone(),
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            controller_id.clone(),
-            station_id.clone(),
-        )),
+        controller_actor.clone(),
     )
     .await?;
     let created_at = chrono::Utc::now();
@@ -846,8 +883,7 @@ async fn prepare_sidecar(
             arkret_wire::ScopeRef::Realm {
                 realm_id: body.source_realm_id.clone(),
             },
-            controller_id.clone(),
-            station_id.clone(),
+            controller_actor.clone(),
             frontier.next_actor_seq,
             arkret_identifiers::Hlc::new(state.hlc().now())
                 .map_err(|error| AppError::internal(format!("Sidecar create HLC: {error}")))?,
@@ -877,8 +913,7 @@ async fn prepare_sidecar(
             realm_id: body.source_realm_id.clone(),
             sidecar_id: sidecar_id.clone(),
         },
-        controller_id.clone(),
-        station_id,
+        controller_actor,
         attach_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
             .map_err(|error| AppError::internal(format!("Sidecar attach HLC: {error}")))?,
@@ -1145,12 +1180,7 @@ async fn ensure_sidecar_impl(
                 &body.context_attach_event,
             )
             .await?;
-            authorize_sidecar_ensure(
-                state,
-                session.actor.as_str(),
-                body.create_event.realm_id.as_str(),
-            )
-            .await?;
+            authorize_sidecar_ensure(state, &session, body.create_event.realm_id.as_str()).await?;
             crate::routing::events::event_log::submit_sidecar_ensure_batch(
                 state,
                 &session,
@@ -1225,12 +1255,8 @@ async fn ensure_sidecar_impl(
                 &body.context_attach_event,
             )
             .await?;
-            authorize_sidecar_ensure(
-                state,
-                session.actor.as_str(),
-                body.context_attach_event.realm_id.as_str(),
-            )
-            .await?;
+            authorize_sidecar_ensure(state, &session, body.context_attach_event.realm_id.as_str())
+                .await?;
             crate::routing::events::event_log::submit_sidecar_ensure_batch(
                 state,
                 &session,
@@ -1309,7 +1335,7 @@ pub(super) async fn get_sidecar(
         .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
         .filter(|record| record.controller_id == session.actor)
         .ok_or_else(|| AppError::not_found("Sidecar not found"))?;
-    json_ok(sidecar_view(state, &record, &session.device_id).await?)
+    json_ok(sidecar_view(state, &record, &session).await?)
 }
 
 #[salvo::oapi::endpoint(tags("identity"))]
@@ -1341,7 +1367,7 @@ pub(super) async fn list_sidecars(
         .map_err(|error| AppError::internal(format!("Sidecar cursor: {error}")))?;
     let mut items = Vec::with_capacity(records.len());
     for record in records {
-        items.push(sidecar_view(state, &record, &session.device_id).await?);
+        items.push(sidecar_view(state, &record, &session).await?);
     }
     json_ok(AgentSidecarList {
         agent_sidecar_views: items,
@@ -1367,8 +1393,10 @@ mod tests {
                 .unwrap();
         let event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarCreate>(
             arkret_wire::ScopeRef::Realm { realm_id },
-            crate::test_actor_id_str("did:web:example.com:users:alice"),
-            crate::test_event::station_id(),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                crate::test_actor_id_str("did:web:example.com:users:alice"),
+                crate::test_event::station_id(),
+            )),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             Vec::new(),
@@ -1425,6 +1453,66 @@ mod tests {
         assert_eq!(
             sidecar_access_readiness(&[], false, false, false),
             AgentSidecarAccessReadiness::KeyMaterialPending
+        );
+    }
+
+    #[test]
+    fn sidecar_membership_uses_exact_projected_actor_not_directory_principal() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let local_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let foreign_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let mut directory = soland_services::events::RealmDirectoryEntry::new(
+            RealmId::new(realm_id).unwrap(),
+            "discovery only",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
+        directory.members.insert(principal.clone());
+        state.realm_directory().upsert(directory);
+        assert!(!realm_member_joined(
+            &state,
+            realm_id,
+            &local_actor.to_string()
+        ));
+        let now = chrono::Utc::now();
+        state.test_projection().lock().members.insert(
+            (realm_id.to_owned(), local_actor.to_string()),
+            soland_domain::reducer::SolandMembershipState {
+                member: local_actor.to_string(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                membership_event_ref: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+        assert!(realm_member_joined(
+            &state,
+            realm_id,
+            &local_actor.to_string()
+        ));
+        assert!(!realm_member_joined(
+            &state,
+            realm_id,
+            &foreign_actor.to_string()
+        ));
+        assert!(!realm_member_joined(&state, realm_id, principal.as_str()));
+        assert_eq!(
+            realm_members_for_authz(&state, realm_id),
+            vec![local_actor.to_string()]
         );
     }
 
@@ -1523,7 +1611,12 @@ mod tests {
         claimed_group_id: Option<&str>,
         consumed: bool,
     ) -> soland_domain::reducer::ProjectionState {
-        let controller = "ak:did_core:web:alice.example";
+        let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            crate::test_event::station_id(),
+        ))
+        .to_string();
+        let controller = controller_actor.as_str();
         let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
         let mut projection = soland_domain::reducer::ProjectionState::default();
         projection.mls_key_packages.insert(
@@ -1578,7 +1671,12 @@ mod tests {
 
     #[test]
     fn a_second_controller_device_is_ready_on_matching_welcome_and_consume_evidence() {
-        let controller = "ak:did_core:web:alice.example";
+        let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            crate::test_event::station_id(),
+        ))
+        .to_string();
+        let controller = controller_actor.as_str();
         let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
         let group = "sidecarGroup01";
         let projection = projection_with_controller_join(group, Some(group), true);
@@ -1588,11 +1686,26 @@ mod tests {
             device,
             group
         ));
+        let foreign_controller = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert!(!controller_device_completed_group_join(
+            &projection,
+            &foreign_controller.to_string(),
+            device,
+            group
+        ));
     }
 
     #[test]
     fn controller_join_evidence_never_crosses_groups_or_skips_consume() {
-        let controller = "ak:did_core:web:alice.example";
+        let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            crate::test_event::station_id(),
+        ))
+        .to_string();
+        let controller = controller_actor.as_str();
         let device = "ak:device:01904100-0000-7000-8000-a11ce0000002";
         let group = "sidecarGroup01";
         assert!(!controller_device_completed_group_join(

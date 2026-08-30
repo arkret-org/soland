@@ -144,9 +144,10 @@ async fn install_preview_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
+    let session_actor = crate::routing::identity::session_actor_from_credential(state, &session)?;
     let basis = &preview.authoring_request_basis;
     if basis.target_station_id.as_str() != state.service_id()
-        || basis.install_actor_id.as_str() != session.actor
+        || basis.install_actor_id != session_actor
         || basis.applet_id != preview.applet_package.applet_id
         || basis.service_id != preview.applet_package.service_id
         || preview.applet_package.package_digest.as_ref() != Some(&basis.package_digest)
@@ -181,7 +182,7 @@ async fn install_preview_endpoint(
         })?;
     }
     let validated_admin =
-        validate_admin_install_events(&preview.applet_package, basis, session.actor.as_str())?;
+        validate_admin_install_events(&preview.applet_package, basis, &session_actor)?;
     let registration_epoch_evidence =
         registration_epoch_evidence_from_event(&basis.registration_event)?;
     validate_applet_package(state, &preview.applet_package, &registration_epoch_evidence)?;
@@ -345,10 +346,11 @@ async fn install_endpoint(
         .await
         .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
     }
+    let session_actor = crate::routing::identity::session_actor_from_credential(state, &session)?;
     let approved_scopes = approved_scopes_from_formal_install_events(
         state,
         &commit,
-        &session.actor,
+        &session_actor,
         state.service_id(),
     )?;
     let recomputed_plan = build_install_plan(

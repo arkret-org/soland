@@ -50,7 +50,7 @@ pub(super) struct ValidatedAdminInstallEvents {
 pub(super) fn approved_scopes_from_formal_install_events(
     state: &AppState,
     commit: &AppletInstallRequestBody,
-    install_actor: &str,
+    install_actor: &ActorId,
     station_id: &str,
 ) -> Result<Vec<ScopeGrant>, AppError> {
     let basis = commit.authoring_request().basis.install().ok_or_else(|| {
@@ -106,7 +106,7 @@ pub(super) fn validate_hosted_applet_pcr_notary(
 fn validate_formal_install_events(
     state: &AppState,
     commit: &AppletInstallRequestBody,
-    install_actor: &str,
+    install_actor: &ActorId,
     station_id: &str,
 ) -> Result<ValidatedInstallEvents, AppError> {
     let package = commit.applet_package();
@@ -134,12 +134,13 @@ fn validate_formal_install_events(
 pub(super) fn validate_admin_install_events(
     package: &AppletPackage,
     basis: &AppletInstallAuthoringRequestBasis,
-    install_actor: &str,
+    install_actor: &ActorId,
 ) -> Result<ValidatedAdminInstallEvents, AppError> {
     let realm_id = basis.effective_scope.realm_id();
     let registration = &basis.registration_event;
-    if registration.kind != arkret_wire::EventKind::AppletRegistration
-        || registration.actor_id.signing_principal_id().as_str() != install_actor
+    if &basis.install_actor_id != install_actor
+        || registration.kind != arkret_wire::EventKind::AppletRegistration
+        || &registration.actor_id != install_actor
         || registration.actor_id.route_service_id() != &basis.target_station_id
         || &registration.realm_id != realm_id
         || registration.scope_ref != basis.effective_scope
@@ -199,7 +200,7 @@ pub(super) fn validate_admin_install_events(
 
     for event in &basis.capability_grant_events {
         if event.kind != arkret_wire::EventKind::CapabilityGrant
-            || event.actor_id.signing_principal_id().as_str() != install_actor
+            || &event.actor_id != install_actor
             || event.actor_id.route_service_id() != &basis.target_station_id
             || &event.realm_id != realm_id
             || event.scope_ref != basis.effective_scope
@@ -667,9 +668,11 @@ pub(super) async fn register_package_install(
     authoring_request_digest: String,
     res: &mut Response,
 ) -> Result<AppletInstallOutcome, AppError> {
-    let owner_actor_id = session.actor.as_str();
+    let owner_actor = crate::routing::identity::session_actor_from_credential(state, session)?;
+    let owner_actor_key = owner_actor.to_string();
+    let owner_actor_id = owner_actor_key.as_str();
     let validated_events =
-        validate_formal_install_events(state, &commit, owner_actor_id, state.service_id())?;
+        validate_formal_install_events(state, &commit, &owner_actor, state.service_id())?;
     let approved_actions = validated_events.approved_actions;
     let capability_grant_refs = validated_events.grant_ids;
     let basis = commit.authoring_request().basis.install().ok_or_else(|| {
@@ -1518,21 +1521,7 @@ pub(super) async fn require_realm_admin(
 ) -> Result<(), AppError> {
     let realm_id = effective_scope_realm_id(scope);
     let (owner, members) = realm_owner_and_members(state, &realm_id).await;
-    let actor = if let Some(account_pk) = session.account_pk.clone() {
-        let account = state
-            .identities()
-            .account_by_id(account_pk)
-            .await
-            .map_err(|error| AppError::internal(format!("session account lookup failed: {error}")))?
-            .ok_or_else(|| AppError::capability_denied("session account is unavailable"))?;
-        ActorId::account(account.account_id)
-    } else {
-        ActorId::hosted_principal(
-            DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
-            state.service_core_id(),
-        )
-    };
+    let actor = crate::routing::identity::session_actor_from_credential(state, session)?;
     if state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
@@ -1555,28 +1544,13 @@ pub(super) async fn require_realm_admin(
 }
 
 /// Resolve the realm owner and member set, matching
-/// `routing/events/operations.rs::realm_owner_and_members` (which is module
-/// private). They are request context only; neither implies a capability.
+/// The shared event-policy projection supplies exact Actor membership context;
+/// request context alone does not imply a capability.
 async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
-    let owner = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .map(|meta| meta.owner);
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        RealmId::new(realm_id.to_owned())
-            .ok()
-            .and_then(|id| realms.get(&id))
-            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-            .unwrap_or_default()
-    };
-    (owner, members)
+    crate::routing::events::operations::realm_owner_and_members(state, realm_id).await
 }
 
 pub(super) fn ghost_actors_allowed_for_install(

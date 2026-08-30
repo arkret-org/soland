@@ -171,10 +171,14 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         realm.members.insert(actor_did.clone());
         realms.upsert(realm);
     }
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        actor_did,
+        state.service_core_id(),
+    ));
     state.test_projection().lock().members.insert(
-        (demo_realm_id().to_owned(), actor_did.to_string()),
+        (demo_realm_id().to_owned(), actor.to_string()),
         soland_domain::reducer::SolandMembershipState {
-            member: actor_did.to_string(),
+            member: actor.to_string(),
             realm_id: demo_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -2914,7 +2918,12 @@ async fn signed_revoke_events(
     let frontier = existing
         .iter()
         .filter(|event| {
-            event.actor_id == actor_core_id.as_str()
+            event.actor_id
+                == arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    actor_core_id.clone(),
+                    state.service_core_id(),
+                ))
+                .to_string()
                 && event.realm_id.as_deref() == Some(realm_id.as_str())
         })
         .max_by_key(|event| event.actor_seq)

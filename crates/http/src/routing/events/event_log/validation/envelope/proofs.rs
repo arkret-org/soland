@@ -1275,7 +1275,7 @@ mod tests {
             "did:webvh:z6mkevil:alice.example#key-1".to_owned(),
         ] {
             let mut event = event_with_verification_method(&actor, &verification_method);
-            event["executed_by"] = json!(actor);
+            event["executed_by"] = event["actor_id"].clone();
             let error = validate_event_proofs(
                 event.as_object().unwrap(),
                 &state,

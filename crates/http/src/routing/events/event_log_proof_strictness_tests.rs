@@ -48,9 +48,7 @@ fn session() -> SessionRecord {
         token_hash: "hash".to_owned(),
         actor: "ak:did_core:web:alice.example".to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-        audience:
-            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"
-                .to_owned(),
+        audience: crate::test_event::station_id().to_string(),
         session_public_key: None,
         agent_session: None,
         session_grant: None,

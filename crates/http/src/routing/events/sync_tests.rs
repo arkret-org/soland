@@ -1075,9 +1075,11 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
 
 fn insert_member_identity_subject(state: &AppState) {
     use crate::state::{MemberIdentityEventRecord, MemberIdentitySubjectKey};
+    insert_projected_membership(state, ROSTER_ACTOR, "join");
+    insert_projected_membership(state, ROSTER_CALLER, "join");
     let identity_payload = json!({
         "member_identity": {
-            "subject_id": ROSTER_SUBJECT,
+            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
             "display_profile": { "display_name": "Alice" }
         }
     });
@@ -1088,7 +1090,7 @@ fn insert_member_identity_subject(state: &AppState) {
         event_id: "ak:event:Aa8_CTduEn4HY_7QtwQ1Ct3QH2pg-9mfHGxJfGOYYHxx".to_owned(),
         subject: MemberIdentitySubjectKey {
             realm_id: ROSTER_REALM.to_owned(),
-            actor_id: ROSTER_ACTOR.to_owned(),
+            actor_id: roster_actor(ROSTER_ACTOR).to_string(),
             segment: "member_identity".to_owned(),
         },
         payload_digest,
@@ -1100,7 +1102,7 @@ fn insert_member_identity_subject(state: &AppState) {
             "created_at": now(),
             "payload": {
                 "realm_id": ROSTER_REALM,
-                "actor_id": ROSTER_ACTOR,
+                "actor_id": roster_actor(ROSTER_ACTOR),
                 "segment": "member_identity",
                 "identity_payload": identity_payload,
             }
@@ -1119,7 +1121,7 @@ fn handle_claim(
     let mut claim = json!({
         "schema": "ak.schema.handle_claim.v1",
         "handle": "alice:soland.local",
-        "subject_id": ROSTER_SUBJECT,
+        "subject_account_id": roster_actor(ROSTER_SUBJECT).as_account_id(),
         "issuer_id": issuer,
         "binding_state": binding_state,
         "claim_kind": "handle_binding",
@@ -1161,13 +1163,13 @@ fn roster_row(
     let body = roster_body(state.service_id());
     roster_members_for_realm(state, realm, session, &body)
         .into_iter()
-        .find(|row| row["actor_id"] == ROSTER_ACTOR)
+        .find(|row| row["actor_id"] == json!(roster_actor(ROSTER_ACTOR)))
         .expect("actor row")
 }
 
 fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a str> {
     rows.iter()
-        .find(|row| row["actor_id"] == actor)
+        .find(|row| row["actor_id"] == json!(roster_actor(actor)))
         .and_then(|row| row["membership"].as_str())
 }
 
@@ -1185,32 +1187,40 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
 
     let state = test_state();
     let realm = ROSTER_REALM;
-    let actor = ROSTER_ACTOR;
+    let actor = roster_actor(ROSTER_ACTOR).to_string();
     let created_at = now();
-    let first_event_id = "ak:event:AWLjsk0JkbLdfBfaY2GoxT61q1Ttw6HFu7sU-XGFywHc";
-    let second_event_id = "ak:event:AS3cyhr0pju5AnMYHRcgMbHHU45oa25NELQwXBDt8smD";
 
     let first_identity = json!({
         "member_identity": {
-            "subject_id": ROSTER_SUBJECT,
+            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
             "display_profile": { "display_name": "Alice" }
         }
     });
     let first_digest = arkret_canonical::sha256_digest(
         arkret_canonical::canonical_json_bytes(&first_identity).unwrap(),
     );
+    let first_record = canonical_event_record_received_at(
+        1,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        json!({"realm_id": realm, "actor_id": roster_actor(ROSTER_ACTOR), "segment": "member_identity", "identity_payload": first_identity}),
+        ROSTER_ACTOR,
+        created_at,
+        created_at,
+    );
+    let first_event_id = first_record.event_id.clone();
+    store_canonical_event(&state, first_record).await;
 
     // First update. The canonical `ak:event:` id is envelope metadata in the
     // typed projection context and never part of the signed payload.
     let first_op = accepted_sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000e1",
-        first_event_id,
+        &first_event_id,
         ROSTER_ACTOR_DID,
         1,
         arkret_wire::EventKind::MemberIdentityUpdate,
         json!({
             "realm_id": realm,
-            "actor_id": actor,
+            "actor_id": roster_actor(ROSTER_ACTOR),
             "segment": "member_identity",
             "identity_payload": first_identity,
         }),
@@ -1219,7 +1229,7 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     project_member_identity_update(&state, &first_op).await;
 
     {
-        let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
+        let snapshot = state.member_identity_snapshot(realm, &actor).unwrap();
         assert_eq!(snapshot.identity_event_ids, vec![first_event_id.to_owned()]);
     }
 
@@ -1227,28 +1237,34 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
     // edge. Before the fix this never matched (projection stored `ak:operation:`).
     let second_identity = json!({
         "member_identity": {
-            "subject_id": ROSTER_SUBJECT,
+            "subject_actor_id": roster_actor(ROSTER_SUBJECT),
             "display_profile": { "display_name": "Alice 2" }
         }
     });
+    let second_payload = json!({"realm_id": realm, "actor_id": roster_actor(ROSTER_ACTOR), "segment": "member_identity", "identity_payload": second_identity,
+        "replaces": [{"event_id": first_event_id, "payload_digest": first_digest}]});
+    let second_record = canonical_event_record_received_at(
+        2,
+        arkret_wire::EventKind::MemberIdentityUpdate,
+        second_payload.clone(),
+        ROSTER_ACTOR,
+        created_at + chrono::Duration::milliseconds(1),
+        created_at + chrono::Duration::milliseconds(1),
+    );
+    let second_event_id = second_record.event_id.clone();
+    store_canonical_event(&state, second_record).await;
     let second_op = accepted_sync_test_operation_at(
         "ak:operation:01904100-0000-7000-8000-0000000000e2",
-        second_event_id,
+        &second_event_id,
         ROSTER_ACTOR_DID,
         2,
         arkret_wire::EventKind::MemberIdentityUpdate,
-        json!({
-            "realm_id": realm,
-            "actor_id": actor,
-            "segment": "member_identity",
-            "identity_payload": second_identity,
-            "replaces": [ { "event_id": first_event_id, "payload_digest": first_digest } ],
-        }),
+        second_payload,
         created_at + chrono::Duration::milliseconds(1),
     );
     project_member_identity_update(&state, &second_op).await;
 
-    let snapshot = state.member_identity_snapshot(realm, actor).unwrap();
+    let snapshot = state.member_identity_snapshot(realm, &actor).unwrap();
     // The `ak:event:` replaces edge drops the predecessor: only the second
     // event remains effective, and the stored id is the typed event id.
     assert_eq!(
@@ -1266,11 +1282,12 @@ async fn member_identity_projection_stores_typed_event_id_and_matches_event_repl
 }
 
 #[test]
-fn roster_includes_projected_members_and_directory_fallback() {
+fn roster_includes_only_complete_projected_member_actors() {
     let state = test_state();
+    insert_projected_membership(&state, ROSTER_ACTOR, "join");
     insert_projected_membership(&state, ROSTER_CALLER, "join");
-    insert_projected_membership(&state, "did:web:carol.example", "invite");
-    insert_projected_membership(&state, "did:web:dave.example", "knock");
+    insert_projected_membership(&state, "ak:did_core:web:carol.example", "join");
+    insert_projected_membership(&state, "ak:did_core:web:dave.example", "knock");
     let realm = roster_realm(false, false);
     let body = roster_body(state.service_id());
     let session = roster_session(&state, ROSTER_ACTOR);
@@ -1280,19 +1297,19 @@ fn roster_includes_projected_members_and_directory_fallback() {
     assert_eq!(
         roster_membership_for_actor(&rows, ROSTER_ACTOR),
         Some("join"),
-        "directory creator is retained as a joined member fallback"
+        "creator is present only through its explicit membership projection"
     );
     assert_eq!(
         roster_membership_for_actor(&rows, ROSTER_CALLER),
         Some("join"),
-        "accepted invitee_id from projected member FSM is emitted"
+        "accepted Account member from the projected member FSM is emitted"
     );
     assert_eq!(
-        roster_membership_for_actor(&rows, "did:web:carol.example"),
-        Some("invite")
+        roster_membership_for_actor(&rows, "ak:did_core:web:carol.example"),
+        Some("join")
     );
     assert_eq!(
-        roster_membership_for_actor(&rows, "did:web:dave.example"),
+        roster_membership_for_actor(&rows, "ak:did_core:web:dave.example"),
         Some("knock")
     );
 }
@@ -1307,6 +1324,66 @@ fn roster_suppresses_terminal_projected_membership_over_directory_fallback() {
     let rows = roster_members_for_realm(&state, &realm, None, &body);
 
     assert_eq!(roster_membership_for_actor(&rows, ROSTER_ACTOR), None);
+}
+
+#[test]
+fn roster_preserves_two_stations_for_the_same_principal() {
+    let state = test_state();
+    insert_projected_membership(&state, ROSTER_ACTOR, "join");
+    let local_actor = roster_actor(ROSTER_ACTOR);
+    let remote_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        local_actor.signing_principal_id().clone(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+    ));
+    let mut remote_member = state
+        .test_projection()
+        .lock()
+        .members
+        .get(&(ROSTER_REALM.to_owned(), local_actor.to_string()))
+        .unwrap()
+        .clone();
+    remote_member.member = remote_actor.to_string();
+    state.test_projection().lock().members.insert(
+        (ROSTER_REALM.to_owned(), remote_actor.to_string()),
+        remote_member,
+    );
+    let realm = roster_realm(true, true);
+    let rows = roster_members_for_realm(&state, &realm, None, &roster_body(state.service_id()));
+    assert_eq!(
+        rows.len(),
+        2,
+        "directory-only principals do not create member Accounts"
+    );
+    assert!(rows.iter().any(|row| row["actor_id"] == json!(local_actor)));
+    assert!(
+        rows.iter()
+            .any(|row| row["actor_id"] == json!(remote_actor))
+    );
+}
+
+#[test]
+fn roster_rejects_a_handle_claim_for_the_same_principal_at_another_station() {
+    let state = test_state();
+    insert_member_identity_subject(&state);
+    let mut claim = handle_claim(
+        &state,
+        state.service_id(),
+        state.service_id(),
+        now() + chrono::Duration::hours(1),
+        "verified",
+        None,
+    );
+    claim["subject_account_id"]["station_id"] = json!("ak:did_core:web:other-station.example");
+    cache_claim(&state, claim);
+    let realm = roster_realm(false, true);
+    let session = roster_session(&state, ROSTER_CALLER);
+    let row = roster_row(&state, &realm, Some(&session));
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
+    assert!(row.get("handle_claim_digests").is_none());
+    assert!(row.get("handle_claims").is_none());
 }
 
 #[test]
@@ -1327,7 +1404,10 @@ fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
 
     let row = roster_row(&state, &realm, Some(&session));
 
-    assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert_eq!(row["handle_claim_digests"], json!([digest]));
     assert_eq!(
         canonical_value_digest(&row["handle_claims"][0]),
@@ -1356,7 +1436,10 @@ fn roster_hides_handle_claim_from_untrusted_issuer() {
 
     let row = roster_row(&state, &realm, Some(&session));
 
-    assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert!(row.get("handle_claim_digests").is_none());
     assert!(row.get("handle_claims").is_none());
 }
@@ -1381,7 +1464,10 @@ fn roster_hides_expired_handle_claim() {
 
     let row = roster_row(&state, &realm, Some(&session));
 
-    assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert!(row.get("handle_claim_digests").is_none());
 }
 
@@ -1405,7 +1491,10 @@ fn roster_hides_revoked_handle_claim() {
 
     let row = roster_row(&state, &realm, Some(&session));
 
-    assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert!(row.get("handle_claim_digests").is_none());
 }
 
@@ -1427,13 +1516,16 @@ fn roster_disclosure_depends_on_realm_policy() {
 
     let private_realm = roster_realm(false, false);
     let private_row = roster_row(&state, &private_realm, None);
-    assert!(private_row.get("subject_id").is_none());
+    assert!(private_row.get("subject_account_id").is_none());
     assert!(private_row.get("handle_claim_digests").is_none());
     assert!(private_row.get("handle_claims").is_none());
 
     let public_realm = roster_realm(true, false);
     let public_row = roster_row(&state, &public_realm, None);
-    assert_eq!(public_row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        public_row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert_eq!(public_row["handle_claim_digests"], json!([digest]));
 }
 
@@ -1455,7 +1547,10 @@ fn roster_limits_large_inline_handle_claim_payloads() {
 
     let row = roster_row(&state, &realm, Some(&session));
 
-    assert_eq!(row["subject_id"], ROSTER_SUBJECT);
+    assert_eq!(
+        row["subject_account_id"],
+        json!(roster_actor(ROSTER_SUBJECT).as_account_id())
+    );
     assert_eq!(row["handle_claim_digests"], json!([digest]));
     assert!(row.get("handle_claims").is_none());
     assert_eq!(row["handle_claims_limited"], true);
@@ -1510,7 +1605,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     assert_eq!(
         serde_json::to_value(&initial.device_lists).unwrap(),
-        json!({"changed_ids": [ROSTER_ACTOR, ROSTER_CALLER], "left_ids": []})
+        json!({"changed_ids": [roster_actor(ROSTER_ACTOR), roster_actor(ROSTER_CALLER)], "left_ids": []})
     );
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
@@ -1550,7 +1645,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     assert_eq!(
         serde_json::to_value(&after_revocation.device_lists).unwrap(),
-        json!({"changed_ids": [ROSTER_ACTOR], "left_ids": []}),
+        json!({"changed_ids": [roster_actor(ROSTER_ACTOR)], "left_ids": []}),
         "device revocation changes the principal device list, not top-level left"
     );
     let incremental_filter_value = sync_filter_value(incremental_body.filter.as_ref());
@@ -1565,6 +1660,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .expect("revocation cursor parses");
 
     state.realm_directory().upsert(roster_realm(false, false));
+    insert_projected_membership(&state, ROSTER_CALLER, "leave");
     let after_scope_loss = build_sync_snapshot(
         &state,
         Some(&session),
@@ -1574,7 +1670,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await;
     assert_eq!(
         serde_json::to_value(&after_scope_loss.device_lists).unwrap(),
-        json!({"changed_ids": [], "left_ids": [ROSTER_ACTOR]}),
+        json!({"changed_ids": [], "left_ids": [roster_actor(ROSTER_ACTOR)]}),
         "principals no longer visible through any Realm leave the tracked device list set"
     );
 }
@@ -1737,6 +1833,7 @@ async fn membership_only_projection_advances_incremental_roster() {
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:30:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
+    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
     state
         .realms()
         .store_realm_metadata(

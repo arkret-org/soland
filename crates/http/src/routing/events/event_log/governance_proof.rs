@@ -49,7 +49,13 @@ pub(super) async fn mls_governance_proof(
     let own_pcr = state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_value, &session.actor);
+        .realm_is_principal_control_for_actor(
+            realm_value,
+            &crate::routing::identity::session_actor::session_actor_from_credential(
+                state, &session,
+            )?
+            .to_string(),
+        );
     let managed_agent_pcr =
         crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
             state,
@@ -75,10 +81,15 @@ fn scope_visible_to_session(
 ) -> bool {
     match scope {
         GovernanceScope::Realm { .. } => true,
-        GovernanceScope::Circle { circle_id, .. } => state
-            .projections()
-            .snapshot()
-            .circle_scope_visible_to_actor(circle_id.as_str(), &session.actor),
+        GovernanceScope::Circle { circle_id, .. } => {
+            crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+                .is_ok_and(|actor| {
+                    state
+                        .projections()
+                        .snapshot()
+                        .circle_scope_visible_to_actor(circle_id.as_str(), &actor.to_string())
+                })
+        }
         _ => false,
     }
 }
@@ -365,8 +376,9 @@ async fn materialize_realm_control_with_transported_seals(
             && record
                 .envelope
                 .get("executed_by")
-                .and_then(serde_json::Value::as_str)
-                .is_some_and(|executed_by| !executed_by.is_empty())
+                .is_some_and(|executed_by| {
+                    serde_json::from_value::<arkret_wire::ActorId>(executed_by.clone()).is_ok()
+                })
     }) {
         return materialize_managed_agent_realm_control(state, realm_id, &realm_records);
     }
@@ -381,16 +393,20 @@ async fn materialize_realm_control_with_transported_seals(
                     .and_then(serde_json::Value::as_str)
                     == Some("principal_control")
         })
-        .map(|record| record.actor_id.clone());
+        .map(|record| canonical_actor(&record.actor_id))
+        .transpose()?;
     let active_device_generation = if let Some(principal_id) = &principal_control_actor {
-        crate::routing::identity::device_generation::current_device_generation(state, principal_id)
-            .await
-            .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    format!("device generation state unavailable: {error}"),
-                )
-            })?
+        crate::routing::identity::device_generation::current_device_generation(
+            state,
+            principal_id.signing_principal_id().as_str(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("device generation state unavailable: {error}"),
+            )
+        })?
     } else {
         None
     };
@@ -400,7 +416,7 @@ async fn materialize_realm_control_with_transported_seals(
     {
         state
             .identities()
-            .devices_for_actor(principal_id)
+            .devices_for_actor(principal_id.signing_principal_id().as_str())
             .await
             .map_err(|error| {
                 AppError::new(
@@ -436,9 +452,11 @@ async fn materialize_realm_control_with_transported_seals(
         .map(|record| record.actor_id.as_str())
         .collect::<BTreeSet<_>>()
     {
+        let actor = canonical_actor(actor)?;
         quarantined_digests.extend(
             crate::routing::identity::device_generation::quarantined_generation_event_digests(
-                state, actor,
+                state,
+                actor.signing_principal_id().as_str(),
             )
             .await
             .map_err(|error| {
@@ -502,7 +520,7 @@ async fn materialize_realm_control_with_transported_seals(
         }
         if let (Some(principal_id), Some(generation)) =
             (&principal_control_actor, &active_device_generation)
-            && record.actor_id == principal_id.as_str()
+            && record.actor_id == principal_id.to_string()
             && !identity_anchor_event_ids.contains(&record.event_id)
             && record.envelope.get("executed_by").is_none()
             && !preserved_generation_coverage
@@ -1329,6 +1347,15 @@ fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
     AppError::new(code, error.to_string())
 }
 
+fn canonical_actor(value: &str) -> Result<arkret_wire::ActorId, AppError> {
+    serde_json::from_str(value).map_err(|error| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            format!("stored ActorId is invalid: {error}"),
+        )
+    })
+}
+
 fn event_signer_device_id(record: &AcceptedEvent) -> Option<String> {
     let verification_method = record
         .envelope
@@ -1337,7 +1364,8 @@ fn event_signer_device_id(record: &AcceptedEvent) -> Option<String> {
         .and_then(|proofs| proofs.first())
         .and_then(|proof| proof.get("verification_method"))
         .and_then(serde_json::Value::as_str)?;
-    verification_method_device_id(record.actor_id.as_str(), verification_method)
+    let actor = canonical_actor(&record.actor_id).ok()?;
+    verification_method_device_id(actor.signing_principal_id().as_str(), verification_method)
 }
 
 fn verification_method_device_id(actor_id: &str, verification_method: &str) -> Option<String> {
@@ -1372,21 +1400,25 @@ pub(crate) async fn first_generation_event_seal_requirement(
         .collect::<BTreeSet<_>>();
     let mut requirement = None;
     for actor in actors {
-        let generation =
-            crate::routing::identity::device_generation::current_device_generation(state, actor)
-                .await
-                .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        format!("device generation state unavailable: {error}"),
-                    )
-                })?
-                .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::StateMismatch,
-                        "device re-anchor history has no B-model generation state",
-                    )
-                })?;
+        let actor_id = canonical_actor(actor)?;
+        let principal_id = actor_id.signing_principal_id();
+        let generation = crate::routing::identity::device_generation::current_device_generation(
+            state,
+            principal_id.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("device generation state unavailable: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                "device re-anchor history has no B-model generation state",
+            )
+        })?;
         if generation.status
             == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
         {
@@ -1466,7 +1498,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 "stored replacement device authorization does not match the re-anchor payload digest",
             ));
         }
-        if authorize_payload.principal_id.as_str() != actor {
+        if &authorize_payload.principal_id != principal_id || authorize.actor_id != actor {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 "replacement device authorization principal differs from the re-anchor actor",
@@ -1500,7 +1532,9 @@ pub(crate) async fn first_generation_event_seal_requirement(
         })?;
         let accepted_frontier_refs =
             crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
-                state, actor, &realm_id,
+                state,
+                principal_id.as_str(),
+                &realm_id,
             )
             .await
             .map_err(|error| {
@@ -1533,9 +1567,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             predecessor_refs,
             accepted_frontier_refs,
             required_delta,
-            principal_id: arkret_wire::DidCoreId::new(actor).map_err(|error| {
-                AppError::internal(format!("first-generation principal_id is invalid: {error}"))
-            })?,
+            principal_id: principal_id.clone(),
             replacement_device_id: authorize_payload.device_id.as_str().to_owned(),
             replacement_device_public_key: authorize_payload.device_public_key_did.to_string(),
         });
@@ -2085,10 +2117,10 @@ mod tests {
         ));
 
         let move_id = Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap();
-        for prior_state in ["leave", "invite"] {
+        for prior_state in ["leave", "knock"] {
             // The member-state fsm starts at its registered `initial_state`
             // (`leave`), so the frozen pre-state for that case is the cell with
-            // no accumulated op at all; `invite` needs one accepted transition
+            // no accumulated op at all; `knock` needs one accepted transition
             // into it first.
             let prior_ops = if prior_state == "leave" {
                 Vec::new()

@@ -35,7 +35,7 @@ use arkret_models_collaboration::governance::circle::{
     CircleMembership, CircleMembershipOutcome, CircleScopeRotateOutcome,
     CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
 };
-use arkret_wire::Event;
+use arkret_wire::{ActorId, Event};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -132,20 +132,25 @@ fn circle_view_from(
         member_ids: if include_member_details {
             c.members
                 .iter()
-                .map(|member| parse_sdk_field::<arkret_wire::ActorId>("member", member))
+                .map(|member| parse_stored_circle_actor(member))
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             Vec::new()
         },
-        created_by: parse_sdk_field("created_by", &c.created_by)?,
+        created_by: parse_stored_circle_actor(&c.created_by)?,
         created_at: c.created_at,
         updated_by: c
             .updated_by
             .as_ref()
-            .map(|actor| parse_sdk_field::<arkret_wire::ActorId>("updated_by", actor))
+            .map(|actor| parse_stored_circle_actor(actor))
             .transpose()?,
         updated_at: c.updated_at,
     })
+}
+
+fn parse_stored_circle_actor(value: &str) -> Result<ActorId, AppError> {
+    serde_json::from_str(value)
+        .map_err(|error| AppError::internal(format!("stored circle ActorId: {error}")))
 }
 
 fn circle_directory_visible_to_actor(
@@ -153,6 +158,14 @@ fn circle_directory_visible_to_actor(
     circle: &CircleProjection,
     actor: &str,
 ) -> bool {
+    if serde_json::from_str::<ActorId>(actor).is_err()
+        || (projection
+            .agent_membership_binding(&circle.realm_id, actor)
+            .is_some()
+            && !projection.effective_agent_membership_base(&circle.realm_id, actor))
+    {
+        return false;
+    }
     circle.members.contains(actor)
         || (circle.directory_visibility == "realm_members"
             && projection
@@ -308,6 +321,8 @@ async fn list_circles(
 ) -> JsonResult<CircleList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = RealmId::new(realm_id.into_inner())
         .map_err(|e| AppError::param_invalid(format!("realm_id: {e}")))?;
     let projection = state.projections().snapshot();
@@ -315,8 +330,8 @@ async fn list_circles(
         .circles_for_realm(realm_id.as_str())
         .iter()
         .filter(|c| is_ordinary_circle(c))
-        .filter(|c| circle_directory_visible_to_actor(&projection, c, &session.actor))
-        .map(|c| circle_view_from_projection(&projection, c, &session.actor))
+        .filter(|c| circle_directory_visible_to_actor(&projection, c, &actor.to_string()))
+        .map(|c| circle_view_from_projection(&projection, c, &actor.to_string()))
         .collect::<Result<Vec<_>, _>>()?;
     json_ok(CircleList {
         realm_id,
@@ -338,20 +353,22 @@ async fn get_circle(
 ) -> JsonResult<CircleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
     let projection = state.projections().snapshot();
     let circle = projection
         .circle(&circle_id)
         .ok_or_else(|| AppError::not_found("circle not found"))?;
     if !is_ordinary_circle(circle)
-        || !circle_directory_visible_to_actor(&projection, circle, &session.actor)
+        || !circle_directory_visible_to_actor(&projection, circle, &actor.to_string())
     {
         return Err(AppError::not_found("circle not found"));
     }
     json_ok(circle_view_from_projection(
         &projection,
         circle,
-        &session.actor,
+        &actor.to_string(),
     )?)
 }
 
@@ -369,11 +386,13 @@ async fn post_circle(
 ) -> JsonResult<CircleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let submission = body.into_inner().create_event;
     // The Circle id is `retype(create_event.event_id)`, so it is read off the
     // caller's Event, never minted here. A service that minted it would be
     // naming an object no receiver can agree with.
-    let circle_id = caller_signed_circle_create_id(&session.actor, &submission.event)?;
+    let circle_id = caller_signed_circle_create_id(&actor, &submission.event)?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
     let projection = state.projections().snapshot();
     let circle = projection
@@ -382,7 +401,7 @@ async fn post_circle(
     json_ok(circle_view_from_projection(
         &projection,
         circle,
-        &session.actor,
+        &actor.to_string(),
     )?)
 }
 
@@ -393,13 +412,13 @@ async fn post_circle(
 /// ordinary Event admission path's job. This covers only the bindings between
 /// the authenticated session and the Event it submitted, plus the two fields the
 /// reducer owns and an actor therefore MUST NOT supply.
-fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId, AppError> {
+fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<CircleId, AppError> {
     if event.kind != arkret_wire::EventKind::CircleCreate {
         return Err(AppError::param_invalid(
             "create_event.event.kind must be ak.circle.create",
         ));
     }
-    if event.actor_id.signing_principal_id().as_str() != actor {
+    if &event.actor_id != actor {
         return Err(AppError::param_invalid(
             "create_event.event.actor_id must be the authenticated caller",
         ));
@@ -470,6 +489,8 @@ async fn post_circle_member(
 ) -> JsonResult<CircleMembershipOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
     let submission = body.into_inner().member_event;
     // Neither the strict-subset invariant nor the `ak.circle.member.manage`
@@ -480,7 +501,7 @@ async fn post_circle_member(
     // (`events/operations/policy/realm_circle.rs`), which is also what makes a
     // request-supplied verdict worthless — and `circle_member_state_payload` is
     // closed, so the caller could not carry one even if it wanted to.
-    let target = caller_signed_circle_member_target(&session.actor, &circle_id, &submission.event)?;
+    let target = caller_signed_circle_member_target(&actor, &circle_id, &submission.event)?;
     submit_caller_signed_circle_event(state, &session, submission).await?;
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
@@ -500,7 +521,7 @@ struct CircleMemberTarget {
 /// Check what the request wrapper alone can decide about a caller-signed
 /// `ak.circle.member.state`, and report the membership transition it names.
 fn caller_signed_circle_member_target(
-    actor: &str,
+    actor: &ActorId,
     circle_id: &str,
     event: &Event,
 ) -> Result<CircleMemberTarget, AppError> {
@@ -509,7 +530,7 @@ fn caller_signed_circle_member_target(
             "member_event.event.kind must be ak.circle.member.state",
         ));
     }
-    if event.actor_id.signing_principal_id().as_str() != actor {
+    if &event.actor_id != actor {
         return Err(AppError::param_invalid(
             "member_event.event.actor_id must be the authenticated caller",
         ));
@@ -544,7 +565,7 @@ fn caller_signed_circle_member_target(
 /// Bind the caller-signed leave Event to every identifier selected by the
 /// DELETE surface before ordinary Event admission receives it.
 fn caller_signed_circle_member_delete_target(
-    actor: &str,
+    actor: &ActorId,
     circle_id: &str,
     actor_id: &str,
     realm_id: &str,
@@ -556,9 +577,11 @@ fn caller_signed_circle_member_delete_target(
             "member_event.event.realm_id must equal the path Circle's parent Realm",
         ));
     }
-    if target.actor_id.signing_principal_id().as_str() != actor_id {
+    let path_actor = serde_json::from_str::<ActorId>(actor_id)
+        .map_err(|_| AppError::param_invalid("path actor_id must be a complete ActorId"))?;
+    if target.actor_id != path_actor {
         return Err(AppError::param_invalid(
-            "member_event payload.actor_id must equal the path actor_id",
+            "member_event payload.member_id must equal the path actor_id",
         ));
     }
     if target.membership != CircleMembership::Leave {
@@ -595,12 +618,14 @@ async fn delete_circle_member(
 ) -> JsonResult<CircleMembershipOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let circle_id = circle_id.into_inner();
     let actor_id = actor_id.into_inner();
     let circle = circle_projection_snapshot(state, &circle_id)?;
     let submission = body.into_inner().member_event;
     let target = caller_signed_circle_member_delete_target(
-        &session.actor,
+        &actor,
         &circle_id,
         &actor_id,
         &circle.realm_id,
@@ -757,8 +782,11 @@ mod tests {
 
     #[test]
     fn circle_id_is_retyped_from_the_create_event_not_minted() {
-        let circle_id =
-            caller_signed_circle_create_id(ACTOR, &circle_create_event(circle_object())).unwrap();
+        let circle_id = caller_signed_circle_create_id(
+            &account_actor(ACTOR),
+            &circle_create_event(circle_object()),
+        )
+        .unwrap();
 
         // Same complete 44-character token as the Event, only the typed prefix differs. This is
         // what makes the id something every receiver can recompute.
@@ -773,16 +801,36 @@ mod tests {
         let mut object = circle_object();
         object["id"] = json!("ak:circle:AdVFm9Eyns52cFWR93OmGlKaDKaSotPq--9cYx2SqAuy");
 
-        let error = caller_signed_circle_create_id(ACTOR, &circle_create_event(object)).expect_err(
-            "an actor-supplied object id must not be accepted as the Circle's identity",
-        );
+        let error =
+            caller_signed_circle_create_id(&account_actor(ACTOR), &circle_create_event(object))
+                .expect_err(
+                    "an actor-supplied object id must not be accepted as the Circle's identity",
+                );
         assert_eq!(error.code, ErrorCode::SchemaViolation);
     }
 
     #[test]
     fn a_create_event_signed_by_someone_else_is_rejected() {
-        caller_signed_circle_create_id(BOB, &circle_create_event(circle_object()))
+        caller_signed_circle_create_id(&account_actor(BOB), &circle_create_event(circle_object()))
             .expect_err("the submitted Event must be authored by the authenticated caller");
+    }
+
+    #[test]
+    fn circle_authoring_and_stored_actors_keep_station_identity() {
+        let actor = account_actor(ACTOR);
+        assert_eq!(
+            parse_stored_circle_actor(&actor.to_string()).unwrap(),
+            actor
+        );
+        assert!(parse_stored_circle_actor(ACTOR).is_err());
+        let other_station = ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(ACTOR).unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert!(
+            caller_signed_circle_create_id(&other_station, &circle_create_event(circle_object()))
+                .is_err()
+        );
     }
 
     const CIRCLE: &str = "ak:circle:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
@@ -818,7 +866,8 @@ mod tests {
                 "membership": "join",
             }),
         );
-        let target = caller_signed_circle_member_target(ACTOR, CIRCLE, &event).unwrap();
+        let target =
+            caller_signed_circle_member_target(&account_actor(ACTOR), CIRCLE, &event).unwrap();
 
         assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Join);
@@ -836,7 +885,7 @@ mod tests {
                 "membership": "join",
             }),
         );
-        caller_signed_circle_member_target(ACTOR, CIRCLE, &event)
+        caller_signed_circle_member_target(&account_actor(ACTOR), CIRCLE, &event)
             .expect_err("payload.circle_id must equal the path circle_id");
     }
 
@@ -851,11 +900,31 @@ mod tests {
                 "expected_membership": "join",
             }),
         );
-        let target =
-            caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &event).unwrap();
+        let target = caller_signed_circle_member_delete_target(
+            &account_actor(ACTOR),
+            CIRCLE,
+            &account_actor(BOB).to_string(),
+            REALM,
+            &event,
+        )
+        .unwrap();
 
         assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Leave);
+        let other_station_target = ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(BOB).unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert!(
+            caller_signed_circle_member_delete_target(
+                &account_actor(ACTOR),
+                CIRCLE,
+                &other_station_target.to_string(),
+                REALM,
+                &event,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -866,13 +935,25 @@ mod tests {
             "membership": "leave",
         });
         let event = member_state_event(ACTOR, payload.clone());
-        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, MALLORY, REALM, &event)
-            .expect_err("payload actor must equal the DELETE path actor");
+        caller_signed_circle_member_delete_target(
+            &account_actor(ACTOR),
+            CIRCLE,
+            &account_actor(MALLORY).to_string(),
+            REALM,
+            &event,
+        )
+        .expect_err("payload actor must equal the DELETE path actor");
 
         let other_realm = "ak:realm:ATGd5JrukD5xsqzxo2mPDYgWsgsvKfW0RmWdOZLa_hOO";
         let wrong_realm_event = member_state_event_in_realm(ACTOR, other_realm, payload.clone());
-        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &wrong_realm_event)
-            .expect_err("Event realm must equal the path Circle's parent Realm");
+        caller_signed_circle_member_delete_target(
+            &account_actor(ACTOR),
+            CIRCLE,
+            &account_actor(BOB).to_string(),
+            REALM,
+            &wrong_realm_event,
+        )
+        .expect_err("Event realm must equal the path Circle's parent Realm");
 
         let wrong_transition = member_state_event(
             ACTOR,
@@ -882,8 +963,14 @@ mod tests {
                 "membership": "ban",
             }),
         );
-        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &wrong_transition)
-            .expect_err("DELETE must carry a signed leave transition");
+        caller_signed_circle_member_delete_target(
+            &account_actor(ACTOR),
+            CIRCLE,
+            &account_actor(BOB).to_string(),
+            REALM,
+            &wrong_transition,
+        )
+        .expect_err("DELETE must carry a signed leave transition");
 
         let missing_head = member_state_event(
             ACTOR,
@@ -893,8 +980,14 @@ mod tests {
                 "membership": "leave",
             }),
         );
-        caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &missing_head)
-            .expect_err("DELETE must carry its signed membership head_eq guard");
+        caller_signed_circle_member_delete_target(
+            &account_actor(ACTOR),
+            CIRCLE,
+            &account_actor(BOB).to_string(),
+            REALM,
+            &missing_head,
+        )
+        .expect_err("DELETE must carry its signed membership head_eq guard");
     }
 
     #[test]
