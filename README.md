@@ -199,6 +199,7 @@ docker run --rm -p 8698:8698 \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk... \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
+  -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=shared-secret-known-by-coauth \
   -e DATABASE_URL=postgres://soland:soland@db:5432/soland \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
@@ -242,6 +243,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` | unset | Account Authority service DID trusted for S2S account-status evidence; required together with `SOLAND_ACCOUNT_AUTHORITY_URL` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
+| `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | exact Auth Server S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
@@ -346,6 +348,7 @@ SOLAND_ACCOUNT_AUTHORITY_URL=https://auth.local.host
 SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
 SOLAND_OAUTH_CLIENT_ID=01GFWR28C4KNE04WG3HKXB7C9R
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://auth.local.host/_arkret/gate/account/session-grants/introspect
+SOLAND_AUTH_SESSION_LOGOUT_URL=https://auth.local.host/_arkret/gate/account/auth-sessions/logout
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=local-coauth-session-grant-introspection
 SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```

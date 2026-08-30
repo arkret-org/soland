@@ -90,6 +90,41 @@ impl IdempotencyStore for PgIdempotencyStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn complete_reservation(
+        &self,
+        expected: &IdempotencyRecord,
+        completed: &IdempotencyRecord,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "UPDATE idempotency_keys SET service_id = $9, request_hash = $10, \
+             response_status = $11, response_body = $12, created_at = $13, expires_at = $14 \
+             WHERE principal_id = $1 AND idempotency_key = $2 AND service_id = $3 \
+             AND request_hash = $4 AND response_status = $5 AND response_body = $6 \
+             AND created_at = $7 AND expires_at = $8",
+        )
+        .bind::<Text, _>(&expected.principal_id)
+        .bind::<Text, _>(&expected.idempotency_key)
+        .bind::<Text, _>(&expected.service_id)
+        .bind::<Text, _>(&expected.request_hash)
+        .bind::<Integer, _>(expected.response_status)
+        .bind::<Jsonb, _>(&expected.response_body)
+        .bind::<Timestamptz, _>(expected.created_at)
+        .bind::<Timestamptz, _>(expected.expires_at)
+        .bind::<Text, _>(&completed.service_id)
+        .bind::<Text, _>(&completed.request_hash)
+        .bind::<Integer, _>(completed.response_status)
+        .bind::<Jsonb, _>(&completed.response_body)
+        .bind::<Timestamptz, _>(completed.created_at)
+        .bind::<Timestamptz, _>(completed.expires_at)
+        .execute(&mut *conn)
+        .await
+        .map(|affected| affected == 1)
+        .map_err(PersistenceError::database)
+    }
+
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
         let mut conn = pg_conn(&self.pool)
             .await

@@ -276,6 +276,11 @@ pub struct AppConfig {
     /// unless `development_mode` is on. See [`crate::failpoints`].
     pub failpoints: crate::failpoints::FailpointRegistry,
     pub session_grant_introspection_url: Option<String>,
+    /// Exact Auth Server S2S hard-logout endpoint. This is intentionally
+    /// independent from session-grant introspection: the two operations may
+    /// be routed or versioned separately and must never be derived from one
+    /// another by string substitution.
+    pub auth_session_logout_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
     /// Enable soland's built-in `did:webvh` provider. This is intended for
@@ -862,6 +867,7 @@ impl AppConfig {
             development_mode: false,
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
             session_grant_introspection_url: None,
+            auth_session_logout_url: None,
             session_grant_introspection_bearer: None,
             // Test fixtures intentionally allow bare `did:web` — the spec
             // conformance vectors use it. The production default
@@ -988,6 +994,10 @@ impl AppConfig {
             .or_else(|| development_mode.then(|| "*".to_owned()));
         let session_grant_introspection_url =
             env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_URL");
+        let auth_session_logout_url = env_non_empty(values, "SOLAND_AUTH_SESSION_LOGOUT_URL");
+        if let Some(value) = auth_session_logout_url.as_deref() {
+            validate_auth_session_logout_url(value)?;
+        }
         let session_grant_introspection_bearer =
             env_non_empty(values, "SOLAND_SESSION_GRANT_INTROSPECTION_BEARER");
         let did_resolver_allow_methods = env_csv(values, "SOLAND_DID_RESOLVER_ALLOW_METHODS")
@@ -1225,6 +1235,7 @@ impl AppConfig {
             development_mode,
             failpoints,
             session_grant_introspection_url,
+            auth_session_logout_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,
             embedded_webvh_provider_enabled,
@@ -1480,6 +1491,23 @@ impl AppConfig {
             warnings,
         }
     }
+}
+
+fn validate_auth_session_logout_url(value: &str) -> anyhow::Result<()> {
+    let parsed = url::Url::parse(value)
+        .map_err(|error| anyhow::anyhow!("SOLAND_AUTH_SESSION_LOGOUT_URL is invalid: {error}"))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/_arkret/gate/account/auth-sessions/logout"
+    {
+        anyhow::bail!(
+            "SOLAND_AUTH_SESSION_LOGOUT_URL must be an http(s) URL without credentials, query, or fragment and with path /_arkret/gate/account/auth-sessions/logout"
+        );
+    }
+    Ok(())
 }
 
 fn load_object_storage_config(
@@ -1954,6 +1982,25 @@ mod tests {
         validate_persistence_key_store(Some("postgres://example"), &KeyStoreConfig::Platform)
             .unwrap();
         validate_persistence_key_store(None, &KeyStoreConfig::Disabled).unwrap();
+    }
+
+    #[test]
+    fn auth_session_logout_url_is_an_explicit_exact_operation_endpoint() {
+        validate_auth_session_logout_url(
+            "https://auth.example/_arkret/gate/account/auth-sessions/logout",
+        )
+        .unwrap();
+        for invalid in [
+            "https://auth.example/_arkret/gate/account/session-grants/introspect",
+            "https://user@auth.example/_arkret/gate/account/auth-sessions/logout",
+            "https://auth.example/_arkret/gate/account/auth-sessions/logout?version=1",
+            "ftp://auth.example/_arkret/gate/account/auth-sessions/logout",
+        ] {
+            assert!(
+                validate_auth_session_logout_url(invalid).is_err(),
+                "{invalid}"
+            );
+        }
     }
 
     #[test]

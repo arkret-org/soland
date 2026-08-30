@@ -1,6 +1,4 @@
-use arkret_models_collaboration::session_grant_bodies::{
-    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody,
-};
+use arkret_models_collaboration::session_grant_bodies::AuthSessionLogoutOutcome;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, Verifier as _};
 
@@ -194,67 +192,9 @@ async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
 ) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
-    let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
-        return Err(AppError::unsupported_feature(
-            "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
-        ));
-    };
-    let Some(bearer) = state.config().session_grant_introspection_bearer.as_deref() else {
-        return Err(AppError::unsupported_feature(
-            "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
-        ));
-    };
-    let audience =
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            AppError::internal(format!(
-                "runtime principal service_id is not a core_id: {error}"
-            ))
-        })?;
-    let request = SessionGrantIntrospectRequestBody::ByJwt(
-        arkret_models_collaboration::session_grant_bodies::SessionGrantIntrospectByJwt {
-            grant_jwt: grant_jwt.to_owned(),
-            audience_id: Some(audience),
-            proof: None,
-        },
-    );
-    let (introspection_url, client) =
-        crate::security::validate_http_url_for_egress_with_pinned_client(
-            introspection_url,
-            "session grant logout introspection",
-            state.config().development_mode,
-            std::time::Duration::from_secs(10),
-        )
-        .map_err(AppError::capability_denied)?;
-    let response = crate::routing::with_arkret_operation(
-        client.post(introspection_url),
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
-    )
-    .bearer_auth(bearer)
-    .json(&request)
-    .send()
-    .await
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("session grant logout introspection request failed: {error}"),
-        )
-    })?;
-    if !response.status().is_success() {
-        let status = response.status();
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("session grant logout introspection was rejected by the Auth Server: {status}"),
-        ));
-    }
-    let response = response
-        .json::<SessionGrantIntrospectOutcome>()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("invalid session grant logout introspection response: {error}"),
-            )
-        })?;
+    let response = super::super::auth_server_client::AuthServerClient::from_state(state)?
+        .introspect_logout_grant(grant_jwt)
+        .await?;
     classify_logout_introspection(response)
 }
 
@@ -266,7 +206,7 @@ async fn introspect_session_grant_for_logout(
 /// logout sub-operation before returning success. `audience_mismatch` is a
 /// routing/authentication error and must never be treated as already gone.
 fn classify_logout_introspection(
-    outcome: SessionGrantIntrospectOutcome,
+    outcome: crate::wire::SessionGrantIntrospectOutcome,
 ) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
     use crate::wire::SessionGrantIntrospectStatus;
 
@@ -310,66 +250,9 @@ async fn trigger_auth_side_auth_session_logout(
     state: &AppState,
     grant_jwt: &str,
 ) -> Result<(), AppError> {
-    let Some(introspection_url) = state.config().session_grant_introspection_url.as_deref() else {
-        // Dev mode without an Auth Server: no rotation chain to terminate.
-        return Ok(());
-    };
-    let Some(logout_url) = introspection_url
-        .strip_suffix("/session-grants/introspect")
-        .map(|base| format!("{base}/auth-sessions/logout"))
-    else {
-        return Err(AppError::unsupported_feature(
-            "SOLAND_SESSION_GRANT_INTROSPECTION_URL must end in /session-grants/introspect so the Auth-side /auth-sessions/logout endpoint can be derived",
-        ));
-    };
-    let Some(bearer) = state.config().session_grant_introspection_bearer.as_deref() else {
-        return Err(AppError::unsupported_feature(
-            "session grant Auth-side logout requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
-        ));
-    };
-    let (logout_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &logout_url,
-        "auth session logout",
-        state.config().development_mode,
-        std::time::Duration::from_secs(10),
-    )
-    .map_err(AppError::capability_denied)?;
-    let request = AuthSessionLogoutRequestBody {
-        grant_jwt: grant_jwt.to_owned(),
-        logout_request_digest: None,
-        validated_at: Some(now()),
-        reason_code: Some("account_logout".to_owned()),
-    };
-    let response = crate::routing::with_arkret_operation(
-        client.post(logout_url),
-        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
-    )
-    .bearer_auth(bearer)
-    .json(&request)
-    .send()
-    .await
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("Auth-side session logout request failed: {error}"),
-        )
-    })?;
-    if !response.status().is_success() {
-        let status = response.status();
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("Auth-side session logout was rejected by the Auth Server: {status}"),
-        ));
-    }
-    let body = response
-        .json::<AuthSessionLogoutOutcome>()
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                format!("invalid Auth-side session logout response: {error}"),
-            )
-        })?;
+    let body = super::super::auth_server_client::AuthServerClient::from_state(state)?
+        .logout_auth_session(grant_jwt, now())
+        .await?;
     confirm_auth_side_logout(body)
 }
 
@@ -407,8 +290,8 @@ mod logout_introspection_tests {
     fn outcome(
         active: bool,
         status: SessionGrantIntrospectStatus,
-    ) -> SessionGrantIntrospectOutcome {
-        SessionGrantIntrospectOutcome {
+    ) -> crate::wire::SessionGrantIntrospectOutcome {
+        crate::wire::SessionGrantIntrospectOutcome {
             active,
             status,
             proof_required: false,

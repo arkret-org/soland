@@ -5,6 +5,7 @@ pub(crate) use account::{project_canonical_direct_binding, validate_direct_bindi
 pub(crate) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
+pub(crate) mod auth_server_client;
 // api-conventions.md §3.3 — `/_arkret/self/*` inbound credential: a
 // `ak.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
 // validated against a TTL-cached coauth introspection. The default ② session

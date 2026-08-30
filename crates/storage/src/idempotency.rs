@@ -36,6 +36,15 @@ pub trait IdempotencyStore: Send + Sync {
     /// concurrent first-writer race keeps the earliest landed row, so a later
     /// racer reads it back as a `Replay` instead of clobbering it.
     async fn record(&self, record: &IdempotencyRecord) -> PersistenceResult<()>;
+    /// Atomically replace an exact first-writer reservation with its terminal
+    /// response. The compare includes the entire expected row, so a worker can
+    /// complete only the reservation token it acquired; a stale or competing
+    /// worker cannot overwrite the landed outcome.
+    async fn complete_reservation(
+        &self,
+        expected: &IdempotencyRecord,
+        completed: &IdempotencyRecord,
+    ) -> PersistenceResult<bool>;
     /// TTL sweep: drop every row whose `expires_at` is at or before `now`.
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize>;
 }

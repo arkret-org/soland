@@ -1,0 +1,143 @@
+use arkret_models_collaboration::session_grant_bodies::{
+    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SessionGrantIntrospectByJwt,
+};
+use chrono::{DateTime, Utc};
+use soland_http::error::{AppError, ErrorCode};
+
+use crate::state::AppState;
+use crate::wire::{SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody};
+
+/// Typed deployment-internal boundary from the Principal Server to the Auth Server.
+///
+/// Endpoint selection, S2S authentication, operation selectors, timeouts and
+/// transport error mapping live here so product handlers cannot couple sibling
+/// operations through URL string conventions.
+pub(crate) struct AuthServerClient<'a> {
+    state: &'a AppState,
+    introspection_url: &'a str,
+    logout_url: &'a str,
+    bearer: &'a str,
+}
+
+impl<'a> AuthServerClient<'a> {
+    pub(crate) fn from_state(state: &'a AppState) -> Result<Self, AppError> {
+        let config = state.config();
+        let introspection_url = config
+            .session_grant_introspection_url
+            .as_deref()
+            .ok_or_else(|| {
+                AppError::unsupported_feature(
+                    "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode",
+                )
+            })?;
+        let logout_url = config.auth_session_logout_url.as_deref().ok_or_else(|| {
+            AppError::unsupported_feature(
+                "Auth-side session logout requires SOLAND_AUTH_SESSION_LOGOUT_URL",
+            )
+        })?;
+        let bearer = config
+            .session_grant_introspection_bearer
+            .as_deref()
+            .ok_or_else(|| {
+                AppError::unsupported_feature(
+                    "Auth Server S2S calls require SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
+                )
+            })?;
+        Ok(Self {
+            state,
+            introspection_url,
+            logout_url,
+            bearer,
+        })
+    }
+
+    pub(crate) async fn introspect_logout_grant(
+        &self,
+        grant_jwt: &str,
+    ) -> Result<SessionGrantIntrospectOutcome, AppError> {
+        let audience = arkret_identifiers::DidCoreId::new(self.state.service_id().clone())
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "runtime principal service_id is not a core_id: {error}"
+                ))
+            })?;
+        let request = SessionGrantIntrospectRequestBody::ByJwt(SessionGrantIntrospectByJwt {
+            grant_jwt: grant_jwt.to_owned(),
+            audience_id: Some(audience),
+            proof: None,
+        });
+        self.post_json(
+            self.introspection_url,
+            "session grant logout introspection",
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_INTROSPECT_SESSION_GRANT_V1,
+            &request,
+        )
+        .await
+    }
+
+    pub(crate) async fn logout_auth_session(
+        &self,
+        grant_jwt: &str,
+        validated_at: DateTime<Utc>,
+    ) -> Result<AuthSessionLogoutOutcome, AppError> {
+        let request = AuthSessionLogoutRequestBody {
+            grant_jwt: grant_jwt.to_owned(),
+            logout_request_digest: None,
+            validated_at: Some(validated_at),
+            reason_code: Some("account_logout".to_owned()),
+        };
+        self.post_json(
+            self.logout_url,
+            "Auth-side session logout",
+            arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_LOGOUT_AUTH_SESSION_V1,
+            &request,
+        )
+        .await
+    }
+
+    async fn post_json<Request, Response>(
+        &self,
+        endpoint: &str,
+        operation: &str,
+        operation_id: &'static str,
+        request: &Request,
+    ) -> Result<Response, AppError>
+    where
+        Request: serde::Serialize + ?Sized,
+        Response: serde::de::DeserializeOwned,
+    {
+        let (endpoint, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+            endpoint,
+            operation,
+            self.state.config().development_mode,
+            std::time::Duration::from_secs(10),
+        )
+        .map_err(AppError::capability_denied)?;
+        let response = crate::routing::with_arkret_operation(client.post(endpoint), operation_id)
+            .bearer_auth(self.bearer)
+            .json(request)
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::TemporarilyUnavailable,
+                    format!("{operation} request failed: {error}"),
+                )
+            })?;
+        if !response.status().is_success() {
+            return Err(AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!(
+                    "{operation} was rejected by the Auth Server: {}",
+                    response.status()
+                ),
+            ));
+        }
+        response.json::<Response>().await.map_err(|error| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                format!("invalid {operation} response: {error}"),
+            )
+        })
+    }
+}

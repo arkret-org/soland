@@ -61,6 +61,23 @@ impl IdempotencyStore for MemoryIdempotencyStore {
         Ok(())
     }
 
+    async fn complete_reservation(
+        &self,
+        expected: &IdempotencyRecord,
+        completed: &IdempotencyRecord,
+    ) -> PersistenceResult<bool> {
+        let mut data = self.data.lock();
+        let key = (
+            expected.principal_id.clone(),
+            expected.idempotency_key.clone(),
+        );
+        if data.get(&key) != Some(expected) {
+            return Ok(false);
+        }
+        data.insert(key, completed.clone());
+        Ok(true)
+    }
+
     async fn prune_expired(&self, now: chrono::DateTime<Utc>) -> PersistenceResult<usize> {
         let mut data = self.data.lock();
         let before = data.len();

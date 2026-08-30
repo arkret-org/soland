@@ -277,6 +277,18 @@ impl PersistenceHandle {
         Ok(())
     }
 
+    pub async fn complete_idempotency_reservation(
+        &self,
+        expected: &soland_storage::IdempotencyRecord,
+        completed: &soland_storage::IdempotencyRecord,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .persistence
+            .idempotency_keys()
+            .complete_reservation(expected, completed)
+            .await?)
+    }
+
     pub async fn stored_service_route_keys(
         &self,
         after: Option<&soland_storage::ServiceRouteStoredKey>,

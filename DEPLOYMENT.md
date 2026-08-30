@@ -115,6 +115,7 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example
 SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk...
 SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect
+SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout
 SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth>
 SOLAND_OBJECT_STORAGE_BACKEND=s3-compatible
 SOLAND_OBJECT_STORAGE_S3_BUCKET=soland
@@ -289,6 +290,7 @@ docker run --name soland --restart=always -d \
   -e SOLAND_ACCOUNT_AUTHORITY_URL=https://coauth.example \
   -e SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID=did:key:z6Mk... \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_URL=https://coauth.example/_arkret/gate/account/session-grants/introspect \
+  -e SOLAND_AUTH_SESSION_LOGOUT_URL=https://coauth.example/_arkret/gate/account/auth-sessions/logout \
   -e SOLAND_SESSION_GRANT_INTROSPECTION_BEARER=<shared-secret-configured-in-coauth> \
   -e DATABASE_URL=postgres://soland:<password>@db:5432/soland?sslmode=verify-full \
   -e SOLAND_OBJECT_STORAGE_BACKEND=filesystem \
@@ -582,6 +584,9 @@ pre-upgrade backup if you need to roll back.
   `/_arkret/gate/account/session-grants/introspect`, and
   `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` matches the shared
   server-to-server secret configured there.
+- `SOLAND_AUTH_SESSION_LOGOUT_URL` independently points at coauth's exact
+  `/_arkret/gate/account/auth-sessions/logout` S2S operation; it is never
+  inferred from the introspection URL.
 - `DATABASE_URL` uses `sslmode=verify-full` and a password kept out of source
   control (Vault / Kubernetes Secret / systemd `LoadCredential`).
 - `SOLAND_CORS_ALLOW_ORIGIN` is the **single** browser origin you trust;

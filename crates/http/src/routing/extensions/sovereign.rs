@@ -96,6 +96,7 @@ pub fn assert_enclave_invariants(config: &AppConfig) -> EnclaveAssertionResult {
 /// `arkret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct ConfigureDeploymentRequestBody {
     profile: Option<String>,
     upstream_main: Option<String>,
@@ -105,6 +106,7 @@ struct ConfigureDeploymentRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct RegisterEnclaveRequestBody {
     server_id: String,
     base_url: String,
@@ -113,6 +115,7 @@ struct RegisterEnclaveRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct RealmCreateRequestBody {
     realm_id: Option<String>,
     hosted_on: String,
@@ -121,6 +124,7 @@ struct RealmCreateRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct ExternalInviteRequestBody {
     target_realm: String,
     invitee_id: String,
@@ -128,6 +132,7 @@ struct ExternalInviteRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct AcceptExternalInviteRequestBody {
     invite_token: String,
     actor_id: String,
@@ -136,11 +141,13 @@ struct AcceptExternalInviteRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct NetworkLinkRequestBody {
     upstream_available: bool,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct StoreForwardMessageRequestBody {
     realm_id: String,
     actor: String,
@@ -148,12 +155,14 @@ struct StoreForwardMessageRequestBody {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct IngestStoreForwardRequestBody {
     #[serde(default)]
     operations: Vec<StoreForwardOperationBody>,
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[serde(deny_unknown_fields)]
 struct EnclaveProxyRequestBody {
     target: String,
     path: String,
@@ -1393,5 +1402,66 @@ mod tests {
             "did:webvh:zE2ucm2oH9PCib4kBzLEAkFqa:registry.defense.example",
             malformed_root,
         ));
+    }
+
+    #[test]
+    fn sovereign_admin_request_bodies_reject_unknown_fields() {
+        let error = serde_json::from_value::<ConfigureDeploymentRequestBody>(serde_json::json!({
+            "trust_root_ids": []
+        }))
+        .expect_err("the obsolete trust_root_ids alias must not be ignored");
+        assert!(error.to_string().contains("unknown field"));
+
+        let cases = [
+            serde_json::from_value::<RegisterEnclaveRequestBody>(serde_json::json!({
+                "server_id": "ak:did_core:key:z6Mkservice",
+                "base_url": "https://enclave.example",
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<RealmCreateRequestBody>(serde_json::json!({
+                "hosted_on": "ak:did_core:key:z6Mkservice",
+                "created_by": "ak:did_core:key:z6Mkprincipal",
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<ExternalInviteRequestBody>(serde_json::json!({
+                "target_realm": "ak:realm:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "invitee_id": "ak:did_core:key:z6Mkinvitee",
+                "inviter_id": "ak:did_core:key:z6Mkinviter",
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<AcceptExternalInviteRequestBody>(serde_json::json!({
+                "invite_token": "ak:external_invite:test",
+                "actor_id": "ak:did_core:key:z6Mkactor",
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<NetworkLinkRequestBody>(serde_json::json!({
+                "upstream_available": true,
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<StoreForwardMessageRequestBody>(serde_json::json!({
+                "realm_id": "ak:realm:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "actor": "ak:did_core:key:z6Mkactor",
+                "content": {},
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<IngestStoreForwardRequestBody>(serde_json::json!({
+                "operations": [],
+                "unknown": true
+            }))
+            .map(|_| ()),
+            serde_json::from_value::<EnclaveProxyRequestBody>(serde_json::json!({
+                "target": "https://main.example",
+                "path": "/_arkret/describe",
+                "unknown": true
+            }))
+            .map(|_| ()),
+        ];
+        assert!(cases.into_iter().all(|result| result.is_err()));
     }
 }

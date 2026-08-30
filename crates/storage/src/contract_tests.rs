@@ -1043,6 +1043,51 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
         Some(first),
         "the first response must win a duplicate-key race"
     );
+
+    let reservation_key = format!("idempotency-reservation:{namespace}");
+    let reservation = IdempotencyRecord {
+        principal_id: principal_id.clone(),
+        idempotency_key: reservation_key.clone(),
+        service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example".to_owned())
+            .unwrap(),
+        request_hash: "sha256:reserved".to_owned(),
+        response_status: 102,
+        response_body: serde_json::json!({"reservation_id": namespace}),
+        created_at: now,
+        expires_at: now + Duration::minutes(1),
+    };
+    store
+        .record(&reservation)
+        .await
+        .expect("record first-writer reservation");
+    let mut completed = reservation.clone();
+    completed.response_status = 200;
+    completed.response_body = serde_json::json!({"accepted": true});
+    completed.expires_at = now + Duration::hours(1);
+    let mut competing_reservation = reservation.clone();
+    competing_reservation.response_body = serde_json::json!({"reservation_id": "competitor"});
+    assert!(
+        !store
+            .complete_reservation(&competing_reservation, &completed)
+            .await
+            .expect("reject competing reservation completion"),
+        "a worker that does not own the exact reservation must not complete it"
+    );
+    assert!(
+        store
+            .complete_reservation(&reservation, &completed)
+            .await
+            .expect("complete owned reservation"),
+        "the exact reservation owner must atomically publish its terminal response"
+    );
+    assert_eq!(
+        store
+            .get(&principal_id, &reservation_key)
+            .await
+            .expect("read completed reservation"),
+        Some(completed),
+        "reservation completion must replace the pending row exactly once"
+    );
 }
 
 pub async fn assert_mimi_consent_correlation_store_contract(

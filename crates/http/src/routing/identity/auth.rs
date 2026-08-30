@@ -40,10 +40,7 @@ use super::{
     render_error, validate_device_id,
 };
 use crate::state::AppState;
-use crate::wire::{
-    DevLoginRequestBody, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionLoginOutcome,
-};
+use crate::wire::{DevLoginRequestBody, SessionLoginOutcome};
 use crate::{JsonResult, ids, json_ok};
 
 mod device_pair;
