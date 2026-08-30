@@ -531,7 +531,7 @@ mod tests {
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
                 service_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
-                service_kind: "principal_server".to_owned(),
+                service_kind: "station".to_owned(),
                 did,
                 method_history_head: "head-1".to_owned(),
                 version_id: "1-head-1".to_owned(),
@@ -699,7 +699,7 @@ mod tests {
                     .unwrap()
                     .record
                     .service_id,
-                "principal_server",
+                "station",
             )
             .await
             .unwrap()

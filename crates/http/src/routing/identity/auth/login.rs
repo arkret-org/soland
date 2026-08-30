@@ -117,11 +117,9 @@ pub(super) async fn dev_login(
     // threshold gets a 403 `policy_denied` (lockout) until the lockout window
     // expires, without revealing whether the credential would otherwise
     // have been valid.
-    let principal_server_id =
-        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            AppError::internal(format!("invalid local Principal Server id: {error}"))
-        })?;
-    let account_id = arkret_wire::AccountId::new(actor.clone(), principal_server_id);
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("invalid local Station id: {error}")))?;
+    let account_id = arkret_wire::AccountId::new(actor.clone(), station_id);
     let account = state
         .identities()
         .find_account_by_actor(FindAccountByActorQuery {

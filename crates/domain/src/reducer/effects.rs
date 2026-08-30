@@ -279,7 +279,7 @@ pub enum ProjectionEffect {
     /// growing four near-identical `ProjectionEffect` arms.
     Mls(MlsEffect),
     /// `ak.device.push_route` actor-private state projected into the
-    /// per-recipient Principal Server push-route cell cache.
+    /// per-recipient Station push-route cell cache.
     PushRouteUpdated {
         subject: PushRouteSubject,
         action: String,

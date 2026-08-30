@@ -34,10 +34,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(self.0.accounts().get(account_id).await?.map(|account| {
             crate::identity::AccountIdentity {
                 account_pk: account.pk,
-                account_id: arkret_wire::AccountId::new(
-                    account.principal_id,
-                    account.principal_server_id,
-                ),
+                account_id: arkret_wire::AccountId::new(account.principal_id, account.station_id),
             }
         }))
     }
@@ -61,7 +58,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         let account = soland_storage::AccountRecord {
             pk: AccountPk(0),
             principal_id: command.account_id.principal_id.clone(),
-            principal_server_id: command.account_id.station_id.clone(),
+            station_id: command.account_id.station_id.clone(),
             localpart: command.localpart.clone(),
             display_name: command.display_name,
             bio: None,
@@ -265,7 +262,7 @@ fn application_account_profile(
         pk: account.pk,
         account_id: arkret_wire::AccountId::new(
             account.principal_id.clone(),
-            account.principal_server_id.clone(),
+            account.station_id.clone(),
         ),
         principal_id: account.principal_id,
         localpart: account.localpart,
@@ -282,7 +279,7 @@ fn persistence_account_profile(
     soland_storage::AccountRecord {
         pk: account.pk,
         principal_id: account.principal_id,
-        principal_server_id: account.account_id.station_id,
+        station_id: account.account_id.station_id,
         localpart: account.localpart,
         display_name: account.display_name,
         bio: account.bio,
@@ -1601,7 +1598,7 @@ fn application_recovery_session(
         session_grant_id: record.session_grant_id,
         session_grant_cnf_jkt: record.session_grant_cnf_jkt,
         principal_id: record.principal_id,
-        principal_server_id: record.principal_server_id,
+        station_id: record.station_id,
         requesting_device_id: record.requesting_device_id,
         trust_domain: record.trust_domain,
         policy_id: record.policy_id,
@@ -1634,7 +1631,7 @@ fn persistence_recovery_session(
         session_grant_id: session.session_grant_id,
         session_grant_cnf_jkt: session.session_grant_cnf_jkt,
         principal_id: session.principal_id,
-        principal_server_id: session.principal_server_id,
+        station_id: session.station_id,
         requesting_device_id: session.requesting_device_id,
         trust_domain: session.trust_domain,
         policy_id: session.policy_id,

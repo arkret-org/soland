@@ -221,13 +221,12 @@ pub(crate) async fn active_series_pointer_is_current(
     pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     let controller_core = managed_controller_core_id(controller_id)?;
-    if pointer.actor_id != controller_core {
+    let station_id = DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
+    let authority = arkret_wire::AccountId::new(controller_core, station_id);
+    if pointer.actor_id != arkret_wire::ActorId::account(authority.clone()) {
         return Ok(false);
     }
-    let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!("local Principal Server id is invalid: {error}"))
-    })?;
-    let authority = arkret_wire::AccountId::new(controller_core, principal_server_id);
     let verification_method = pointer.auth_data.verification_method.as_str();
     let Some((_, device_fragment)) = verification_method.rsplit_once('#') else {
         return Ok(false);
@@ -275,19 +274,23 @@ pub(crate) async fn validate_active_series_operation_authority(
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(operation.realm_id.as_str(), record.actor_id.as_str())
+        .realm_is_principal_control_for_actor(
+            operation.realm_id.as_str(),
+            record.actor_id.signing_principal_id().as_str(),
+        )
     {
         return Err("key_backup_active_series_wrong_control_realm");
     }
     let backup_kind = record.backup_kind.as_str().to_owned();
     let series_exists = state
         .key_backups()
-        .backups_for_actor(record.actor_id.as_str())
+        .backups_for_actor(record.actor_id.signing_principal_id().as_str())
         .await
         .map_err(|_| "key_backup_active_series_authority_unavailable")?
         .iter()
         .any(|backup| {
-            backup.get("actor_id").and_then(Value::as_str) == Some(record.actor_id.as_str())
+            backup.get("actor_id").and_then(Value::as_str)
+                == Some(record.actor_id.signing_principal_id().as_str())
                 && backup.get("backup_kind").and_then(Value::as_str) == Some(backup_kind.as_str())
                 && backup.get("series_id").and_then(Value::as_str)
                     == Some(record.active_series_id.as_str())
@@ -298,7 +301,13 @@ pub(crate) async fn validate_active_series_operation_authority(
     }
     arkret_models_collaboration::events_payloads::validate_key_backup_active_series_record(&record)
         .map_err(|error| error.reason_code())?;
-    match active_series_pointer_is_current(state, record.actor_id.as_str(), &record).await {
+    match active_series_pointer_is_current(
+        state,
+        record.actor_id.signing_principal_id().as_str(),
+        &record,
+    )
+    .await
+    {
         Ok(true) => Ok(()),
         Ok(false) => Err("backup_frontier_stale"),
         Err(_) => Err("key_backup_active_series_authority_unavailable"),
@@ -524,14 +533,14 @@ pub(crate) async fn validate_delegated_agent_envelope(
     // field which must not exist on the wire.
     let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
         .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
-    let agent_id = event.actor_id.as_str();
+    let agent_id = event.actor_id.signing_principal_id().as_str();
     let record = managed_agent_record(state, agent_id).await?;
     let controller_core_id = managed_controller_core_id(controller_id)?;
     if managed_controller_core_id(&record.controller_id)? != controller_core_id
         || event
             .executed_by
             .as_ref()
-            .map(arkret_wire::DidCoreId::as_str)
+            .map(|actor| actor.signing_principal_id().as_str())
             != Some(controller_core_id.as_str())
         || event.realm_id.as_str() != record.principal_control_realm_id
         || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
@@ -876,7 +885,7 @@ mod tests {
             "service": [
                 {
                     "id": format!("{AGENT_DID}#soland"),
-                    "type": "ArkretPrincipalServer",
+                    "type": "ArkretStation",
                     "serviceEndpoint": "https://agent.example"
                 },
                 {

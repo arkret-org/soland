@@ -163,7 +163,7 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
     SessionRecord {
         token_hash: "applet-transaction-source-signature".to_owned(),
         account_pk: None,
-        actor: event.actor_id.to_string(),
+        actor: event.actor_id.signing_principal_id().to_string(),
         // An applet service is not a device. This session authenticates the
         // source service signature, so it names no device rather than a
         // literal that no device directory can resolve.
@@ -207,21 +207,26 @@ fn validate_transaction_event_binding(
     {
         return Err("authorization_ref_missing");
     }
-    let actor_id = event.actor_id.as_str();
-    if actor_id == install.bot_actor_id.as_str() {
+    let actor_id = event.actor_id.signing_principal_id().as_str();
+    if event.actor_id == install.bot_actor_id {
         return Ok(());
     }
     if install
         .ghosts
         .iter()
-        .any(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
+        .any(|ghost| ghost.ghost_actor_id == event.actor_id)
     {
         return Ok(());
     }
-    let matched = install.package.namespaces.actors.iter().any(|entry| {
-        !namespace_pattern_is_wildcard(&entry.pattern)
-            && namespace_pattern_matches(AppletNamespaceDomain::Actors, &entry.pattern, actor_id)
-    });
+    let matched = event.actor_id.route_service_id() == install.bot_actor_id.route_service_id()
+        && install.package.namespaces.actors.iter().any(|entry| {
+            !namespace_pattern_is_wildcard(&entry.pattern)
+                && namespace_pattern_matches(
+                    AppletNamespaceDomain::Actors,
+                    &entry.pattern,
+                    actor_id,
+                )
+        });
     if matched {
         Ok(())
     } else {

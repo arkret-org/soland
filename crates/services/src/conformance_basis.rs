@@ -38,7 +38,7 @@ const FIXTURE_FIELD_SCOPED_WRITE_FIELDS: [&str; 6] = [
 
 /// Explicit inputs that distinguish one synthetic Realm basis from another.
 pub struct RealmBasisFixtureOptions<'a> {
-    pub principal_server_id: &'a str,
+    pub station_id: &'a str,
     pub notary_signer: &'a ConformanceNotarySigner,
     pub install_notary: bool,
     pub data_plane_actions: &'a [String],
@@ -125,7 +125,7 @@ pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 4] = [
 pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
-    principal_server_id: &str,
+    station_id: &str,
     notary_signer: &ConformanceNotarySigner,
     install_notary: bool,
     data_plane_actions: &[String],
@@ -134,7 +134,7 @@ pub fn build_conformance_realm_basis(
         realm_id,
         subject,
         RealmBasisFixtureOptions {
-            principal_server_id,
+            station_id,
             notary_signer,
             install_notary,
             data_plane_actions,
@@ -152,7 +152,7 @@ pub fn build_realm_basis(
     options: RealmBasisFixtureOptions<'_>,
 ) -> Result<ConformanceRealmBasis, String> {
     let RealmBasisFixtureOptions {
-        principal_server_id,
+        station_id,
         notary_signer,
         install_notary,
         data_plane_actions,
@@ -352,7 +352,7 @@ pub fn build_realm_basis(
         &owner_grant_id,
         realm_id,
         subject,
-        principal_server_id,
+        station_id,
         &owner_actions,
         None,
     )?;
@@ -373,7 +373,7 @@ pub fn build_realm_basis(
             &content_grant_id,
             realm_id,
             subject,
-            principal_server_id,
+            station_id,
             &plain_content_actions,
             None,
         )?;
@@ -395,7 +395,7 @@ pub fn build_realm_basis(
             &field_scoped_grant_id,
             realm_id,
             subject,
-            principal_server_id,
+            station_id,
             &field_scoped_actions,
             Some(serde_json::json!([{
                 "constraint_kind": "field_access",
@@ -560,7 +560,7 @@ fn grant_body(
     grant_id: &str,
     realm_id: &str,
     subject: &str,
-    principal_server_id: &str,
+    station_id: &str,
     actions: &[String],
     constraints: Option<Value>,
 ) -> Result<Value, String> {
@@ -569,9 +569,9 @@ fn grant_body(
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
         "issuer_id": subject,
-        "issuer_principal_server_id": principal_server_id,
+        "issuer_station_id": station_id,
         "subject": subject,
-        "subject_principal_server_id": principal_server_id,
+        "subject_station_id": station_id,
         "actions": actions,
         "issuer_authority_refs": [{
             "kind": "realm_root",
@@ -621,7 +621,7 @@ mod tests {
                 realm_id,
                 subject,
                 RealmBasisFixtureOptions {
-                    principal_server_id: "ak:did_core:web:principal-server.example",
+                    station_id: "ak:did_core:web:station.example",
                     notary_signer: &notary,
                     install_notary,
                     data_plane_actions: &actions,
@@ -673,7 +673,7 @@ mod tests {
             grant_id,
             realm_id,
             subject,
-            "ak:did_core:web:principal-server.example",
+            "ak:did_core:web:station.example",
             std::slice::from_ref(&action),
             None,
         )
@@ -708,7 +708,7 @@ mod tests {
             realm_id,
             subject,
             RealmBasisFixtureOptions {
-                principal_server_id: "ak:did_core:web:principal-server.example",
+                station_id: "ak:did_core:web:station.example",
                 notary_signer: &test_notary(),
                 install_notary: true,
                 data_plane_actions: &actions,

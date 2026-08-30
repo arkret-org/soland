@@ -97,7 +97,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     for account in accounts {
         let localparts = state
             .identities()
-            .account_localparts(account.pk)
+            .account_localparts(account.pk.clone())
             .await
             .unwrap_or_default();
         for localpart in localparts {
@@ -328,22 +328,18 @@ async fn revoke_handle(
     // Operator revocation releases the durable account-localpart binding and
     // records the release in the post-release grace ledger.
     let released = handle_id.clone();
-    let subject_account_id = arkret_wire::AccountId::new(
-        subject_id.clone(),
-        arkret_wire::DidCoreId::new(state.service_id().to_owned())
-            .map_err(|error| AppError::internal(format!("service id is invalid: {error}")))?,
-    );
-    let subject_account = state
+    if let Some(owner) = state
         .identities()
-        .account(&subject_account_id)
+        .localpart_owner(&released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::not_found("subject account not found"))?;
-    state
-        .identities()
-        .remove_localpart(subject_account.pk, &released)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    {
+        state
+            .identities()
+            .remove_localpart(owner.account_pk, &released)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
     crate::routing::identity::account::record_handle_release(state, &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -398,13 +394,12 @@ async fn reassign_handle(
         .unwrap_or_else(|| handle_id.clone());
 
     // Target account must exist before we re-bind onto it.
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().to_owned())
-        .map_err(|error| AppError::internal(format!("service id is invalid: {error}")))?;
-    let target_account_id =
-        arkret_wire::AccountId::new(new_subject_id.clone(), principal_server_id.clone());
     let target = state
         .identities()
-        .account(&target_account_id)
+        .account(&arkret_wire::AccountId::new(
+            new_subject_id.clone(),
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("target subject account not found"))?;
@@ -412,24 +407,23 @@ async fn reassign_handle(
     // Detach the handle from its current holder, if a different account
     // still carries the localpart.
     if previous_subject_id != new_subject_id {
-        let previous_account_id =
-            arkret_wire::AccountId::new(previous_subject_id.clone(), principal_server_id);
-        let previous_account = state
+        if let Some(owner) = state
             .identities()
-            .account(&previous_account_id)
+            .localpart_owner(&localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::not_found("previous subject account not found"))?;
-        state
-            .identities()
-            .remove_localpart(previous_account.pk, &localpart)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+        {
+            state
+                .identities()
+                .remove_localpart(owner.account_pk, &localpart)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?;
+        }
     }
 
     state
         .identities()
-        .add_localpart(target.pk, &localpart, true)
+        .add_localpart(target.pk.clone(), &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 

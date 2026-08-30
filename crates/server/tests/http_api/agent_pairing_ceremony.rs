@@ -271,7 +271,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             realm_id: agent_pcr_realm.clone(),
         },
         outcome.agent_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0007-a13f9c2e")).unwrap(),
         serde_json::to_value(&payload).unwrap(),
@@ -279,7 +279,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     )
     .unwrap();
     authorize.prev_refs = vec![genesis_event_id.clone()];
-    authorize.executed_by = Some(controller_core.clone());
+    authorize.executed_by = Some(arkret_wire::ActorId::service(controller_core.clone()));
     authorize.authorization_ref = Some(record.controller_authorization_ref.clone().into());
     authorize.seal_basis = Some(genesis_seal.seal_basis());
     authorize

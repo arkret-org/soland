@@ -79,7 +79,7 @@ async fn test_pool() -> Option<PgPool> {
 fn franking_event_request(
     realm_id: &arkret_identifiers::RealmId,
     actor_id: arkret_wire::DidCoreId,
-    principal_server_id: &arkret_wire::DidCoreId,
+    station_id: &arkret_wire::DidCoreId,
     marker: u64,
     kind: &str,
     payload: serde_json::Value,
@@ -91,7 +91,7 @@ fn franking_event_request(
             realm_id: realm_id.clone(),
         },
         actor_id.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         0,
         arkret_identifiers::Hlc::new(format!("019f00000000-{marker:04x}-aabbccdd")).unwrap(),
         payload,

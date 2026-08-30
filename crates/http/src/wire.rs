@@ -357,9 +357,9 @@ fn profile_limitations() -> Vec<Value> {
     ]
 }
 
-fn full_principal_server_gap_summary() -> Vec<Value> {
+fn full_station_gap_summary() -> Vec<Value> {
     vec![json!({
-        "profile": arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
+        "profile": arkret_wire::ProfileId::STATION_V1,
         "status": "not_claimed",
         "first_batch_landed": [
             "artifact-derived supported operation advertisement",
@@ -456,7 +456,7 @@ pub fn describe(
     let gate_account_base_url = format!("{account_origin}/_arkret/gate/account");
 
     // Authentication methods are pure provider discovery; they do not decide
-    // gate/account routing. Advertise OIDC when an Auth Server is configured;
+    // gate/account routing. Advertise OIDC when an Account Authority process is configured;
     // the client uses standard OIDC discovery and submits an
     // OIDC proof to the Account Authority's one-shot account-handoff operation.
     let mut methods = Vec::new();
@@ -513,14 +513,14 @@ pub fn describe(
     // typed surface can never drift.
     //
     // Profile catalogue per `arkret-spec/spec/v1/zh/conformance/conformance-profiles.md`
-    // §1 / §7 / §8: a principal server self-claims the Event Store
-    // interop floor AND the Principal Server + Principal Server Events
+    // §1 / §7 / §8: a Station self-claims the Event Store
+    // interop floor AND the Station + Station Events
     // API stable-catalog profiles in addition to whatever interop
     // staging extensions it implements (MIMI here).
     let claimed_profiles = vec![
         ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::CORE_EVENT_STORE_V1),
-        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::PRINCIPAL_SERVER_V1),
-        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1),
+        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::STATION_V1),
+        ClaimedProfileEntry::self_claimed(arkret_wire::ProfileId::STATION_EVENTS_API_V1),
         ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
@@ -580,13 +580,13 @@ pub fn describe(
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
-        service_kind: arkret_wire::ServiceKind::PrincipalServer,
+        service_kind: arkret_wire::ServiceKind::Station,
         protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
                 arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),
-                arkret_wire::ProfileId::PRINCIPAL_SERVER_V1.to_owned(),
-                arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1.to_owned(),
+                arkret_wire::ProfileId::STATION_V1.to_owned(),
+                arkret_wire::ProfileId::STATION_EVENTS_API_V1.to_owned(),
                 arkret_wire::ProfileId::MIMI_INTEROP_V1.to_owned(),
                 arkret_wire::ProfileId::FILE_TRANSFER_V1.to_owned(),
                 arkret_wire::ProfileId::WEBRTC_MEDIA_V1.to_owned(),
@@ -602,17 +602,17 @@ pub fn describe(
         },
         profile_bindings: Default::default(),
         supported_operation_bundles: vec![
-            "ak.operation_bundle.principal_server.agent_pairing_handoff.v1".to_owned(),
-            "ak.operation_bundle.principal_server.agent_runtime.v1".to_owned(),
-            "ak.operation_bundle.principal_server.applet.v1".to_owned(),
-            "ak.operation_bundle.principal_server.applet_ghost.v1".to_owned(),
-            "ak.operation_bundle.principal_server.applet_install.v1".to_owned(),
-            "ak.operation_bundle.principal_server.describe.v1".to_owned(),
-            "ak.operation_bundle.principal_server.history_key_recovery.v1".to_owned(),
-            "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
-            "ak.operation_bundle.principal_server.mimi_interop.v1".to_owned(),
-            "ak.operation_bundle.principal_server.push.v1".to_owned(),
-            "ak.operation_bundle.principal_server.tus_upload.v1".to_owned(),
+            "ak.operation_bundle.station.agent_pairing_handoff.v1".to_owned(),
+            "ak.operation_bundle.station.agent_runtime.v1".to_owned(),
+            "ak.operation_bundle.station.applet.v1".to_owned(),
+            "ak.operation_bundle.station.applet_ghost.v1".to_owned(),
+            "ak.operation_bundle.station.applet_install.v1".to_owned(),
+            "ak.operation_bundle.station.describe.v1".to_owned(),
+            "ak.operation_bundle.station.history_key_recovery.v1".to_owned(),
+            "ak.operation_bundle.station.http_core.v1".to_owned(),
+            "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
+            "ak.operation_bundle.station.push.v1".to_owned(),
+            "ak.operation_bundle.station.tus_upload.v1".to_owned(),
         ],
         transport_bindings: vec![
             arkret_models_discovery::TransportBinding::HttpJson {
@@ -747,7 +747,7 @@ pub fn describe(
                     "operation_id": arkret_wire::ServiceOperationId::SELF_AUTHZ_GRANTS_READ_EFFECTIVE_V1,
                     "method": "GET",
                     "path": "/_arkret/self/authz/effective-grants",
-                    "query": ["realm_id", "subject", "subject_principal_server_id", "at"],
+                    "query": ["realm_id", "subject", "subject_station_id", "at"],
                     "response_shape": "GrantList",
                     "subject_scope": "authenticated_actor_or_realm_owner_for_realm_scoped_queries",
                     "operation_specific_error_codes": []
@@ -845,16 +845,16 @@ pub fn describe(
                     }
                 ],
                 "full_profiles_not_claimed": [
-                    arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
+                    arkret_wire::ProfileId::STATION_V1,
                     arkret_wire::ProfileId::DIRECTORY_SERVICE_V1,
                     arkret_wire::ProfileId::IDENTITY_REGISTRY_V1,
                     arkret_wire::ProfileId::BLOB_NODE_V1
                 ],
-                "principal_server_full_profile_gaps": full_principal_server_gap_summary(),
+                "station_full_profile_gaps": full_station_gap_summary(),
                 "local_extension_operations": local_extension_operations,
                 "local_extension_operation_source": "transport_registry+live_openapi",
                 "implemented_surfaces": [
-                    "principal_server",
+                    "station",
                     "events_api_minimal",
                     "sync",
                     "index",
@@ -916,12 +916,12 @@ mod tests {
         let bundles = value["supported_operation_bundles"]
             .as_array()
             .expect("operation bundle ids are present");
-        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.describe.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.station.describe.v1")));
         assert!(bundles.contains(&json!(
-            "ak.operation_bundle.principal_server.history_key_recovery.v1"
+            "ak.operation_bundle.station.history_key_recovery.v1"
         )));
-        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.http_core.v1")));
-        assert!(bundles.contains(&json!("ak.operation_bundle.principal_server.tus_upload.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.station.http_core.v1")));
+        assert!(bundles.contains(&json!("ak.operation_bundle.station.tus_upload.v1")));
         assert!(value["transport_bindings"][0]["extension_profile_required"].is_null());
         assert!(value["transport_bindings"][0].get("operations").is_none());
         assert_eq!(

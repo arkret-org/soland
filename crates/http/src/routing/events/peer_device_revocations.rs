@@ -148,11 +148,11 @@ pub(super) async fn check_device_revocation_gate(
         ));
     }
 
-    let local_principal_server = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let local_station = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("local service id is invalid: {error}")))?;
-    if request.principal_authority.principal_server_id != local_principal_server {
+    if request.account_id.station_id != local_station {
         return Err(cross_domain_replay(
-            "device revocation gate request is routed to the wrong Principal Server",
+            "device revocation gate request is routed to the wrong Station",
         ));
     }
 
@@ -163,7 +163,7 @@ pub(super) async fn check_device_revocation_gate(
     // the durable gate is followed by an exact current-binding revalidation.
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(
-            request.principal_authority.principal_id.as_str(),
+            request.account_id.principal_id.as_str(),
         );
     let _generation_guard = generation_lock.lock().await;
 
@@ -201,7 +201,7 @@ pub(super) async fn check_device_revocation_gate(
             &signing_bytes,
             signature,
             proof.verification_method().as_str(),
-            &request.principal_authority,
+            &request.account_id,
             &request.device_id,
             state,
         )
@@ -209,7 +209,7 @@ pub(super) async fn check_device_revocation_gate(
         .map_err(|error| {
             tracing::warn!(
                 %error,
-                principal_id = %request.principal_authority.principal_id,
+                principal_id = %request.account_id.principal_id,
                 device_id = %request.device_id,
                 "accepted-device possession proof verification failed"
             );
@@ -230,7 +230,7 @@ pub(super) async fn check_device_revocation_gate(
     let origin_current_selector = admit_origin_current_selector(
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
-            request.principal_authority.principal_id.as_str(),
+            request.account_id.principal_id.as_str(),
             request.device_id.as_str(),
         )
         .await,
@@ -262,8 +262,8 @@ pub(super) async fn check_device_revocation_gate(
         .persistence()
         .linearize_device_revocation_gate(
             soland_storage::DeviceRevocationGateLinearizationRequest {
-                principal_id: request.principal_authority.principal_id.clone(),
-                principal_server_id: request.principal_authority.principal_server_id.clone(),
+                principal_id: request.account_id.principal_id.clone(),
+                station_id: request.account_id.station_id.clone(),
                 device_id: request.device_id.to_string(),
                 expected_device_authorize_event_id: request
                     .expected_device_authorize_event_id
@@ -293,7 +293,7 @@ pub(super) async fn check_device_revocation_gate(
     let post_linearization_selector = admit_origin_current_selector(
         crate::routing::identity::device_generation::active_device_revocation_gate_selector(
             state,
-            request.principal_authority.principal_id.as_str(),
+            request.account_id.principal_id.as_str(),
             request.device_id.as_str(),
         )
         .await,
@@ -349,7 +349,7 @@ pub(super) async fn check_device_revocation_gate(
         .await
         .map_err(AppError::internal)?;
     let unsigned_receipt = UnsignedDeviceRevocationGateDecisionReceipt {
-        principal_authority: request.principal_authority.clone(),
+        account_id: request.account_id.clone(),
         device_id: request.device_id.clone(),
         target_device_authorize_event_id,
         target_device_generation_ref,
@@ -398,14 +398,14 @@ mod tests {
     use super::*;
 
     const PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
-    const PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+    const STATION: &str = "ak:did_core:web:soland.example";
     const DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
     const AUTHORIZE_EVENT: &str = "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa";
 
     fn selector() -> DeviceRevocationGateSelector {
         DeviceRevocationGateSelector {
             principal_id: arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
-            principal_server_id: arkret_wire::DidCoreId::new(PRINCIPAL_SERVER).unwrap(),
+            station_id: arkret_wire::DidCoreId::new(STATION).unwrap(),
             device_id: DEVICE.to_owned(),
             target_device_authorize_event_id: AUTHORIZE_EVENT.to_owned(),
             target_device_generation_ref: 1,

@@ -1192,7 +1192,7 @@ async fn range_completeness_for_query(
 
     let actor_seq = accepted_events
         .iter()
-        .filter(|event| event.actor_id == issuer_actor)
+        .filter(|event| event.actor_id == arkret_wire::ActorId::service(issuer_actor.clone()))
         .map(|event| event.actor_seq)
         .max()
         .map_or(0, |sequence| sequence.saturating_add(1));
@@ -1204,8 +1204,7 @@ async fn range_completeness_for_query(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        issuer_actor.clone(),
-        issuer_actor,
+        arkret_wire::ActorId::service(issuer_actor.clone()),
         payload,
     )
     .map(|draft| draft.with_prev_refs(to_frontier))

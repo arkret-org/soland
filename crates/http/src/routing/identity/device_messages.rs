@@ -42,10 +42,10 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 /// Build the only service sender accepted by the internal actor-private
 /// materializer. Keeping this constructor beside the fanout prevents CAS
 /// producers from accepting or copying a caller-supplied service identity.
-pub(crate) fn principal_server_device_message_sender(state: &AppState) -> DeviceMessageSender {
+pub(crate) fn station_device_message_sender(state: &AppState) -> DeviceMessageSender {
     DeviceMessageSender::Service {
         sender_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
-            .expect("the loaded Principal Server identity is a core DID"),
+            .expect("the loaded Station identity is a core DID"),
     }
 }
 
@@ -111,7 +111,7 @@ async fn send_device_messages(
     let restricted_fresh_device_verification = state.config().development_mode
         && session.session_grant.is_none()
         && body.messages.iter().all(|(principal_id, targets)| {
-            principal_id.as_str() == session.actor
+            principal_id.signing_principal_id().as_str() == session.actor
                 && targets
                     .values()
                     .all(|target| target.kind.as_str().starts_with("ak.key.verification."))
@@ -170,14 +170,14 @@ async fn send_device_messages(
                 kind: &target.kind,
                 sender_principal_id: &session.actor,
                 sender_device_id: &session.device_id,
-                recipient_principal_id: &recipient,
+                recipient_principal_id: recipient.signing_principal_id(),
                 recipient_device_id: &device_id,
                 expires_at: target.expires_at,
                 content: &target.content,
             })
             .map_err(|error| AppError::internal(error.to_string()))?;
             prepared_targets.push(PreparedDeviceMessageTarget {
-                recipient: recipient.to_string(),
+                recipient: recipient.signing_principal_id().to_string(),
                 device_id: device_id.to_string(),
                 target,
                 message_key,
@@ -390,7 +390,7 @@ fn device_message_intent_conflict() -> AppError {
 
 /// Fan an actor-private update (account-data / blocklist / read-cursor
 /// deltas, plaintext `content`) out to the holder's active devices. A real
-/// device sender excludes its origin device; the local Principal Server
+/// device sender excludes its origin device; the local Station
 /// materializer has no origin device and therefore reaches every active one.
 ///
 /// Sidecar isolation note (zh/models/sidecar.md §7 / private-objects.md
@@ -463,7 +463,7 @@ pub(crate) async fn fanout_actor_private_update(
                 return 0;
             }
             // This internal materializer always writes `sender == recipient ==
-            // actor` below. A Principal Server update is therefore scoped to
+            // actor` below. A Station update is therefore scoped to
             // the holder whose cell changed, does not borrow a holder device's
             // authority, and has neither a device-revocation gate nor an
             // origin device to exclude.
@@ -522,10 +522,15 @@ pub(crate) async fn fanout_actor_private_update(
         tracing::error!(%error, actor, "failed to prune to-device messages after actor-private fanout");
     }
     if delivered > 0 {
-        match state.identities().account(actor).await {
+        let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
+            tracing::warn!(actor, "actor-private fanout actor is invalid");
+            return delivered;
+        };
+        let account_id = arkret_wire::AccountId::new(principal_id, state.service_core_id().clone());
+        match state.identities().account(&account_id).await {
             Ok(Some(account)) => {
                 let _ = state.publish_event_notification(crate::state::EventNotification::account(
-                    account.id.to_string(),
+                    account.account_id.to_string(),
                     state.service_id().clone(),
                 ));
             }
@@ -999,13 +1004,17 @@ mod tests {
     async fn production_service_fanout_reaches_every_active_holder_device_and_is_readable() {
         let state = production_test_state();
         let holder = "ak:did_core:web:holder.example";
-        let account_id = arkret_wire::ServiceAccountId::new("holder-account").unwrap();
+        let account_id = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
         let first_device = "ak:device:01904100-0000-7000-8000-0000000000d1";
         let second_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
         state
             .identities()
             .save_account(AccountProfileState {
-                id: account_id.clone(),
+                pk: soland_storage::AccountPk(1),
+                account_id: account_id.clone(),
                 principal_id: arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
@@ -1025,7 +1034,7 @@ mod tests {
             &state,
             holder,
             ActorPrivateDeviceUpdate::AccountData {
-                sender: principal_server_device_message_sender(&state),
+                sender: station_device_message_sender(&state),
                 content: ActorPrivateAccountDataUpdate {
                     operation: ActorPrivateAccountDataOperation::Put,
                     account_data_key: "ak.account.invite_delivery".to_owned(),
@@ -1052,7 +1061,7 @@ mod tests {
             crate::state::EventNotificationKind::Account {
                 account_id: ref received_account_id,
                 recipient_id: ref received_recipient_id,
-            } if received_account_id == account_id.as_str()
+            } if received_account_id == &account_id.to_string()
                 && received_recipient_id == state.service_id()
         ));
         for device_id in [first_device, second_device] {

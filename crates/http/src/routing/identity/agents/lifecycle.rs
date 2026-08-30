@@ -202,7 +202,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             did,
-            controller_principal_server_id,
+            controller_station_id,
             slug,
             requested_scope,
             pairing_ttl_ms,
@@ -247,7 +247,7 @@ pub(super) async fn provision_agent(
                 AppError::internal(format!("authenticated controller id is invalid: {error}"))
             })?;
             let controller_authority =
-                arkret_wire::AccountId::new(controller_id.clone(), controller_principal_server_id);
+                arkret_wire::AccountId::new(controller_id.clone(), controller_station_id);
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(controller_id.as_str())
@@ -415,10 +415,7 @@ pub(super) async fn provision_agent(
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
                     did: did.clone(),
-                    controller_principal_server_id: prepared
-                        .controller_authority
-                        .principal_server_id
-                        .clone(),
+                    controller_station_id: prepared.controller_authority.station_id.clone(),
                     slug: slug.clone(),
                     requested_scope: requested_scope.clone(),
                     pairing_ttl_ms,
@@ -454,7 +451,8 @@ pub(super) async fn provision_agent(
                 )
                 .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let controller_core_id = &prepared.controller_authority.principal_id;
-            if &provision_event.event.actor_id != controller_core_id
+            if provision_event.event.actor_id
+                != arkret_wire::ActorId::account(prepared.controller_authority.clone())
                 || provision_event.event.realm_id != controller_realm_id
                 || provision_payload.agent_id != agent_id
                 || &provision_payload.controller_id != controller_core_id
@@ -650,7 +648,7 @@ pub(super) async fn provision_agent(
             let controller_account = state
                 .identities()
                 .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
-                    actor_id: session.actor.clone(),
+                    account_id: prepared.controller_authority.clone(),
                 })
                 .await
                 .map_err(|error| {
@@ -668,7 +666,7 @@ pub(super) async fn provision_agent(
                 .min(12 * 60 * 60 * 1000);
             let expires_at =
                 now_utc + chrono::Duration::milliseconds(effective_pairing_ttl_ms as i64);
-            principal.controller_account_pk = Some(controller_account.pk);
+            principal.controller_account_pk = Some(controller_account.account_pk);
             principal.recipient_id = Some(state.service_id().clone());
             principal.provision_event_refs = Some(json!({
                 "provision_event_id": provision_event_id,
@@ -1014,9 +1012,14 @@ pub(super) async fn get_agent(
     // author complete revocation coverage. The effective authz index supplies
     // optional display metadata, but pending or expired grants must not
     // disappear from the controller's revocation surface.
+    let agent_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(agent_id.clone())
+            .map_err(|error| AppError::internal(format!("invalid agent id: {error}")))?,
+        state.service_core_id().clone(),
+    );
     let effective_grants = state
         .authorization()
-        .grants_for_subject_all_realms(&agent_id, Some(state.service_id()))
+        .grants_for_subject_all_realms(&agent_actor)
         .into_iter()
         .map(|grant| {
             let expires_at = arkret_policy::authz::authority::grant_effective_expiry(&grant);
@@ -1026,7 +1029,7 @@ pub(super) async fn get_agent(
     view.grants = state
         .projections()
         .snapshot()
-        .unrevoked_grant_locations_for_subject(&agent_id, state.service_id())
+        .unrevoked_grant_locations_for_subject(&agent_actor)
         .into_iter()
         .filter_map(|(grant_id, realm_id)| {
             let expires_at = effective_grants.get(&(grant_id.clone(), realm_id.clone()));

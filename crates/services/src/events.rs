@@ -753,7 +753,7 @@ pub trait AppletPort: Send + Sync {
     async fn applet_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> ServiceResult<Option<Value>>;
     async fn applet(
         &self,
@@ -772,7 +772,7 @@ pub trait AppletPort: Send + Sync {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: DateTime<Utc>,
@@ -897,7 +897,7 @@ pub struct CommitAppletRecord {
 
 #[derive(Clone, Debug)]
 pub struct CommitAppletIdentity {
-    pub target_principal_server_id: arkret_wire::DidCoreId,
+    pub target_station_id: arkret_wire::DidCoreId,
     pub expected_record: Option<Value>,
     pub record: Value,
 }
@@ -950,7 +950,7 @@ pub struct IdentityAnchorFrontierState {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorState {
     pub actor_id: String,
-    pub principal_server_id: String,
+    pub station_id: String,
     pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,
@@ -1582,10 +1582,10 @@ impl EventQueryService {
     pub async fn applet_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> ServiceResult<Option<Value>> {
         self.applets
-            .applet_identity(applet_id, target_principal_server_id)
+            .applet_identity(applet_id, target_station_id)
             .await
     }
     pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
@@ -1606,7 +1606,7 @@ impl EventQueryService {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: DateTime<Utc>,
@@ -1615,7 +1615,7 @@ impl EventQueryService {
             .fence_applet_installation(
                 applet_id,
                 effective_scope_key,
-                target_principal_server_id,
+                target_station_id,
                 expected,
                 replacement,
                 fenced_at,
@@ -2230,7 +2230,6 @@ pub struct RealmInviteState {
     pub realm_id: String,
     pub inviter_id: String,
     pub invitee_id: Option<String>,
-    pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
     pub invite_token: String,

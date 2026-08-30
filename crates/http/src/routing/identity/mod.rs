@@ -2,10 +2,10 @@ use salvo::prelude::*;
 
 pub(crate) mod account;
 pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
+pub(crate) mod account_authority_client;
 pub(crate) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
-pub(crate) mod auth_server_client;
 // api-conventions.md §3.3 — `/_arkret/self/*` inbound credential: a
 // `ak.session.grant` presented directly with a DPoP (RFC 9449) holder proof,
 // validated against a TTL-cached coauth introspection. The default ② session
@@ -123,11 +123,11 @@ pub fn local_router() -> Router {
                 .push(account::local_gate_router()),
         )
         // Server-to-server device signing-key directory read at
-        // `/_soland/gate/account/device-signing-keys/query`. The Auth Server
+        // `/_soland/gate/account/device-signing-keys/query`. The Account Authority process
         // (coauth) calls this while verifying a device holder proof
         // (session-grant refresh / soft-logout restore): the holder key is the
         // `ak.device.authorize`-authorized device signing key projected into
-        // this Principal Server's directory, NOT a DID-document
+        // this Station's directory, NOT a DID-document
         // verificationMethod. Bearer-gated (see `keys::product_router`).
         .push(keys::product_router())
         .push(account::local_service_router())

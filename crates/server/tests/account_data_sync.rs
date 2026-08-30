@@ -328,7 +328,7 @@ fn signed_actor_private_event_envelope(
                 .expect("fixture Realm id"),
         },
         arkret_wire::project_did_to_core_id(&actor_did).unwrap(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -477,7 +477,7 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
         .read_cursors
         .values()
         .filter(|marker| {
-            marker.actor_id.as_str() == actor
+            marker.actor_id.signing_principal_id().as_str() == actor
                 && realm_id.is_none_or(|realm_id| marker.realm_id.as_str() == realm_id)
         })
         .map(|marker| {

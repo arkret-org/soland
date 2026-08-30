@@ -47,7 +47,7 @@ use soland_services::identity::{
 };
 
 use crate::routing::identity::device_messages::{
-    fanout_actor_private_update, principal_server_device_message_sender,
+    fanout_actor_private_update, station_device_message_sender,
 };
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -277,7 +277,12 @@ async fn peer_invites_submit(
             trust_headers.source_trust_domain
         ),
         account_pk: None,
-        actor: delivery.invite_event.actor_id.as_str().to_owned(),
+        actor: delivery
+            .invite_event
+            .actor_id
+            .signing_principal_id()
+            .as_str()
+            .to_owned(),
         device_id: format!("peer-invite:{source_id}"),
         audience: state.service_id().clone(),
         session_public_key: None,
@@ -337,7 +342,12 @@ async fn receive_private_invite_delivery(
     // The inviter_id is the actor that signed the durable `ak.invite.create`
     // event; it is the `peer` we test `denied_subject_ids` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
-    let inviter_id = delivery.invite_event.actor_id.as_str().to_owned();
+    let inviter_id = delivery
+        .invite_event
+        .actor_id
+        .signing_principal_id()
+        .as_str()
+        .to_owned();
     let subject_id = delivery.invite_address.subject_id.clone();
     let subject = subject_id.as_str().to_owned();
 
@@ -566,7 +576,7 @@ async fn require_dispatchable_invite_event(
     else {
         return Err(invite_event_precondition(
             arkret_wire::ReasonCode::INVITE_EVENT_UNACCEPTED,
-            "invite_event has not been accepted by this Principal Server",
+            "invite_event has not been accepted by this Station",
         ));
     };
     let session_actor = DidCoreId::new(session.actor.clone())
@@ -611,7 +621,7 @@ async fn enqueue_remote_invite_delivery(
         .resolve_carrier(
             &delivery.invite_address.service_resolution,
             recipient_id,
-            "principal_server",
+            "station",
             now(),
         )
         .await
@@ -727,7 +737,6 @@ async fn persist_private_invite_projection(
         })
         .transpose()?
         .or_else(|| Some(created_at + Duration::days(7)));
-    let invite_delivery_target = payload.get("invite_delivery_target").cloned();
     let introduction_evidence_digest = payload
         .get("introduction_evidence_digest")
         .and_then(Value::as_str)
@@ -735,9 +744,22 @@ async fn persist_private_invite_projection(
     let record = RealmInviteRecord {
         invite_id: invite_id.clone(),
         realm_id: validated.realm_id.to_string(),
-        inviter_id: validated.actor_id.to_string(),
-        invitee_id: Some(subject.to_owned()),
-        invite_delivery_target,
+        inviter_id: validated
+            .actor
+            .as_account_id()
+            .ok_or_else(|| {
+                super::events::peer::schema_violation("invite author must be an account")
+            })?
+            .to_string(),
+        invitee_id: Some(
+            arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(subject.to_owned()).map_err(|_| {
+                    super::events::peer::schema_violation("invite subject must be a DID")
+                })?,
+                state.service_core_id().clone(),
+            )
+            .to_string(),
+        ),
         introduction_evidence_digest,
         third_party_invite: None,
         invite_token: crate::routing::generate_invite_token(
@@ -761,7 +783,6 @@ async fn persist_private_invite_projection(
         let exact_replay = existing.realm_id == record.realm_id
             && existing.inviter_id == record.inviter_id
             && existing.invitee_id == record.invitee_id
-            && existing.invite_delivery_target == record.invite_delivery_target
             && existing.introduction_evidence_digest == record.introduction_evidence_digest
             && existing.expires_at == record.expires_at
             && existing.created_at == record.created_at;
@@ -805,7 +826,11 @@ async fn deliver_invite_credential(
 ) -> Result<bool, AppError> {
     let subject_exists = state
         .identities()
-        .account(subject)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(subject.to_owned())
+                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -919,7 +944,7 @@ async fn deliver_invite_credential(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender: principal_server_device_message_sender(state),
+            sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
@@ -1077,7 +1102,7 @@ async fn resolve_invite_locator(
 
 /// Spec invite-addressing.md §2 — introduction-evidence trust tiers.
 /// High = `{locator_ref, consent_grant, shared_realm}`; Low =
-/// `{same_principal_server, explicit_address, missing/invalid evidence}`. The tier
+/// `{same_station, explicit_address, missing/invalid evidence}`. The tier
 /// drives both the receive action and the §5.1 graded disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrustTier {
@@ -1115,7 +1140,11 @@ async fn persist_invite_quarantine_entry(
 ) -> Result<bool, AppError> {
     let subject_exists = state
         .identities()
-        .account(subject)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(subject.to_owned())
+                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1229,7 +1258,7 @@ async fn persist_invite_quarantine_entry(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender: principal_server_device_message_sender(state),
+            sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -1274,7 +1303,7 @@ fn trust_tier_for_kind(kind: &str) -> TrustTier {
     match kind {
         "locator_ref" | "consent_grant" | "shared_realm" => TrustTier::High,
         "handle_claim" => TrustTier::Discovery,
-        // same_principal_server / explicit_address / unknown → low
+        // same_station / explicit_address / unknown → low
         _ => TrustTier::Low,
     }
 }
@@ -1330,9 +1359,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Some(requester_id) = requester_id else {
         return false;
     };
-    let Some(handle) = handle_claim.handle.clone() else {
-        return false;
-    };
+    let handle = handle_claim.handle.clone();
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
@@ -1593,7 +1620,6 @@ pub(crate) fn evaluate_contact_receive(
                 constraints,
                 handle,
                 handle_claim,
-                None,
                 resolved_by.as_ref(),
                 subject,
                 recipient_id,
@@ -1604,7 +1630,7 @@ pub(crate) fn evaluate_contact_receive(
                 "explicit_address"
             }
         }
-        ContactIntroductionEvidence::SamePrincipalServer => "same_principal_server",
+        ContactIntroductionEvidence::SameStation => "same_station",
         ContactIntroductionEvidence::ExplicitAddress => "explicit_address",
     };
 
@@ -1867,13 +1893,13 @@ fn handle_claim_evidence_valid(
     if handle_claim.validate().is_err() {
         return false;
     }
-    if handle_claim.handle.as_ref() != Some(handle) {
+    if &handle_claim.handle != handle {
         return false;
     }
-    if handle_claim.subject_id.as_ref().map(DidCoreId::as_str) != Some(subject) {
+    if handle_claim.subject_account_id.principal_id.as_str() != subject {
         return false;
     }
-    if handle_claim.binding_state != Some(HandleBindingState::Verified) {
+    if handle_claim.binding_state != HandleBindingState::Verified {
         return false;
     }
     if handle_claim
@@ -1946,10 +1972,7 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreI
     if trusted.is_empty() {
         return false;
     }
-    handle_claim
-        .issuer_id
-        .as_ref()
-        .is_some_and(|issuer| trusted.iter().any(|did| did == issuer))
+    trusted.iter().any(|did| did == &handle_claim.issuer_id)
 }
 
 fn resolved_by_allowed(
@@ -2007,26 +2030,6 @@ fn validate_invite_delivery_event_binding(
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.payload.invitee_id must equal invite_address.subject_id",
-        ));
-    }
-    if payload
-        .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_id"))
-        .and_then(Value::as_str)
-        != Some(delivery.invite_address.recipient_id.as_str())
-    {
-        return Err(super::events::peer::schema_violation(
-            "invite_event.payload.invite_delivery_target.recipient_id must equal invite_address.recipient_id",
-        ));
-    }
-    if let Some(service_kind) = payload
-        .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_kind"))
-        .and_then(Value::as_str)
-        && service_kind != "principal_server"
-    {
-        return Err(super::events::peer::schema_violation(
-            "invite_delivery_target.recipient_kind must be principal_server",
         ));
     }
     let evidence_digest =
@@ -2098,7 +2101,11 @@ mod invite_locator_security_tests {
         state
             .identities()
             .save_account(AccountProfileState {
-                id: arkret_wire::ServiceAccountId::new("production-holder-account").unwrap(),
+                pk: soland_storage::AccountPk(1),
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                ),
                 principal_id: DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
@@ -2180,7 +2187,7 @@ mod invite_locator_security_tests {
             "realm_id": PRODUCTION_REALM,
             "scope_ref": { "kind": "realm", "realm_id": PRODUCTION_REALM },
             "actor_id": PRODUCTION_INVITER,
-            "principal_server_id": state.service_id(),
+            "station_id": state.service_id(),
             "actor_seq": 0,
             "created_at": "2026-08-21T00:00:00.000Z",
             "prev_refs": [],
@@ -2193,14 +2200,15 @@ mod invite_locator_security_tests {
         }))
         .expect("invite Event");
         let service_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
-        let address = arkret_models_collaboration::governance::invite_addressing::InviteAddress::principal_server(
-            DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
-            service_id,
-            ServiceResolutionCarrier::CurrentRecordUrl {
-                current_record_url: "https://soland.test/.well-known/arkret/current".to_owned(),
-                pinned_record_digest: None,
-            },
-        );
+        let address =
+            arkret_models_collaboration::governance::invite_addressing::InviteAddress::station(
+                DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                service_id,
+                ServiceResolutionCarrier::CurrentRecordUrl {
+                    current_record_url: "https://soland.test/.well-known/arkret/current".to_owned(),
+                    pinned_record_digest: None,
+                },
+            );
         InviteDeliveryRequestBody::new(
             event,
             address,
@@ -2492,10 +2500,6 @@ mod invite_locator_security_tests {
                 "created_at": "2026-07-29T10:00:00.000Z",
                 "payload": {
                     "invite_id": invite_id,
-                    "invite_delivery_target": {
-                        "recipient_id": state.service_id(),
-                        "recipient_kind": "principal_server"
-                    },
                     "introduction_evidence_digest":
                         format!("sha256:{}", "a".repeat(64)),
                     "expires_at": "2026-08-05T10:00:00.000Z"
@@ -2512,6 +2516,10 @@ mod invite_locator_security_tests {
             // is a DID and belongs only where a complete DID is required
             // (verification methods, proof controllers).
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                state.service_core_id().clone(),
+            )),
             device_id: Some(
                 arkret_wire::DeviceId::new(
                     "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),

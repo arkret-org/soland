@@ -85,8 +85,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            service_actor_id.clone(),
-            service_actor_id,
+            arkret_wire::ActorId::service(service_actor_id.clone()),
             typed_payload,
         )
         .and_then(|draft| {

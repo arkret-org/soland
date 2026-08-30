@@ -222,6 +222,7 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         .executed_by
         .as_ref()
         .unwrap_or(&event.actor_id)
+        .signing_principal_id()
         .as_str()
         .to_owned();
     for proof in event
@@ -1313,8 +1314,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
             ))
         })?;
     if material.realm_id != seal.realm_id
-        || material.agent_id.as_str() != agent_record.id
-        || material.controller_id != record_controller_id
+        || material.agent_id.signing_principal_id().as_str() != agent_record.id
+        || material.controller_id.signing_principal_id() != &record_controller_id
         || material.authorization_ref.as_str() != agent_record.controller_authorization_ref.as_str()
     {
         return Err(device_generation_fenced(
@@ -1836,7 +1837,7 @@ mod seal_delta_tests {
                     "realm_id": realm_id,
                     "issuer_id": issuer,
                     "subject": subject,
-                    "subject_principal_server_id": state.service_id(),
+                    "subject_station_id": state.service_id(),
                     "actions": ["ak.strand.read"],
                     "resources": [{
                         "kind": "realm",

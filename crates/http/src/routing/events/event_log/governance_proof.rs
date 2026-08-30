@@ -1816,7 +1816,9 @@ mod tests {
 
     fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
         IssuedOp {
-            issuer_id: crate::test_actor_id_str("did:web:alice.example"),
+            issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                "did:web:alice.example",
+            )),
             op: SealedOp::new(
                 Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
                 LatticeOp {
@@ -2079,7 +2081,7 @@ mod tests {
                 Vec::new()
             } else {
                 vec![IssuedOp {
-                    issuer_id: crate::test_actor_id(&actor_did),
+                    issuer_id: arkret_wire::ActorId::service(crate::test_actor_id(&actor_did)),
                     op: SealedOp::new(
                         move_id.clone(),
                         LatticeOp {

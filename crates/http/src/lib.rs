@@ -136,7 +136,7 @@ pub(crate) mod test_event {
     use chrono::{DateTime, Utc};
     use serde_json::Value;
 
-    pub(crate) fn principal_server_id() -> DidCoreId {
+    pub(crate) fn station_id() -> DidCoreId {
         super::test_actor_id_str(
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
         )
@@ -154,7 +154,7 @@ pub(crate) mod test_event {
             kind,
             scope_ref,
             actor_id,
-            principal_server_id(),
+            station_id(),
             actor_seq,
             hlc,
             payload,
@@ -175,7 +175,7 @@ pub(crate) mod test_event {
             kind,
             scope_ref,
             actor_id,
-            principal_server_id(),
+            station_id(),
             actor_seq,
             hlc,
             payload,

@@ -1,5 +1,5 @@
 //! Surfaces a public-ish HTTP read interface over `ProjectionState::cells`
-//! so coauth (consent grants on holder principal servers) and sodmin
+//! so coauth (consent grants on holder Stations) and sodmin
 //! (admin UI bottom-state inspection) can introspect the canonical cell
 //! state without re-implementing the Move/Seal pipeline.
 //!

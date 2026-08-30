@@ -1,6 +1,6 @@
 # Soland architecture
 
-Soland is the Arkret v1 principal-server implementation. The workspace uses a
+Soland is the Arkret v1 station implementation. The workspace uses a
 one-way dependency graph so transport, use-case orchestration, deterministic
 state, and persistence adapters can be verified independently.
 

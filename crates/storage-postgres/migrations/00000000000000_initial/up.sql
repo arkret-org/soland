@@ -74,7 +74,7 @@ ALTER TABLE ONLY public.account_datas
 CREATE TABLE public.accounts (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL CHECK (principal_server_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     disabled_at timestamp with time zone,
@@ -83,7 +83,7 @@ CREATE TABLE public.accounts (
 );
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_principal_server_key UNIQUE (principal_server_id, principal_id);
+    ADD CONSTRAINT accounts_station_key UNIQUE (station_id, principal_id);
 
 CREATE TABLE public.account_localparts (
     id uuid PRIMARY KEY,
@@ -299,13 +299,13 @@ CREATE INDEX agent_membership_cleanup_incomplete_idx
 
 CREATE TABLE public.applet_managed_identities (
     applet_id text NOT NULL,
-    target_principal_server_id text NOT NULL,
+    target_station_id text NOT NULL,
     record jsonb NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT applet_managed_identities_pkey PRIMARY KEY (applet_id, target_principal_server_id),
+    CONSTRAINT applet_managed_identities_pkey PRIMARY KEY (applet_id, target_station_id),
     CONSTRAINT applet_managed_identities_record_key_check CHECK (
         record->>'applet_id' = applet_id
-        AND record->>'bot_actor_principal_server_id' = target_principal_server_id
+        AND record->>'bot_actor_station_id' = target_station_id
     )
 );
 
@@ -318,7 +318,7 @@ CREATE TABLE public.applet_installations (
     CONSTRAINT applet_installations_record_key_check CHECK (
         record->>'applet_id' = applet_id
         AND NOT (record ?| ARRAY[
-            'identity', 'registry_id', 'bot_actor_id', 'bot_actor_principal_server_id',
+            'identity', 'registry_id', 'bot_actor_id', 'bot_actor_station_id',
             'bot_actor_provision_ref', 'bot_principal_control_realm_id', 'initial_package',
             'initial_owner_actor_id', 'initial_effective_scope', 'initial_registration_event',
             'initial_capability_grant_refs', 'bot_actor_provision_event', 'bot_pcr_genesis_event',
@@ -345,9 +345,9 @@ CREATE INDEX applet_namespace_claims_domain_pattern_idx
 
 CREATE TABLE public.managed_authority_claims (
     actor_id text NOT NULL,
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     applet_id text NOT NULL,
-    PRIMARY KEY (actor_id, principal_server_id)
+    PRIMARY KEY (actor_id, station_id)
 );
 
 CREATE INDEX managed_authority_claims_applet_idx
@@ -1347,17 +1347,17 @@ CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, 
 
 CREATE TABLE public.device_revocation_linearization_heads (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     last_seq bigint DEFAULT 0 NOT NULL CHECK (last_seq >= 0),
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    PRIMARY KEY (principal_id, principal_server_id, device_id)
+    PRIMARY KEY (principal_id, station_id, device_id)
 );
 
 CREATE TABLE public.device_revocation_targets (
     proposal_digest text PRIMARY KEY REFERENCES public.state_control_events(event_digest) ON DELETE RESTRICT,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -1365,30 +1365,30 @@ CREATE TABLE public.device_revocation_targets (
     accepted_at timestamp with time zone NOT NULL,
     acceptance_seq bigint NOT NULL CHECK (acceptance_seq > 0),
     control_proposal_ack jsonb NOT NULL,
-    UNIQUE (principal_id, principal_server_id, device_id,
+    UNIQUE (principal_id, station_id, device_id,
             target_device_authorize_event_id, target_device_generation_ref, acceptance_seq)
 );
 
 CREATE INDEX device_revocation_targets_selector_idx
     ON public.device_revocation_targets
-    (principal_id, principal_server_id, device_id,
+    (principal_id, station_id, device_id,
      target_device_authorize_event_id, target_device_generation_ref, acceptance_seq);
 
 CREATE TABLE public.device_revocation_gate_receipts (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     action_class text NOT NULL CHECK (action_class = ANY (ARRAY[
         'session_grant_issue', 'session_grant_refresh', 'keypackage_claim',
-        'to_device_write', 'event_write', 'principal_server_admission_proof_issue'
+        'to_device_write', 'event_write', 'station_admission_proof_issue'
     ])),
     intent_digest text NOT NULL,
     decision_payload jsonb NOT NULL,
     linearization_seq bigint NOT NULL CHECK (linearization_seq > 0),
     linearized_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (principal_id, principal_server_id, device_id, action_class, intent_digest),
-    UNIQUE (principal_id, principal_server_id, device_id,
+    PRIMARY KEY (principal_id, station_id, device_id, action_class, intent_digest),
+    UNIQUE (principal_id, station_id, device_id,
             linearization_seq),
     CHECK (expires_at > linearized_at AND expires_at <= linearized_at + interval '30 seconds')
 );
@@ -1398,7 +1398,7 @@ CREATE TABLE public.device_revocation_cleanup_intents (
     proposal_event_id text NOT NULL,
     covering_seal_id text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     device_id text NOT NULL,
     target_device_authorize_event_id text NOT NULL,
     target_device_generation_ref bigint NOT NULL CHECK (target_device_generation_ref > 0),
@@ -2495,7 +2495,6 @@ CREATE TABLE public.realm_invites (
     realm_id text NOT NULL,
     inviter_id text NOT NULL,
     invitee_id text,
-    invite_delivery_target jsonb,
     introduction_evidence_digest text,
     third_party_invite jsonb,
     invite_token text NOT NULL,
@@ -2547,7 +2546,7 @@ CREATE TABLE public.recovery_sessions (
     session_grant_id text NOT NULL,
     session_grant_cnf_jkt text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     requesting_device_id text NOT NULL,
     trust_domain text NOT NULL,
     policy_id uuid NOT NULL,
@@ -2786,30 +2785,30 @@ CREATE TABLE public.service_identity (
 -- current/history read index keyed by the public account authority pair.
 CREATE TABLE public.principal_resolutions (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL CHECK (principal_server_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     pcr_realm_id text UNIQUE NOT NULL CHECK (pcr_realm_id LIKE 'ak:realm:%'),
     genesis_event_id text NOT NULL,
     current_event_id text NOT NULL,
     projection jsonb NOT NULL,
     updated_at timestamptz NOT NULL,
-    PRIMARY KEY (principal_id, principal_server_id)
+    PRIMARY KEY (principal_id, station_id)
 );
 
 CREATE TABLE public.principal_resolution_events (
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
-    principal_server_id text NOT NULL,
+    station_id text NOT NULL,
     event_id text NOT NULL,
     previous_event_id text,
     method_history_head text NOT NULL,
     event_json jsonb NOT NULL,
     created_at timestamptz NOT NULL,
-    PRIMARY KEY (principal_id, principal_server_id, event_id),
-    FOREIGN KEY (principal_id, principal_server_id)
-        REFERENCES public.principal_resolutions(principal_id, principal_server_id)
+    PRIMARY KEY (principal_id, station_id, event_id),
+    FOREIGN KEY (principal_id, station_id)
+        REFERENCES public.principal_resolutions(principal_id, station_id)
         ON DELETE CASCADE
 );
 CREATE UNIQUE INDEX principal_resolution_events_predecessor_idx
-    ON public.principal_resolution_events (principal_id, principal_server_id, previous_event_id)
+    ON public.principal_resolution_events (principal_id, station_id, previous_event_id)
     WHERE previous_event_id IS NOT NULL;
 
 -- Durable remote-route safety state is deliberately split from the

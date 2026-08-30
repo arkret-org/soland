@@ -558,8 +558,8 @@ mod tests {
         let mut description = ServiceDescribe::development(
             did.clone(),
             TrustDomainId::new("ak:trust_domain:route.example").unwrap(),
-            ServiceKind::PrincipalServer,
-            vec!["ak.operation_bundle.principal_server.describe.v1".to_owned()],
+            ServiceKind::Station,
+            vec!["ak.operation_bundle.station.describe.v1".to_owned()],
             vec![TransportBinding::HttpJson {
                 base_url: base_url.to_owned(),
                 extension_profile_required: (),
@@ -576,7 +576,7 @@ mod tests {
         let describe_digest = Hash::new(
             arkret_canonical::canonical_sha256(&Projection {
                 service_id: &service_id,
-                service_kind: ServiceKind::PrincipalServer,
+                service_kind: ServiceKind::Station,
                 service_resolution: &commitment,
                 http_json_base_url: base_url,
             })
@@ -587,7 +587,7 @@ mod tests {
         let record = ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
                 service_id,
-                service_kind: "principal_server".to_owned(),
+                service_kind: "station".to_owned(),
                 did: did.clone(),
                 method_history_head: commitment.method_history_head.clone(),
                 version_id: commitment.version_id.clone(),
@@ -613,14 +613,12 @@ mod tests {
     #[test]
     fn valid_record_rejects_describe_commitment_and_base_mismatch() {
         let (record, description) = fixture();
-        validate_service_describe(&record, description.clone(), ServiceKind::PrincipalServer)
-            .unwrap();
+        validate_service_describe(&record, description.clone(), ServiceKind::Station).unwrap();
 
         let mut wrong_commitment = description.clone();
         wrong_commitment.service_resolution.version_id = "other-version".to_owned();
         assert!(
-            validate_service_describe(&record, wrong_commitment, ServiceKind::PrincipalServer)
-                .is_err()
+            validate_service_describe(&record, wrong_commitment, ServiceKind::Station).is_err()
         );
 
         let mut wrong_base = description;
@@ -629,8 +627,6 @@ mod tests {
             panic!("fixture transport must be HTTP JSON")
         };
         *base_url = "https://other.example/".to_owned();
-        assert!(
-            validate_service_describe(&record, wrong_base, ServiceKind::PrincipalServer).is_err()
-        );
+        assert!(validate_service_describe(&record, wrong_base, ServiceKind::Station).is_err());
     }
 }

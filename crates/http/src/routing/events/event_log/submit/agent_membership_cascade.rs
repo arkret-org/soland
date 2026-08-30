@@ -74,7 +74,7 @@ fn event_producer_device_id(event: &arkret_wire::Event) -> Result<String, Submit
         )
     })?;
     let initiator = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-    if &controller != initiator {
+    if &controller != initiator.signing_principal_id() {
         return Err(cascade_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_proof",
@@ -97,9 +97,9 @@ fn frozen_controller_membership(
     controller: &arkret_wire::Event,
 ) -> Result<FrozenControllerMembership, SubmitOneError> {
     let projection = state.projections().snapshot();
-    let controller_id = controller.actor_id.as_str();
+    let controller_id = controller.actor_id.to_string();
     let realm_id = controller.realm_id.as_str();
-    let member = projection.member(realm_id, controller_id).ok_or_else(|| {
+    let member = projection.member(realm_id, &controller_id).ok_or_else(|| {
         cascade_error(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
@@ -124,17 +124,17 @@ fn frozen_controller_membership(
                 "controller membership generation is unavailable",
             )
         })?;
-    let authority = arkret_wire::AccountId {
-        principal_id: controller.actor_id.clone(),
-        principal_server_id: controller.principal_server_id.clone(),
-    };
-    if projection.membership_authority(realm_id, controller_id) != Some(&authority) {
-        return Err(cascade_error(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "controller membership authority pair is not current",
-        ));
-    }
+    let authority = controller
+        .actor_id
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| {
+            cascade_error(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "controller membership is not bound to an account",
+            )
+        })?;
     let mut agent_ids = projection
         .agent_membership_bindings
         .iter()
@@ -144,7 +144,11 @@ fn frozen_controller_membership(
                 && binding.controller_membership_generation_ref == generation
                 && projection.effective_agent_membership_base(bound_realm_id, agent_id)
         })
-        .filter_map(|((_, agent_id), _)| arkret_wire::DidCoreId::new(agent_id.clone()).ok())
+        .filter_map(|((_, agent_id), _)| {
+            serde_json::from_str::<arkret_wire::ActorId>(agent_id)
+                .ok()
+                .map(|actor| actor.signing_principal_id().clone())
+        })
         .collect::<Vec<_>>();
     agent_ids.sort();
     agent_ids.dedup();
@@ -167,7 +171,7 @@ fn transition_agent_ids(
 ) -> Vec<arkret_wire::DidCoreId> {
     transitions
         .iter()
-        .map(|submission| submission.event.actor_id.clone())
+        .map(|submission| submission.event.actor_id.signing_principal_id().clone())
         .collect()
 }
 
@@ -193,14 +197,14 @@ fn require_session_initiator(
         .executed_by
         .as_ref()
         .unwrap_or(&controller.actor_id);
-    if session.actor != initiator.as_str() {
+    if session.actor != initiator.signing_principal_id().as_str() {
         return Err(cascade_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
             "cascade initiator must equal the authenticated session principal",
         ));
     }
-    Ok(initiator.clone())
+    Ok(initiator.signing_principal_id().clone())
 }
 
 async fn exact_existing_event(
@@ -664,7 +668,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 controller_membership_generation_ref: frozen.generation,
                 initiator_authority: arkret_wire::AccountId {
                     principal_id: initiator,
-                    principal_server_id: local_service_id(state)?,
+                    station_id: local_service_id(state)?,
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
@@ -729,7 +733,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 })?;
             if record.controller_terminal_event_id != controller_event_id
                 || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.principal_server_id.as_str() != state.service_id()
+                || record.initiator_authority.station_id.as_str() != state.service_id()
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1078,7 +1082,7 @@ async fn submit_federated_cascade_after_transport_validation(
             let submitted = submission
                 .agent_transitions
                 .iter()
-                .map(|transition| transition.event.actor_id.clone())
+                .map(|transition| transition.event.actor_id.signing_principal_id().clone())
                 .collect::<Vec<_>>();
             require_exact_agent_set(&submitted, &frozen.agent_ids)?;
             prepared.push(
@@ -1140,8 +1144,8 @@ async fn submit_federated_cascade_after_transport_validation(
                 controller_authority: frozen.authority,
                 controller_membership_generation_ref: frozen.generation,
                 initiator_authority: arkret_wire::AccountId {
-                    principal_id: initiator,
-                    principal_server_id: source_id.clone(),
+                    principal_id: initiator.signing_principal_id().clone(),
+                    station_id: source_id.clone(),
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
@@ -1205,8 +1209,8 @@ async fn submit_federated_cascade_after_transport_validation(
                     )
                 })?;
             if record.controller_terminal_event_id != controller_event_id
-                || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.principal_server_id != *source_id
+                || record.initiator_authority.principal_id != *initiator.signing_principal_id()
+                || record.initiator_authority.station_id != *source_id
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1227,7 +1231,7 @@ async fn submit_federated_cascade_after_transport_validation(
             let submitted = submission
                 .agent_transitions
                 .iter()
-                .map(|transition| transition.event.actor_id.clone())
+                .map(|transition| transition.event.actor_id.signing_principal_id().clone())
                 .collect::<Vec<_>>();
             require_exact_agent_set(&submitted, &record.expected_agent_ids)?;
             for transition in &submission.agent_transitions {
@@ -1472,7 +1476,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         };
     let mut admitted_producers = BTreeMap::new();
     for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
-        if event.realm_id.as_str() != realm_id || event.principal_server_id != source_id {
+        if event.realm_id.as_str() != realm_id || event.actor_id.route_service_id() != &source_id {
             render_error(
                 res,
                 StatusCode::FORBIDDEN,
@@ -1483,9 +1487,9 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         }
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
-            event.actor_id.as_str(),
+            event.actor_id.signing_principal_id().as_str(),
             source_id.as_str(),
-            Some(event.principal_server_id.as_str()),
+            Some(event.actor_id.route_service_id().as_str()),
             realm_id,
             Some(event.kind.as_str()),
         )
@@ -1565,7 +1569,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         .unwrap_or(&submission.controller_transition.event.actor_id);
     if !crate::routing::federation::federation::federation_actor_origin_acceptable(
         state,
-        initiator.as_str(),
+        initiator.signing_principal_id().as_str(),
         source_id.as_str(),
         Some(source_id.as_str()),
         realm_id,
@@ -1680,7 +1684,7 @@ mod tests {
     #[test]
     fn delegated_cascade_device_comes_from_the_initiator_proof_method() {
         let actor = core("ak:did_core:web:agent.example");
-        let principal_server = core("ak:did_core:web:principal.example");
+        let station = core("ak:did_core:web:principal.example");
         let initiator = core("ak:did_core:web:controller.example");
         let mut event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::MemberState.as_str(),
@@ -1691,13 +1695,13 @@ mod tests {
                 )),
             },
             actor,
-            principal_server,
+            station,
             1,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"membership": "leave"}),
         )
         .unwrap();
-        event.executed_by = Some(initiator);
+        event.executed_by = Some(arkret_wire::ActorId::service(initiator));
         event
             .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();

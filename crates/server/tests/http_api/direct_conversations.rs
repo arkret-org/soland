@@ -20,6 +20,14 @@ fn core_id(value: &str) -> arkret_wire::DidCoreId {
         .expect("fixture core DID")
 }
 
+fn local_account_id(principal_id: arkret_wire::DidCoreId) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(principal_id, core_id("did:web:server.test"))
+}
+
+fn local_actor(principal_id: arkret_wire::DidCoreId) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(local_account_id(principal_id))
+}
+
 fn fixture_hash(byte: char) -> arkret_wire::Hash {
     arkret_wire::Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
 }
@@ -48,10 +56,10 @@ fn normal_contact_evidence(
     };
 
     let requester_peer = ContactPeer::Human {
-        principal_id: requester_id.clone(),
+        account_id: local_account_id(requester_id.clone()),
     };
     let target_peer = ContactPeer::Human {
-        principal_id: target.clone(),
+        account_id: local_account_id(target.clone()),
     };
     let mut request_receipt = RequestAcceptanceReceipt {
         core: RequestAcceptanceReceiptCore {
@@ -63,16 +71,19 @@ fn normal_contact_evidence(
             request_event_ref: request_event_ref.clone(),
             source_checkpoint: fixture_hash('2'),
             accepted_at: now,
-            issuer_id: soland_test_support::fixture_principal_server_id(),
+            issuer_id: soland_test_support::fixture_station_id(),
         },
         receipt_digest: fixture_hash('0'),
-        signature: fixture_protocol_signature("did:web:principal-server.example", now),
+        signature: fixture_protocol_signature("did:web:station.example", now),
     };
     request_receipt.receipt_digest = request_receipt.computed_core_digest().unwrap();
     let request_acceptance_receipt_digest =
         arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&request_receipt).unwrap())
             .unwrap();
-    let mut sorted_pair_members = [requester_id.clone(), target.clone()];
+    let mut sorted_pair_members = [
+        local_actor(requester_id.clone()),
+        local_actor(target.clone()),
+    ];
     sorted_pair_members.sort();
     let contact_round = ContactRound::Normal {
         sorted_pair_member_ids: sorted_pair_members,
@@ -87,7 +98,7 @@ fn normal_contact_evidence(
         |issuer: arkret_wire::DidCoreId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
             ContactCurrentProof {
                 contact_round_id: contact_round_id.clone(),
-                issuer_id: issuer,
+                issuer_id: local_actor(issuer),
                 terminal: false,
                 accepted_frontier: vec![head_event_ref.clone()],
                 head_event_ref,
@@ -107,7 +118,7 @@ fn normal_contact_evidence(
             response_event_ref: response_event_ref.clone(),
             outgoing_slot_absence_digest: fixture_hash('5'),
             accepted_at: now,
-            issuer_id: target.clone(),
+            issuer_id: local_actor(target.clone()),
             signature: fixture_protocol_signature("did:web:bob.example", now),
         }),
         glare_concurrency_attestations: None,
@@ -138,10 +149,12 @@ fn human_direct_resolve_request(
 ) -> arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
     arkret_models_collaboration::direct_conversation_ops::DirectConversationResolveRequestBody {
         peer: arkret_models_collaboration::contact_operations::ContactPeer::Human {
-            principal_id: arkret_wire::project_did_to_core_id(
-                &arkret_wire::Did::new(peer).expect("valid human contact DID"),
-            )
-            .unwrap(),
+            account_id: local_account_id(
+                arkret_wire::project_did_to_core_id(
+                    &arkret_wire::Did::new(peer).expect("valid human contact DID"),
+                )
+                .unwrap(),
+            ),
         },
     }
 }
@@ -172,8 +185,8 @@ async fn seed_accepted_direct_message_contact(
         .test_persistence()
         .contacts()
         .put(&soland_domain::identity::ContactRecord {
-            requester_id,
-            target_id: target,
+            requester_id: local_actor(requester_id),
+            target_id: local_actor(target),
             contact_round_id: Some(evidence.contact_round_id.clone()),
             version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -325,8 +338,8 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let target = core_id(BOB_DID);
     let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain.clone(),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(requester_id.clone()),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(target.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(local_actor(requester_id.clone())),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(local_actor(target.clone())),
     )
     .unwrap();
     let claim_request_id = URL_SAFE_NO_PAD.encode([41_u8; 16]);
@@ -669,8 +682,8 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
         .test_persistence()
         .contacts()
         .put(&soland_domain::identity::ContactRecord {
-            requester_id: core_id("did:web:alice.example"),
-            target_id: core_id(BOB_DID),
+            requester_id: local_actor(core_id("did:web:alice.example")),
+            target_id: local_actor(core_id(BOB_DID)),
             contact_round_id: Some(
                 arkret_identifiers::Hash::new(format!("sha256:{}", "4".repeat(64))).unwrap(),
             ),

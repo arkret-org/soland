@@ -150,7 +150,7 @@ mod tests {
     fn unknown_route_is_explicit_and_sparse() {
         let detail: AdminServiceRouteDetail = serde_json::from_value(serde_json::json!({
             "service_id": "ak:did_core:webvh:z6Mkroute",
-            "service_kind": "principal_server",
+            "service_kind": "station",
             "known": false,
             "notices_truncated": false,
             "acks_truncated": false,

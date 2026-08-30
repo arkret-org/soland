@@ -12,8 +12,7 @@ pub struct AuthorizationDecision {
 }
 
 pub struct AuthorizationCheck<'a> {
-    pub actor: &'a str,
-    pub actor_principal_server_id: Option<&'a str>,
+    pub actor: &'a arkret_wire::ActorId,
     pub action: &'a str,
     pub resource: &'a str,
     pub realm_id: &'a str,
@@ -26,30 +25,16 @@ pub trait AuthorizationPort: Send + Sync {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision;
     fn upsert_projected_grant(&self, grant: Grant);
     fn mark_projected_grant_revoked(&self, grant_id: &str);
-    fn mark_projected_grants_revoked_for_subject(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-    ) -> usize;
+    fn mark_projected_grants_revoked_for_subject(&self, subject: &arkret_wire::ActorId) -> usize;
     fn get_grant(&self, grant_id: &str) -> Option<Grant>;
-    fn grants_for_subject(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-        realm_id: &str,
-    ) -> Vec<Grant>;
+    fn grants_for_subject(&self, subject: &arkret_wire::ActorId, realm_id: &str) -> Vec<Grant>;
     fn grants_for_subject_at(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
         evaluated_at: DateTime<Utc>,
     ) -> Vec<Grant>;
-    fn grants_for_subject_all_realms(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-    ) -> Vec<Grant>;
+    fn grants_for_subject_all_realms(&self, subject: &arkret_wire::ActorId) -> Vec<Grant>;
     fn grants_snapshot(&self) -> Vec<Grant>;
 }
 
@@ -77,49 +62,31 @@ impl AuthorizationService {
 
     pub fn mark_projected_grants_revoked_for_subject(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
     ) -> usize {
-        self.port
-            .mark_projected_grants_revoked_for_subject(subject, subject_principal_server_id)
+        self.port.mark_projected_grants_revoked_for_subject(subject)
     }
 
     pub fn get_grant(&self, grant_id: &str) -> Option<Grant> {
         self.port.get_grant(grant_id)
     }
 
-    pub fn grants_for_subject(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-        realm_id: &str,
-    ) -> Vec<Grant> {
-        self.port
-            .grants_for_subject(subject, subject_principal_server_id, realm_id)
+    pub fn grants_for_subject(&self, subject: &arkret_wire::ActorId, realm_id: &str) -> Vec<Grant> {
+        self.port.grants_for_subject(subject, realm_id)
     }
 
     pub fn grants_for_subject_at(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
         evaluated_at: DateTime<Utc>,
     ) -> Vec<Grant> {
-        self.port.grants_for_subject_at(
-            subject,
-            subject_principal_server_id,
-            realm_id,
-            evaluated_at,
-        )
+        self.port
+            .grants_for_subject_at(subject, realm_id, evaluated_at)
     }
 
-    pub fn grants_for_subject_all_realms(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-    ) -> Vec<Grant> {
-        self.port
-            .grants_for_subject_all_realms(subject, subject_principal_server_id)
+    pub fn grants_for_subject_all_realms(&self, subject: &arkret_wire::ActorId) -> Vec<Grant> {
+        self.port.grants_for_subject_all_realms(subject)
     }
 
     pub fn grants_snapshot(&self) -> Vec<Grant> {

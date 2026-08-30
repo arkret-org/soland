@@ -352,7 +352,7 @@ pub fn verify_jws_with_pinned_document(
 /// Principal-authorization verification error.
 ///
 /// Principal authorization has no core-only entry point: every verifier below
-/// takes an exact `(principal_id, principal_server_id)` account authority
+/// takes an exact `(principal_id, station_id)` account authority
 /// context plus accepted local device evidence. The sole current-DID path is
 /// restricted to registered identity-resolution updates.
 #[derive(Debug)]
@@ -439,7 +439,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
     if authority.station_id.as_str() != state.service_id() {
         return Err(fail(
-            "principal authorization is addressed to a different Principal Server".to_owned(),
+            "principal authorization is addressed to a different Station".to_owned(),
         ));
     }
     let (method_did, fragment) = verification_method
@@ -528,12 +528,12 @@ async fn principal_authorized_device_binding_with_account_authority_async(
             ))
         })?
         .ok_or_else(|| fail("principal device authorization Event is unavailable".to_owned()))?;
-    let authorize_principal_server_id = authorize_event
+    let authorize_station_id = authorize_event
         .envelope
-        .get("principal_server_id")
+        .get("station_id")
         .and_then(Value::as_str);
     if authorize_event.actor_id != authority.principal_id.as_str()
-        || authorize_principal_server_id != Some(authority.station_id.as_str())
+        || authorize_station_id != Some(authority.station_id.as_str())
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
     {
@@ -677,7 +677,7 @@ pub async fn verify_principal_authorized_ed25519_signature_with_account_authorit
 pub fn verify_principal_authorized_event_proof_async<'a>(
     proof: &'a arkret_wire::ProducerEventProof,
     envelope_bytes: &'a [u8],
-    actor_id: &'a arkret_wire::DidCoreId,
+    actor_id: &'a arkret_wire::ActorId,
     verification_method: &'a str,
     principal_id: &'a str,
     state: &'a AppState,
@@ -729,21 +729,16 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         let envelope: Value = serde_json::from_slice(envelope_bytes)
             .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
 
-        let principal_server_id = envelope
-            .get("principal_server_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| fail("principal Event has no principal_server_id".to_owned()))?;
-        let principal_server_id = arkret_wire::DidCoreId::new(principal_server_id.to_owned())
-            .map_err(|error| fail(format!("principal Event server is invalid: {error}")))?;
-        if principal_server_id.as_str() != state.service_id() {
+        let station_id = actor_id.route_service_id();
+        if station_id.as_str() != state.service_id() {
             return Err(fail(
-                "principal Event is not addressed to this Principal Server".to_owned(),
+                "principal Event is not addressed to this Station".to_owned(),
             ));
         }
-        if actor_id != &expected_principal_id {
+        if actor_id.signing_principal_id() != &expected_principal_id {
             let agent = state
                 .agent_pairings()
-                .agent(actor_id.as_str())
+                .agent(actor_id.signing_principal_id().as_str())
                 .await
                 .map_err(|error| fail(format!("managed Agent authority lookup failed: {error}")))?
                 .ok_or_else(|| {
@@ -773,7 +768,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
             }
         }
         let authority_key =
-            arkret_wire::AccountId::new(expected_principal_id.clone(), principal_server_id);
+            arkret_wire::AccountId::new(expected_principal_id.clone(), station_id.clone());
         let durable = state
             .persistence()
             .principal_resolution_by_account_id(&authority_key)
@@ -905,7 +900,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
 pub async fn verify_registered_identity_resolution_event_proof_async(
     proof: &arkret_wire::ProducerEventProof,
     envelope_bytes: &[u8],
-    actor_id: &arkret_wire::DidCoreId,
+    actor_id: &arkret_wire::ActorId,
     verification_method: &str,
     principal_id: &str,
     state: &AppState,
@@ -1557,11 +1552,12 @@ mod did_binding_tests {
         let verification_method = format!("{did}#{device_id}");
         let (envelope_bytes, proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
 
         let error = verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1582,8 +1578,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         let jws = detached_jws_with_header(
             &key,
@@ -1596,7 +1593,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1615,8 +1612,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "ES256"}), &binding_bytes);
@@ -1624,7 +1622,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1643,8 +1641,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
@@ -1652,7 +1651,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1672,8 +1671,9 @@ mod did_binding_tests {
 
         let (_, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
@@ -1681,7 +1681,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             br#"{"actor_id":"ak:did_core:web:principal.example","kind":"ak.other.event"}"#,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,

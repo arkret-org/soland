@@ -685,7 +685,7 @@ async fn verify_mimi_consent_update_authority(
 > {
     let (session, source_id) = if request_has_bearer_session(req) {
         let session = aa.authenticated_session(state, req).await?;
-        if session.actor != body.actor_id.as_str() {
+        if session.actor != body.actor_id.signing_principal_id().as_str() {
             return Err(AppError::capability_denied(
                 "MIMI consent user session must match the consent actor",
             ));
@@ -768,7 +768,7 @@ async fn verify_mimi_consent_correlation(
         .is_some_and(|expires_at| expires_at <= now())
         || correlation.source_id.as_deref() != source_id
         || correlation.target_kind != "did"
-        || correlation.target_id != body.actor_id.as_str()
+        || correlation.target_id != body.actor_id.signing_principal_id().as_str()
     {
         return Err(mimi_consent_correlation_unavailable());
     }
@@ -798,7 +798,7 @@ async fn verify_mimi_consent_correlation(
                 .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
             let cell = state
                 .consents()
-                .holder_cell(&body.actor_id, &cell_id)
+                .holder_cell(body.actor_id.signing_principal_id(), &cell_id)
                 .filter(|cell| {
                     cell.peer_principal_id.as_str() == correlation.requester_id
                         && cell.consent_scope == correlation.purpose
@@ -849,10 +849,16 @@ async fn verify_mimi_consent_actor_proof(
         ))
         .with_wire_code("invalid_proof")
     })?;
-    let authority = arkret_wire::AccountId::new(
-        body.actor_id.clone(),
-        body.consent_event.event.principal_server_id.clone(),
-    );
+    let authority = body
+        .consent_event
+        .event
+        .actor_id
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| {
+            AppError::param_invalid("MIMI consent actor must be an account")
+                .with_wire_code("invalid_proof")
+        })?;
     verify_mimi_operation_proof(
         state,
         &binding,
@@ -1114,7 +1120,12 @@ pub(super) async fn enforce_mimi_reporter_resolution(
         .map_err(|error| AppError::param_invalid(format!("invalid reporter_id DID: {error}")))?;
     if state
         .identities()
-        .account(reporter_id)
+        .account(&arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
+                AppError::param_invalid(format!("invalid reporter_id: {error}"))
+            })?,
+            state.service_core_id().clone(),
+        ))
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some()
@@ -1298,7 +1309,10 @@ mod consent_proof_tests {
         let mut request = MimiUpdateConsentRequestBody {
             consent_id,
             decision: MimiConsentDecision::Accept,
-            actor_id,
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                actor_id,
+                state.service_core_id().clone(),
+            )),
             consent_event: EventInitialSubmission::online(consent_event),
             signature: PayloadProof {
                 kind: proof_kind::DETACHED_JWS.to_owned(),
@@ -1357,13 +1371,13 @@ mod consent_proof_tests {
             .expect("device verification method");
         let actor_did = Did::new(actor_did.to_owned()).unwrap();
         let device_id = DeviceId::new(device_id.to_owned()).unwrap();
-        let principal_server_id = request.consent_event.event.principal_server_id.clone();
+        let station_id = request.actor_id.route_service_id().clone();
         let created_at = now();
         let mut genesis = arkret_wire::test_support::raw_event_at(
             EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
-            request.actor_id.clone(),
-            principal_server_id.clone(),
+            request.actor_id.signing_principal_id().clone(),
+            station_id.clone(),
             0,
             Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
             json!({"object": {"purpose": "principal_control"}}),
@@ -1389,8 +1403,8 @@ mod consent_proof_tests {
             ScopeRef::Realm {
                 realm_id: pcr_realm_id.clone(),
             },
-            request.actor_id.clone(),
-            principal_server_id.clone(),
+            request.actor_id.signing_principal_id().clone(),
+            station_id.clone(),
             1,
             Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
             json!({
@@ -1429,9 +1443,9 @@ mod consent_proof_tests {
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key: arkret_wire::AccountId::new(
-                        request.actor_id.clone(),
-                        principal_server_id,
+                    account_id: arkret_wire::AccountId::new(
+                        request.actor_id.signing_principal_id().clone(),
+                        station_id,
                     ),
                     pcr_realm_id,
                     genesis_event: genesis.clone(),
@@ -1514,12 +1528,15 @@ mod consent_proof_tests {
     }
 
     #[tokio::test]
-    async fn consent_actor_proof_rejects_wrong_principal_server() {
+    async fn consent_actor_proof_rejects_wrong_station() {
         let state = state();
         let mut request = request(&state);
         install_authorized_actor_device(&state, &request).await;
-        request.consent_event.event.principal_server_id =
-            DidCoreId::new("ak:did_core:web:other-principal-server.invalid".to_owned()).unwrap();
+        request.consent_event.event.actor_id =
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                request.actor_id.signing_principal_id().clone(),
+                DidCoreId::new("ak:did_core:web:other-station.invalid".to_owned()).unwrap(),
+            ));
         request
             .consent_event
             .event
@@ -1528,7 +1545,7 @@ mod consent_proof_tests {
 
         let error = verify_mimi_consent_actor_proof(&state, &request)
             .await
-            .expect_err("a different Principal Server authority must fail closed");
+            .expect_err("a different Station authority must fail closed");
 
         assert_eq!(error.code, ErrorCode::ParamInvalid);
         assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));
@@ -1588,7 +1605,12 @@ mod consent_proof_tests {
     async fn consent_correlation_binds_target_peer_and_scope() {
         let state = state();
         let request = request(&state);
-        install_correlation(&state, &request, request.actor_id.as_str()).await;
+        install_correlation(
+            &state,
+            &request,
+            request.actor_id.signing_principal_id().as_str(),
+        )
+        .await;
 
         verify_mimi_consent_correlation(&state, &request, None)
             .await

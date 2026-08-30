@@ -357,11 +357,11 @@ fn check_proof_envelope(
 }
 
 /// `principal_signing`: the proof MUST be made by a principal control key that
-/// was accepted for the caller's exact `(principal_id, principal_server_id)`
+/// was accepted for the caller's exact `(principal_id, station_id)`
 /// account authority pair at `proof.created_at`.
 ///
 /// The authenticated self endpoint supplies `principal_id`, and the local
-/// service identity supplies `principal_server_id`; verification must resolve
+/// service identity supplies `station_id`; verification must resolve
 /// only that pair's unique local PCR lineage. Re-resolving a current did:webvh
 /// history head is not an alternative: a DID host outage MUST NOT decide this
 /// account-local authorization.
@@ -397,12 +397,9 @@ async fn verify_principal_signing_delete(
                 "principal proof device fragment is invalid: {error}"
             ))
         })?;
-    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| {
-            AppError::internal(format!("local Principal Server id is invalid: {error}"))
-        })?;
-    let authority_key =
-        arkret_wire::AccountId::new(challenge.principal_id.clone(), principal_server_id);
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
+    let authority_key = arkret_wire::AccountId::new(challenge.principal_id.clone(), station_id);
     let authority = state
         .persistence()
         .principal_resolution_by_account_id(&authority_key)

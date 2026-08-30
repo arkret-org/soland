@@ -297,7 +297,7 @@ pub(super) async fn admit_mimi_room_binding_event(
     let update_group_id = update_body.get("mls_group_id").and_then(Value::as_str);
     if event.kind != arkret_wire::EventKind::MimiRoomBinding
         || event.realm_id.as_str() != realm_id
-        || event.actor_id.as_str() != sender_actor_id
+        || event.actor_id.signing_principal_id().as_str() != sender_actor_id
         || serde_json::to_value(&event.payload).ok().as_ref() != Some(binding)
         || binding.get("mimi_room_uri").and_then(Value::as_str) != Some(expected_room_uri.as_str())
         || binding_group_id.is_none()

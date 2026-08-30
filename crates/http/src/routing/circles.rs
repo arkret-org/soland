@@ -132,7 +132,7 @@ fn circle_view_from(
         member_ids: if include_member_details {
             c.members
                 .iter()
-                .map(|member| parse_sdk_field::<DidCoreId>("member", member))
+                .map(|member| parse_sdk_field::<arkret_wire::ActorId>("member", member))
                 .collect::<Result<Vec<_>, _>>()?
         } else {
             Vec::new()
@@ -142,7 +142,7 @@ fn circle_view_from(
         updated_by: c
             .updated_by
             .as_ref()
-            .map(|actor| parse_sdk_field::<DidCoreId>("updated_by", actor))
+            .map(|actor| parse_sdk_field::<arkret_wire::ActorId>("updated_by", actor))
             .transpose()?,
         updated_at: c.updated_at,
     })
@@ -399,7 +399,7 @@ fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId
             "create_event.event.kind must be ak.circle.create",
         ));
     }
-    if event.actor_id.as_str() != actor {
+    if event.actor_id.signing_principal_id().as_str() != actor {
         return Err(AppError::param_invalid(
             "create_event.event.actor_id must be the authenticated caller",
         ));
@@ -493,7 +493,7 @@ async fn post_circle_member(
 /// What a caller-signed `ak.circle.member.state` Event says it is acting on.
 #[derive(Debug)]
 struct CircleMemberTarget {
-    actor_id: DidCoreId,
+    actor_id: arkret_wire::ActorId,
     membership: CircleMembership,
 }
 
@@ -509,7 +509,7 @@ fn caller_signed_circle_member_target(
             "member_event.event.kind must be ak.circle.member.state",
         ));
     }
-    if event.actor_id.as_str() != actor {
+    if event.actor_id.signing_principal_id().as_str() != actor {
         return Err(AppError::param_invalid(
             "member_event.event.actor_id must be the authenticated caller",
         ));
@@ -527,7 +527,7 @@ fn caller_signed_circle_member_target(
     let target_actor = event
         .payload
         .get("actor_id")
-        .and_then(Value::as_str)
+        .cloned()
         .ok_or_else(|| AppError::param_missing("member_event payload.actor_id is required"))?;
     let membership = event
         .payload
@@ -535,7 +535,8 @@ fn caller_signed_circle_member_target(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::param_missing("member_event payload.membership is required"))?;
     Ok(CircleMemberTarget {
-        actor_id: parse_sdk_field("actor_id", target_actor)?,
+        actor_id: serde_json::from_value(target_actor)
+            .map_err(|error| AppError::param_invalid(format!("actor_id: {error}")))?,
         membership: parse_sdk_field("membership", membership)?,
     })
 }
@@ -555,7 +556,7 @@ fn caller_signed_circle_member_delete_target(
             "member_event.event.realm_id must equal the path Circle's parent Realm",
         ));
     }
-    if target.actor_id.as_str() != actor_id {
+    if target.actor_id.signing_principal_id().as_str() != actor_id {
         return Err(AppError::param_invalid(
             "member_event payload.actor_id must equal the path actor_id",
         ));
@@ -706,7 +707,7 @@ mod tests {
     const ACTOR: &str = "ak:did_core:web:alice.example";
     const BOB: &str = "ak:did_core:web:bob.example";
     const MALLORY: &str = "ak:did_core:web:mallory.example";
-    const PRINCIPAL_SERVER: &str = "ak:did_core:web:principal-server.example";
+    const STATION: &str = "ak:did_core:web:station.example";
     const REALM: &str = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
     const CREATE_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
 
@@ -717,7 +718,7 @@ mod tests {
             "realm_id": REALM,
             "scope_ref": { "kind": "realm", "realm_id": REALM },
             "actor_id": ACTOR,
-            "principal_server_id": PRINCIPAL_SERVER,
+            "station_id": STATION,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -791,7 +792,7 @@ mod tests {
             "realm_id": realm_id,
             "scope_ref": { "kind": "realm", "realm_id": realm_id },
             "actor_id": actor,
-            "principal_server_id": PRINCIPAL_SERVER,
+            "station_id": STATION,
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],
@@ -814,7 +815,7 @@ mod tests {
         );
         let target = caller_signed_circle_member_target(ACTOR, CIRCLE, &event).unwrap();
 
-        assert_eq!(target.actor_id.as_str(), BOB);
+        assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Join);
     }
 
@@ -848,7 +849,7 @@ mod tests {
         let target =
             caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &event).unwrap();
 
-        assert_eq!(target.actor_id.as_str(), BOB);
+        assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Leave);
     }
 

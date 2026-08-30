@@ -7,19 +7,19 @@ use soland_http::error::{AppError, ErrorCode};
 use crate::state::AppState;
 use crate::wire::{SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody};
 
-/// Typed deployment-internal boundary from the Principal Server to the Auth Server.
+/// Typed deployment-internal boundary from the Station to its Account Authority process.
 ///
 /// Endpoint selection, S2S authentication, operation selectors, timeouts and
 /// transport error mapping live here so product handlers cannot couple sibling
 /// operations through URL string conventions.
-pub(crate) struct AuthServerClient<'a> {
+pub(crate) struct AccountAuthorityClient<'a> {
     state: &'a AppState,
     introspection_url: &'a str,
     logout_url: &'a str,
     bearer: &'a str,
 }
 
-impl<'a> AuthServerClient<'a> {
+impl<'a> AccountAuthorityClient<'a> {
     pub(crate) fn from_state(state: &'a AppState) -> Result<Self, AppError> {
         let config = state.config();
         let introspection_url = config
@@ -40,7 +40,7 @@ impl<'a> AuthServerClient<'a> {
             .as_deref()
             .ok_or_else(|| {
                 AppError::unsupported_feature(
-                    "Auth Server S2S calls require SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
+                    "Account Authority S2S calls require SOLAND_SESSION_GRANT_INTROSPECTION_BEARER",
                 )
             })?;
         Ok(Self {
@@ -128,7 +128,7 @@ impl<'a> AuthServerClient<'a> {
             return Err(AppError::new(
                 ErrorCode::TemporarilyUnavailable,
                 format!(
-                    "{operation} was rejected by the Auth Server: {}",
+                    "{operation} was rejected by the Account Authority process: {}",
                     response.status()
                 ),
             ));

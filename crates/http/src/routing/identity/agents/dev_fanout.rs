@@ -45,14 +45,14 @@ pub(super) async fn require_controller_principal_control_realm(
     let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
     if authority.principal_id != controller_id
-        || authority.principal_server_id.as_str() != state.service_id()
+        || authority.station_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "controller authority does not bind this session and Principal Server",
+            "controller authority does not bind this session and Station",
         )
         .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("principal_authority_mismatch"));
+        .with_reason_code("account_id_mismatch"));
     }
     let record = state
         .persistence()
@@ -64,10 +64,10 @@ pub(super) async fn require_controller_principal_control_realm(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "controller authority is not accepted by this Principal Server",
+                "controller authority is not accepted by this Station",
             )
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-            .with_reason_code("principal_authority_mismatch")
+            .with_reason_code("account_id_mismatch")
         })?;
     let realm_id = record.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
@@ -165,7 +165,11 @@ pub(super) async fn submit_provision_event(
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
         AppError::param_invalid(format!("session DID core id is invalid: {error}"))
     })?;
-    if event.actor_id != session_core_id
+    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        session_core_id.clone(),
+        state.service_core_id().clone(),
+    ));
+    if event.actor_id != session_actor
         || event.realm_id.as_str() != controller_realm_id
         || payload.agent_id != *agent_id
         || payload.controller_id != session_core_id
@@ -217,11 +221,11 @@ pub(super) fn validate_durable_agent_lifecycle(
     };
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
-        || event.actor_id.as_str() != agent_id
+        || event.actor_id.signing_principal_id().as_str() != agent_id
         || event
             .executed_by
             .as_ref()
-            .map(arkret_wire::DidCoreId::as_str)
+            .map(|actor| actor.signing_principal_id().as_str())
             != Some(session.actor.as_str())
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
@@ -396,8 +400,7 @@ mod tests {
             Some(controller_id.as_str())
         );
         assert!(!projection.issuer_has_projected_capability(
-            controller_id.as_str(),
-            controller_id.as_str(),
+            &arkret_wire::ActorId::service(controller_id.clone()),
             realm_id,
             CapabilityActionId::MESSAGE_CREATE,
             realm_id,

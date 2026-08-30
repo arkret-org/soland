@@ -11,7 +11,7 @@ pub const MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION: usize = 128;
 #[derive(Clone, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct DeviceRevocationGateSelector {
     pub principal_id: arkret_identifiers::DidCoreId,
-    pub principal_server_id: arkret_identifiers::DidCoreId,
+    pub station_id: arkret_identifiers::DidCoreId,
     pub device_id: String,
     pub target_device_authorize_event_id: String,
     pub target_device_generation_ref: u64,
@@ -25,7 +25,7 @@ pub enum DeviceRevocationGateAction {
     KeyPackageClaim,
     ToDeviceWrite,
     EventWrite,
-    PrincipalServerAdmissionProofIssue,
+    StationAdmissionProofIssue,
 }
 
 impl DeviceRevocationGateAction {
@@ -37,7 +37,7 @@ impl DeviceRevocationGateAction {
             Self::KeyPackageClaim => "keypackage_claim",
             Self::ToDeviceWrite => "to_device_write",
             Self::EventWrite => "event_write",
-            Self::PrincipalServerAdmissionProofIssue => "principal_server_admission_proof_issue",
+            Self::StationAdmissionProofIssue => "station_admission_proof_issue",
         }
     }
 }
@@ -104,7 +104,7 @@ impl DeviceRevocationGateStatus {
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct DeviceRevocationGateLinearizationRequest {
     pub principal_id: arkret_identifiers::DidCoreId,
-    pub principal_server_id: arkret_identifiers::DidCoreId,
+    pub station_id: arkret_identifiers::DidCoreId,
     pub device_id: String,
     pub expected_device_authorize_event_id: Option<String>,
     pub expected_device_generation_ref: Option<u64>,
@@ -126,7 +126,7 @@ pub fn selector_comparison_status(
         return Some(DeviceRevocationGateStatus::AuthorityMismatch);
     };
     if request.principal_id != current.principal_id
-        || request.principal_server_id != current.principal_server_id
+        || request.station_id != current.station_id
         || request.device_id != current.device_id
     {
         return Some(DeviceRevocationGateStatus::AuthorityMismatch);

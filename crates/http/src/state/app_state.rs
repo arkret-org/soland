@@ -175,7 +175,7 @@ pub struct AppState {
     /// (the HTTP Message Signature key) or by an exact verification-method
     /// DID URL (artifact-specific assertion keys). Configuration contains
     /// endpoints, not copied service DIDs or public-key pins; discovery
-    /// validates the document's Principal Server endpoint binding before
+    /// validates the document's Station endpoint binding before
     /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
     /// Live event notification bus for `ak.self.events.stream.subscribe.v1`.
@@ -213,7 +213,7 @@ pub struct AppState {
     notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
-    /// whose `service_role == "principal_server"` and additionally
+    /// whose `service_role == "station"` and additionally
     /// cross-checked against the local `claimed_profiles[]` set inside
     /// `describe.rs::apply_claim_level_partition`. Empty when the env var
     /// is unset / file missing / file malformed — that's the dev-mode
@@ -329,12 +329,14 @@ pub fn development_demo_genesis_event(
         .expect("development demo genesis payload");
     arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::RealmCreate>::new(
         arkret_wire::ScopeRef::RealmGenesis,
-        arkret_wire::project_did_to_core_id(
-            &Did::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
-                .expect("development demo subject DID"),
-        )
-        .expect("development demo subject projection"),
-        service_id.clone(),
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::project_did_to_core_id(
+                &Did::new(DEVELOPMENT_DEMO_SUBJECT_DID.to_owned())
+                    .expect("development demo subject DID"),
+            )
+            .expect("development demo subject projection"),
+            service_id.clone(),
+        )),
         payload,
     )
     .expect("development demo genesis draft")
@@ -395,11 +397,11 @@ pub fn build_realm_directory(
 #[cfg(test)]
 fn development_fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
-        ServiceKind::PrincipalServer,
+        ServiceKind::Station,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
             .expect("test/development public base must be canonicalizable"),
     )
-    .expect("principal-server registration key");
+    .expect("station registration key");
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     DidCoreIdentityState::Ready {
@@ -2080,7 +2082,6 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
         let AuthorizationCheck {
             actor,
-            actor_principal_server_id,
             action,
             resource,
             realm_id,
@@ -2090,7 +2091,6 @@ impl AuthorizationPort for SolandAuthzEngine {
         } = request;
         let decision = self.check_for_authority(
             actor,
-            actor_principal_server_id,
             action,
             resource,
             realm_id,
@@ -2114,12 +2114,8 @@ impl AuthorizationPort for SolandAuthzEngine {
         self.mark_projected_grant_revoked(grant_id);
     }
 
-    fn mark_projected_grants_revoked_for_subject(
-        &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
-    ) -> usize {
-        self.mark_projected_grants_revoked_for_subject(subject, subject_principal_server_id)
+    fn mark_projected_grants_revoked_for_subject(&self, subject: &arkret_wire::ActorId) -> usize {
+        self.mark_projected_grants_revoked_for_subject(subject)
     }
 
     fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
@@ -2128,29 +2124,26 @@ impl AuthorizationPort for SolandAuthzEngine {
 
     fn grants_for_subject(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject(subject, subject_principal_server_id, realm_id)
+        self.grants_for_subject(subject, realm_id)
     }
 
     fn grants_for_subject_at(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
         evaluated_at: chrono::DateTime<chrono::Utc>,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_at(subject, subject_principal_server_id, realm_id, evaluated_at)
+        self.grants_for_subject_at(subject, realm_id, evaluated_at)
     }
 
     fn grants_for_subject_all_realms(
         &self,
-        subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject: &arkret_wire::ActorId,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_all_realms(subject, subject_principal_server_id)
+        self.grants_for_subject_all_realms(subject)
     }
 
     fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {
@@ -2399,7 +2392,6 @@ mod membership_hydration_tests {
             .member(realm_id, member)
             .expect("joined member restored to reducer projection");
         assert_eq!(hydrated.state, "join");
-        assert_eq!(hydrated.delivery_status.as_deref(), Some("unroutable"));
     }
 
     // Regression: the MLS KeyPackage + commit-epoch projections — which the
@@ -2421,7 +2413,7 @@ mod membership_hydration_tests {
                 id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
-                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
+                owner_account_pk: soland_storage::AccountPk(1),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2451,7 +2443,7 @@ mod membership_hydration_tests {
                 id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
-                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
+                owner_account_pk: soland_storage::AccountPk(1),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2887,8 +2879,7 @@ mod membership_hydration_tests {
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
         assert!(!proj.issuer_has_projected_capability(
-            owner,
-            owner,
+            &arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(owner).unwrap()),
             realm_id,
             "ak.message.create",
             realm_id,

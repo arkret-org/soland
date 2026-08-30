@@ -95,7 +95,7 @@ pub(super) fn validate_strand_watch_manage_others_levels(
         return Ok(());
     }
     let payload = strand_watch_set_payload(object)?;
-    if payload.watcher_actor_id.as_str() == actor_id {
+    if payload.watcher_actor_id.signing_principal_id().as_str() == actor_id {
         return Ok(());
     }
     // `muted` suppresses mention / moderation routing and `level_public` is a
@@ -170,7 +170,7 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             continue;
         };
         let payload = strand_watch_set_payload(object)?;
-        if payload.watcher_actor_id.as_str() == actor_id {
+        if payload.watcher_actor_id.signing_principal_id().as_str() == actor_id {
             continue;
         }
         // The cell the audit has to name comes from the SDK payload type, which
@@ -189,7 +189,7 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
                 matches!(audit_payload.access_kind, AuditAccessedKind::WatchSetOthers)
                     && audit_payload.writer_actor_id.as_str() == actor_id
                     && audit_payload.target_actor_id.as_ref()
-                        == Some(&payload.watcher_actor_id)
+                        == Some(payload.watcher_actor_id.signing_principal_id())
                     && audit_payload.target_ref == payload.strand_id.as_str()
                     && audit_payload.target_cell_id.as_ref() == Some(&target_cell_id)
                     && audit_payload
@@ -290,6 +290,10 @@ mod tests {
                 "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
             )
             .unwrap(),
+            actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+            )),
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
             device_id: Some(
                 DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002".to_owned()).unwrap(),

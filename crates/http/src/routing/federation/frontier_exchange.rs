@@ -117,14 +117,10 @@ impl FrontierExchangeWorker {
         peer_id: &arkret_wire::DidCoreId,
         realm_id: &str,
     ) -> Result<String, String> {
-        let route = super::federation::resolved_peer_route(
-            &self.state,
-            peer_id.as_str(),
-            "principal_server",
-            false,
-        )
-        .await
-        .map_err(|error| format!("service_route_unavailable:{error}"))?;
+        let route =
+            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
+                .await
+                .map_err(|error| format!("service_route_unavailable:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
             peer_id.as_str(),
             Some(route.trust_domain.as_str()),

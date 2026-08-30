@@ -439,7 +439,7 @@ mod tests {
         ServiceResolutionRecord {
             record: ServiceResolutionRecordCore {
                 service_id: arkret_wire::project_did_to_core_id(&did).unwrap(),
-                service_kind: "principal_server".to_owned(),
+                service_kind: "station".to_owned(),
                 did,
                 method_history_head: format!("head-{sequence}"),
                 version_id: format!("v-{sequence}"),
@@ -494,7 +494,7 @@ mod tests {
         });
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
         ServiceRouteResolver::new(store.clone(), first_fetcher.clone())
-            .resolve(&expected, "principal_server", now, true)
+            .resolve(&expected, "station", now, true)
             .await
             .unwrap();
         assert_eq!(
@@ -513,12 +513,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let entry = ServiceRouteResolver::new(store, successor_fetcher)
-            .resolve(
-                &expected,
-                "principal_server",
-                now + Duration::seconds(1),
-                true,
-            )
+            .resolve(&expected, "station", now + Duration::seconds(1), true)
             .await
             .unwrap();
         assert_eq!(entry.record_sequence, 1);
@@ -541,7 +536,7 @@ mod tests {
         });
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
         let error = ServiceRouteResolver::new(store, fetcher.clone())
-            .resolve(&expected, "principal_server", now, true)
+            .resolve(&expected, "station", now, true)
             .await
             .unwrap_err();
         assert!(matches!(error, ServiceError::NotFound(_)));
@@ -564,13 +559,13 @@ mod tests {
         });
         let resolver = ServiceRouteResolver::new(store.clone(), seed_fetcher.clone());
         resolver
-            .resolve_route(&expected, "principal_server", now, true)
+            .resolve_route(&expected, "station", now, true)
             .await
             .unwrap();
         store
             .quarantine_fork(ServiceResolutionForkEvidence {
                 service_id: expected.clone(),
-                service_kind: "principal_server".to_owned(),
+                service_kind: "station".to_owned(),
                 artifact_family: "service_resolution_record".to_owned(),
                 artifact_key: "0".to_owned(),
                 accepted_digest: record_digest(&accepted),
@@ -581,7 +576,7 @@ mod tests {
             .await
             .unwrap();
         let error = resolver
-            .resolve_route(&expected, "principal_server", now, false)
+            .resolve_route(&expected, "station", now, false)
             .await
             .unwrap_err();
         assert!(matches!(error, ServiceError::Conflict(_)));
@@ -600,7 +595,7 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         ServiceRouteResolver::new(store.clone(), seed_fetcher)
-            .resolve(&expected, "principal_server", now, true)
+            .resolve(&expected, "station", now, true)
             .await
             .unwrap();
 
@@ -611,22 +606,12 @@ mod tests {
             calls: Mutex::new(Vec::new()),
         });
         let error = ServiceRouteResolver::new(store.clone(), fetcher.clone())
-            .resolve(
-                &expected,
-                "principal_server",
-                now + Duration::seconds(1),
-                true,
-            )
+            .resolve(&expected, "station", now + Duration::seconds(1), true)
             .await
             .unwrap_err();
         assert!(matches!(error, ServiceError::Conflict(_)));
         assert_eq!(*fetcher.calls.lock(), vec![RouteSource::CurrentRecord]);
-        assert!(
-            store
-                .is_quarantined(&expected, "principal_server")
-                .await
-                .unwrap()
-        );
+        assert!(store.is_quarantined(&expected, "station").await.unwrap());
     }
 
     #[test]
@@ -690,28 +675,18 @@ mod tests {
         let resolver = ServiceRouteResolver::new(store, fetcher.clone());
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
         let first = resolver
-            .resolve_route(&expected, "principal_server", now, true)
+            .resolve_route(&expected, "station", now, true)
             .await
             .unwrap();
         assert!(first.is_routable_at(now + Duration::seconds(59)));
         resolver
-            .resolve_route(
-                &expected,
-                "principal_server",
-                now + Duration::seconds(59),
-                false,
-            )
+            .resolve_route(&expected, "station", now + Duration::seconds(59), false)
             .await
             .unwrap();
         assert_eq!(fetcher.calls.lock().len(), 1);
 
         resolver
-            .resolve_route(
-                &expected,
-                "principal_server",
-                now + Duration::seconds(60),
-                false,
-            )
+            .resolve_route(&expected, "station", now + Duration::seconds(60), false)
             .await
             .unwrap();
         assert_eq!(fetcher.calls.lock().len(), 2);

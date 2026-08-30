@@ -45,66 +45,6 @@ fn cell_value_returns_none_for_bottom_state() {
     assert!(state.cell_value(&cell_id).is_none());
 }
 
-#[test]
-fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
-    const REALM_A: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
-    const REALM_B: &str = "ak:realm:ASR8x2N1qyfyy6I-eob3l-FNhx4FPBTyMJrIfifkksgW";
-    const FAMILY: &str = arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1;
-
-    let mut state = ProjectionState::new();
-    for (realm_id, binding_mode) in [(REALM_A, "direct"), (REALM_B, "relay")] {
-        // The registered contract for this facet is a single `cas_register`
-        // write on the `null`-subject cell whose value is the whole payload,
-        // so the payload here IS the cell value the assertions below read.
-        let payload = serde_json::json!({"binding_mode": binding_mode});
-        let (_, cell_writes) = projected_cell_writes(
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            realm_id,
-            &payload,
-        );
-        let operation = make_operation(
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            realm_id,
-            payload,
-        );
-
-        assert_eq!(
-            cell_writes.len(),
-            1,
-            "delivery_binding_policy registers exactly one cell write"
-        );
-        assert_eq!(
-            cell_writes[0].cell_id.as_str(),
-            format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)
-        );
-        assert!(matches!(
-            state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes),
-            ProjectionEffect::RealmBootstrapFacetProjected { .. }
-        ));
-    }
-
-    assert_eq!(
-        state
-            .realm_delivery_binding_policy_cell_value(REALM_A)
-            .and_then(|value| value.get("binding_mode"))
-            .and_then(Value::as_str),
-        Some("direct")
-    );
-    assert_eq!(
-        state
-            .realm_delivery_binding_policy_cell_value(REALM_B)
-            .and_then(|value| value.get("binding_mode"))
-            .and_then(Value::as_str),
-        Some("relay")
-    );
-    let canonical_wire_cell =
-        CellRef::new(format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)).unwrap();
-    assert!(
-        state.cell(&canonical_wire_cell).is_none(),
-        "wire singleton key must not leak into the process-wide projection cache"
-    );
-}
-
 // ── Membership cache + FSM cell tests ──
 
 #[test]
@@ -116,24 +56,20 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
         .realm_join_rules
         .insert(realm_id.to_owned(), "public".to_owned());
 
-    // `membership=join` MUST carry `delivery_status` per
-    // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
-    // `unroutable` keeps the projection focused on the FSM cell +
-    // structured cache write paths without requiring a projected
-    // realm delivery-binding policy.
     let payload = serde_json::json!({
         "realm_id": realm_id,
         "actor_id": "ak:did_core:web:alice",
-        "membership": "join",
-        "delivery_status": "unroutable"
+        "membership": "join"
     });
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_wire::project_did_to_core_id(
-        &arkret_identifiers::Did::new("did:web:alice").unwrap(),
-    )
-    .unwrap();
+    operation.context.sender = arkret_wire::ActorId::service(
+        arkret_wire::project_did_to_core_id(
+            &arkret_identifiers::Did::new("did:web:alice").unwrap(),
+        )
+        .unwrap(),
+    );
     state.apply_projected(&operation, &writes, &hlc);
 
     // Structured cache populated with state="join" and the default member
@@ -161,13 +97,13 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let payload = serde_json::json!({
         "realm_id": realm_id,
         "actor_id": actor,
-        "membership": "join",
-        "delivery_status": "unroutable"
+        "membership": "join"
     });
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_identifiers::DidCoreId::new(actor).unwrap();
+    operation.context.sender =
+        arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(actor).unwrap());
 
     let mut ordinary = ProjectionState::new();
     ordinary
@@ -196,10 +132,12 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     );
 
     let mut mismatched = operation;
-    mismatched.context.sender = arkret_wire::project_did_to_core_id(
-        &arkret_identifiers::Did::new("did:web:mallory.example").unwrap(),
-    )
-    .unwrap();
+    mismatched.context.sender = arkret_wire::ActorId::service(
+        arkret_wire::project_did_to_core_id(
+            &arkret_identifiers::Did::new("did:web:mallory.example").unwrap(),
+        )
+        .unwrap(),
+    );
     assert!(matches!(
         ProjectionState::new()
             .apply_validated_realm_bootstrap_membership(&mismatched, &writes),
@@ -214,7 +152,6 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
     let payload = serde_json::json!({
         "actor_id": peer,
         "membership": "join",
-        "delivery_status": "unroutable",
         "reason": "direct_conversation_bootstrap"
     });
     let (_, writes) =
@@ -322,11 +259,11 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
         "realm_id": REALM_A,
         "actor_id": ACTOR,
         "membership": "join",
-        "delivery_status": "unroutable"
     });
     let (_, writes) = projected_cell_writes(arkret_wire::EventKind::MemberState, REALM_A, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, REALM_A, payload);
-    operation.context.sender = arkret_identifiers::DidCoreId::new(ACTOR).unwrap();
+    operation.context.sender =
+        arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(ACTOR).unwrap());
     state.apply_projected(&operation, &writes, &hlc);
 
     let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
@@ -961,12 +898,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
             realm_id: realm_id.to_owned(),
             state: "leave".to_owned(),
             role: "member".to_owned(),
-            delivery_status: None,
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: chrono::Utc::now() - chrono::Duration::days(1),
             updated_at: chrono::Utc::now() - chrono::Duration::minutes(1),
@@ -1005,7 +937,6 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
             "actor_id": member,
             "sender": member,
             "membership": "join",
-            "delivery_status": "unroutable"
         }),
     );
     assert_eq!(
@@ -1035,7 +966,6 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
             "actor_id": member,
             "sender": member,
             "membership": "join",
-            "delivery_status": "unroutable"
         }),
     );
     assert_eq!(
@@ -1048,8 +978,7 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
         serde_json::json!({
             "actor_id": member,
             "sender": "ak:did_core:web:admin.example",
-            "membership": "join",
-            "delivery_status": "unroutable"
+            "membership": "join"
         }),
     );
     assert_eq!(state.check_membership_join_admission(&admin_join), Ok(()));
@@ -1060,12 +989,7 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("unroutable".to_owned()),
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -1092,12 +1016,7 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
             realm_id: realm_id.to_owned(),
             state: "invite".to_owned(),
             role: "member".to_owned(),
-            delivery_status: None,
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: Some(chrono::Utc::now()),
             joined_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -1407,7 +1326,10 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         realm_id,
         payload.clone(),
     );
-    operation.context.sender = agent_id.clone();
+    operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        agent_id.clone(),
+    ));
     operation.context.accepted_event_id = event_id;
     operation.created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .unwrap()
@@ -1439,7 +1361,8 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         agent_id.clone(),
     );
     let mut replay = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-    replay.context.sender = agent_id;
+    replay.context.sender =
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(agent_id.clone(), agent_id));
     assert!(matches!(
         state.apply_projected(&replay, &replay_writes, &ServerHlc::new("test")),
         ProjectionEffect::Rejected { reason }
@@ -1470,7 +1393,7 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
         .to_value()
         .unwrap();
     let mut operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-    operation.context.sender = agent_id;
+    operation.context.sender = arkret_wire::ActorId::service(agent_id);
     let mut state = ProjectionState::new();
 
     assert!(matches!(
@@ -1844,12 +1767,7 @@ fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: None,
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

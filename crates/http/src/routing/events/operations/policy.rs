@@ -16,7 +16,7 @@ use governance::*;
 pub(crate) fn moderation_actor_for_test<'a>(
     operation: &'a Operation,
     kind: &arkret_wire::EventKind,
-) -> Result<Option<&'a str>, &'static str> {
+) -> Result<Option<&'a arkret_wire::ActorId>, &'static str> {
     governance::moderation_actor(operation, kind)
 }
 #[cfg(test)]
@@ -46,7 +46,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .payload
         .as_object()
         .ok_or("sidecar_create_denied")?;
-    if operation.context.sender.as_str() != controller
+    if operation.context.sender.signing_principal_id().as_str() != controller
         || payload.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
         || payload.keys().any(|field| {
             !matches!(
@@ -320,7 +320,7 @@ async fn validate_agent_operation_membership(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let actor_id = operation.context.sender.as_str();
+    let actor_id = operation.context.sender.signing_principal_id().as_str();
     let record = state
         .agent_pairings()
         .agent(actor_id)
@@ -390,10 +390,7 @@ mod tests {
         let op = circle_create_with_payload(serde_json::json!({
             "object": { "created_by": "did:web:example.com:users:alice" },
         }));
-        assert_eq!(
-            policy_operation_sender(&op),
-            Some("ak:did_core:web:fixture.example")
-        );
+        assert_eq!(policy_operation_sender(&op), Some(&op.context.sender));
     }
 
     #[tokio::test]

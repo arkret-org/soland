@@ -1368,11 +1368,20 @@ async fn verified_contact_mirror_event(
         })?,
     )
     .map_err(|error| AppError::internal(format!("Contact mirror payload decode: {error}")))?;
-    if payload.peer.contact_actor_id().as_str() != session.actor.as_str() {
+    if payload
+        .peer
+        .contact_actor_id()
+        .signing_principal_id()
+        .as_str()
+        != session.actor.as_str()
+    {
         return Ok(None);
     }
-    let session_actor_id = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::internal(format!("invalid session actor id: {error}")))?;
+    let session_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("invalid session actor id: {error}")))?,
+        state.service_core_id().clone(),
+    ));
     let Ok(Some(contact)) = state
         .contacts()
         .contact_any(&event.actor_id, &session_actor_id)
@@ -1381,7 +1390,7 @@ async fn verified_contact_mirror_event(
         return Ok(None);
     };
     if contact.status != "pending"
-        || contact.requester_id.as_str() != event.actor_id.as_str()
+        || contact.requester_id != event.actor_id
         || contact.target_id != session_actor_id
         || contact.request_event_ref.as_ref() != Some(&event.event_id)
         || contact.peer_host_id.as_ref().map(|id| id.as_str()) != Some(mirror.issuer_id.as_str())
@@ -1389,8 +1398,8 @@ async fn verified_contact_mirror_event(
         return Ok(None);
     }
     let receipt_matches = contact.request_receipts.iter().any(|receipt| {
-        receipt.core.holder.contact_actor_id().as_str() == event.actor_id.as_str()
-            && receipt.core.peer.contact_actor_id().as_str() == session.actor
+        receipt.core.holder.contact_actor_id() == event.actor_id
+            && receipt.core.peer.contact_actor_id() == session_actor_id
             && receipt.core.request_event_ref == event.event_id
             && receipt.core.request_digest().as_str() == mirror.request_digest
             && receipt == &mirror.source_receipt
@@ -1426,8 +1435,12 @@ async fn resolve_events(
         ));
     }
     if let Some(access) = body.history_traversal_access.clone() {
-        let caller = arkret_wire::DidCoreId::new(session.actor.clone())
-            .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+        let caller = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+                AppError::internal(format!("session actor is invalid: {error}"))
+            })?,
+            state.service_core_id().clone(),
+        ));
         let retained = state
             .persistence()
             .governance_history_service()
@@ -1691,7 +1704,12 @@ async fn events_frontier(
         .map_err(|_| {
             AppError::json_invalid("invalid ak.self.events.read.frontier.v1 request body")
         })?;
-    let actor_id = query_body.actor_id.as_str().to_owned();
+    let selected_actor_id = query_body.actor_id.clone();
+    let actor_id = query_body
+        .actor_id
+        .signing_principal_id()
+        .as_str()
+        .to_owned();
     let realm_selector = query_body
         .realm_id
         .as_ref()
@@ -1772,7 +1790,8 @@ async fn events_frontier(
         {
             return Err(AppError::not_found("realm not found"));
         }
-        let frontier = load_realm_actor_frontier(state, realm_id, actor_id).await?;
+        let frontier =
+            load_realm_actor_frontier(state, realm_id, selected_actor_id.clone()).await?;
         return soland_http::result::json_ok(EventsFrontierState {
             frontier: EventsFrontierView::RealmActor(frontier),
         });
@@ -1798,9 +1817,9 @@ async fn events_frontier(
         .as_ref()
         .filter(|access| access.owned_by_session)
         .map(|access| access.pcr_realm_id.as_str());
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("local principal server id is invalid"))?;
-    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), principal_server_id);
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|_| AppError::internal("local Station id is invalid"))?;
+    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), station_id);
     let own_actor_pcr = if actor_id == session_core_id {
         state
             .persistence()
@@ -1846,11 +1865,11 @@ async fn events_frontier(
         }
         let realm_id = RealmId::new(realm_value)
             .map_err(|_| AppError::internal("stored realm_id is invalid"))?;
-        realms.push(load_realm_actor_frontier(state, realm_id, actor_id.clone()).await?);
+        realms.push(load_realm_actor_frontier(state, realm_id, selected_actor_id.clone()).await?);
     }
     let aggregate = ActorAggregateFrontierView {
         kind: ActorAggregateFrontierKind::ActorAggregate,
-        actor_id,
+        actor_id: selected_actor_id,
         frontiers: realms,
     };
     aggregate
@@ -1911,8 +1930,8 @@ async fn applet_managed_actor_pcr_access(
     for record in records {
         let record_active = record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed");
-        if record.bot_actor_id.as_str() == actor_id {
-            if record.bot_actor_principal_server_id.as_str() != state.service_id() {
+        if record.bot_actor_id.signing_principal_id().as_str() == actor_id {
+            if record.bot_actor_id.route_service_id().as_str() != state.service_id() {
                 continue;
             }
             let owned_by_session =
@@ -1920,8 +1939,7 @@ async fn applet_managed_actor_pcr_access(
             let active_grant_ids = state
                 .authorization()
                 .grants_for_subject(
-                    record.package.service_id.as_str(),
-                    Some(record.bot_actor_principal_server_id.as_str()),
+                    &arkret_wire::ActorId::service(record.package.service_id.clone()),
                     record.portal_realm_id.as_str(),
                 )
                 .into_iter()
@@ -1945,9 +1963,9 @@ async fn applet_managed_actor_pcr_access(
         if let Some(ghost) = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
+            .find(|ghost| ghost.ghost_actor_id.signing_principal_id().as_str() == actor_id)
         {
-            if ghost.actor_principal_server_id.as_str() != state.service_id() {
+            if ghost.ghost_actor_id.route_service_id().as_str() != state.service_id() {
                 continue;
             }
             let owned_by_session = record.package.service_id.as_str() == session_service_id;
@@ -1959,8 +1977,7 @@ async fn applet_managed_actor_pcr_access(
             let authority_active = state
                 .authorization()
                 .grants_for_subject(
-                    record.package.service_id.as_str(),
-                    Some(ghost.actor_principal_server_id.as_str()),
+                    &arkret_wire::ActorId::service(record.package.service_id.clone()),
                     record.portal_realm_id.as_str(),
                 )
                 .iter()
@@ -2070,10 +2087,12 @@ pub(crate) async fn load_realm_actor_frontier(
     realm_id: RealmId,
     actor_id: arkret_wire::ActorId,
 ) -> Result<RealmActorFrontierView, AppError> {
-    let actor_key = actor_id.to_string();
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(realm_id.as_str(), &actor_key)
+        .canonical_events_for_realm_actor(
+            realm_id.as_str(),
+            actor_id.signing_principal_id().as_str(),
+        )
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
     let (next_actor_seq, frontier_event_ids) =
@@ -2111,7 +2130,7 @@ pub(crate) async fn load_realm_actor_frontier(
 pub(super) fn build_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
     next_actor_seq: u64,
     frontier_event_ids: Vec<EventId>,
 ) -> Result<RealmActorFrontierView, AppError> {

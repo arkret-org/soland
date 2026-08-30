@@ -1,6 +1,6 @@
 # soland
 
-Reference Arkret v1 principal server, built with Salvo, Diesel, and
+Reference Arkret v1 Station, built with Salvo, Diesel, and
 PostgreSQL. The HTTP surface mirrors `arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml`;
 in-memory mode keeps the same API for fast local iteration.
 
@@ -57,9 +57,6 @@ Operator-visible highlights:
 - **Federation idempotency `historical_only`** — cache hits after
   source-key revocation return the cached body with
   `reason_code=historical_only`; no side effects.
-- **Delivery-binding handover error codes** —
-  `delivery_binding_stale` (with `new_recipient_service_id` +
-  `handover_frontier`) and `delivery_binding_handed_over`.
 
 ## Round R2/R3 deployment requirements
 
@@ -243,7 +240,7 @@ All settings can be supplied via environment variables (preferred) or a
 | `SOLAND_ACCOUNT_AUTHORITY_URL` | unset | Public Account Authority URL advertised at `/_arkret/describe.auth_metadata.account_authority` |
 | `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` | unset | Account Authority service DID trusted for S2S account-status evidence; required together with `SOLAND_ACCOUNT_AUTHORITY_URL` |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_URL` | unset | coauth session-grant introspection endpoint used for `ak.session.grant + DPoP` |
-| `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | exact Auth Server S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL |
+| `SOLAND_AUTH_SESSION_LOGOUT_URL` | unset | exact Account Authority process S2S `/_arkret/gate/account/auth-sessions/logout` endpoint; never derived from the introspection URL |
 | `SOLAND_SESSION_GRANT_INTROSPECTION_BEARER` | unset | Server-to-server bearer sent to the session-grant introspection endpoint |
 | `DATABASE_URL` | unset | Required for runtime startup; enables PostgreSQL and runs migrations. In-memory persistence is test-only, and a durable `SOLAND_KEYSTORE_BACKEND` is mandatory |
 | `SOLAND_OBJECT_STORAGE_BACKEND` | `filesystem` | Blob object backend: `filesystem`/`local` or `s3-compatible` |
@@ -354,7 +351,7 @@ SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER=local-soland-webvh-registration
 ```
 
 Those bearer values must match coauth's
-`arkret.principal_servers[]` entry for `https://local.host/`; otherwise
+`arkret.stations[]` entry for `https://local.host/`; otherwise
 coauth will reject soland's introspection call and browser sign-in will end
 with `unauthenticated: invalid bearer token`.
 

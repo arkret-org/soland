@@ -613,7 +613,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         return json_ok(outcome);
     }
     // The authenticated device (or managed-Agent allocation) selects one exact
-    // `(principal_id, principal_server_id)` pair and its local lifetime PCR
+    // `(principal_id, station_id)` pair and its local lifetime PCR
     // lineage. Never resolve account state from the principal core alone.
     let realm_id = contact_authority_realm(state, session, &holder).await?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
@@ -735,7 +735,7 @@ async fn contact_authority_realm(
                         "Contact holder device authorization Event is unavailable",
                     )
                 })?;
-            if authorize_event.actor_id != holder.contact_actor_id().to_string()
+            if authorize_event.actor_id != account_id.principal_id.as_str()
                 || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
             {
                 return Err(AppError::new(
@@ -1233,10 +1233,10 @@ async fn plan_contact_commit(
             ..
         } => {
             let request_receipt = sign_request_receipt(state, reservation, event, digest_suite)?;
-            let same_service_target = if let Some(account_id) = peer.as_account_id() {
+            let same_service_target = if let Some(peer_account_id) = peer.as_account_id() {
                 state
                     .identities()
-                    .account(account_id)
+                    .account(peer_account_id)
                     .await
                     .map_err(|error| {
                         AppError::internal(format!("Contact target account lookup: {error}"))
@@ -1248,7 +1248,7 @@ async fn plan_contact_commit(
             let peer_id = if same_service_target
                 || matches!(
                     introduction_evidence.as_ref(),
-                    ContactIntroductionEvidence::SamePrincipalServer
+                    ContactIntroductionEvidence::SameStation
                 ) {
                 Some(
                     arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
@@ -1782,7 +1782,7 @@ fn imported_contact_continuity_history(
     for checkpoint_signature in &evidence.checkpoint.signatures {
         verify_contact_service_signature_bytes(
             state,
-            checkpoint_signature.signer.principal_server_id.as_str(),
+            checkpoint_signature.signer.station_id.as_str(),
             &checkpoint_signature.signature,
             &signing_bytes,
             "continuity_evidence.checkpoint",
@@ -1945,28 +1945,15 @@ async fn prepare_contact_federation_delivery(
 }
 
 async fn contact_request_delivery_address(
-    state: &AppState,
+    _state: &AppState,
     _holder: &arkret_wire::ActorId,
-    peer: &arkret_wire::ActorId,
-    evidence: &ContactIntroductionEvidence,
+    _peer: &arkret_wire::ActorId,
+    _evidence: &ContactIntroductionEvidence,
 ) -> Result<Option<PeerContactAddress>, AppError> {
-    let Some(account_id) = peer.as_account_id() else {
-        return Ok(None);
-    };
-    let Some(service_resolution) = contact_introduction_service_resolution(state, evidence).await?
-    else {
-        return Ok(None);
-    };
-    let address = PeerContactAddress::principal_server(
-        account_id.principal_id.clone(),
-        account_id.clone(),
-        account_id.station_id.clone(),
-        service_resolution,
-    );
-    address
-        .validate_shape()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    Ok(Some(address))
+    // Contact introduction evidence does not carry enough authority to derive
+    // a delivery target. In particular, Realm membership is social context,
+    // not an account-to-Station routing binding.
+    Ok(None)
 }
 
 async fn contact_introduction_service_resolution(
@@ -1977,52 +1964,10 @@ async fn contact_introduction_service_resolution(
         ContactIntroductionEvidence::LocatorRef { principal_locator } => {
             Some(principal_locator.service_resolution.clone())
         }
-        ContactIntroductionEvidence::SharedRealm {
-            realm_id,
-            target_member_ref,
-            ..
-        } => {
-            let snapshot = state.projections().snapshot();
-            let member = snapshot
-                .members_of_realm(realm_id.as_str())
-                .into_iter()
-                .find(|member| {
-                    member.state == "join"
-                        && member.membership_event_ref.as_deref()
-                            == Some(target_member_ref.as_str())
-                });
-            let Some(member) = member else {
-                return Ok(None);
-            };
-            let member_id =
-                serde_json::from_str::<arkret_wire::ActorId>(&member.member).map_err(|error| {
-                    AppError::internal(format!("projected member id is invalid: {error}"))
-                })?;
-            let service_id = member_id.route_service_id();
-            if service_id.as_str() == state.service_id() {
-                state
-                    .current_signed_service_resolution()
-                    .await
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "current service resolution unavailable: {error}"
-                        ))
-                    })?
-                    .map(|inline| ServiceResolutionCarrier::Inline { inline })
-            } else {
-                let route = state
-                    .service_route_resolver()
-                    .map_err(AppError::internal)?
-                    .resolve_route(service_id, "principal_server", chrono::Utc::now(), false)
-                    .await
-                    .map_err(|error| AppError::internal(error.to_string()))?;
-                Some(ServiceResolutionCarrier::CurrentRecordUrl {
-                    current_record_url: route.cache_entry.current_record_url,
-                    pinned_record_digest: Some(route.cache_entry.record_digest),
-                })
-            }
-        }
-        ContactIntroductionEvidence::SamePrincipalServer => state
+        // Realm membership proves social context, not transport routing. The
+        // removed membership delivery binding must not be resurrected here.
+        ContactIntroductionEvidence::SharedRealm { .. } => None,
+        ContactIntroductionEvidence::SameStation => state
             .current_signed_service_resolution()
             .await
             .map_err(|error| {

@@ -259,7 +259,7 @@ async fn validate_active_series_authority_before_commit(
                 format!("active-series payload is invalid: {error}"),
             )
         })?;
-    if record.actor_id.as_str() != parsed.actor_id.as_str() {
+    if record.actor_id.signing_principal_id().as_str() != parsed.actor_id.as_str() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -1106,7 +1106,7 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
         .rsplit_once('#')?;
     let controller = arkret_wire::Did::new(controller.to_owned()).ok()?;
     let controller_id = arkret_wire::project_did_to_core_id(&controller).ok()?;
-    (controller_id == event.actor_id)
+    (controller_id == *event.actor_id.signing_principal_id())
         .then_some(fragment)
         .filter(|fragment| fragment.starts_with("ak:device:"))
         .filter(|fragment| fragment.len() > "ak:device:".len())
@@ -1116,7 +1116,7 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
 /// Select the one proof that can author an Ack-less self-PCR Control Move.
 ///
 /// A freshly submitted Event contains only this producer proof. Once admitted,
-/// the canonical envelope also contains the Principal Server admission proof
+/// the canonical envelope also contains the Station admission proof
 /// required for federation. Revalidation must ignore that transport-origin
 /// attestation without ever accepting two producer authorities.
 fn sole_self_principal_pcr_producer_proof(
@@ -1155,9 +1155,10 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         return Ok(SelfPrincipalPcrAuthority::Rejected(reason));
     }
     let snapshot = state.projections().snapshot();
-    if !snapshot
-        .realm_is_principal_control_for_actor(event.realm_id.as_str(), event.actor_id.as_str())
-    {
+    if !snapshot.realm_is_principal_control_for_actor(
+        event.realm_id.as_str(),
+        event.actor_id.signing_principal_id().as_str(),
+    ) {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
             "event Realm is not the actor's accepted PCR",
         ));
@@ -1230,7 +1231,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     }
     let Some(generation) = crate::routing::identity::device_generation::current_device_generation(
         state,
-        event.actor_id.as_str(),
+        event.actor_id.signing_principal_id().as_str(),
     )
     .await
     .map_err(|error| format!("self-principal PCR device generation is unavailable: {error}"))?
@@ -1404,11 +1405,11 @@ pub(super) async fn accepted_event_envelope(
         return Ok((event, envelope, parsed.canonical_bytes.clone(), None));
     }
     let mut event = event;
-    if event.principal_server_id.as_str() != state.service_id() {
+    if event.actor_id.route_service_id().as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "caller Event must be submitted to its declared Principal Server",
+            "caller Event must be submitted to its declared Station",
         ));
     }
     let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
@@ -1434,7 +1435,7 @@ pub(super) async fn accepted_event_envelope(
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
-                    format!("Principal Server signing method is unavailable: {error}"),
+                    format!("Station signing method is unavailable: {error}"),
                 )
             })?;
     let event_digest =
@@ -1449,7 +1450,7 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server id is invalid: {error}"),
+            format!("Station id is invalid: {error}"),
         )
     })?;
     let producer_signer_evidence = if session.agent_session.is_some() {
@@ -1459,7 +1460,7 @@ pub(super) async fn accepted_event_envelope(
             .unwrap_or(&event.actor_id)
             .clone();
         let selector = arkret_models_identity::agent_signer_evidence::AgentSignerEvidenceQuerySelector::CurrentAdmission {
-            agent_id: signer_id,
+            agent_id: signer_id.signing_principal_id().clone(),
             verification_method: producer.verification_method.clone(),
             operation_id: arkret_wire::ProtocolOperationId::new(
                 "ak:operation:ak.self.events.command.submit.v1",
@@ -1511,7 +1512,7 @@ pub(super) async fn accepted_event_envelope(
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "temporarily_unavailable",
-                    format!("Principal Server signer evidence is unavailable: {error}"),
+                    format!("Station signer evidence is unavailable: {error}"),
                 )
             })?;
     let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
@@ -1523,7 +1524,7 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",
-            format!("Principal Server signer evidence is invalid: {error}"),
+            format!("Station signer evidence is invalid: {error}"),
         )
     })?;
     let signer_resolution_evidence_digest =
@@ -1531,14 +1532,14 @@ pub(super) async fn accepted_event_envelope(
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("Principal Server signer evidence digest failed: {error}"),
+                format!("Station signer evidence digest failed: {error}"),
             )
         })?;
     let signer_resolution_evidence_ref = signer_evidence.evidence_ref().map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server signer evidence ref failed: {error}"),
+            format!("Station signer evidence ref failed: {error}"),
         )
     })?;
     let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
@@ -1556,7 +1557,7 @@ pub(super) async fn accepted_event_envelope(
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("Principal Server signer evidence retention failed: {error}"),
+                format!("Station signer evidence retention failed: {error}"),
             )
         })?;
     let governance_dependency =
@@ -1575,16 +1576,14 @@ pub(super) async fn accepted_event_envelope(
         kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method,
         event_digest,
-        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(
-            &producer,
-        )
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error.to_string(),
-            )
-        })?,
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?,
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key_did: producer_signing_key,
         producer_signer_resolution_evidence_ref: producer_signer_evidence
@@ -1612,7 +1611,7 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server admission proof signing failed: {error}"),
+            format!("Station admission proof signing failed: {error}"),
         )
     })?;
     event.proofs.push(admission.into());
@@ -1652,11 +1651,11 @@ pub(super) fn validate_origin_submission_shape(
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    if event.principal_server_id.as_str() != state.service_id() {
+    if event.actor_id.route_service_id().as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "caller Event must be submitted to its declared Principal Server",
+            "caller Event must be submitted to its declared Station",
         ));
     }
     if !matches!(
@@ -1800,8 +1799,8 @@ async fn validate_membership_compensation_live_state(
         .map(|proof| &proof.verification_method);
     if producer_method != Some(&core.executor_proof_key_kid)
         || evidence.delegation.signature.verification_method != core.verification_method
-        || evidence.terminal_certificate.issuer_id != core.executor_id
-        || evidence.single_use_cas_token.issuer_id != core.executor_id
+        || evidence.terminal_certificate.issuer_id != *core.executor_id.signing_principal_id()
+        || evidence.single_use_cas_token.issuer_id != *core.executor_id.signing_principal_id()
         || evidence.join_accepted_proof.accepted_at > evidence.terminal_certificate.certified_at
         || evidence.terminal_certificate.certified_at > event.created_at
         || evidence.single_use_cas_token.issued_at > event.created_at
@@ -1817,7 +1816,7 @@ async fn validate_membership_compensation_live_state(
         state,
         &evidence.delegation,
         &evidence.delegation.signature,
-        &core.join_actor_id,
+        core.join_actor_id.signing_principal_id(),
         "delegation",
     )
     .await?;
@@ -1881,16 +1880,18 @@ async fn validate_membership_compensation_live_state(
     if accepted_join_digest != core.join_event_digest.as_str()
         || accepted_join_event.kind != arkret_wire::EventKind::MemberState
         || accepted_join_event.realm_id != core.resource_id
-        || evidence.join_accepted_proof.issuer_id != accepted_join_event.principal_server_id
+        || evidence.join_accepted_proof.issuer_id
+            != *accepted_join_event.actor_id.route_service_id()
         || accepted_join_event.actor_id != core.join_actor_id
         || accepted_join_event.executed_by != core.executed_by
         || accepted_join_event.authorization_ref != core.authorization_ref
         || join_producer_method != Some(&core.verification_method)
-        || accepted_join_event
-            .payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            != Some(core.subject_id.as_str())
+        || serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(serde_json::to_value(&accepted_join_event.payload).unwrap_or(Value::Null))
+        .map(|payload| payload.member_id)
+        .ok()
+            != Some(core.member_id.clone())
         || accepted_join_event
             .payload
             .get("membership")
@@ -1906,7 +1907,7 @@ async fn validate_membership_compensation_live_state(
     let current_membership = state
         .projections()
         .snapshot()
-        .member(core.resource_id.as_str(), core.subject_id.as_str())
+        .member(core.resource_id.as_str(), &core.member_id.to_string())
         .cloned();
     let Some(current_membership) = current_membership else {
         return Err(SubmitOneError::new(
@@ -2252,7 +2253,7 @@ pub(super) async fn submit_event_value_with_context(
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
                 parsed.realm_id.clone(),
-                parsed.actor_id.clone(),
+                parsed.actor.clone(),
             )
             .await
             .map_err(|error| {
@@ -2365,7 +2366,7 @@ pub(super) async fn submit_event_value_with_context(
         let current_frontier = super::super::endpoints::build_realm_actor_frontier(
             state,
             parsed.realm_id.clone(),
-            parsed.actor_id.clone(),
+            parsed.actor.clone(),
             next_actor_seq,
             frontier_event_ids,
         )
@@ -3257,7 +3258,7 @@ pub(super) async fn submit_event_value_with_context(
     let prospective_frontier = super::super::endpoints::build_realm_actor_frontier(
         state,
         parsed.realm_id.clone(),
-        parsed.actor_id.clone(),
+        parsed.actor.clone(),
         next_actor_seq,
         prospective_frontier_ids,
     )
@@ -3570,7 +3571,7 @@ pub(super) async fn submit_event_value_with_context(
                 let current_frontier = super::super::endpoints::load_realm_actor_frontier(
                     state,
                     parsed.realm_id.clone(),
-                    parsed.actor_id.clone(),
+                    parsed.actor.clone(),
                 )
                 .await
                 .map_err(|frontier_error| {
@@ -3649,7 +3650,7 @@ pub(super) async fn submit_event_value_with_context(
                     let frontier = super::super::endpoints::load_realm_actor_frontier(
                         state,
                         parsed.realm_id.clone(),
-                        parsed.actor_id.clone(),
+                        parsed.actor.clone(),
                     )
                     .await
                     .map_err(|frontier_error| {

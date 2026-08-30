@@ -283,7 +283,7 @@ pub struct AppletRecordCommit {
 
 #[derive(Clone, Debug)]
 pub struct AppletIdentityCommit {
-    pub target_principal_server_id: arkret_wire::DidCoreId,
+    pub target_station_id: arkret_wire::DidCoreId,
     pub expected_record: Option<serde_json::Value>,
     pub record: serde_json::Value,
 }
@@ -336,7 +336,7 @@ pub fn validate_applet_installation_record(record: &serde_json::Value) -> Persis
         "identity",
         "registry_id",
         "bot_actor_id",
-        "bot_actor_principal_server_id",
+        "bot_actor_station_id",
         "bot_actor_provision_ref",
         "bot_principal_control_realm_id",
         "initial_package",
@@ -409,7 +409,7 @@ pub fn applet_managed_authorities_from_record(
     };
     let mut authorities = std::collections::BTreeSet::from([ManagedAuthorityClaim {
         actor_id: required("bot_actor_id")?.to_owned(),
-        principal_server_id: required("bot_actor_principal_server_id")?.to_owned(),
+        station_id: required("bot_actor_station_id")?.to_owned(),
     }]);
     let ghosts = installation
         .get("ghosts")
@@ -428,18 +428,17 @@ pub fn applet_managed_authorities_from_record(
                     "schema_violation: durable Applet Ghost omits ghost_actor_id".to_owned(),
                 )
             })?;
-        let principal_server_id = ghost
-            .get("actor_principal_server_id")
+        let station_id = ghost
+            .get("actor_station_id")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 PersistenceError::Conflict(
-                    "schema_violation: durable Applet Ghost omits actor_principal_server_id"
-                        .to_owned(),
+                    "schema_violation: durable Applet Ghost omits actor_station_id".to_owned(),
                 )
             })?;
         if !authorities.insert(ManagedAuthorityClaim {
             actor_id: actor_id.to_owned(),
-            principal_server_id: principal_server_id.to_owned(),
+            station_id: station_id.to_owned(),
         }) {
             return Err(PersistenceError::Conflict(
                 "applet_managed_authority_conflict".to_owned(),
@@ -452,7 +451,7 @@ pub fn applet_managed_authorities_from_record(
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ManagedAuthorityClaim {
     pub actor_id: String,
-    pub principal_server_id: String,
+    pub station_id: String,
 }
 
 /// All durable writes produced by accepting a closed multi-Event aggregate.

@@ -16,7 +16,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
 
     let principal_did = Did::new(principal_did.to_owned()).unwrap();
     let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
-    let principal_server_id = DidCoreId::new(state.service_id().clone()).unwrap();
+    let station_id = DidCoreId::new(state.service_id().clone()).unwrap();
     let pcr_realm_id = RealmId::new(soland_test_support::fixture_principal_control_realm(
         principal_did.as_str(),
     ))
@@ -71,7 +71,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             realm_id: pcr_realm_id.clone(),
         },
         principal_id.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -116,15 +116,14 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         .await
         .unwrap();
 
-    let authority =
-        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id.clone());
+    let authority = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
     state
         .test_persistence()
         .principal_resolutions()
         .compare_and_set(
             None,
             soland_storage::PrincipalResolutionRecord {
-                authority_key: authority,
+                account_id: authority,
                 pcr_realm_id: pcr_realm_id.clone(),
                 genesis_event: genesis.clone(),
                 current_event: genesis.clone(),
@@ -196,7 +195,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             "ak:receipt:0196419b-0000-7000-8000-000000000004",
         )
         .unwrap(),
-        issuer_id: principal_server_id.clone(),
+        issuer_id: station_id.clone(),
         scope: arkret_wire::EventBatchReceiptScope::PcrGenesis(
             arkret_wire::event_receipt::PcrGenesisReceiptScope {
                 kind: arkret_wire::event_receipt::PcrGenesisReceiptScopeKind::PcrGenesisUnit,
@@ -210,7 +209,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
                 device_key_digest: descriptor.device_key_digest,
                 hpke_key_digest: descriptor.hpke_key_digest,
                 accepted_at: genesis.created_at,
-                audience_id: principal_server_id,
+                audience_id: station_id,
             },
         ),
         events: vec![
@@ -279,10 +278,10 @@ fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals() {
 
 async fn open_principal_resolution_is_public_bounded_and_blinds_unknown_principals_body() {
     let state = soland_test_support::app_state(test_config());
-    let principal_server_id = state.service_id().clone();
+    let station_id = state.service_id().clone();
     let service = app_from_state(state);
     let url = format!(
-        "http://server/_arkret/open/principals/ak%3Adid_core%3Aweb%3Aunknown.example/resolution?principal_server_id={principal_server_id}"
+        "http://server/_arkret/open/principals/ak%3Adid_core%3Aweb%3Aunknown.example/resolution?station_id={station_id}"
     );
 
     let unknown = TestClient::get(&url).send(&service).await;
@@ -329,22 +328,22 @@ async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor
 }
 
 #[test]
-fn resolution_audit_blinds_a_wrong_principal_authority_pair() {
+fn resolution_audit_blinds_a_wrong_account_id_pair() {
     run_on_deep_stack(
-        "resolution_audit_blinds_a_wrong_principal_authority_pair",
-        resolution_audit_blinds_a_wrong_principal_authority_pair_body,
+        "resolution_audit_blinds_a_wrong_account_id_pair",
+        resolution_audit_blinds_a_wrong_account_id_pair_body,
     );
 }
 
-async fn resolution_audit_blinds_a_wrong_principal_authority_pair_body() {
+async fn resolution_audit_blinds_a_wrong_account_id_pair_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let response = TestClient::post("http://server/_arkret/self/identity/resolution-audit/query")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "principal_authority": {
+            "account_id": {
                 "principal_id": fixture_actor_core_id("did:web:alice.example"),
-                "principal_server_id": fixture_actor_core_id("did:web:wrong-server.example")
+                "station_id": fixture_actor_core_id("did:web:wrong-server.example")
             },
             "history_depth": 0
         }))
@@ -376,9 +375,9 @@ async fn resolution_audit_returns_unified_event_receipt_and_seal_evidence_body()
         TestClient::post("http://server/_arkret/self/identity/resolution-audit/query")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
-                "principal_authority": {
+                "account_id": {
                     "principal_id": fixture_actor_core_id("did:web:alice.example"),
-                    "principal_server_id": service_id
+                    "station_id": service_id
                 },
                 "history_depth": 0
             }))
@@ -613,8 +612,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = soland_test_support::app_state(config);
     let key = arkret_models_identity::service_identity::ServiceRegistrationKey::new(
-        arkret_wire::ServiceKind::AuthServer,
-        arkret_models_identity::service_identity::CanonicalServiceUrl::new("https://auth.example/")
+        arkret_wire::ServiceKind::PushGateway,
+        arkret_models_identity::service_identity::CanonicalServiceUrl::new("https://push.example/")
             .unwrap(),
     )
     .unwrap();
@@ -689,7 +688,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     );
 
     let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
-        "http://server/_arkret/root/identity/service-registrations?service_kind=auth_server&public_base_url=https%3A%2F%2Fauth.example%2F",
+        "http://server/_arkret/root/identity/service-registrations?service_kind=push_gateway&public_base_url=https%3A%2F%2Fpush.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
     .send(&app_from_state(state.clone()))

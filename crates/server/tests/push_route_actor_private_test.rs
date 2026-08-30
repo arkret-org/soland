@@ -33,8 +33,10 @@ fn state() -> ProjectionState {
 
 fn active(expected_revision: u64, target: &str) -> Value {
     json!({
-        "recipient_id": SERVICE,
-        "principal_id": PRINCIPAL,
+        "account_id": {
+            "principal_id": PRINCIPAL,
+            "station_id": SERVICE,
+        },
         "device_id": DEVICE,
         "push_route": ROUTE,
         "expected_revision": expected_revision,
@@ -47,8 +49,10 @@ fn active(expected_revision: u64, target: &str) -> Value {
 
 fn revoked(expected_revision: u64) -> Value {
     json!({
-        "recipient_id": SERVICE,
-        "principal_id": PRINCIPAL,
+        "account_id": {
+            "principal_id": PRINCIPAL,
+            "station_id": SERVICE,
+        },
         "device_id": DEVICE,
         "push_route": ROUTE,
         "expected_revision": expected_revision,
@@ -58,8 +62,10 @@ fn revoked(expected_revision: u64) -> Value {
 
 fn subject(service: &str, route: &str) -> PushRouteSubject {
     PushRouteSubject {
-        recipient_id: service.to_owned(),
-        principal_id: arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
+        account_id: arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(PRINCIPAL).unwrap(),
+            arkret_wire::DidCoreId::new(service).unwrap(),
+        ),
         device_id: DEVICE.to_owned(),
         push_route: route.to_owned(),
     }
@@ -70,10 +76,8 @@ fn push_route_create_rotate_revoke_erases_secrets() {
     let mut state = state();
     let hlc = ServerHlc::new("test");
     let create = active(0, TARGET_1);
-    serde_json::from_value::<
-        arkret_models_identity::delivery_binding::DevicePushRouteActivePayload,
-    >(create.clone())
-    .expect("active test payload must match the SDK contract");
+    serde_json::from_value::<arkret_models_identity::DevicePushRouteActivePayload>(create.clone())
+        .expect("active test payload must match the SDK contract");
     let effect = state.apply(&op(create), &hlc);
     assert!(
         matches!(effect, ProjectionEffect::PushRouteUpdated { ref action, .. } if action == "active"),

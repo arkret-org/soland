@@ -45,10 +45,6 @@ pub(super) fn validate_initial_publication_session_context(
         .as_ref()
         .unwrap_or(&submission.event.actor_id)
         .clone();
-    let request_authority = arkret_wire::AccountId::new(
-        request_principal,
-        submission.event.principal_server_id.clone(),
-    );
     let session_principal =
         arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
             SubmitOneError::new(
@@ -65,12 +61,15 @@ pub(super) fn validate_initial_publication_session_context(
                 format!("authenticated session audience is invalid: {error}"),
             )
         })?;
-    let expected = arkret_wire::AccountId::new(session_principal, session_server);
-    if request_authority != expected {
+    let expected = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        session_principal,
+        session_server,
+    ));
+    if request_principal != expected {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
-            "online Event principal/executor and principal_server_id must match the authenticated session authority",
+            "online Event principal/executor and station_id must match the authenticated session authority",
         ));
     }
     if let Some(grant) = session.session_grant.as_ref() {
@@ -271,6 +270,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: EventId,
+    pub(in crate::routing) actor: arkret_wire::ActorId,
     pub(in crate::routing) actor_id: DidCoreId,
     /// Submitting device, absent for a deviceless service session.
     pub(in crate::routing) device_id: Option<DeviceId>,
@@ -1192,11 +1192,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
                     SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
                 })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
-            let peer = member_payload.actor_id.ok_or_else(|| SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "direct_conversation_founding_unit_invalid",
-                "controller-Agent founding peer membership has no actor_id",
-            ))?;
+            let peer = member_payload.member_id;
             let founder = submission.events[0].event.actor_id.clone();
             let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain_id.clone(),
@@ -1215,7 +1211,9 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
             )
         }
     };
-    if founder_id.as_str() != session.actor || submission.events[0].event.actor_id != founder_id {
+    if founder_id.signing_principal_id().as_str() != session.actor
+        || submission.events[0].event.actor_id != founder_id
+    {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
@@ -1225,7 +1223,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     if let Some(stored) = state
         .event_queries()
         .direct_conversation_founding_slot(
-            founder_id.as_str(),
+            founder_id.signing_principal_id().as_str(),
             trust_domain_id.as_str(),
             pair_key.as_str(),
         )
@@ -1272,8 +1270,8 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 })?;
             let current = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
-                left.as_str(),
-                right.as_str(),
+                &left,
+                &right,
                 "direct_message",
             )
             .await
@@ -1325,14 +1323,10 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 serde_json::from_value(serde_json::to_value(&submission.events[1].event.payload).map_err(|error| {
                     SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string())
                 })?).map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "direct_conversation_founding_unit_invalid", error.to_string()))?;
-            let agent_id = member_payload.actor_id.ok_or_else(|| SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "direct_conversation_founding_unit_invalid",
-                "controller-Agent founding peer membership has no actor_id",
-            ))?;
+            let agent_id = member_payload.member_id;
             let agent = state
                 .agent_pairings()
-                .agent(agent_id.as_str())
+                .agent(agent_id.signing_principal_id().as_str())
                 .await
                 .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
                 .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision is unavailable"))?;
@@ -1347,7 +1341,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 .await
                 .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
                 .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision Event is unavailable"))?;
-            if agent.controller_id != founder_id.as_str()
+            if agent.controller_id != founder_id.signing_principal_id().as_str()
                 || agent.state
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())
@@ -1471,7 +1465,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     let stored = state
         .event_queries()
         .direct_conversation_founding_slot(
-            founder_id.as_str(),
+            founder_id.signing_principal_id().as_str(),
             trust_domain_id.as_str(),
             pair_key.as_str(),
         )
@@ -1657,7 +1651,7 @@ async fn submit_event_batch_outcome_with_leases(
                     realm_actor_frontiers.insert(
                         (
                             frontier.realm_id.as_str().to_owned(),
-                            frontier.actor_id.as_str().to_owned(),
+                            frontier.actor_id.signing_principal_id().as_str().to_owned(),
                         ),
                         frontier,
                     );
@@ -2260,7 +2254,7 @@ async fn verify_federated_event_admission(
         &admission_bytes,
         &admission.jws,
         admission.verification_method.as_str(),
-        event.principal_server_id.as_str(),
+        event.actor_id.route_service_id().as_str(),
         state,
     )
     .await?;
@@ -2496,7 +2490,7 @@ pub(crate) async fn submit_federation_events(
                     res,
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    "federated Event does not carry a valid origin Principal Server admission proof",
+                    "federated Event does not carry a valid origin Station admission proof",
                 );
                 return;
             }
@@ -2890,13 +2884,11 @@ pub(crate) async fn submit_federation_events(
             continue;
         }
         let event_kind = event_string_field_from_value(&envelope, "kind");
-        let Some(event_principal_server_id) =
-            event_string_field_from_value(&envelope, "principal_server_id")
-        else {
+        let Some(event_station_id) = event_string_field_from_value(&envelope, "station_id") else {
             rejected.push(rejected_item(
                 id,
                 ReasonCode::from_wire("missing_param"),
-                Some("principal_server_id is required".to_owned()),
+                Some("station_id is required".to_owned()),
             ));
             continue;
         };
@@ -2904,7 +2896,7 @@ pub(crate) async fn submit_federation_events(
             state,
             &actor,
             &source_id,
-            Some(&event_principal_server_id),
+            Some(&event_station_id),
             &binding_realm,
             event_kind.as_deref(),
         )
@@ -3150,7 +3142,7 @@ pub(crate) async fn submit_federation_events(
     } else {
         EventsSubmitStatus::Accepted
     };
-    let status_label = events_submit_status_label(status);
+    let status_label = status.as_str();
     append_audit_log(
         state,
         None,
@@ -3199,7 +3191,7 @@ async fn prepare_agent_event_admission_receipt(
         arkret_wire::EventProof::StationAdmission(value) => Some(value),
         arkret_wire::EventProof::Producer(_) => None,
     }) else {
-        return Err("federated Event omitted its Principal Server admission proof".to_owned());
+        return Err("federated Event omitted its Station admission proof".to_owned());
     };
     let (Some(producer_evidence_ref), Some(producer_evidence_digest)) = (
         admission.producer_signer_resolution_evidence_ref.clone(),
@@ -3242,6 +3234,7 @@ async fn prepare_agent_event_admission_receipt(
             .executed_by
             .as_ref()
             .unwrap_or(&event.actor_id)
+            .signing_principal_id()
             .clone(),
         verification_method: admission.producer_verification_method.clone(),
         producer_signer_resolution_evidence_ref: producer_evidence_ref,
@@ -3289,7 +3282,7 @@ async fn load_agent_event_admission_receipt(
         .iter()
         .any(|proof| matches!(proof, arkret_wire::EventProof::StationAdmission(_)))
         .then_some(())
-        .ok_or_else(|| "federated Event omitted its Principal Server admission proof".to_owned())?;
+        .ok_or_else(|| "federated Event omitted its Station admission proof".to_owned())?;
     let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
     let receipt_key = format!(
@@ -3362,23 +3355,23 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let event_principal_server_ids = submission
+    let event_station_ids = submission
         .events
         .iter()
-        .map(|item| item.event.principal_server_id.as_str())
+        .map(|item| item.event.actor_id.route_service_id().as_str())
         .collect::<Vec<_>>();
     if arkret_wire::DidCoreId::new(source_id.to_owned()).is_err()
         || !direct_founding_origin_ids_match(
             source_id,
             receipt.issuer_id.as_str(),
-            &event_principal_server_ids,
+            &event_station_ids,
         )
     {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "authenticated source, founding receipt issuer and every Event principal server must match",
+            "authenticated source, founding receipt issuer and every Event Station must match",
         );
         return;
     }
@@ -3411,10 +3404,10 @@ async fn submit_direct_conversation_federation(
         );
         return;
     }
-    let peer_actor = submission.events[1].event.payload.clone();
+    let peer_actor = serde_json::to_value(&submission.events[1].event.payload).ok();
     let peer_actor = serde_json::from_value::<
         arkret_models_collaboration::governance::membership_invite::MembershipPayload,
-    >(peer_actor)
+    >(peer_actor.unwrap_or(Value::Null))
     .ok()
     .map(|payload| payload.member_id);
     if peer_actor
@@ -3553,14 +3546,14 @@ async fn submit_direct_conversation_federation(
 fn direct_founding_origin_ids_match(
     source_id: &str,
     receipt_issuer_id: &str,
-    event_principal_server_ids: &[&str],
+    event_station_ids: &[&str],
 ) -> bool {
     !source_id.is_empty()
         && source_id == receipt_issuer_id
-        && event_principal_server_ids.len() == 3
-        && event_principal_server_ids
+        && event_station_ids.len() == 3
+        && event_station_ids
             .iter()
-            .all(|principal_server_id| *principal_server_id == source_id)
+            .all(|station_id| *station_id == source_id)
 }
 
 pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {

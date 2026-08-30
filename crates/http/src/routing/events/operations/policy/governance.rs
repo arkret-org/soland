@@ -104,24 +104,24 @@ pub(super) async fn validate_member_state_policy(
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("join") {
         let target = membership_target(operation);
-        if let Some(member) = target
+        if let Some(ref member) = target
             && crate::routing::organizations::organization_policy_blocks_join(
                 state,
                 operation.realm_id.as_str(),
-                member,
+                member.signing_principal_id().as_str(),
             )
             .await
         {
             return Err("organization_policy_denied");
         }
-        let actor = operation.context.sender.as_str();
+        let actor = &operation.context.sender;
         let Some(target) = target else {
             return Err("invalid_membership_target");
         };
-        if actor == target {
+        if actor == &target {
             return Ok(());
         }
-        if let Some(agent) = native_agent_controlled_by_record(state, target, actor).await {
+        if let Some(agent) = native_agent_controlled_by_record(state, &target, actor).await {
             match agent.state {
                 AgentLifecycleState::Active => {}
                 AgentLifecycleState::Paused => return Err("agent_paused"),
@@ -142,14 +142,16 @@ pub(super) async fn validate_member_state_policy(
                 })
                 .ok_or("agent_controller_binding_missing")?;
             let projection = state.projections().snapshot();
+            let actor_key = actor.to_string();
             let current_controller = projection
-                .member(operation.realm_id.as_str(), actor)
+                .member(operation.realm_id.as_str(), &actor_key)
                 .ok_or("not_member")?;
-            let current_authority = projection
-                .membership_authority(operation.realm_id.as_str(), actor)
-                .ok_or("agent_controller_binding_invalid")?;
-            if binding.controller_authority != *current_authority
-                || binding.controller_authority.principal_id.as_str() != actor
+            let current_authority = arkret_wire::AccountId::new(
+                actor.signing_principal_id().clone(),
+                actor.route_service_id().clone(),
+            );
+            if binding.controller_authority != current_authority
+                || binding.controller_authority.principal_id != *actor.signing_principal_id()
                 || current_controller.membership_event_ref.as_deref()
                     != Some(binding.controller_membership_generation_ref.as_str())
                 || binding.controller_terminal_event_ref.is_some()
@@ -158,13 +160,13 @@ pub(super) async fn validate_member_state_policy(
                 return Err("agent_controller_binding_invalid");
             }
             drop(projection);
-            if !has_active_accountability_grant(state, target, actor).await {
+            if !has_active_accountability_grant(state, &target, actor).await {
                 return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
             }
             if realm_requires_content_encryption(state, operation.realm_id.as_str()).await
                 && !crate::routing::mls::has_claimable_realm_membership_keypackage(
                     state,
-                    target,
+                    target.signing_principal_id().as_str(),
                     operation.realm_id.as_str(),
                 )
                 .await
@@ -178,7 +180,6 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
-            Some(operation.context.principal_server_id.as_str()),
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
@@ -189,11 +190,11 @@ pub(super) async fn validate_member_state_policy(
         return Err("missing_capability");
     }
     if operation.payload.get("membership").and_then(Value::as_str) == Some("leave") {
-        let actor = operation.context.sender.as_str();
+        let actor = &operation.context.sender;
         let Some(target) = membership_target(operation) else {
             return Err("invalid_membership_target");
         };
-        if actor == target || native_agent_controlled_by(state, target, actor, false).await {
+        if actor == &target || native_agent_controlled_by(state, &target, actor, false).await {
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
@@ -201,7 +202,6 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
-            Some(operation.context.principal_server_id.as_str()),
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
@@ -214,7 +214,7 @@ pub(super) async fn validate_member_state_policy(
     if operation.payload.get("membership").and_then(Value::as_str) != Some("ban") {
         return Ok(());
     }
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     // capabilities.md section 16 - `ak.realm.admin` governs `ak.member.state`
     // writes, and section 3.2 lets the Realm owner aggregate stand in for it.
     // Both legs are resolved by the shared governance predicate; the
@@ -224,7 +224,6 @@ pub(super) async fn validate_member_state_policy(
         state,
         realm_id,
         actor,
-        Some(operation.context.principal_server_id.as_str()),
         &[arkret_wire::CapabilityActionId::REALM_ADMIN],
         operation.created_at,
     )
@@ -240,23 +239,23 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
         return false;
     };
     let projection = state.projections().snapshot();
-    let Some(controller) = projection.member(operation.realm_id.as_str(), controller_id) else {
+    let controller_key = controller_id.to_string();
+    let Some(controller) = projection.member(operation.realm_id.as_str(), &controller_key) else {
         return false;
     };
     let Some(generation) = controller.membership_event_ref.as_deref() else {
         return false;
     };
-    let Some(authority) =
-        projection.membership_authority(operation.realm_id.as_str(), controller_id)
-    else {
-        return false;
-    };
+    let authority = arkret_wire::AccountId::new(
+        controller_id.signing_principal_id().clone(),
+        controller_id.route_service_id().clone(),
+    );
     projection
         .agent_membership_bindings
         .iter()
         .any(|((realm_id, agent_id), binding)| {
             realm_id == operation.realm_id.as_str()
-                && binding.controller_authority == *authority
+                && binding.controller_authority == authority
                 && binding.controller_membership_generation_ref.as_str() == generation
                 && projection.effective_agent_membership_base(realm_id, agent_id)
         })
@@ -264,34 +263,44 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
 
 async fn native_agent_controlled_by_record(
     state: &AppState,
-    agent_id: &str,
-    controller_id: &str,
+    agent_id: &arkret_wire::ActorId,
+    controller_id: &arkret_wire::ActorId,
 ) -> Option<soland_services::identity::AgentPairingState> {
     state
         .agent_pairings()
-        .agent(agent_id)
+        .agent(agent_id.signing_principal_id().as_str())
         .await
         .ok()
         .flatten()
-        .filter(|record| record.controller_id == controller_id)
+        .filter(|record| record.controller_id == controller_id.signing_principal_id().as_str())
 }
 
-async fn realm_member_is_joined(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
+async fn realm_member_is_joined(
+    state: &AppState,
+    realm_id: &str,
+    actor_id: &arkret_wire::ActorId,
+) -> bool {
+    let actor_key = actor_id.to_string();
     if state
         .projections()
         .snapshot()
-        .member(realm_id, actor_id)
+        .member(realm_id, &actor_key)
         .is_some_and(|member| member.state == "join")
     {
         return true;
     }
-    crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, actor_id).await
+    crate::routing::spaces::space::realm_has_member_by_id(
+        state,
+        realm_id,
+        actor_id.signing_principal_id().as_str(),
+    )
+    .await
 }
 
 async fn has_active_accountability_grant(
     state: &AppState,
-    agent_id: &str,
-    controller_id: &str,
+    agent_id: &arkret_wire::ActorId,
+    controller_id: &arkret_wire::ActorId,
 ) -> bool {
     let now = chrono::Utc::now();
     state
@@ -307,11 +316,11 @@ async fn has_active_accountability_grant(
                     .get("executed_by")
                     .and_then(Value::as_str)
                     .unwrap_or(record.actor_id.as_str())
-                    == controller_id
+                    == controller_id.signing_principal_id().as_str()
                 && accountability_grant_value_active_for(
                     record.envelope.get("payload").unwrap_or(&record.envelope),
-                    controller_id,
-                    agent_id,
+                    controller_id.signing_principal_id().as_str(),
+                    agent_id.signing_principal_id().as_str(),
                     now,
                 )
         })
@@ -319,14 +328,18 @@ async fn has_active_accountability_grant(
 
 async fn native_agent_controlled_by(
     state: &AppState,
-    agent_id: &str,
-    controller_id: &str,
+    agent_id: &arkret_wire::ActorId,
+    controller_id: &arkret_wire::ActorId,
     require_active: bool,
 ) -> bool {
-    let Ok(Some(record)) = state.agent_pairings().agent(agent_id).await else {
+    let Ok(Some(record)) = state
+        .agent_pairings()
+        .agent(agent_id.signing_principal_id().as_str())
+        .await
+    else {
         return false;
     };
-    record.controller_id == controller_id
+    record.controller_id == controller_id.signing_principal_id().as_str()
         && (!require_active || record.state == AgentLifecycleState::Active)
 }
 
@@ -343,17 +356,12 @@ pub(super) async fn validate_set_default_strand_policy(
     {
         return Ok(());
     }
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -369,7 +377,6 @@ pub(super) async fn validate_set_default_strand_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -485,17 +492,12 @@ pub(super) async fn validate_realm_organization_policy(
     // Realm side — explicit `ak.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is
     // not sufficient on its own.
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -504,7 +506,6 @@ pub(super) async fn validate_realm_organization_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
@@ -582,18 +583,13 @@ pub(super) async fn validate_moderation_event_policy(
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if kind == arkret_wire::EventKind::ModerationAppealSubmit
-        && members.iter().any(|member| member == actor)
+        && members.iter().any(|member| member == &actor.to_string())
     {
         return Ok(());
     }
@@ -602,7 +598,6 @@ pub(super) async fn validate_moderation_event_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -626,17 +621,12 @@ pub(super) async fn validate_call_recording_start_policy(
     }
     let payload = call_recording_start_payload(operation)?;
     let action = call_recording_start_required_action(&payload);
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -645,7 +635,6 @@ pub(super) async fn validate_call_recording_start_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action,
             resource: realm_id,
             realm_id,
@@ -695,8 +684,8 @@ pub(super) fn call_recording_start_required_action(
 pub(super) fn moderation_actor<'a>(
     operation: &'a Operation,
     kind: &arkret_wire::EventKind,
-) -> Result<Option<&'a str>, &'static str> {
-    let actor = match kind {
+) -> Result<Option<&'a arkret_wire::ActorId>, &'static str> {
+    let actor_principal = match kind {
         arkret_wire::EventKind::ModerationDecision => operation
             .payload
             .get("issuer_id")
@@ -704,7 +693,7 @@ pub(super) fn moderation_actor<'a>(
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,
         arkret_wire::EventKind::ModerationDecisionLift => {
-            return Ok(Some(operation.context.sender.as_str()));
+            return Ok(Some(&operation.context.sender));
         }
         arkret_wire::EventKind::ModerationAppealSubmit => operation
             .payload
@@ -727,10 +716,10 @@ pub(super) fn moderation_actor<'a>(
             .ok_or("moderation_appeal_actor_missing")?,
         _ => return Ok(None),
     };
-    if operation.context.sender.as_str() != actor {
+    if operation.context.sender.signing_principal_id().as_str() != actor_principal {
         return Err("moderation_actor_mismatch");
     }
-    Ok(Some(actor))
+    Ok(Some(&operation.context.sender))
 }
 
 /// True when an `appeal.close` is an appellant self-withdrawal: the closer
@@ -739,7 +728,7 @@ pub(super) fn moderation_actor<'a>(
 pub(super) fn moderation_close_is_appellant_withdrawal(
     state: &AppState,
     operation: &Operation,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
 ) -> bool {
     if operation
         .payload
@@ -756,7 +745,7 @@ pub(super) fn moderation_close_is_appellant_withdrawal(
         let proj = state.projections().snapshot();
         proj.moderation_appeal_appellant(appeal_id)
     };
-    matches!(appellant, Some(appellant) if appellant == actor)
+    matches!(appellant, Some(appellant) if appellant == actor.signing_principal_id().as_str())
 }
 
 pub(super) fn direct_conversation_member_state_guard(
@@ -798,7 +787,7 @@ pub(super) fn direct_conversation_member_state_guard(
     if binding
         .participants_unordered
         .iter()
-        .any(|participant| participant == target)
+        .any(|participant| participant == &target.to_string())
     {
         None
     } else {

@@ -332,7 +332,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 }),
                 reanchor_slot.map(|state| soland_storage::IdentityAnchorReanchorSlot {
                     actor_id: state.actor_id,
-                    principal_server_id: state.principal_server_id,
+                    station_id: state.station_id,
                     new_device_generation: state.new_device_generation,
                     reanchor_digest: state.reanchor_digest,
                     authorize_digest: state.authorize_digest,
@@ -779,12 +779,12 @@ impl crate::events::AppletPort for PersistenceEventReader {
     async fn applet_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> crate::ServiceResult<Option<Value>> {
         Ok(self
             .0
             .applets()
-            .get_identity(applet_id, target_principal_server_id)
+            .get_identity(applet_id, target_station_id)
             .await?)
     }
 
@@ -815,7 +815,7 @@ impl crate::events::AppletPort for PersistenceEventReader {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: chrono::DateTime<chrono::Utc>,
@@ -826,7 +826,7 @@ impl crate::events::AppletPort for PersistenceEventReader {
             .fence_installation(
                 applet_id,
                 effective_scope_key,
-                target_principal_server_id,
+                target_station_id,
                 expected,
                 replacement,
                 fenced_at,
@@ -1611,7 +1611,6 @@ fn application_realm_invite(
         realm_id: record.realm_id,
         inviter_id: record.inviter_id,
         invitee_id: record.invitee_id,
-        invite_delivery_target: record.invite_delivery_target,
         introduction_evidence_digest: record.introduction_evidence_digest,
         third_party_invite: record.third_party_invite,
         invite_token: record.invite_token,
@@ -1631,7 +1630,6 @@ fn persistence_realm_invite(
         realm_id: record.realm_id,
         inviter_id: record.inviter_id,
         invitee_id: record.invitee_id,
-        invite_delivery_target: record.invite_delivery_target,
         introduction_evidence_digest: record.introduction_evidence_digest,
         third_party_invite: record.third_party_invite,
         invite_token: record.invite_token,
@@ -1821,9 +1819,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
                     soland_storage::AppletRecordCommit {
                         applet_id: mutation.applet_id,
                         identity: soland_storage::AppletIdentityCommit {
-                            target_principal_server_id: mutation
-                                .identity
-                                .target_principal_server_id,
+                            target_station_id: mutation.identity.target_station_id,
                             expected_record: mutation.identity.expected_record,
                             record: mutation.identity.record,
                         },

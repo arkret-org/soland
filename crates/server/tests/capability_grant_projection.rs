@@ -29,6 +29,10 @@ const STRAND_ID: &str = "ak:strand:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd"
 const CIRCLE_A: &str = "ak:circle:AV0qavYDFj4YHrrFZnfkfneXMs0JkzjUEmCj7wbVmzN4";
 const CIRCLE_B: &str = "ak:circle:AbSfcRhN4egzL0N5Mj2zIGUOB-2ng3vazhVmP7lFmJXo";
 
+fn actor(value: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(value).unwrap())
+}
+
 fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let operation_uuid = uuid::Uuid::now_v7().to_string();
     let object = payload.as_object_mut().expect("test payload object");
@@ -113,9 +117,7 @@ fn seed_realm_owner(state: &mut ProjectionState) {
         ),
         arkret_state::lattice::CellState::Value(
             serde_json::to_value(
-                arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                    arkret_identifiers::DidCoreId::new(ISSUER).unwrap(),
-                ),
+                arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(actor(ISSUER)),
             )
             .unwrap(),
         ),
@@ -152,7 +154,7 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
         engine.upsert_projected_grant(grant);
     }
     engine
-        .check(SUBJECT, action, resource, REALM, None, &[], &[])
+        .check(&actor(SUBJECT), action, resource, REALM, None, &[], &[])
         .allowed
 }
 
@@ -240,7 +242,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     assert!(
         engine
             .check(
-                SUBJECT,
+                &actor(SUBJECT),
                 "ak.circle.member.manage",
                 CIRCLE_A,
                 REALM,
@@ -254,7 +256,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     assert!(
         !engine
             .check(
-                SUBJECT,
+                &actor(SUBJECT),
                 "ak.circle.member.manage",
                 CIRCLE_B,
                 REALM,

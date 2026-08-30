@@ -107,7 +107,7 @@ struct RecoveryTranscriptContext {
     request_id: RequestId,
     session_grant_id: SessionGrantId,
     session_grant_cnf_jkt: String,
-    principal_authority: AccountId,
+    account_id: AccountId,
     requesting_device_id: DeviceId,
     trust_domain: TrustDomainId,
     policy_id: PolicyId,
@@ -130,10 +130,7 @@ fn typed_recovery_transcript_context(
         session_grant_id: SessionGrantId::new(record.session_grant_id.clone())
             .map_err(|error| stored_recovery_type_error("session_grant_id", error))?,
         session_grant_cnf_jkt: record.session_grant_cnf_jkt.clone(),
-        principal_authority: AccountId::new(
-            record.principal_id.clone(),
-            record.principal_server_id.clone(),
-        ),
+        account_id: AccountId::new(record.principal_id.clone(), record.station_id.clone()),
         requesting_device_id: DeviceId::new(record.requesting_device_id.clone())
             .map_err(|error| stored_recovery_type_error("requesting_device_id", error))?,
         trust_domain: TrustDomainId::new(record.trust_domain.clone())
@@ -163,7 +160,7 @@ pub(super) fn typed_recovery_session_state(
         recovery_session_id: transcript.recovery_session_id,
         session_grant_id: transcript.session_grant_id,
         session_grant_cnf_jkt: transcript.session_grant_cnf_jkt,
-        principal_authority: transcript.principal_authority,
+        account_id: transcript.account_id,
         requesting_device_id: transcript.requesting_device_id,
         trust_domain: transcript.trust_domain,
         policy_id: transcript.policy_id,
@@ -397,7 +394,7 @@ pub(super) async fn load_owned_recovery_session(
             ))
         })?;
     if record.principal_id.as_str() != principal
-        || record.principal_server_id.as_str() != session.audience
+        || record.station_id.as_str() != session.audience
         || record.requesting_device_id != candidate_device_id
         || record.session_grant_id != grant_id
         || record.session_grant_cnf_jkt != grant_jkt
@@ -507,35 +504,35 @@ pub(super) async fn recovery_session_create(
         .with_wire_code("duplicate_conflict"));
     }
 
-    let principal_authority = payload.principal_authority;
-    if principal_authority.principal_id.as_str() != principal {
+    let account_id = payload.account_id;
+    if account_id.principal_id.as_str() != principal {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "principal_authority.principal_id does not match the authenticated principal",
+            "account_id.principal_id does not match the authenticated principal",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    if principal_authority.station_id.as_str() != state.service_id() {
+    if account_id.station_id.as_str() != state.service_id() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "principal_authority does not bind this Principal Server",
+            "account_id does not bind this Station",
         )
         .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("principal_authority_mismatch"));
+        .with_reason_code("account_id_mismatch"));
     }
     let authority_record = state
         .persistence()
-        .principal_resolution_by_account_id(&principal_authority)
+        .principal_resolution_by_account_id(&account_id)
         .await
         .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "principal authority is not accepted by this Principal Server",
+                "principal authority is not accepted by this Station",
             )
             .with_status(StatusCode::PRECONDITION_FAILED)
-            .with_reason_code("principal_authority_mismatch")
+            .with_reason_code("account_id_mismatch")
         })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {
@@ -680,8 +677,8 @@ pub(super) async fn recovery_session_create(
         recovery_session_id: crate::ids::generate("recovery_session"),
         session_grant_id,
         session_grant_cnf_jkt,
-        principal_id: principal_authority.principal_id.clone(),
-        principal_server_id: principal_authority.station_id.clone(),
+        principal_id: account_id.principal_id.clone(),
+        station_id: account_id.station_id.clone(),
         requesting_device_id,
         trust_domain,
         policy_id: active.policy_id.clone(),
@@ -746,9 +743,9 @@ pub(super) async fn recovery_session_create(
         arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_SESSION_COMMAND_CREATE_V1,
         json!({
             "recovery_session_id": record.recovery_session_id.clone(),
-            "principal_authority": {
+            "account_id": {
                 "principal_id": record.principal_id.clone(),
-                "principal_server_id": record.principal_server_id.clone(),
+                "station_id": record.station_id.clone(),
             },
             "policy_id": record.policy_id.clone(),
             "trust_domain": record.trust_domain.clone(),
@@ -942,9 +939,9 @@ pub(super) async fn verify_did_root_proof(
     record: &RecoverySessionServiceState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    if record.principal_server_id.as_str() != state.service_id() {
+    if record.station_id.as_str() != state.service_id() {
         return Err(recovery_signature_error(
-            "recovery session principal authority pair does not bind this Principal Server",
+            "recovery session principal authority pair does not bind this Station",
         ));
     }
     let verification_method = required_proof_string(proof, "verification_method")?;
@@ -966,10 +963,8 @@ pub(super) async fn verify_did_root_proof(
         arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
             recovery_signature_error(format!("did-root device fragment is invalid: {error}"))
         })?;
-    let authority_key = arkret_wire::AccountId::new(
-        record.principal_id.clone(),
-        record.principal_server_id.clone(),
-    );
+    let authority_key =
+        arkret_wire::AccountId::new(record.principal_id.clone(), record.station_id.clone());
     let authority = state
         .persistence()
         .principal_resolution_by_account_id(&authority_key)
@@ -1439,7 +1434,7 @@ pub(super) fn did_root_recovery_proof_transcript(
         request_id: context.request_id,
         session_grant_id: context.session_grant_id,
         session_grant_cnf_jkt: context.session_grant_cnf_jkt,
-        principal_authority: context.principal_authority,
+        account_id: context.account_id,
         requesting_device_id: context.requesting_device_id,
         trust_domain: context.trust_domain,
         policy_id: context.policy_id,
@@ -1471,7 +1466,7 @@ pub(super) fn generic_recovery_proof_transcript(
         request_id: context.request_id,
         session_grant_id: context.session_grant_id,
         session_grant_cnf_jkt: context.session_grant_cnf_jkt,
-        principal_authority: context.principal_authority,
+        account_id: context.account_id,
         requesting_device_id: context.requesting_device_id,
         trust_domain: context.trust_domain,
         policy_id: context.policy_id,

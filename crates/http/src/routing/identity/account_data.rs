@@ -139,15 +139,15 @@ fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), Ap
 }
 
 /// Resource reads cover both holder-authored encrypted cells and the two
-/// registry-declared plaintext inboxes written by the Principal Server.  The
+/// registry-declared plaintext inboxes written by the Station.  The
 /// write validator above deliberately remains narrower: a holder must never
-/// gain PUT/DELETE authority over a `principal_server_cas` cell merely because
+/// gain PUT/DELETE authority over a `station_cas` cell merely because
 /// it is readable through the actor-private account-data resource.
 fn validate_readable_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     let is_plaintext_service_cas = arkret_schema::account_data_pattern(account_data_key)
         .is_some_and(|descriptor| {
             descriptor.storage == "plaintext_account_data"
-                && descriptor.writer_authorities == ["principal_server_cas"]
+                && descriptor.writer_authorities == ["station_cas"]
                 && descriptor.holder_self_operations.is_empty()
                 && descriptor.write_event_kinds.is_empty()
         });
@@ -332,7 +332,7 @@ async fn admit_caller_signed_account_data_set(
     }
     // The subject is the actor, so a mismatch here is what the whole change exists
     // to prevent: it would write another principal's cell.
-    if event.actor_id.as_str() != session.actor {
+    if event.actor_id.signing_principal_id().as_str() != session.actor {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "set_event.event.actor_id must be the authenticated holder",
@@ -694,6 +694,7 @@ mod tests {
         AccountProfileState, AgentController, AgentDirectoryPort, DeviceDirectoryPort,
         DeviceIdentity, SaveDeviceCommand,
     };
+    use soland_storage::AccountPk;
 
     use super::*;
 
@@ -705,14 +706,14 @@ mod tests {
     impl AccountLookupPort for NoAccounts {
         async fn find_account_by_actor(
             &self,
-            _actor_id: &str,
+            _account_id: &arkret_wire::AccountId,
         ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(None)
         }
 
         async fn account_by_id(
             &self,
-            _account_id: &str,
+            _account_pk: AccountPk,
         ) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
@@ -720,11 +721,14 @@ mod tests {
         async fn register_account(
             &self,
             _command: soland_services::identity::RegisterAccountCommand,
-        ) -> ServiceResult<()> {
-            Ok(())
+        ) -> ServiceResult<AccountIdentity> {
+            unreachable!("NoAccounts mock: register_account is not exercised by these tests")
         }
 
-        async fn account(&self, _actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
+        async fn account(
+            &self,
+            _account_id: &arkret_wire::AccountId,
+        ) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
 
@@ -736,13 +740,13 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_account(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn delete_account(&self, _account_id: &arkret_wire::AccountId) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn account_localparts(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
         ) -> ServiceResult<Vec<AccountLocalpartState>> {
             Ok(Vec::new())
         }
@@ -756,7 +760,7 @@ mod tests {
 
         async fn add_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
             _primary: bool,
         ) -> ServiceResult<AccountLocalpartState> {
@@ -765,13 +769,17 @@ mod tests {
 
         async fn set_primary_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
         ) -> ServiceResult<AccountLocalpartState> {
             unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
         }
 
-        async fn remove_localpart(&self, _actor_id: &str, _localpart: &str) -> ServiceResult<()> {
+        async fn remove_localpart(
+            &self,
+            _account_pk: AccountPk,
+            _localpart: &str,
+        ) -> ServiceResult<()> {
             Ok(())
         }
 

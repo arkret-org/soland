@@ -153,7 +153,12 @@ pub(super) async fn submit_agent_runtime_key_request(
     let account = state
         .identities()
         .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
-            actor_id: controller_id.clone(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(controller_id.clone()).map_err(|error| {
+                    AppError::internal(format!("controller account id is invalid: {error}"))
+                })?,
+                state.service_core_id().clone(),
+            ),
         })
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
@@ -180,7 +185,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_pk: account.pk,
+        controller_account_pk: account.account_pk.clone(),
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -241,14 +246,15 @@ pub(super) async fn submit_agent_runtime_key_request(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
-                    recipient_actor_id: arkret_identifiers::DidCoreId::new(controller_id).map_err(
-                        |error| {
+                    recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        arkret_identifiers::DidCoreId::new(controller_id).map_err(|error| {
                             AppError::internal(format!(
                                 "approval notification recipient is invalid: {error}"
                             ))
-                        },
-                    )?,
-                    controller_account_pk: account.pk,
+                        })?,
+                        state.service_core_id().clone(),
+                    )),
+                    controller_account_pk: account.account_pk,
                     recipient_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
                         .map_err(|error| {
                             AppError::internal(format!(
@@ -654,9 +660,10 @@ pub(super) async fn agent_key_pair(
                     "authorize_event.executed_by is required for delegated pairing",
                 )
             })?;
+        let controller_principal_id = controller_id.signing_principal_id().as_str();
         let controller_device_id =
-            service_pairing_controller_device_id(&body, controller_id.as_str())?;
-        controller_service_session(controller_id.as_str(), &controller_device_id, state)
+            service_pairing_controller_device_id(&body, controller_principal_id)?;
+        controller_service_session(controller_principal_id, &controller_device_id, state)
     } else {
         aa.authenticated_session(state, req).await?
     };
@@ -818,11 +825,11 @@ pub(super) fn service_pairing_controller_device_id(
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
     let agent_core = body.agent_id.clone();
-    if submission.event.actor_id != agent_core
+    if submission.event.actor_id.signing_principal_id() != &agent_core
         || submission
             .authorization_lease
             .as_ref()
-            .is_some_and(|lease| lease.actor_id != agent_core)
+            .is_some_and(|lease| lease.actor_id.signing_principal_id() != &agent_core)
     {
         return Err(AppError::capability_denied(
             "delegated pairing Event and any delayed authorization lease must name the managed Agent",
@@ -832,7 +839,7 @@ pub(super) fn service_pairing_controller_device_id(
         .event
         .executed_by
         .as_ref()
-        .map(arkret_wire::DidCoreId::as_str)
+        .map(|actor| actor.signing_principal_id().as_str())
         != Some(controller_id)
     {
         return Err(AppError::capability_denied(
@@ -1055,7 +1062,7 @@ async fn validate_agent_signing_key_binding_parts(
     };
     // The controller proof is a principal-device detached JWS. Verify it
     // against the controller's explicit local account authority: the pairing
-    // endpoint runs on the controller's Principal Server (the session was
+    // endpoint runs on the controller's Station (the session was
     // already bound to the local controller account), so the authority
     // coordinate is `(controller_id, this service)` and the signer device is
     // the fragment of the controller proof's verification method.
@@ -1255,7 +1262,7 @@ fn ensure_current_runtime_key_request_matches(
 
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
-    recipient_actor_id: arkret_wire::DidCoreId,
+    recipient_actor_id: arkret_wire::ActorId,
     controller_account_pk: soland_storage::AccountPk,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
@@ -1270,8 +1277,10 @@ pub(super) fn account_notification_context(
             &agent_record.approval_notification_id?,
         ))
         .ok()?,
-        recipient_actor_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
-            .ok()?,
+        recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone()).ok()?,
+            arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?).ok()?,
+        )),
         controller_account_pk: agent_record.controller_account_pk.clone()?,
         recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
             .ok()?,
@@ -1319,7 +1328,7 @@ pub(super) async fn persist_terminal_account_notification(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        context.controller_account_pk.to_string(),
+        context.controller_account_pk.0.to_string(),
         context.recipient_id.to_string(),
     ));
     Ok(())
@@ -1465,7 +1474,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .any(|value| value.as_str() == Some(service_id))
     {
         return Err(AppError::param_invalid(
-            "authorize_event.payload.audience must include this principal server",
+            "authorize_event.payload.audience must include this Station",
         ));
     }
     if let Some(expires_at) = payload.get("expires_at") {
@@ -1705,7 +1714,7 @@ fn verify_runtime_key_proof_of_possession(
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
     if proof_of_possession.audience_id != service_id {
         return Err(AppError::param_invalid(
-            "proof_of_possession.audience_id must match this principal server",
+            "proof_of_possession.audience_id must match this Station",
         ));
     }
     let expected_binding =
@@ -2032,8 +2041,7 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8528")
                 .expect("valid notification uuid"),
         );
-        record.controller_account_pk =
-            Some(arkret_wire::ServiceAccountId::new("account-test-controller".to_owned()).unwrap());
+        record.controller_account_pk = Some(soland_storage::AccountPk(1));
         record.recipient_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
             Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
@@ -2044,10 +2052,7 @@ mod requested_scope_tests {
             context.notification_id.as_str(),
             "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
         );
-        assert_eq!(
-            context.controller_account_pk.as_str(),
-            "account-test-controller"
-        );
+        assert_eq!(context.controller_account_pk.get(), 1);
     }
 
     #[test]

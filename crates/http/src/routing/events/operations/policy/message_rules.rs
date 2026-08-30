@@ -180,8 +180,8 @@ pub(super) fn validate_circle_scope_membership(
         return Ok(());
     };
     projection.validate_scope_circle_id(&scope_circle_id, operation.realm_id.as_str())?;
-    let actor = operation.context.sender.as_str();
-    if projection.circle_scope_visible_to_actor(&scope_circle_id, actor) {
+    let actor = &operation.context.sender;
+    if projection.circle_scope_visible_to_actor(&scope_circle_id, &actor.to_string()) {
         Ok(())
     } else {
         Err("circle_scope_membership_required")
@@ -206,17 +206,12 @@ pub(super) async fn validate_applet_registration_authz(
     {
         return Ok(());
     }
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
         .snapshot()
-        .actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            operation.context.principal_server_id.as_str(),
-            operation.created_at,
-        )
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
     {
         return Ok(());
     }
@@ -225,7 +220,6 @@ pub(super) async fn validate_applet_registration_authz(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
@@ -354,7 +348,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
         crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
             object,
             &agent_id,
-            controller_id.as_str(),
+            controller_id.signing_principal_id().as_str(),
             &expected,
             state.config().trust_domain.as_str(),
             &initial_resolution,
@@ -395,7 +389,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     if !is_redact && !is_revise {
         return Ok(());
     }
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
 
     // Resolve the target Message's creation time.
@@ -436,11 +430,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
         )
     };
 
-    let grants = state.authorization().grants_for_subject(
-        actor,
-        Some(operation.context.principal_server_id.as_str()),
-        realm_id,
-    );
+    let grants = state.authorization().grants_for_subject(actor, realm_id);
 
     // Admin override: a broader (non-`.own`) capability is not time-boxed.
     let holds_broad = grants

@@ -89,7 +89,10 @@ pub(super) async fn submit_realm_bootstrap_batch(
         }
     }
 
-    let actor_lock = actor_submit_lock(unit.realm_id.as_str(), unit.actor_id.as_str());
+    let actor_lock = actor_submit_lock(
+        unit.realm_id.as_str(),
+        unit.actor_id.signing_principal_id().as_str(),
+    );
     let _guard = actor_lock.lock().await;
     let context = RealmBootstrapBatchContext {
         realm_id: unit.realm_id.to_string(),
@@ -459,13 +462,13 @@ pub(super) async fn submit_realm_bootstrap_batch(
     for operation in &operations {
         crate::routing::events::projection::ensure_projected_realm(
             state,
-            unit.actor_id.as_str(),
+            unit.actor_id.signing_principal_id().as_str(),
             operation,
         )
         .await;
         let projected = crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(unit.actor_id.as_str()),
+            Some(unit.actor_id.signing_principal_id().as_str()),
         );
         if let Err(error) =
             crate::routing::events::projection::persist_and_publish_projection_event(

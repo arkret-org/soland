@@ -138,8 +138,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     let mut event =
         arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
             event_scope,
-            service_actor_id.clone(),
-            service_actor_id,
+            arkret_wire::ActorId::service(service_actor_id.clone()),
             typed_payload,
         )
         .and_then(|draft| {
@@ -307,8 +306,7 @@ pub(crate) async fn prepare_franking_proof_event(
         ScopeRef::Realm {
             realm_id: proof.realm_id.clone(),
         },
-        service_actor_id.clone(),
-        service_actor_id,
+        arkret_wire::ActorId::service(service_actor_id.clone()),
         proof,
     )
     .and_then(|draft| {
@@ -991,6 +989,13 @@ async fn actor_has_exact_scope_moderation_capability(
     if state.is_admin_principal(actor) {
         return true;
     }
+    let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
+        return false;
+    };
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id,
+        state.service_core_id().clone(),
+    ));
     let (realm_id, resource) = match scope {
         ScopeRef::Realm { realm_id } => (realm_id.as_str(), realm_id.as_str()),
         ScopeRef::Circle {
@@ -1023,8 +1028,7 @@ async fn actor_has_exact_scope_moderation_capability(
         state
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
-                actor,
-                actor_principal_server_id: Some(state.service_id()),
+                actor: &actor_id,
                 action,
                 resource,
                 realm_id,
@@ -1247,8 +1251,12 @@ async fn moderation_report(
             target_ref: payload.target_ref.to_string(),
             effective_scope: event.scope_ref.clone(),
         };
-    body.validate_authoring_context(&principal_id, &accepted_target, digest_suite)
-        .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
+    body.validate_authoring_context(
+        &arkret_wire::AccountId::new(principal_id, state.service_core_id().clone()),
+        &accepted_target,
+        digest_suite,
+    )
+    .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let report_id = body
         .report_id(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
@@ -1333,6 +1341,13 @@ async fn moderation_routing_visible_to_actor(
     if owner.as_deref() == Some(actor) {
         return true;
     }
+    let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
+        return false;
+    };
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id,
+        state.service_core_id().clone(),
+    ));
     let members = {
         let realms = state.realm_directory().snapshot();
         RealmId::new(realm_id.to_owned())
@@ -1356,8 +1371,7 @@ async fn moderation_routing_visible_to_actor(
         state
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
-                actor,
-                actor_principal_server_id: Some(state.service_id()),
+                actor: &actor_id,
                 action,
                 resource: realm_id,
                 realm_id,

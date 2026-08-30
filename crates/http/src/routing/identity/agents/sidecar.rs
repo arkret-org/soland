@@ -71,11 +71,15 @@ async fn authorize_sidecar_ensure(
         .flatten()
         .map(|meta| meta.owner);
     let members = realm_members_for_authz(state, realm_id);
+    let controller_actor = arkret_wire::ActorId::hosted_principal(
+        arkret_wire::DidCoreId::new(controller.to_owned())
+            .map_err(|error| AppError::internal(format!("invalid controller id: {error}")))?,
+        state.service_core_id().clone(),
+    );
     let verdict = state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor: controller,
-            actor_principal_server_id: Some(state.service_id()),
+            actor: &controller_actor,
             action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
             resource: realm_id,
             realm_id,
@@ -431,7 +435,8 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     match operation.event_kind.clone() {
         arkret_wire::EventKind::MlsGenesis => {
             if current_group.is_some()
-                || operation.context.sender.as_str() != sidecar_projection.controller_id
+                || operation.context.sender.signing_principal_id().as_str()
+                    != sidecar_projection.controller_id
                 || !device_coordinates_match(
                     operation
                         .context
@@ -659,7 +664,7 @@ fn sidecar_event_draft(
 fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     scope_ref: arkret_wire::ScopeRef,
     actor_id: arkret_wire::DidCoreId,
-    principal_server_id: arkret_wire::DidCoreId,
+    station_id: arkret_wire::DidCoreId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
     prev_refs: Vec<EventId>,
@@ -668,10 +673,14 @@ fn author_typed_sidecar_event<K: arkret_event_draft::EventSpec>(
     payload: K::Payload,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<arkret_wire::AuthoredEvent, AppError> {
-    TypedEventDraft::<K>::new(scope_ref, actor_id, principal_server_id, payload)
-        .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
-        .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
-        .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
+    TypedEventDraft::<K>::new(
+        scope_ref,
+        arkret_wire::ActorId::hosted_principal(actor_id, station_id),
+        payload,
+    )
+    .map(|draft| draft.with_prev_refs(prev_refs).with_refs(refs))
+    .and_then(|draft| draft.author_with_digest_suite(actor_seq, hlc, created_at, digest_suite))
+    .map_err(|error| AppError::internal(format!("Sidecar typed Event draft: {error}")))
 }
 
 fn sidecar_reservation_key(handle: &arkret_wire::ReservationHandle) -> String {
@@ -815,7 +824,7 @@ async fn prepare_sidecar(
 
     let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
     let digest_suite = state
         .projections()
@@ -823,7 +832,10 @@ async fn prepare_sidecar(
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
         body.source_realm_id.clone(),
-        controller_id.clone(),
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            controller_id.clone(),
+            station_id.clone(),
+        )),
     )
     .await?;
     let created_at = chrono::Utc::now();
@@ -835,7 +847,7 @@ async fn prepare_sidecar(
                 realm_id: body.source_realm_id.clone(),
             },
             controller_id.clone(),
-            principal_server_id.clone(),
+            station_id.clone(),
             frontier.next_actor_seq,
             arkret_identifiers::Hlc::new(state.hlc().now())
                 .map_err(|error| AppError::internal(format!("Sidecar create HLC: {error}")))?,
@@ -866,7 +878,7 @@ async fn prepare_sidecar(
             sidecar_id: sidecar_id.clone(),
         },
         controller_id.clone(),
-        principal_server_id,
+        station_id,
         attach_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
             .map_err(|error| AppError::internal(format!("Sidecar attach HLC: {error}")))?,
@@ -1356,7 +1368,7 @@ mod tests {
         let event = author_typed_sidecar_event::<arkret_wire::event_spec::SidecarCreate>(
             arkret_wire::ScopeRef::Realm { realm_id },
             crate::test_actor_id_str("did:web:example.com:users:alice"),
-            crate::test_event::principal_server_id(),
+            crate::test_event::station_id(),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             Vec::new(),
@@ -1520,7 +1532,7 @@ mod tests {
                 id: "keypackage-controller-02".to_owned(),
                 keypackage_ref: "ak:keypackage:controller-02".to_owned(),
                 keypackage_digest: format!("sha256:{}", "2".repeat(64)),
-                owner_account_id: arkret_wire::ServiceAccountId::new("account-controller").unwrap(),
+                owner_account_pk: 1,
                 actor_id: controller.to_owned(),
                 device_id: Some(device.to_owned()),
                 endpoint_verification_method: None,

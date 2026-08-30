@@ -19,7 +19,7 @@ struct CurrentRow {
     #[diesel(sql_type = Text)]
     principal_id: DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: DidCoreId,
+    station_id: DidCoreId,
     #[diesel(sql_type = Text)]
     pcr_realm_id: String,
     #[diesel(sql_type = Jsonb)]
@@ -47,7 +47,7 @@ impl TryFrom<CurrentRow> for PrincipalResolutionRecord {
 
     fn try_from(row: CurrentRow) -> Result<Self, Self::Error> {
         let record = Self {
-            account_id: AccountId::new(row.principal_id, row.principal_server_id),
+            account_id: AccountId::new(row.principal_id, row.station_id),
             pcr_realm_id: RealmId::new(row.pcr_realm_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             genesis_event: serde_json::from_value(row.genesis_event)
@@ -71,19 +71,19 @@ impl PgPrincipalResolutionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT p.principal_id, p.principal_server_id, p.pcr_realm_id, \
+            "SELECT p.principal_id, p.station_id, p.pcr_realm_id, \
                     genesis.event_json AS genesis_event, current.event_json AS current_event, \
                     p.projection \
              FROM principal_resolutions p \
              JOIN principal_resolution_events genesis \
                ON genesis.principal_id = p.principal_id \
-              AND genesis.principal_server_id = p.principal_server_id \
+              AND genesis.station_id = p.station_id \
               AND genesis.event_id = p.genesis_event_id \
              JOIN principal_resolution_events current \
                ON current.principal_id = p.principal_id \
-              AND current.principal_server_id = p.principal_server_id \
+              AND current.station_id = p.station_id \
               AND current.event_id = p.current_event_id \
-             WHERE p.principal_id = $1 AND p.principal_server_id = $2",
+             WHERE p.principal_id = $1 AND p.station_id = $2",
         )
         .bind::<Text, _>(account_id.principal_id.as_str())
         .bind::<Text, _>(account_id.station_id.as_str())
@@ -103,17 +103,17 @@ impl PgPrincipalResolutionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT p.principal_id, p.principal_server_id, p.pcr_realm_id, \
+            "SELECT p.principal_id, p.station_id, p.pcr_realm_id, \
                     genesis.event_json AS genesis_event, current.event_json AS current_event, \
                     p.projection \
              FROM principal_resolutions p \
              JOIN principal_resolution_events genesis \
                ON genesis.principal_id = p.principal_id \
-              AND genesis.principal_server_id = p.principal_server_id \
+              AND genesis.station_id = p.station_id \
               AND genesis.event_id = p.genesis_event_id \
              JOIN principal_resolution_events current \
                ON current.principal_id = p.principal_id \
-              AND current.principal_server_id = p.principal_server_id \
+              AND current.station_id = p.station_id \
               AND current.event_id = p.current_event_id \
              WHERE p.pcr_realm_id = $1",
         )
@@ -165,20 +165,20 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
             sql_query(
                 "WITH inserted_event AS ( \
                    INSERT INTO principal_resolution_events \
-                     (principal_id, principal_server_id, event_id, previous_event_id, method_history_head, event_json, created_at) \
-                   SELECT principal_id, principal_server_id, $6, $5, $9, $10, $8 \
+                     (principal_id, station_id, event_id, previous_event_id, method_history_head, event_json, created_at) \
+                   SELECT principal_id, station_id, $6, $5, $9, $10, $8 \
                      FROM principal_resolutions \
-                    WHERE principal_id = $1 AND principal_server_id = $2 \
+                    WHERE principal_id = $1 AND station_id = $2 \
                       AND pcr_realm_id = $3 AND genesis_event_id = $4 \
                       AND current_event_id = $5 \
                    ON CONFLICT DO NOTHING \
-                   RETURNING principal_id, principal_server_id \
+                   RETURNING principal_id, station_id \
                  ), updated AS ( \
                    UPDATE principal_resolutions current \
                       SET current_event_id = $6, projection = $7, updated_at = $8 \
                      FROM inserted_event \
                     WHERE current.principal_id = inserted_event.principal_id \
-                      AND current.principal_server_id = inserted_event.principal_server_id \
+                      AND current.station_id = inserted_event.station_id \
                       AND current.current_event_id = $5 \
                     RETURNING current.principal_id \
                  ) \
@@ -209,14 +209,14 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
             sql_query(
                 "WITH inserted AS ( \
                    INSERT INTO principal_resolutions \
-                     (principal_id, principal_server_id, pcr_realm_id, genesis_event_id, current_event_id, projection, updated_at) \
+                     (principal_id, station_id, pcr_realm_id, genesis_event_id, current_event_id, projection, updated_at) \
                    VALUES ($1, $2, $3, $4, $4, $5, $6) \
                    ON CONFLICT DO NOTHING \
-                   RETURNING principal_id, principal_server_id \
+                   RETURNING principal_id, station_id \
                  ), inserted_event AS ( \
                    INSERT INTO principal_resolution_events \
-                     (principal_id, principal_server_id, event_id, previous_event_id, method_history_head, event_json, created_at) \
-                   SELECT principal_id, principal_server_id, $4, NULL, $7, $8, $6 FROM inserted \
+                     (principal_id, station_id, event_id, previous_event_id, method_history_head, event_json, created_at) \
+                   SELECT principal_id, station_id, $4, NULL, $7, $8, $6 FROM inserted \
                  ) \
                  SELECT EXISTS(SELECT 1 FROM inserted) AS applied",
             )
@@ -255,7 +255,7 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
         if let Some(after) = after_event_ref {
             let exists = sql_query(
                 "SELECT EXISTS(SELECT 1 FROM principal_resolution_events \
-                  WHERE principal_id = $1 AND principal_server_id = $2 AND event_id = $3) AS applied",
+                  WHERE principal_id = $1 AND station_id = $2 AND event_id = $3) AS applied",
             )
             .bind::<Text, _>(account_id.principal_id.as_str())
             .bind::<Text, _>(account_id.station_id.as_str())
@@ -277,15 +277,15 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                  FROM principal_resolution_events event \
                  JOIN principal_resolutions current \
                    ON current.principal_id = event.principal_id \
-                  AND current.principal_server_id = event.principal_server_id \
-                WHERE event.principal_id = $1 AND event.principal_server_id = $2 \
+                  AND current.station_id = event.station_id \
+                WHERE event.principal_id = $1 AND event.station_id = $2 \
                   AND event.event_id = COALESCE($3, current.current_event_id) \
                UNION ALL \
                SELECT predecessor.event_json, predecessor.previous_event_id, chain.depth + 1 \
                  FROM chain \
                  JOIN principal_resolution_events predecessor \
                    ON predecessor.principal_id = $1 \
-                  AND predecessor.principal_server_id = $2 \
+                  AND predecessor.station_id = $2 \
                   AND predecessor.event_id = chain.previous_event_id \
              ) \
              SELECT event_json FROM chain \

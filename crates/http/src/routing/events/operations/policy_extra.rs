@@ -301,14 +301,17 @@ fn read_receipt_parent_link_kind(link_kind: &str) -> bool {
 /// `#/$defs/circle_member_state_payload` both name it `actor_id` and are
 /// `additionalProperties:false`; `member` / `actor` are not spec fields. When
 /// the payload omits `actor_id` the subject is the Event author.
-pub(crate) fn membership_target(operation: &Operation) -> Option<&str> {
-    Some(
-        operation
-            .payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| operation.context.sender.as_str()),
-    )
+pub(crate) fn membership_target(operation: &Operation) -> Option<arkret_wire::ActorId> {
+    operation
+        .payload
+        .get("member_id")
+        .or_else(|| operation.payload.get("actor_id"))
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()
+        .ok()
+        .flatten()
+        .or_else(|| Some(operation.context.sender.clone()))
 }
 
 pub(crate) async fn validate_audience_mention_operation_policy(
@@ -326,7 +329,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
     if mentions.is_empty() {
         return Ok(());
     }
-    let actor = operation.context.sender.as_str();
+    let actor = &operation.context.sender;
     let realm_id = operation.realm_id.as_str();
     let resource = operation
         .payload
@@ -339,7 +342,6 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
             action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
             resource,
             realm_id,
@@ -444,18 +446,13 @@ pub(crate) async fn realm_owner_and_members(
 pub(crate) async fn actor_governs_realm(
     state: &AppState,
     realm_id: &str,
-    actor: &str,
-    actor_principal_server_id: Option<&str>,
+    actor: &arkret_wire::ActorId,
     actions: &[&str],
     evaluation_basis: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    let Some(actor_principal_server_id) = actor_principal_server_id else {
-        return false;
-    };
     if state.projections().snapshot().actor_governs_realm(
         realm_id,
         actor,
-        actor_principal_server_id,
         actions,
         evaluation_basis,
     ) {
@@ -470,7 +467,6 @@ pub(crate) async fn actor_governs_realm(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(actor_principal_server_id),
                 action,
                 resource: realm_id,
                 realm_id,

@@ -2,10 +2,11 @@
 //!
 //! Implements the scoped subset of the MLS event family:
 //!
-//! 1. **KeyPackage atomic claim** — `apply_keypackage_publish` / `apply_keypackage_claim`. The
-//!    claim path is a compare-and-swap on the `claimed_by` slot so two concurrent Welcomes can't
-//!    grab the same KeyPackage; the second claim returns `ProjectionEffect::Rejected { reason:
-//!    "mls_keypackage_already_claimed" }` which the routing layer maps to HTTP 409 `cas_conflict`.
+//! 1. **KeyPackage atomic claim** — `apply_keypackage_upload_projection` /
+//!    `apply_keypackage_claim`. The claim path is a compare-and-swap on the `claimed_by` slot so
+//!    two concurrent Welcomes can't grab the same KeyPackage; the second claim returns
+//!    `ProjectionEffect::Rejected { reason: "mls_keypackage_already_claimed" }` which the routing
+//!    layer maps to HTTP 409 `cas_conflict`.
 //!
 //! 2. **Welcome endpoint persistence** — `apply_welcome_enqueue`. Each accepted Welcome is appended
 //!    to an exact device, Native-Agent method, or Realm-local pairwise method projection.

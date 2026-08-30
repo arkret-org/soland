@@ -119,7 +119,7 @@ async fn create_and_dispatch_local_realm_invite(
     let mut receive_policy = InviteReceivePolicy::spec_default(bob_core.clone());
     receive_policy
         .holder_allowed_introduction_kinds
-        .push("same_principal_server".to_owned());
+        .push("same_station".to_owned());
     let receive_policy_response =
         TestClient::put("http://server/_arkret/self/invite-receive-policy")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
@@ -142,9 +142,9 @@ async fn create_and_dispatch_local_realm_invite(
         ),
         pinned_record_digest: None,
     };
-    let introduction_evidence = IntroductionEvidence::SamePrincipalServer;
+    let introduction_evidence = IntroductionEvidence::SameStation;
     let introduction_evidence_digest = arkret_canonical::canonical_sha256(&introduction_evidence)
-        .expect("same-principal-server evidence digest");
+        .expect("same-station evidence digest");
     let mut invite_event = signed_canonical_event(
         "account-workflow-invite",
         arkret_wire::EventKind::InviteCreate.as_str(),
@@ -155,11 +155,6 @@ async fn create_and_dispatch_local_realm_invite(
         Vec::new(),
         serde_json::json!({
             "invitee_id": bob_core.clone(),
-            "invite_delivery_target": {
-                "recipient_id": recipient_id.clone(),
-                "service_resolution": service_resolution.clone(),
-                "recipient_kind": "principal_server"
-            },
             "introduction_evidence_digest": introduction_evidence_digest,
             "expires_at": "2099-01-01T00:00:00.000Z"
         }),
@@ -196,7 +191,7 @@ async fn create_and_dispatch_local_realm_invite(
     let dispatch = SelfInviteDispatchRequestBody {
         schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
         invite_event_id,
-        invite_address: InviteAddress::principal_server(bob_core, recipient_id, service_resolution),
+        invite_address: InviteAddress::station(bob_core, recipient_id, service_resolution),
         introduction_evidence,
         idempotency_key: "ak:idempotency:account-workflow-invite".to_owned(),
     };
@@ -313,12 +308,14 @@ async fn create_contact_request(
         operation_id: operation_id.clone(),
         idempotency_key: idempotency_key.clone(),
         peer: ContactPeer::Human {
-            principal_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example")
-                .unwrap(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+                arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+            ),
         },
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
         introduction_evidence:
-            arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SamePrincipalServer,
+            arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SameStation,
         previous_terminal_contact_round_id: None,
         continuity_evidence: None,
         message: None,
@@ -474,16 +471,29 @@ async fn erasure_pending_account_refuses_self_reads_with_account_erased_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let actor = fixture_actor_core_id("did:web:alice.example");
+    let account_pk = state
+        .test_persistence()
+        .accounts()
+        .get(&arkret_wire::AccountId::new(
+            actor.clone(),
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .expect("dev login account exists")
+        .pk;
 
     state
         .test_persistence()
         .account_lifecycle()
         .put(
-            actor.as_str(),
+            account_pk,
             &soland_storage::AccountLifecycleRecord {
                 state: "erasure_pending".to_owned(),
                 reason: Some("account_authority_erasure_record".to_owned()),
-                changed_by: Some(arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap()),
+                changed_by: Some(arkret_wire::ActorId::service(
+                    arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+                )),
                 changed_at: chrono::Utc::now(),
             },
         )
@@ -527,23 +537,35 @@ async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let actor = fixture_actor_core_id("did:web:alice.example");
+    let account_pk = state
+        .test_persistence()
+        .accounts()
+        .get(&arkret_wire::AccountId::new(
+            actor.clone(),
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+        ))
+        .await
+        .unwrap()
+        .expect("dev login account exists")
+        .pk;
 
     let seed_state = |status: &str| {
         let state = state.clone();
         let actor = actor.clone();
+        let account_pk = account_pk;
         let status = status.to_owned();
         async move {
             state
                 .test_persistence()
                 .account_lifecycle()
                 .put(
-                    actor.as_str(),
+                    account_pk,
                     &soland_storage::AccountLifecycleRecord {
                         state: status,
                         reason: Some("account_authority_status_record".to_owned()),
-                        changed_by: Some(
+                        changed_by: Some(arkret_wire::ActorId::service(
                             arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
-                        ),
+                        )),
                         changed_at: chrono::Utc::now(),
                     },
                 )
@@ -1258,18 +1280,10 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         1
     );
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
-    // invite.schema.json + decision 0008: a direct member invite (invitee_id is a
-    // DID, no third_party_invite) carries the recipient binding in
-    // invite_delivery_target.recipient_id; third_party_invite exists only for
-    // third-party/3PID invites and only holds a verification_id.
-    assert_eq!(
-        bob_invites["invites"][0]["invite_delivery_target"]["recipient_id"],
-        state.service_id().as_str()
-    );
     assert_eq!(
         bob_invites["invites"][0]["introduction_evidence_digest"],
-        arkret_canonical::canonical_sha256(&IntroductionEvidence::SamePrincipalServer)
-            .expect("same-principal-server evidence digest")
+        arkret_canonical::canonical_sha256(&IntroductionEvidence::SameStation)
+            .expect("same-station evidence digest")
     );
     // The private delivery token is transport material and MUST NOT be surfaced
     // through the Invite read model (`governance-objects.md` §5.3). It is read

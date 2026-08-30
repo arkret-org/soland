@@ -1828,7 +1828,7 @@ impl ProjectionState {
     /// revoked. A "service delegation" is a capability grant whose `subject` is
     /// a service DID (`did:`-prefixed). Once such a grant carries a revoked
     /// tombstone (or_set observed-remove, terminal per capabilities.md §12.1),
-    /// the source Principal Server MUST stop pushing future events for that
+    /// the source Station MUST stop pushing future events for that
     /// Realm to the revoked peer. Scanning the grant cells keeps this derivable
     /// from durable capability events with no extra durable column.
     pub fn federation_delivery_revoked_peers(

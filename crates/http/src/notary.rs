@@ -165,7 +165,7 @@ impl ControlMoveRejection {
 struct AcceptedControlMove {
     event_digest: Hash,
     event: Event,
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
     effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 
@@ -1541,7 +1541,7 @@ impl NotaryWorker {
         .await?
         {
             return Err(NotaryError::NotAuthorized(
-                "local Principal Server is not the create-locked availability holder".to_owned(),
+                "local Station is not the create-locked availability holder".to_owned(),
             ));
         }
 
@@ -1878,7 +1878,7 @@ async fn local_service_is_eligible_availability_holder(
             .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {
                 NotaryError::Construction(format!(
-                    "PCR create Principal Server admission binding is invalid: {error}"
+                    "PCR create Station admission binding is invalid: {error}"
                 ))
             })?;
         return Ok(create.actor_id.route_service_id() == service_id);
@@ -2409,7 +2409,9 @@ mod tests {
         let event_ops = vec![(
             notary_cell.clone(),
             IssuedOp {
-                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                    "did:web:alice.example",
+                )),
                 op: SealedOp::new(
                     move_id.clone(),
                     arkret_wire::cba::LatticeOp {
@@ -2438,7 +2440,9 @@ mod tests {
         let remote_event_ops = vec![(
             notary_cell,
             IssuedOp {
-                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                    "did:web:alice.example",
+                )),
                 op: SealedOp::new(
                     move_id,
                     arkret_wire::cba::LatticeOp {
@@ -2477,7 +2481,7 @@ mod tests {
         });
         let payload = serde_json::from_value(json!({
             "principal_id": principal_id,
-            "principal_server_id": "ak:did_core:web:principal.example",
+            "station_id": "ak:did_core:web:principal.example",
             "recovery_authority_kind": "pcr_policy",
             "recovery_policy_id": "ak:policy:01904100-0000-7000-8000-000000000001",
             "recovery_policy_version": 1,

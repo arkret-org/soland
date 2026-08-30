@@ -36,7 +36,7 @@ pub fn ed25519_notary_signer_descriptor(
     public_key: &[u8; 32],
 ) -> Result<NotarySignerDescriptor, String> {
     let descriptor = NotarySignerDescriptor {
-        actor_id,
+        actor_id: arkret_wire::ActorId::service(actor_id),
         verification_method,
         key_kind: NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: NotaryJoseAlgorithm::Ed25519,
@@ -1620,7 +1620,7 @@ pub struct RecoverySessionState {
     pub session_grant_id: String,
     pub session_grant_cnf_jkt: String,
     pub principal_id: arkret_identifiers::DidCoreId,
-    pub principal_server_id: arkret_identifiers::DidCoreId,
+    pub station_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,

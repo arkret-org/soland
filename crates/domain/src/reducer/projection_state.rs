@@ -275,7 +275,7 @@ pub struct ProjectionState {
     /// Device push-route projection keyed by the protocol composite
     /// `(recipient_id, principal_id, device_id, push_route)`.
     /// These are actor-private state cells and MUST stay isolated per
-    /// recipient Principal Server.
+    /// recipient Station.
     pub push_routes: BTreeMap<PushRouteSubject, PushRouteCellValue>,
     /// Optional local Principal/Sync service DID. When set, incoming
     /// `ak.device.push_route` writes whose `recipient_id` does
@@ -1325,8 +1325,8 @@ impl ProjectionState {
     /// owned by `principal_id`.
     ///
     /// This is intentionally scoped to one Realm and principal. The complete
-    /// account identity is the `(principal_id, principal_server_id)` pair; on
-    /// its Principal Server that pair owns one lifetime-local PCR lineage.
+    /// account identity is the `(principal_id, station_id)` pair; on
+    /// its Station that pair owns one lifetime-local PCR lineage.
     pub fn realm_is_principal_control_for_actor(&self, realm_id: &str, principal_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
             realm.owner.as_deref() == Some(principal_id)

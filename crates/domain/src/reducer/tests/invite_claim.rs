@@ -6,6 +6,7 @@ const REALM: &str = "ak:realm:Af9DRPZ6jo28Ku6bsJX3iOs5fu2GLdPa5mI-lkvcujvM";
 const INVITE: &str = "ak:invite:AUftf_3k2fRKMG0NFlHe5iEMBOUpxMwYMRu-yhMJl-yz";
 const INVITER: &str = "ak:did_core:web:alice.example";
 const SUBJECT: &str = "ak:did_core:web:bob.example";
+const SUBJECT_STATION: &str = "ak:did_core:web:station.example";
 const SUBJECT_METHOD: &str = "did:web:bob.example#device-1";
 const SERVICE: &str = "ak:did_core:web:verify.example";
 const VERIFICATION_METHOD: &str = "did:web:verify.example#invite-key";
@@ -30,10 +31,14 @@ fn third_party_invite(expires_at: &str) -> Value {
 }
 
 fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value {
+    let subject_account_id = arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(SUBJECT).unwrap(),
+        arkret_identifiers::DidCoreId::new(SUBJECT_STATION).unwrap(),
+    );
     let binding_proof = json!({
         "verification_id": service_id,
         "verification_method": VERIFICATION_METHOD,
-        "subject_id": SUBJECT,
+        "subject_account_id": subject_account_id,
         "realm_id": REALM,
         "audience": "arkret.invite.claim",
         "claim_nonce": nonce,
@@ -42,7 +47,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
     });
     let binding_digest = arkret_canonical::canonical_sha256(&binding_proof).unwrap();
     let transcript_digest = arkret_models_collaboration::governance::membership_invite::invite_subject_proof_transcript_digest(
-        SUBJECT,
+        &subject_account_id,
         INVITE,
         REALM,
         token_commitment,
@@ -53,7 +58,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
     .unwrap();
     json!({
         "invite_id": INVITE,
-        "subject_id": SUBJECT,
+        "subject_account_id": subject_account_id,
         "token_commitment": token_commitment,
         "claim_nonce": nonce,
         "binding_proof": binding_proof,

@@ -243,7 +243,7 @@ mod federated_producer_event_proof_tests {
     fn fixture_event() -> arkret_wire::Event {
         let actor = arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap();
         let actor_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
-        let principal_server_id =
+        let station_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:remote.example".to_owned()).unwrap();
         let verification_method = arkret_wire::DidUrl::new(format!(
             "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000001"
@@ -259,7 +259,7 @@ mod federated_producer_event_proof_tests {
                 .unwrap(),
             },
             actor_id,
-            principal_server_id,
+            station_id,
             1,
             arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
             serde_json::json!({
@@ -292,7 +292,7 @@ mod federated_producer_event_proof_tests {
 
     fn sign_with_protected_header(
         proof: &arkret_wire::ProducerEventProof,
-        actor_id: &arkret_wire::DidCoreId,
+        actor_id: &arkret_wire::ActorId,
         key: &SigningKey,
         header: serde_json::Value,
     ) -> String {
@@ -466,7 +466,9 @@ mod managed_agent_pcr_batch_tests {
             payload,
         )
         .unwrap();
-        event.executed_by = Some(crate::test_actor_id_str("did:web:alice.example"));
+        event.executed_by = Some(arkret_wire::ActorId::service(crate::test_actor_id_str(
+            "did:web:alice.example",
+        )));
         event.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );
@@ -546,150 +548,5 @@ mod internal_event_admission_tests {
         });
 
         assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
-    }
-}
-
-mod federation_delivery_binding_tests {
-    use super::*;
-
-    fn event_id(suffix: u32) -> EventId {
-        let digest = Hash::new(arkret_canonical::sha256_digest(suffix.to_be_bytes())).unwrap();
-        EventId::from_event_digest(&digest).unwrap()
-    }
-
-    fn member_view(
-        actor: &str,
-        recipient_id: &str,
-        frontier: &EventId,
-        updated_at: DateTime<Utc>,
-    ) -> DeliveryBindingMemberView {
-        DeliveryBindingMemberView {
-            member: actor.to_owned(),
-            realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            recipient_id: recipient_id.to_owned(),
-            membership_event_ref: Some(frontier.as_str().to_owned()),
-            delivery_binding_frontier_ref: frontier.as_str().to_owned(),
-            updated_at,
-        }
-    }
-
-    #[test]
-    fn federation_service_binding_check_accepts_current_local_frontier() {
-        let now = Utc::now();
-        let frontier = event_id(1);
-        let result = federation_service_binding_check_from_members(
-            "ak:did_core:web:local.example",
-            now,
-            std::slice::from_ref(&frontier),
-            vec![member_view(
-                "ak:did_core:web:alice.example",
-                "ak:did_core:web:local.example",
-                &frontier,
-                now,
-            )],
-        );
-
-        assert!(matches!(result, FederationServiceBindingCheck::Current));
-    }
-
-    #[test]
-    fn federation_service_binding_check_rejects_empty_frontier_as_schema_violation() {
-        let now = Utc::now();
-        let result = federation_service_binding_check_from_members(
-            "ak:did_core:web:local.example",
-            now,
-            &[],
-            vec![member_view(
-                "ak:did_core:web:alice.example",
-                "ak:did_core:web:local.example",
-                &event_id(1),
-                now,
-            )],
-        );
-
-        assert!(matches!(
-            result,
-            FederationServiceBindingCheck::Reject("schema_violation")
-        ));
-    }
-
-    #[test]
-    fn federation_service_binding_check_emits_stale_handover_before_grace_expires() {
-        let now = Utc::now();
-        let old_frontier = event_id(1);
-        let new_frontier = event_id(2);
-        let result = federation_service_binding_check_from_members(
-            "ak:did_core:web:old.example",
-            now,
-            std::slice::from_ref(&old_frontier),
-            vec![member_view(
-                "ak:did_core:web:alice.example",
-                "ak:did_core:web:new.example",
-                &new_frontier,
-                now - Duration::seconds(60),
-            )],
-        );
-
-        match result {
-            FederationServiceBindingCheck::Stale(evidence) => {
-                assert_eq!(
-                    evidence.new_recipient_id.as_str(),
-                    "ak:did_core:web:new.example"
-                );
-                assert_eq!(evidence.actor_id.as_str(), "ak:did_core:web:alice.example");
-                assert_eq!(evidence.handover_frontier, vec![new_frontier]);
-            }
-            other => panic!("expected stale handover evidence, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn federation_service_binding_check_emits_handed_over_after_grace_expires() {
-        let now = Utc::now();
-        let result = federation_service_binding_check_from_members(
-            "ak:did_core:web:old.example",
-            now,
-            &[event_id(1)],
-            vec![member_view(
-                "ak:did_core:web:alice.example",
-                "ak:did_core:web:new.example",
-                &event_id(2),
-                now - Duration::seconds(DELIVERY_BINDING_HANDOVER_GRACE_SECONDS + 1),
-            )],
-        );
-
-        assert!(matches!(
-            result,
-            FederationServiceBindingCheck::HandedOver(_)
-        ));
-    }
-
-    #[test]
-    fn federation_service_binding_check_rejects_ambiguous_handover_targets() {
-        let now = Utc::now();
-        let result = federation_service_binding_check_from_members(
-            "ak:did_core:web:old.example",
-            now,
-            &[event_id(1)],
-            vec![
-                member_view(
-                    "ak:did_core:web:alice.example",
-                    "ak:did_core:web:new.example",
-                    &event_id(2),
-                    now,
-                ),
-                member_view(
-                    "ak:did_core:web:bob.example",
-                    "ak:did_core:web:other.example",
-                    &event_id(3),
-                    now,
-                ),
-            ],
-        );
-
-        assert!(matches!(
-            result,
-            FederationServiceBindingCheck::Reject("delivery_binding_stale")
-        ));
     }
 }

@@ -11,7 +11,7 @@ pub(super) struct HandleLookup {
 }
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
-    // Public handles are issued by the Principal Server. The Account
+    // Public handles are issued by the Station. The Account
     // Authority's service-account handle is a separate unsigned UX hint and
     // must never select this namespace.
     handle_domain_from_url(&state.config().public_base_url)
@@ -166,7 +166,7 @@ pub(super) async fn contact_request_resolve_allowed(
     )
 }
 
-/// Issue a Principal-Server-signed, SDK-validated handle claim for
+/// Issue a Station-signed, SDK-validated handle claim for
 /// `handle` → `principal_id` as a JSON value. Used by the account viewer / register
 /// outcome to expose the primary handle claim re-derived on demand from the
 /// account's durable localpart (the claim itself is never persisted).
@@ -204,33 +204,19 @@ pub(super) fn resolve_handle_audience(
 }
 
 pub(super) fn local_handle_resolution_outcome(
-    principal_id: String,
     canonical_handle: String,
-    audience: String,
     handle_claim: SdkHandleClaim,
 ) -> Result<DirectoryHandleResolutionOutcome, AppError> {
     handle_claim
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
-        principal_id: DidCoreId::new(principal_id).map_err(|err| {
-            AppError::param_invalid(format!("invalid resolved actor principal id: {err}"))
-        })?,
-        subject_id: handle_claim
-            .subject_id
-            .clone()
-            .ok_or_else(|| AppError::internal("resolved handle claim is missing subject_id"))?,
+        account_id: handle_claim.subject_account_id.clone(),
         handle: canonical_handle,
         verified: true,
         claims: Some(vec![handle_claim.clone()]),
-        audience: Some(audience),
-        handle_claim: Some(handle_claim),
-        as_of: Some(now()),
         source_refs: Vec::new(),
-        policy_revision: None,
-        stale: false,
-        divergent: false,
-        via_services: Vec::new(),
+        expires_at: handle_claim.expires_at,
     })
 }
 
@@ -353,17 +339,15 @@ async fn fetch_remote_handle_from_peer(
         .map_err(|reason| {
             AppError::capability_denied(reason).with_wire_code("handle_unverified")
         })?;
-    if !outcome
-        .via_services
-        .iter()
-        .any(|service| service == peer_id)
-    {
-        outcome.via_services.push(peer_id.to_owned());
+    if !outcome.source_refs.iter().any(|service| service == peer_id) {
+        outcome.source_refs.push(peer_id.to_owned());
     }
-    if let Some(claim) = outcome.handle_claim.as_ref()
-        && let Ok(envelope) = serde_json::to_value(claim)
-    {
-        let _ = state.cache_handle_claim(envelope).await;
+    if let Some(claims) = outcome.claims.as_ref() {
+        for claim in claims {
+            if let Ok(envelope) = serde_json::to_value(claim) {
+                let _ = state.cache_handle_claim(envelope).await;
+            }
+        }
     }
     Ok(Some(outcome))
 }
@@ -375,44 +359,34 @@ async fn validate_remote_handle_resolution(
     lookup: &HandleLookup,
     outcome: &DirectoryHandleResolutionOutcome,
 ) -> Result<(), String> {
-    if !outcome.verified || outcome.stale || outcome.divergent {
+    if !outcome.verified {
         return Err("remote handle resolution is not a current verified result".to_owned());
     }
     if outcome.handle != lookup.canonical {
         return Err("remote handle resolution handle mismatch".to_owned());
     }
     let audience = resolve_handle_audience(body, peer_id);
-    if outcome.audience.as_deref() != Some(audience.as_str()) {
-        return Err("remote handle resolution audience mismatch".to_owned());
-    }
     if let Some(expected_principal_id) = body.expected_principal_id.as_ref()
-        && outcome.principal_id != *expected_principal_id
+        && outcome.account_id.principal_id != *expected_principal_id
     {
         return Err("remote handle resolution expected_principal_id mismatch".to_owned());
     }
     let claim = outcome
-        .handle_claim
+        .claims
         .as_ref()
-        .ok_or_else(|| "remote handle resolution requires handle_claim".to_owned())?;
-    let expected_peer_id = DidCoreId::new(peer_id.to_owned())
-        .map_err(|error| format!("invalid peer principal id: {error}"))?;
+        .and_then(|claims| claims.first())
+        .ok_or_else(|| "remote handle resolution requires a handle claim".to_owned())?;
     claim
-        .validate_remote_resolution(Some(audience.as_str()), Some(&expected_peer_id), now())
+        .validate_remote_resolution(Some(audience.as_str()), Some(&outcome.account_id), now())
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
     verify_remote_handle_claim_proof(state, peer_id, audience.as_str(), claim).await?;
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
-    if claim.subject_id.as_ref() != Some(&outcome.principal_id) {
+    if claim.subject_account_id != outcome.account_id {
         return Err("remote handle claim subject mismatch".to_owned());
     }
-    if claim
-        .issuer_id
-        .as_ref()
-        .map(DidCoreId::as_str)
-        .unwrap_or_default()
-        != peer_id
-    {
+    if claim.issuer_id.as_str() != peer_id {
         return Err("remote handle claim issuer service mismatch".to_owned());
     }
     Ok(())
@@ -553,15 +527,9 @@ pub(super) async fn resolve_handle(
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (arkret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
-            let canonical_handle = handle_claim
-                .handle
-                .as_ref()
-                .map(|handle| handle.canonical().to_owned())
-                .ok_or_else(|| AppError::internal("signed handle claim is missing handle"))?;
+            let canonical_handle = handle_claim.handle.canonical().to_owned();
             json_ok(local_handle_resolution_outcome(
-                principal_id,
                 canonical_handle,
-                audience,
                 handle_claim,
             )?)
         }
@@ -600,7 +568,15 @@ async fn local_handle_binding_matches(
         .localpart_owner(localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(owner.is_some_and(|record| record.account_principal_id.as_str() == principal_id))
+    let Some(owner) = owner else {
+        return Ok(false);
+    };
+    let profile = state
+        .identities()
+        .account_by_id(owner.account_pk)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(profile.is_some_and(|record| record.principal_id.as_str() == principal_id))
 }
 
 fn handle_unverified_error(canonical_handle: &str) -> AppError {
@@ -655,12 +631,12 @@ pub(super) async fn signed_handle_claim(
     let expires_at = created_at + chrono::Duration::hours(24);
     let mut claim = SdkHandleClaim {
         schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
-        handle: Some(handle),
+        handle,
         handle_aliases: vec![handle_alias],
-        subject_id: Some(subject),
-        issuer_id: Some(signer_id),
+        subject_account_id: AccountId::new(subject, state.service_core_id().clone()),
+        issuer_id: signer_id,
         vouching_id: None,
-        binding_state: Some(HandleBindingState::Verified),
+        binding_state: HandleBindingState::Verified,
         claim_kind: Some(HandleClaimKind::HandleBinding),
         visibility: Some(HandleVisibility::Public),
         audience: Some(audience.to_owned()),
@@ -734,8 +710,8 @@ pub(super) async fn list_handles_for_subject(
     {
         return Err(AppError::not_found("not found"));
     }
-    let subject_did = body.subject_id.clone();
-    let subject = subject_did.as_str().to_owned();
+    let subject_account_id = body.account_id.clone();
+    let subject = subject_account_id.principal_id.as_str().to_owned();
     if subject.is_empty() {
         return Err(AppError::param_missing("subject is required"));
     }
@@ -769,6 +745,9 @@ pub(super) async fn list_handles_for_subject(
 
     let mut generated_claim = None;
     for actor in demo_actors(state).await {
+        if subject_account_id.station_id != state.service_core_id().clone() {
+            break;
+        }
         if actor.get("actor_id").and_then(Value::as_str) != Some(subject.as_str()) {
             continue;
         }
@@ -823,7 +802,7 @@ pub(super) async fn list_handles_for_subject(
         push_visible_subject_handle_claim(
             state,
             &body,
-            &subject,
+            &subject_account_id,
             as_of,
             claim,
             &mut claims,
@@ -834,7 +813,7 @@ pub(super) async fn list_handles_for_subject(
         push_visible_subject_handle_claim(
             state,
             &body,
-            &subject,
+            &subject_account_id,
             as_of,
             claim.envelope,
             &mut claims,
@@ -869,7 +848,7 @@ pub(super) async fn list_handles_for_subject(
         .transpose()
         .map_err(|err| AppError::internal(format!("primary handle is invalid: {err}")))?;
     let response = DirectorySubjectHandleList {
-        subject_id: subject_did,
+        account_id: subject_account_id,
         claims,
         primary_handle,
         as_of,
@@ -955,7 +934,7 @@ fn cursor_app_error(error: CursorAuthorityError) -> AppError {
 pub(super) fn push_visible_subject_handle_claim(
     state: &AppState,
     request: &DirectoryListHandlesForSubjectRequestBody,
-    subject: &str,
+    subject: &AccountId,
     as_of: DateTime<Utc>,
     claim: Value,
     claims: &mut Vec<Value>,
@@ -975,17 +954,20 @@ pub(super) fn push_visible_subject_handle_claim(
 pub(super) fn subject_handle_claim_visible(
     state: &AppState,
     request: &DirectoryListHandlesForSubjectRequestBody,
-    subject: &str,
+    subject: &AccountId,
     as_of: DateTime<Utc>,
     claim: &Value,
 ) -> bool {
-    if claim.get("subject_id").and_then(Value::as_str) != Some(subject) {
+    let Ok(parsed_claim) = serde_json::from_value::<SdkHandleClaim>(claim.clone()) else {
+        return false;
+    };
+    if &parsed_claim.subject_account_id != subject {
         return false;
     }
     if subject_handle_claim_handle(claim).is_none() {
         return false;
     }
-    if claim.get("binding_state").and_then(Value::as_str) != Some("verified") {
+    if parsed_claim.binding_state != HandleBindingState::Verified {
         return false;
     }
     if claim
@@ -1014,8 +996,7 @@ pub(super) fn subject_handle_claim_visible(
     if expires_at <= as_of {
         return false;
     }
-    let issuer_id = claim.get("issuer_id").and_then(Value::as_str);
-    if issuer_id != Some(state.service_id().as_str()) {
+    if parsed_claim.issuer_id.as_str() != state.service_id().as_str() {
         return false;
     }
     let Some(audience) = claim.get("audience").and_then(Value::as_str) else {
@@ -1045,10 +1026,12 @@ pub(super) fn subject_handle_claim_handle(claim: &Value) -> Option<&str> {
 }
 
 pub(super) fn subject_handle_claim_dedupe_key(claim: &Value) -> Option<String> {
+    let account_id = claim.get("subject_account_id")?;
     Some(format!(
-        "{}|{}|{}|{}",
+        "{}|{}|{}|{}|{}",
         subject_handle_claim_handle(claim)?,
-        claim.get("subject_id").and_then(Value::as_str)?,
+        account_id.get("principal_id").and_then(Value::as_str)?,
+        account_id.get("station_id").and_then(Value::as_str)?,
         claim
             .get("issuer_id")
             .and_then(Value::as_str)
@@ -1125,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_domain_normalizes_public_principal_server_host() {
+    fn handle_domain_normalizes_public_station_host() {
         assert_eq!(
             handle_domain_from_url("https://Principal.Example.test/base").as_deref(),
             Some("principal.example.test")

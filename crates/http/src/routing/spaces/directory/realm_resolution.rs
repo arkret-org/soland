@@ -775,7 +775,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .flatten()
         .filter(|record| {
             record.record.service_id.as_str() == state.service_id()
-                && record.record.service_kind == "principal_server"
+                && record.record.service_kind == "station"
                 && observed_at < record.record.refresh_after
                 && observed_at < record.record.expires_at
         });
@@ -837,22 +837,22 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .flatten()
             .map(|(profile, _)| match profile {
                 arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => {
-                    std::iter::once(signer.actor_id.route_service_id().to_string()).collect()
+                    std::iter::once(signer.actor_id.to_string()).collect()
                 }
                 arkret_wire::notary::NotaryValue::Threshold { signers, .. }
                 | arkret_wire::notary::NotaryValue::OpenSet { signers } => signers
                     .into_iter()
-                    .map(|member| member.actor_id.route_service_id().to_string())
+                    .map(|member| member.actor_id.to_string())
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
                     signer,
                     recovery_signers,
                     ..
-                } => std::iter::once(signer.actor_id.route_service_id().to_string())
+                } => std::iter::once(signer.actor_id.to_string())
                     .chain(
                         recovery_signers
                             .into_iter()
-                            .map(|member| member.actor_id.route_service_id().to_string()),
+                            .map(|member| member.actor_id.to_string()),
                     )
                     .collect(),
             })
@@ -873,8 +873,8 @@ pub(super) async fn join_candidates_for_resolved_realm(
             service_resolution: ServiceResolutionCarrier::Inline {
                 inline: own_resolution,
             },
-            service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
-            role: RealmJoinCandidateRole::JoinedMemberPrincipalServer,
+            service_kind: RealmJoinCandidateServiceKind::Station,
+            role: RealmJoinCandidateRole::JoinedMemberStation,
             endpoint: None,
             operations: vec![
                 arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1.to_owned(),

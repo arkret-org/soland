@@ -354,7 +354,7 @@ pub(crate) async fn relay_signal_once(
     let body =
         arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
     let peer_target =
-        super::federation::resolved_peer_target(state, peer_id, "principal_server", false).await?;
+        super::federation::resolved_peer_target(state, peer_id, "station", false).await?;
     let target = format!("{}/_arkret/peer/signal", peer_target.base_url);
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target,
@@ -812,7 +812,7 @@ impl FederationDispatcher {
             let peer_target = super::federation::resolved_peer_target(
                 &self.state,
                 row.delivery.peer_id.as_str(),
-                "principal_server",
+                "station",
                 false,
             )
             .await
@@ -915,7 +915,7 @@ impl FederationDispatcher {
         let peer_target = super::federation::resolved_peer_target(
             &self.state,
             row.delivery.peer_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await;
@@ -1411,7 +1411,7 @@ impl FederationDispatcher {
             if receipt.event_digest() != admission.event_digest
                 || receipt.realm_id != event.realm_id
                 || receipt.producer_accepted_at != admission.accepted_at
-                || receipt.agent_id != *signer_id
+                || receipt.agent_id != *signer_id.signing_principal_id()
                 || receipt.verification_method != admission.producer_verification_method
                 || Some(&receipt.producer_signer_resolution_evidence_ref)
                     != admission.producer_signer_resolution_evidence_ref.as_ref()
@@ -1785,7 +1785,7 @@ impl FederationDispatcher {
                     .persistence()
                     .resolve_account_status_records(
                         submitted.account_authority_id.as_str(),
-                        submitted.account_id.as_str(),
+                        &submitted.account_id.to_string(),
                         next_seq,
                         1,
                     )
@@ -1801,7 +1801,7 @@ impl FederationDispatcher {
                     .persistence()
                     .account_status_receipt(
                         submitted.account_authority_id.as_str(),
-                        submitted.account_id.as_str(),
+                        &submitted.account_id.to_string(),
                         next_seq,
                     )
                     .await
@@ -1847,7 +1847,7 @@ impl FederationDispatcher {
             .persistence()
             .resolve_account_status_records(
                 submitted.account_authority_id.as_str(),
-                submitted.account_id.as_str(),
+                &submitted.account_id.to_string(),
                 required,
                 1,
             )
@@ -1861,7 +1861,7 @@ impl FederationDispatcher {
             .persistence()
             .account_status_receipt(
                 submitted.account_authority_id.as_str(),
-                submitted.account_id.as_str(),
+                &submitted.account_id.to_string(),
                 required,
             )
             .await
@@ -2619,7 +2619,7 @@ mod tests {
                     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
                         .unwrap(),
                 ),
-                actor_id: actor_id.clone(),
+                actor_id: arkret_wire::ActorId::service(actor_id.clone()),
                 device_id: arkret_identifiers::DeviceId::new(
                     "ak:device:019f0000-0000-7000-8000-00000000de01",
                 )
@@ -2692,7 +2692,7 @@ mod tests {
                         ))
                         .unwrap(),
                         membership_frontier: Vec::new(),
-                        destination_kind: "principal_server".to_owned(),
+                        destination_kind: "station".to_owned(),
                     },
                 events: vec![
                     submission("000000000001", "00000000ae01", "00000000ce01"),

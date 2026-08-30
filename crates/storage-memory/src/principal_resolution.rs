@@ -155,7 +155,7 @@ mod tests {
         DidCoreId::new("ak:did_core:web:alice.example").unwrap()
     }
 
-    fn principal_server() -> DidCoreId {
+    fn station() -> DidCoreId {
         DidCoreId::new("ak:did_core:web:principal.example").unwrap()
     }
 
@@ -164,7 +164,7 @@ mod tests {
             arkret_wire::EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
             principal(),
-            principal_server(),
+            station(),
             0,
             Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"sequence": 0}),
@@ -180,7 +180,7 @@ mod tests {
                 realm_id: genesis.realm_id.clone(),
             },
             principal(),
-            principal_server(),
+            station(),
             1,
             Hlc::new("019f00000000-0001-00000001").unwrap(),
             serde_json::json!({"sequence": 1}),
@@ -191,7 +191,7 @@ mod tests {
 
     fn record(genesis: &Event, current: Event) -> PrincipalResolutionRecord {
         PrincipalResolutionRecord {
-            account_id: AccountId::new(principal(), principal_server()),
+            account_id: AccountId::new(principal(), station()),
             pcr_realm_id: genesis.realm_id.clone(),
             genesis_event: genesis.clone(),
             projection: PrincipalResolutionProjection {
@@ -264,7 +264,7 @@ mod tests {
         let mut substituted = accepted;
         substituted.account_id = AccountId::new(
             principal(),
-            DidCoreId::new("ak:did_core:web:other-principal-server.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         );
 
         assert!(matches!(

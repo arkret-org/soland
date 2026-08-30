@@ -151,7 +151,7 @@ mod tests {
             json!({
                 "services": [{
                     "service_id": service,
-                    "service_kind": "principal_server",
+                    "service_kind": "station",
                     "data_classes": ["message_content", "notification_summary"],
                     "purposes": ["projection"],
                     "visibility": "private_plaintext"
@@ -179,7 +179,7 @@ mod tests {
                     "title": "Plaintext Realm",
                     "plaintext_visible_services": [{
                         "service_id": service,
-                        "service_kind": "principal_server",
+                        "service_kind": "station",
                         "data_classes": ["message_content"],
                         "purposes": ["message_index"],
                         "visibility": "private_plaintext"

@@ -311,7 +311,7 @@ pub(crate) async fn validate_member_identity_proof(
     let payload_realm = payload.get("realm_id").and_then(Value::as_str);
     let payload_actor = payload.get("actor_id").and_then(Value::as_str);
     if payload_realm != Some(identity.realm_id.as_str())
-        || payload_actor != Some(identity.actor_id.as_str())
+        || payload_actor != Some(identity.actor_id.signing_principal_id().as_str())
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -353,7 +353,7 @@ pub(crate) async fn validate_member_identity_proof(
         ));
     }
     crate::jws_verify::validate_verification_method_controller(
-        identity.subject_id.as_str(),
+        identity.actor_id.signing_principal_id().as_str(),
         &identity.proof.verification_method,
     )
     .map_err(|error| {

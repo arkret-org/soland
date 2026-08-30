@@ -32,10 +32,8 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
     assert_eq!(actor["id"], alice.as_str());
     assert_eq!(actor["principal_id"], alice.as_str());
     assert!(
-        actor["account_id"]
-            .as_str()
-            .is_some_and(|value| { arkret_wire::ServiceAccountId::new(value.to_owned()).is_ok() }),
-        "actor row must include the durable account row id: {actor}"
+        serde_json::from_value::<arkret_wire::AccountId>(actor["account_id"].clone()).is_ok(),
+        "actor row must include the exact AccountId: {actor}"
     );
     assert!(
         actor["status"].as_str().is_some(),

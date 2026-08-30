@@ -74,7 +74,7 @@ async fn health_and_describe_work_body() {
     );
     let describe: Value = describe_response.take_json().await.unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
-    assert_eq!(describe["service_kind"], "principal_server");
+    assert_eq!(describe["service_kind"], "station");
     assert!(
         !describe["supported_profiles"]
             .as_array()
@@ -287,12 +287,12 @@ async fn health_and_describe_work_body() {
             .iter()
             .any(|gap| gap == "RFC 9421 HTTP Message Signatures header emission")
     );
-    let full_gap = describe["limits"]["profile_status"]["principal_server_full_profile_gaps"]
+    let full_gap = describe["limits"]["profile_status"]["station_full_profile_gaps"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|gap| gap["profile"] == "ak.profile.principal_server.v1")
-        .expect("principal server full-profile gap summary should be visible");
+        .find(|gap| gap["profile"] == "ak.profile.station.v1")
+        .expect("Station full-profile gap summary should be visible");
     assert_eq!(full_gap["status"], "not_claimed");
 }
 
@@ -307,18 +307,18 @@ fn server_describe_accepts_only_its_selected_role() {
 async fn server_describe_accepts_only_its_selected_role_body() {
     let service = app_from_state(soland_test_support::app_state(test_config()));
 
-    let selected: Value =
-        TestClient::get("http://server/_arkret/describe?service_kind=principal_server")
-            .send(&service)
-            .await
-            .take_json()
-            .await
-            .unwrap();
-    assert_eq!(selected["service_kind"], "principal_server");
-
-    let mut rejected = TestClient::get("http://server/_arkret/describe?service_kind=auth_server")
+    let selected: Value = TestClient::get("http://server/_arkret/describe?service_kind=station")
         .send(&service)
-        .await;
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(selected["service_kind"], "station");
+
+    let mut rejected =
+        TestClient::get("http://server/_arkret/describe?service_kind=identity_registry")
+            .send(&service)
+            .await;
     assert_eq!(rejected.status_code.unwrap().as_u16(), 400);
     let rejected: Value = rejected.take_json().await.unwrap();
     assert_eq!(problem_code(&rejected), "param_invalid");

@@ -227,6 +227,7 @@ pub(super) fn accountability_grant_operation_signed_by(
         .executed_by
         .as_ref()
         .unwrap_or(&operation.context.sender)
+        .signing_principal_id()
         .as_str()
         == issuer
 }

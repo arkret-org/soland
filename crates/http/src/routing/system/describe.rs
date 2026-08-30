@@ -300,7 +300,7 @@ async fn server_describe(
 ) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     if let Some(service_kind) = service_kind.into_inner()
-        && service_kind != arkret_wire::ServiceKind::PrincipalServer.as_str()
+        && service_kind != arkret_wire::ServiceKind::Station.as_str()
     {
         return Err(soland_http::error::AppError::param_invalid(format!(
             "service_kind {service_kind:?} is not available on this binding"
@@ -436,18 +436,18 @@ pub(crate) fn apply_claim_level_partition(
     // SDK becomes a soland build break, not a silent drift).
     //
     // Conformance profile catalogue per `conformance-profiles.md` §1 /
-    // §7 / §8: a principal server claims the Event Store interop
-    // floor + Principal Server + Principal Server Events API in
+    // §7 / §8: a Station claims the Event Store interop
+    // floor + Station + Station Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
             arkret_wire::ProfileId::CORE_EVENT_STORE_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::PRINCIPAL_SERVER_V1,
+            arkret_wire::ProfileId::STATION_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-            arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1,
+            arkret_wire::ProfileId::STATION_EVENTS_API_V1,
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry {
             notes: Some(
@@ -455,7 +455,7 @@ pub(crate) fn apply_claim_level_partition(
                  security_frontier_digest from accepted key-access state and the RFC 9420 \
                  leaf set. This is the cross-deployment E2EE \
                  federation interop floor (crypto-media/encryption-and-audit.md §2.5 / \
-                 §295); a principal server federating MLS-backed Realms MUST advertise \
+                 §295); a Station federating MLS-backed Realms MUST advertise \
                  it, and it is mutually exclusive with ak.profile.e2ee_relaxed.v1 \
                  (not claimed)."
                     .to_owned(),
@@ -638,7 +638,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
         contract: "arkret.rest.integration_manifest.v1".to_owned(),
         version: "2026-05-04-scaffold".to_owned(),
         service: "soland".to_owned(),
-        service_kind: "principal_server".to_owned(),
+        service_kind: "station".to_owned(),
         api_base_path: "/_arkret".to_owned(),
         describe_path: "/_soland/self/integration/describe".to_owned(),
         dependencies: vec![
@@ -751,10 +751,10 @@ mod tests {
         let mut description = ServiceDescribe::development(
             Did::new("did:web:soland.example".to_owned()).unwrap(),
             TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-            ServiceKind::PrincipalServer,
+            ServiceKind::Station,
             vec![
-                "ak.operation_bundle.principal_server.describe.v1".to_owned(),
-                "ak.operation_bundle.principal_server.http_core.v1".to_owned(),
+                "ak.operation_bundle.station.describe.v1".to_owned(),
+                "ak.operation_bundle.station.http_core.v1".to_owned(),
             ],
             vec![arkret_models_discovery::TransportBinding::HttpJson {
                 base_url: "https://soland.example/".to_owned(),

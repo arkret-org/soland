@@ -213,7 +213,7 @@ async fn enforce_recovery_session_grant_operation(
     if recovery.state != arkret_models_crypto::SessionState::Verified
         || recovery.expires_at <= now()
         || recovery.principal_id.as_str() != session.actor
-        || recovery.principal_server_id.as_str() != session.audience
+        || recovery.station_id.as_str() != session.audience
         || recovery.requesting_device_id != session.device_id
         || recovery.session_grant_id != grant.grant_id.as_str()
         || recovery.session_grant_cnf_jkt != grant.cnf_jkt
@@ -366,15 +366,13 @@ async fn enforce_session_device_revocation_gate(
                     "session principal_id is invalid",
                 )
             })?,
-            principal_server_id: arkret_wire::DidCoreId::new(session.audience.clone()).map_err(
-                |_| {
-                    (
-                        StatusCode::UNAUTHORIZED,
-                        "unauthenticated",
-                        "session principal_server_id is invalid",
-                    )
-                },
-            )?,
+            station_id: arkret_wire::DidCoreId::new(session.audience.clone()).map_err(|_| {
+                (
+                    StatusCode::UNAUTHORIZED,
+                    "unauthenticated",
+                    "session station_id is invalid",
+                )
+            })?,
             device_id: binding.device_id.to_string(),
             target_device_authorize_event_id: binding.authorization_event_id.to_string(),
             target_device_generation_ref: binding.model_generation_ref,

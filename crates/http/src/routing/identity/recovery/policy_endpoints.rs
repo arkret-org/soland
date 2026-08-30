@@ -255,7 +255,7 @@ pub(super) async fn recovery_policy_put(
 
     let validated = validate_recovery_policy(&payload)?;
     if validated.principal_id.as_str() != session.actor
-        || request.event.actor_id.as_str() != session.actor
+        || request.event.actor_id.signing_principal_id().as_str() != session.actor
     {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,

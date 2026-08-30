@@ -200,7 +200,7 @@ pub async fn install(
         for projected_operation in &staged_bootstrap {
             crate::routing::events::projection::ensure_projected_realm(
                 state,
-                body.events[0].actor_id.as_str(),
+                body.events[0].actor_id.signing_principal_id().as_str(),
                 &projected_operation.operation,
             )
             .await;

@@ -4,12 +4,20 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use crate::state::AppState;
 
 pub async fn has_accepted_contact(state: &AppState, left: &str, right: &str) -> bool {
-    let (Ok(left), Ok(right)) = (
+    let (Ok(left_principal), Ok(right_principal)) = (
         arkret_wire::DidCoreId::new(left.to_owned()),
         arkret_wire::DidCoreId::new(right.to_owned()),
     ) else {
         return false;
     };
+    let left = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        left_principal,
+        state.service_core_id().clone(),
+    ));
+    let right = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        right_principal,
+        state.service_core_id().clone(),
+    ));
     state
         .contacts()
         .contacts_for_actor(&left)
@@ -61,8 +69,14 @@ mod tests {
         state
             .contacts()
             .save_contact(soland_services::identity::ContactRecord {
-                requester_id: arkret_wire::DidCoreId::new(alice.to_owned()).unwrap(),
-                target_id: arkret_wire::DidCoreId::new(bob.to_owned()).unwrap(),
+                requester_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new(alice.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                )),
+                target_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new(bob.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                )),
                 contact_round_id: Some(
                     arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
                 ),

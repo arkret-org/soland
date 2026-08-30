@@ -70,7 +70,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .unwrap();
     assert_eq!(
         organization_previews["organizations"][0]["organization_principal_id"],
-        soland_test_support::fixture_principal_server_id().as_str()
+        soland_test_support::fixture_station_id().as_str()
     );
     assert_eq!(
         organization_previews["organizations"][0]["display_name"],
@@ -202,7 +202,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
     config.account_authority_url = Some("https://auth.local.host".to_owned());
-    let service_id = soland_test_support::fixture_principal_server_id().to_string();
+    let service_id = soland_test_support::fixture_station_id().to_string();
     config.trust_domain =
         arkret_identifiers::TrustDomainId::new(trust_domain_from_service_id(&service_id)).unwrap();
     let state = soland_test_support::app_state(config);
@@ -397,7 +397,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         "Invite Handle Realm",
         None,
         "invite_only",
-        &[soland_test_support::fixture_principal_server_id().as_str()],
+        &[soland_test_support::fixture_station_id().as_str()],
         &[],
     )
     .await;
@@ -423,10 +423,6 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     );
     assert_eq!(body["handle"], "bob-example:local.host");
     assert_eq!(body["audience"], realm_id);
-    assert_eq!(
-        body["member_delivery_binding"]["recipient_id"],
-        state.service_id().as_str()
-    );
 
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",
@@ -758,7 +754,7 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
             .unwrap();
     assert_eq!(
         directory_describe["service_id"],
-        soland_test_support::fixture_principal_server_id().as_str(),
+        soland_test_support::fixture_station_id().as_str(),
         "{directory_describe}"
     );
 

@@ -33,7 +33,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     // transported DataEvent's `seal_ref` resolves locally. Without it every
     // inbound Event is deferred as `federation_dependencies_pending` before the
     // check under test is ever reached.
-    seed_test_realm_basis_seal_for_principal_server(
+    seed_test_realm_basis_seal_for_station(
         state,
         test_realm_id(),
         "did:web:alice.example",
@@ -49,12 +49,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(PEER_SOURCE_ID.to_owned()),
-            recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -64,7 +59,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
     // The destination binding is a Realm-wide receiver frontier, distinct
     // from Alice's exact origin authority pair. Keep a local routable member
     // on that frontier so the inbound destination is current while Alice is
-    // hosted by the authenticated remote Principal Server.
+    // hosted by the authenticated remote Station.
     state.test_projection().lock().members.insert(
         (test_realm_id().to_owned(), "did:web:bob.example".to_owned()),
         soland_domain::reducer::SolandMembershipState {
@@ -72,12 +67,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(service_id().to_owned()),
-            recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -137,11 +127,14 @@ fn resign_federation_event(event: Value) -> Value {
 fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
-    event.principal_server_id = arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
-        .expect("fixture peer source is a service core ID");
+    event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        event.actor_id.signing_principal_id().clone(),
+        arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
+            .expect("fixture peer source is a Station core ID"),
+    ));
     if event.seal_ref.is_some() {
         event.seal_ref = Some(
-            test_realm_basis_for_principal_server(
+            test_realm_basis_for_station(
                 &soland_test_support::app_state(super::common::test_config()),
                 event.realm_id.as_str(),
                 actor_did,
@@ -195,14 +188,12 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
     let admission_verification_method =
         arkret_wire::DidUrl::new(format!("{PEER_SOURCE_DID}#notary-key"))
             .expect("fixture admission verification method is a DID URL");
-    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
-        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    let mut admission = arkret_wire::StationAdmissionProof {
+        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method: admission_verification_method.clone(),
         event_digest: producer.event_digest.clone(),
-        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
-            &producer,
-        )
-        .expect("fixture producer proof digest"),
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
+            .expect("fixture producer proof digest"),
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key_did: arkret_wire::DidKey::new(format!(
             "did:key:{}",
@@ -244,7 +235,7 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         .expect("fixture admission signature verifies against the installed peer key");
     event.proofs.push(admission.into());
     event
-        .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+        .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
         .expect("fixture admission proof binds the accepted Event");
     serde_json::to_value(event).expect("federation fixture serializes")
 }
@@ -1275,10 +1266,7 @@ fn peer_submit_body(event: &Value) -> Value {
             realm_policy_digest: arkret_identifiers::Hash::new(sha256_json(&binding_payload))
                 .unwrap(),
             membership_frontier: vec![arkret_wire::EventId::new(event_id).unwrap()],
-            delivery_binding_frontier: vec![
-                arkret_wire::EventId::new(PEER_DELIVERY_FRONTIER.to_owned()).unwrap(),
-            ],
-            destination_kind: "principal_server".to_owned(),
+            destination_kind: "station".to_owned(),
         },
         events: vec![peer_event_submission(event)],
         // The DataEvent's `seal_ref` is a receiver-side prerequisite: a peer

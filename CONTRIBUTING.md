@@ -1,7 +1,7 @@
 # Contributing to soland
 
 Thanks for considering a contribution! soland is a reference Arkret v1
-principal server; the protocol contract lives in
+Station; the protocol contract lives in
 [`arkret-spec`](https://github.com/arkret-org/arkret-spec) and the Rust SDK
 in [`arkret-rust-sdk`](https://github.com/arkret-org/arkret-rust-sdk).
 

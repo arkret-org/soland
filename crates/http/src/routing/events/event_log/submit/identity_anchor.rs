@@ -562,7 +562,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.to_string(),
-            principal_server_id: payload.principal_server_id.to_string(),
+            station_id: payload.station_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
@@ -785,7 +785,7 @@ fn validate_identity_anchor_candidate_preconditions(
     authorize_event: &arkret_wire::Event,
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    if authorize_event.actor_id.as_str() != first.actor_id.as_str()
+    if authorize_event.actor_id.signing_principal_id().as_str() != first.actor_id.as_str()
         || authorize_event.realm_id.as_str() != first.realm_id.as_str()
         || authorize_event.actor_seq != first.actor_seq.saturating_add(1)
         || authorize_event.prev_refs.len() != 1
@@ -1117,8 +1117,8 @@ fn conflicting_reanchor_slot(
     else {
         return Vec::new();
     };
-    let Some(principal_server_id) = reanchor_envelope
-        .pointer("/principal_server_id")
+    let Some(station_id) = reanchor_envelope
+        .pointer("/station_id")
         .and_then(Value::as_str)
     else {
         return Vec::new();
@@ -1137,14 +1137,14 @@ fn conflicting_reanchor_slot(
             if candidate_generation != Some(new_generation) {
                 return false;
             }
-            let candidate_principal_server_id = record
+            let candidate_station_id = record
                 .envelope
-                .pointer("/principal_server_id")
+                .pointer("/station_id")
                 .and_then(Value::as_str);
             let candidate_authorize_digest =
                 soland_services::events::paired_replacement_authorize(record, existing)
                     .map(|paired| paired.canonical_digest.as_str());
-            candidate_principal_server_id != Some(principal_server_id)
+            candidate_station_id != Some(station_id)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
@@ -1900,7 +1900,7 @@ async fn build_reanchor_batch_receipt(
             arkret_wire::DeviceReanchorReceiptScope {
                 kind: arkret_wire::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
                 principal_id: payload.principal_id,
-                principal_server_id: payload.principal_server_id,
+                station_id: payload.station_id,
                 realm_id: reanchor.realm_id.clone(),
                 previous_device_generation: payload.previous_device_generation,
                 new_device_generation: payload.new_device_generation,
@@ -2150,7 +2150,7 @@ mod tests {
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
                 principal_did: principal_did.clone(),
-                principal_server_id: arkret_identifiers::DidCoreId::new(
+                station_id: arkret_identifiers::DidCoreId::new(
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),
@@ -2233,7 +2233,9 @@ mod tests {
     fn managed_agent_create_cannot_get_self_principal_pcr_context() {
         let mut envelopes = sdk_canonical_self_principal_bootstrap_unit();
         let mut create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
-        create.executed_by = Some(crate::test_actor_id_str("did:web:controller.example"));
+        create.executed_by = Some(arkret_wire::ActorId::service(crate::test_actor_id_str(
+            "did:web:controller.example",
+        )));
         create.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );

@@ -135,7 +135,7 @@ fn initial_submission(
             basis_ref: LeaseBasisRef::Seal(
                 SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ),
-            actor_id,
+            actor_id: arkret_wire::ActorId::service(actor_id),
             device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap(),
             scope_ref: event.scope_ref.clone(),
             action: event.kind.as_str().to_owned(),
@@ -209,7 +209,7 @@ fn key_authorize_envelope(
         "event_id": "ak:event:AaWlxNyGs0FzlOCJpyhjSRcmOcoYvk0qQ4X91NlGuKSZ",
         "kind": "ak.agent.key.authorize",
         "actor_id": agent_id,
-        "principal_server_id": service_id,
+        "station_id": service_id,
         "executed_by": controller,
         "authorization_ref": record.controller_authorization_ref.as_str(),
         "realm_id": record.principal_control_realm_id.as_str(),
@@ -426,8 +426,9 @@ fn bind_pairing_request_to_controller_device(
     let mut proof = body.requested_scope_disclosure.proofs[0].clone();
     proof.verification_method =
         arkret_wire::DidUrl::new(format!("{}#{device_id}", web_did(controller_id))).unwrap();
-    body.authorize_event.event.executed_by =
-        Some(crate::test_actor_id_str(&web_did(controller_id)));
+    body.authorize_event.event.executed_by = Some(arkret_wire::ActorId::service(
+        crate::test_actor_id_str(&web_did(controller_id)),
+    ));
     body.authorize_event.event.proofs = vec![proof.into()];
 }
 

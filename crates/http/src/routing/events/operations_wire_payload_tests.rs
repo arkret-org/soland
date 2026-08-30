@@ -10,7 +10,7 @@ const TEST_RELATION: &str = "ak:relation:AZEvldDJcWI9IRHqP2BMibDDfc59Ax_LwrbsrQm
 const TEST_CIRCLE: &str = "ak:circle:AQk4t8f1mPAFEQjKNzmTl_TZMxmpSbc_1ldQlxRUZBZ7";
 const TEST_ISSUER: &str = "ak:did_core:web:alice.example";
 const TEST_SUBJECT: &str = "ak:did_core:web:bob.example";
-const TEST_PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+const TEST_STATION: &str = "ak:did_core:web:soland.example";
 
 fn wire_operation(kind: arkret_wire::EventKind, payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
@@ -116,7 +116,7 @@ fn capability_grant_payload() -> Value {
         "realm_id": TEST_REALM,
         "issuer_id": TEST_ISSUER,
         "subject": TEST_SUBJECT,
-        "subject_principal_server_id": TEST_PRINCIPAL_SERVER,
+        "subject_station_id": TEST_STATION,
         "actions": ["ak.strand.read"],
         "resources": [{"kind": "strand", "realm_id": TEST_REALM, "strand_id": TEST_STRAND}],
         "issued_at": "2026-08-17T00:00:00.000Z",
@@ -146,9 +146,13 @@ fn capability_grant_resources_pass_the_artifact_schema() {
 
 #[test]
 fn membership_target_reads_actor_id() {
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(TEST_SUBJECT).unwrap(),
+        arkret_wire::DidCoreId::new(TEST_STATION).unwrap(),
+    ));
     let canonical = wire_operation(
         arkret_wire::EventKind::MemberState,
-        json!({"actor_id": TEST_SUBJECT, "membership": "join"}),
+        json!({"actor_id": actor, "membership": "join"}),
     );
-    assert_eq!(membership_target(&canonical), Some(TEST_SUBJECT));
+    assert_eq!(membership_target(&canonical), Some(actor));
 }

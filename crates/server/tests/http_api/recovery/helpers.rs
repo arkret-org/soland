@@ -105,8 +105,10 @@ fn register_recovery_policy_grant(
                 Sha256::digest(presentation.grant_jwt.as_bytes()).into(),
             ),
             "issuer_id": "ak:did_core:web:coauth.example",
-            "subject_id": subject,
-            "service_account_id": "recovery-policy-fixture",
+            "account_id": {
+                "principal_id": subject,
+                "station_id": state.service_id()
+            },
             "device_id": device_id,
             "audience_id": state.service_id(),
             "scopes": [
@@ -353,7 +355,9 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
         .cloned()
         .expect("notary fixture Seal covers a Control Move");
     let op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
+        issuer_id: arkret_wire::ActorId::service(
+            arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
+        ),
         op: arkret_state::lattice::SealedOp::new(
             move_id,
             arkret_wire::LatticeOp {
@@ -577,23 +581,25 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
     let now = chrono::Utc::now();
     let device_id = RECOVERY_TEST_DEVICE;
     let actor_core = fixture_actor_core_id(actor).to_string();
-    let service_account_id = if let Some(account) = state
+    let principal_id = fixture_actor_core_id(actor);
+    let account_id =
+        arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id().clone());
+    let account_pk = if let Some(account) = state
         .test_persistence()
         .accounts()
-        .get(&actor_core)
+        .get(&account_id)
         .await
         .unwrap()
     {
-        account.id
+        account.pk
     } else {
-        let account_id =
-            arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string()).unwrap();
         state
             .test_persistence()
             .accounts()
             .put(&soland_storage::AccountRecord {
-                id: account_id.clone(),
-                principal_id: fixture_actor_core_id(actor),
+                pk: soland_storage::AccountPk(1),
+                principal_id,
+                station_id: state.service_core_id().clone(),
                 localpart: "recovery-test".to_owned(),
                 display_name: None,
                 bio: None,
@@ -601,15 +607,14 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
                 created_at: now,
             })
             .await
-            .unwrap();
-        account_id
+            .unwrap()
     };
     state
         .test_persistence()
         .sessions()
         .put(&SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
-            service_account_id,
+            account_pk,
             actor: actor_core.clone(),
             device_id: device_id.to_owned(),
             audience: state.service_id().clone(),

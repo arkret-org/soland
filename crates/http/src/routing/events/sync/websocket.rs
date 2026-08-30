@@ -213,7 +213,7 @@ pub(crate) fn advertise_websocket_binding(
     );
     description
         .supported_operation_bundles
-        .push("ak.operation_bundle.principal_server.websocket.v1".to_owned());
+        .push("ak.operation_bundle.station.websocket.v1".to_owned());
     if !description
         .supported_profiles
         .iter()
@@ -1074,7 +1074,7 @@ async fn run_multiplex(
                     close_code = Some(WebSocketCloseCode::PolicyViolation);
                     break;
                 };
-                if grant.subject_id.as_str() != session.actor
+                if grant.account_id.principal_id.as_str() != session.actor
                     || device_id != session.device_id
                     || grant.audience_id.as_str() != session.audience
                     || grant.expires_at <= chrono::Utc::now()
@@ -1668,7 +1668,9 @@ async fn run_events_channel(
                 );
                 return events_resync(&sender, &channel_id).await;
             };
-            if !actor_filter.is_empty() && !actor_filter.contains(envelope.actor_id.as_str()) {
+            if !actor_filter.is_empty()
+                && !actor_filter.contains(envelope.actor_id.signing_principal_id().as_str())
+            {
                 continue;
             }
             let cursor = sync_token_for_events_query(
@@ -1753,7 +1755,9 @@ async fn run_events_channel(
                     }
                     continue;
                 };
-                if !actor_filter.is_empty() && !actor_filter.contains(envelope.actor_id.as_str()) {
+                if !actor_filter.is_empty()
+                    && !actor_filter.contains(envelope.actor_id.signing_principal_id().as_str())
+                {
                     continue;
                 }
                 if !emit_events_event(&sender, &channel_id, &realm_id, &live_cursor, &envelope)

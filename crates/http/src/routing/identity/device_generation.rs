@@ -59,10 +59,8 @@ pub async fn active_device_revocation_gate_selector(
         arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
             ServiceError::SchemaViolation(format!("principal id is invalid: {error}"))
         })?;
-    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| {
-            ServiceError::Internal(format!("local Principal Server id is invalid: {error}"))
-        })?;
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| ServiceError::Internal(format!("local Station id is invalid: {error}")))?;
     let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
         .map_err(|error| ServiceError::SchemaViolation(format!("device id is invalid: {error}")))?;
     let device = state
@@ -88,9 +86,9 @@ pub async fn active_device_revocation_gate_selector(
         .ok_or_else(|| {
             ServiceError::Conflict("accepted device authorization Event is unavailable".to_owned())
         })?;
-    let event_principal_server_id = authorize_event
+    let event_station_id = authorize_event
         .envelope
-        .get("principal_server_id")
+        .get("station_id")
         .and_then(Value::as_str);
     let event_device_id = authorize_event
         .envelope
@@ -99,10 +97,10 @@ pub async fn active_device_revocation_gate_selector(
     if !accepted_authorization_binds_authority_tuple(
         authorize_event.actor_id.as_str(),
         authorize_event.kind.as_str(),
-        event_principal_server_id,
+        event_station_id,
         event_device_id,
         principal_id.as_str(),
-        principal_server_id.as_str(),
+        station_id.as_str(),
         device_id.as_str(),
     ) {
         return Err(ServiceError::Conflict(
@@ -122,7 +120,7 @@ pub async fn active_device_revocation_gate_selector(
     }
     Ok(soland_storage::DeviceRevocationGateSelector {
         principal_id,
-        principal_server_id,
+        station_id,
         device_id: device_id.to_string(),
         target_device_authorize_event_id: target_device_authorize_event_id.to_string(),
         target_device_generation_ref,
@@ -132,24 +130,24 @@ pub async fn active_device_revocation_gate_selector(
 /// `device-lifecycle.md` — the accepted `ak.device.authorize` Event a derived
 /// selector points at MUST re-verify the whole local account-authority tuple
 /// verbatim before the selector may be used: the same principal actor, the
-/// `ak.device.authorize` kind, this exact Principal Server, and the same
+/// `ak.device.authorize` kind, this exact Station, and the same
 /// device. The same all-or-nothing re-check covers genesis, pairing and
 /// re-anchor writers, because all three reach durable state only through this
 /// selector. A selector is never partially trusted: one mismatched member is a
 /// conflict, and the caller MUST NOT fall back to a placeholder Event id,
-/// principal server or device.
+/// Station or device.
 fn accepted_authorization_binds_authority_tuple(
     event_actor_id: &str,
     event_kind: &str,
-    event_principal_server_id: Option<&str>,
+    event_station_id: Option<&str>,
     event_device_id: Option<&str>,
     principal_id: &str,
-    principal_server_id: &str,
+    station_id: &str,
     device_id: &str,
 ) -> bool {
     event_actor_id == principal_id
         && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-        && event_principal_server_id == Some(principal_server_id)
+        && event_station_id == Some(station_id)
         && event_device_id == Some(device_id)
 }
 
@@ -289,7 +287,7 @@ fn reanchor_unit_fingerprint(
         "{}\u{0}{}\u{0}{}",
         reanchor
             .envelope
-            .pointer("/principal_server_id")
+            .pointer("/station_id")
             .and_then(Value::as_str)?,
         reanchor.canonical_digest,
         authorize.canonical_digest,
@@ -548,22 +546,22 @@ mod tests {
     }
 
     const TUPLE_PRINCIPAL: &str = "ak:did_core:webvh:z6mkfixture:alice.example";
-    const TUPLE_PRINCIPAL_SERVER: &str = "ak:did_core:web:soland.example";
+    const TUPLE_STATION: &str = "ak:did_core:web:soland.example";
     const TUPLE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-000000000030";
 
     fn binds_tuple(
         actor_id: &str,
         kind: &str,
-        principal_server_id: Option<&str>,
+        station_id: Option<&str>,
         device_id: Option<&str>,
     ) -> bool {
         accepted_authorization_binds_authority_tuple(
             actor_id,
             kind,
-            principal_server_id,
+            station_id,
             device_id,
             TUPLE_PRINCIPAL,
-            TUPLE_PRINCIPAL_SERVER,
+            TUPLE_STATION,
             TUPLE_DEVICE,
         )
     }
@@ -574,12 +572,12 @@ mod tests {
         assert!(binds_tuple(
             TUPLE_PRINCIPAL,
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
-            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_STATION),
             Some(TUPLE_DEVICE),
         ));
     }
 
-    /// One mismatched member — actor, kind, Principal Server or device — is
+    /// One mismatched member — actor, kind, Station or device — is
     /// enough to reject. Nothing is trusted partially, and a missing member is
     /// never treated as a wildcard.
     #[test]
@@ -588,13 +586,13 @@ mod tests {
         assert!(!binds_tuple(
             "ak:did_core:webvh:z6mkfixture:mallory.example",
             authorize,
-            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_STATION),
             Some(TUPLE_DEVICE),
         ));
         assert!(!binds_tuple(
             TUPLE_PRINCIPAL,
             arkret_wire::event_kind_str::DEVICE_REANCHOR,
-            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_STATION),
             Some(TUPLE_DEVICE),
         ));
         assert!(!binds_tuple(
@@ -612,13 +610,13 @@ mod tests {
         assert!(!binds_tuple(
             TUPLE_PRINCIPAL,
             authorize,
-            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_STATION),
             Some("ak:device:01904100-0000-7000-8000-000000000031"),
         ));
         assert!(!binds_tuple(
             TUPLE_PRINCIPAL,
             authorize,
-            Some(TUPLE_PRINCIPAL_SERVER),
+            Some(TUPLE_STATION),
             None
         ));
     }
@@ -672,7 +670,7 @@ mod tests {
                 reanchor_a,
                 "ak.device.reanchor",
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                json!({"principal_server_id": "ak:did_core:webvh:z6mkservera", "payload": {
+                json!({"station_id": "ak:did_core:webvh:z6mkservera", "payload": {
                     "new_device_generation": 2,
                 }}),
             ),
@@ -686,7 +684,7 @@ mod tests {
                 reanchor_b,
                 "ak.device.reanchor",
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-                json!({"principal_server_id": "ak:did_core:webvh:z6mkserverb", "payload": {
+                json!({"station_id": "ak:did_core:webvh:z6mkserverb", "payload": {
                     "new_device_generation": 2,
                 }}),
             ),
@@ -706,7 +704,7 @@ mod tests {
                 higher,
                 "ak.device.reanchor",
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-                json!({"principal_server_id": "ak:did_core:webvh:z6mkservera", "payload": {
+                json!({"station_id": "ak:did_core:webvh:z6mkservera", "payload": {
                     "new_device_generation": 3,
                 }}),
             ),

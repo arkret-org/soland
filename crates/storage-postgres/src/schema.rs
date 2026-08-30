@@ -35,7 +35,7 @@ diesel::table! {
     accounts (pk) {
         pk -> Int8,
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
         disabled_at -> Nullable<Timestamptz>,
@@ -155,9 +155,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    applet_managed_identities (applet_id, target_principal_server_id) {
+    applet_managed_identities (applet_id, target_station_id) {
         applet_id -> Text,
-        target_principal_server_id -> Text,
+        target_station_id -> Text,
         record -> Jsonb,
         accepted_at -> Timestamptz,
     }
@@ -469,9 +469,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_revocation_linearization_heads (principal_id, principal_server_id, device_id, target_device_authorize_event_id, target_device_generation_ref) {
+    device_revocation_linearization_heads (principal_id, station_id, device_id, target_device_authorize_event_id, target_device_generation_ref) {
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         device_id -> Text,
         target_device_authorize_event_id -> Text,
         target_device_generation_ref -> Int8,
@@ -484,7 +484,7 @@ diesel::table! {
     device_revocation_targets (proposal_digest) {
         proposal_digest -> Text,
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         device_id -> Text,
         target_device_authorize_event_id -> Text,
         target_device_generation_ref -> Int8,
@@ -496,9 +496,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    device_revocation_gate_receipts (principal_id, principal_server_id, device_id, target_device_authorize_event_id, target_device_generation_ref, action_class, intent_digest) {
+    device_revocation_gate_receipts (principal_id, station_id, device_id, target_device_authorize_event_id, target_device_generation_ref, action_class, intent_digest) {
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         device_id -> Text,
         target_device_authorize_event_id -> Text,
         target_device_generation_ref -> Int8,
@@ -517,7 +517,7 @@ diesel::table! {
         proposal_event_id -> Text,
         covering_seal_id -> Text,
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         device_id -> Text,
         target_device_authorize_event_id -> Text,
         target_device_generation_ref -> Int8,
@@ -1136,7 +1136,6 @@ diesel::table! {
         realm_id -> Text,
         inviter_id -> Text,
         invitee_id -> Nullable<Text>,
-        invite_delivery_target -> Nullable<Jsonb>,
         introduction_evidence_digest -> Nullable<Text>,
         third_party_invite -> Nullable<Jsonb>,
         invite_token -> Text,
@@ -1222,7 +1221,7 @@ diesel::table! {
         session_grant_id -> Text,
         session_grant_cnf_jkt -> Text,
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         requesting_device_id -> Text,
         trust_domain -> Text,
         policy_id -> Uuid,
@@ -1330,9 +1329,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    principal_resolutions (principal_id, principal_server_id) {
+    principal_resolutions (principal_id, station_id) {
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         pcr_realm_id -> Text,
         genesis_event_id -> Text,
         current_event_id -> Text,
@@ -1342,9 +1341,9 @@ diesel::table! {
 }
 
 diesel::table! {
-    principal_resolution_events (principal_id, principal_server_id, event_id) {
+    principal_resolution_events (principal_id, station_id, event_id) {
         principal_id -> Text,
-        principal_server_id -> Text,
+        station_id -> Text,
         event_id -> Text,
         previous_event_id -> Nullable<Text>,
         method_history_head -> Text,

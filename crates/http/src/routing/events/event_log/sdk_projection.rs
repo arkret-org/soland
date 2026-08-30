@@ -375,14 +375,12 @@ fn sdk_event_from_record(
     let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
     let event_id = EventId::new(record.event_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let actor_id = arkret_wire::DidCoreId::new(record.actor_id.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let principal_server_id = object
-        .get("principal_server_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("stored event missing principal_server_id"))
+    let actor_id = object
+        .get("actor_id")
+        .cloned()
+        .ok_or_else(|| AppError::internal("stored event missing actor_id"))
         .and_then(|value| {
-            arkret_wire::DidCoreId::new(value.to_owned())
+            serde_json::from_value::<arkret_wire::ActorId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
     let created_at = object
@@ -448,7 +446,6 @@ fn sdk_event_from_record(
         kind: record.kind.clone().into(),
         realm_id: realm_id.clone(),
         actor_id,
-        principal_server_id,
         actor_seq: record.actor_seq,
         created_at,
         // `hlc` is a producer-signed optional field. A read path must preserve
@@ -483,8 +480,8 @@ fn sdk_event_from_record(
         })?,
         executed_by: object
             .get("executed_by")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_wire::DidCoreId::new(value.to_owned()).ok()),
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok()),
         authorization_ref: object
             .get("authorization_ref")
             .and_then(Value::as_str)

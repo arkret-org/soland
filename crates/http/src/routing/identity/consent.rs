@@ -45,7 +45,7 @@ use soland_services::identity::{
 
 use super::{AuthArgs, append_audit_log, now, query_param};
 use crate::routing::identity::device_messages::{
-    fanout_actor_private_update, principal_server_device_message_sender,
+    fanout_actor_private_update, station_device_message_sender,
 };
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -200,7 +200,7 @@ pub(crate) async fn apply_committed_consent_admission(
                     state,
                     admission.holder.as_str(),
                     ActorPrivateDeviceUpdate::AccountData {
-                        sender: principal_server_device_message_sender(state),
+                        sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
                             operation: ActorPrivateAccountDataOperation::Put,
                             account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -778,7 +778,7 @@ fn caller_signed_consent_event_identity(
     if DidCoreId::new(holder.to_owned()).is_err() {
         return Err(AppError::param_invalid("invalid holder principal id"));
     }
-    if event.actor_id.as_str() != holder {
+    if event.actor_id.signing_principal_id().as_str() != holder {
         return Err(AppError::param_invalid(
             "the submitted Event must be authored by the path holder",
         ));
@@ -901,8 +901,7 @@ fn consent_cell_id_for_consent_id(consent_id: &str) -> Result<CellRef, ConsentRe
 /// Spec section 2.1 — the Event actor and the authenticated holder are the same
 /// principal, and consent state is written only into that holder's own cell.
 fn consent_event_holder(operation: &Operation) -> Result<DidCoreId, ConsentRejection> {
-    let sender = operation.context.sender.as_str().to_owned();
-    DidCoreId::new(sender).map_err(|_| ConsentRejection::schema("invalid holder principal id"))
+    Ok(operation.context.sender.signing_principal_id().clone())
 }
 
 fn validate_consent_intent(holder: &DidCoreId, peer: &DidCoreId) -> Result<(), ConsentRejection> {
@@ -1210,33 +1209,37 @@ async fn consent_invalidation_peer_ids(
     peer: &DidCoreId,
 ) -> Vec<String> {
     let mut services = BTreeSet::new();
-    for actor in [holder, peer] {
-        let records = match state.contacts().contacts_for_actor(actor).await {
-            Ok(records) => records,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    actor = %actor.as_str(),
-                    holder = %holder.as_str(),
-                    peer = %peer.as_str(),
-                    "failed to list contacts for consent invalidation target discovery"
-                );
-                continue;
-            }
-        };
-        for record in records {
-            let same_pair = (&record.requester_id == holder && &record.target_id == peer)
-                || (&record.requester_id == peer && &record.target_id == holder);
-            if !same_pair {
-                continue;
-            }
-            if let Some(service_id) = record
-                .peer_host_id
-                .as_ref()
-                .filter(|value| value.as_str() != state.service_id())
-            {
-                services.insert(service_id.to_string());
-            }
+    let holder_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        holder.clone(),
+        state.service_core_id().clone(),
+    ));
+    let records = match state.contacts().contacts_for_actor(&holder_actor).await {
+        Ok(records) => records,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                actor = %holder,
+                holder = %holder.as_str(),
+                peer = %peer.as_str(),
+                "failed to list contacts for consent invalidation target discovery"
+            );
+            return Vec::new();
+        }
+    };
+    for record in records {
+        let same_pair = (record.requester_id.signing_principal_id() == holder
+            && record.target_id.signing_principal_id() == peer)
+            || (record.requester_id.signing_principal_id() == peer
+                && record.target_id.signing_principal_id() == holder);
+        if !same_pair {
+            continue;
+        }
+        if let Some(service_id) = record
+            .peer_host_id
+            .as_ref()
+            .filter(|value| value.as_str() != state.service_id())
+        {
+            services.insert(service_id.to_string());
         }
     }
     services.into_iter().collect()
@@ -1289,7 +1292,7 @@ mod tests {
             "realm_id": HOLDER_PCR,
             "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
             "actor_id": actor,
-            "principal_server_id": "ak:did_core:web:soland.test",
+            "station_id": "ak:did_core:web:soland.test",
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],

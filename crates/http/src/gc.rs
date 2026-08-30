@@ -97,7 +97,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
             candidates.push(GcCandidate {
                 event_digest: digest,
                 realm_id: realm_id.to_string(),
-                issuer_id: record.event.actor_id.clone(),
+                issuer_id: record.event.actor_id.signing_principal_id().clone(),
                 created_at: record.event.created_at,
                 reason: "not_in_live_seal_coverage".to_owned(),
             });

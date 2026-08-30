@@ -26,11 +26,7 @@ impl MemoryAccountStore {
     /// through `AppState::hydrate`, where writes can be awaited normally.
     pub(crate) fn seed(&self, record: AccountRecord) {
         self.data.lock().insert(
-            AccountId::new(
-                record.principal_id.clone(),
-                record.principal_server_id.clone(),
-            )
-            .to_string(),
+            AccountId::new(record.principal_id.clone(), record.station_id.clone()).to_string(),
             record.clone(),
         );
 
@@ -116,11 +112,7 @@ impl AccountStore for MemoryAccountStore {
         let mut stored = record.clone();
         stored.pk = account_pk;
         data.insert(
-            AccountId::new(
-                record.principal_id.clone(),
-                record.principal_server_id.clone(),
-            )
-            .to_string(),
+            AccountId::new(record.principal_id.clone(), record.station_id.clone()).to_string(),
             stored,
         );
         drop(data);
@@ -374,10 +366,7 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
                         ))
                     })?;
                 Ok((
-                    AccountId::new(
-                        account.principal_id.clone(),
-                        account.principal_server_id.clone(),
-                    ),
+                    AccountId::new(account.principal_id.clone(), account.station_id.clone()),
                     record.clone(),
                 ))
             })

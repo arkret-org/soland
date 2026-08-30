@@ -145,13 +145,13 @@ async fn install_preview_endpoint(
     let session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
     let basis = &preview.authoring_request_basis;
-    if basis.target_principal_server_id.as_str() != state.service_id()
+    if basis.target_station_id.as_str() != state.service_id()
         || basis.install_actor_id.as_str() != session.actor
         || basis.applet_id != preview.applet_package.applet_id
         || basis.service_id != preview.applet_package.service_id
         || preview.applet_package.package_digest.as_ref() != Some(&basis.package_digest)
     {
-        return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Principal Server, or Applet package")
+        return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Station, or Applet package")
             .with_wire_code("applet_install_plan_mismatch"));
     }
     let issued_at = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
@@ -280,8 +280,8 @@ async fn install_endpoint(
     let expected_ps_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    require_current_principal_server_authoring_binding(
-        basis.target_principal_server_id.as_str(),
+    require_current_station_authoring_binding(
+        basis.target_station_id.as_str(),
         &authoring_request.proof.verification_method,
         state.service_id(),
         &expected_ps_method,
@@ -371,7 +371,7 @@ async fn install_endpoint(
     // Authentication alone is insufficient â€” the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
     // `state.authorization().check` is authoritative here. fail-closed.
-    require_realm_admin(state, &session.actor, &basis.effective_scope).await?;
+    require_realm_admin(state, &session, &basis.effective_scope).await?;
 
     let response = register_package_install(
         state,
@@ -414,13 +414,13 @@ fn applet_authoring_preview_subject_key(
         json!({
             "purpose": "install_bot",
             "applet_id": basis.applet_id,
-            "target_principal_server_id": basis.target_principal_server_id,
+            "target_station_id": basis.target_station_id,
         })
     } else if let Some(basis) = request.basis.ghost() {
         json!({
             "purpose": "provision_ghost",
             "applet_id": basis.applet_id,
-            "target_principal_server_id": basis.target_principal_server_id,
+            "target_station_id": basis.target_station_id,
             "external_ref": basis.external_ref,
         })
     } else {
@@ -551,19 +551,19 @@ fn require_first_install_commit_fresh(
     )
 }
 
-fn require_current_principal_server_authoring_binding(
-    target_principal_server_id: &str,
+fn require_current_station_authoring_binding(
+    target_station_id: &str,
     proof_verification_method: &str,
-    current_principal_server_id: &str,
+    current_station_id: &str,
     current_verification_method: &str,
 ) -> Result<(), AppError> {
-    if target_principal_server_id == current_principal_server_id
+    if target_station_id == current_station_id
         && proof_verification_method == current_verification_method
     {
         return Ok(());
     }
     Err(AppError::param_invalid(
-        "install authoring request targets or is signed by a non-current Principal Server key",
+        "install authoring request targets or is signed by a non-current Station key",
     )
     .with_wire_code("authoring_request_proof_invalid"))
 }
@@ -587,7 +587,7 @@ async fn revoke_preview_endpoint(
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &preview.effective_scope)?;
-    require_realm_admin(state, &session.actor, &preview.effective_scope).await?;
+    require_realm_admin(state, &session, &preview.effective_scope).await?;
     json_ok(build_revoke_plan(state, &record, &preview)?)
 }
 
@@ -618,7 +618,7 @@ async fn revoke_install_endpoint(
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &revoke.effective_scope)?;
-    require_realm_admin(state, &session.actor, &revoke.effective_scope).await?;
+    require_realm_admin(state, &session, &revoke.effective_scope).await?;
 
     // A durable execution owns the idempotency decision. Exact replay resumes
     // its persisted submissions even when the live projection has moved since
@@ -916,8 +916,7 @@ fn build_revoke_plan(
         let active_grant_ids = state
             .authorization()
             .grants_for_subject(
-                package.service_id.as_str(),
-                Some(record.bot_actor_principal_server_id.as_str()),
+                &arkret_wire::ActorId::service(package.service_id.clone()),
                 &scope_realm_id,
             )
             .into_iter()
@@ -976,7 +975,7 @@ fn validate_revoke_submissions(
     for submission in &revoke.capability_revoke_events {
         let event = &submission.event;
         if event.kind != EventKind::CapabilityRevoke
-            || event.actor_id.as_str() != admin_actor
+            || event.actor_id.signing_principal_id().as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {
             return Err(AppError::param_invalid(
@@ -1024,7 +1023,7 @@ fn validate_revoke_submissions(
     for submission in &revoke.membership_state_events {
         let event = &submission.event;
         if event.kind != EventKind::MemberState
-            || event.actor_id.as_str() != admin_actor
+            || event.actor_id.signing_principal_id().as_str() != admin_actor
             || event.scope_ref != plan.effective_scope
         {
             return Err(AppError::param_invalid(
@@ -1215,10 +1214,9 @@ async fn preview_ghost_actor_endpoint(
     let basis = AppletGhostAuthoringRequestBasis {
         schema: AppletGhostAuthoringRequestBasis::SCHEMA.to_owned(),
         purpose: AppletManagedActorPurpose::ProvisionGhost,
-        target_principal_server_id: arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| {
-                AppError::internal(format!("configured service_id is invalid: {error}"))
-            })?,
+        target_station_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
+            |error| AppError::internal(format!("configured service_id is invalid: {error}")),
+        )?,
         applet_id: record.applet_id.clone(),
         service_id: record.package.service_id,
         realm_id: preview.realm_id,
@@ -1319,8 +1317,8 @@ async fn provision_ghost_actor_endpoint(
     let expected_ps_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    require_current_principal_server_authoring_binding(
-        authoring_basis.target_principal_server_id.as_str(),
+    require_current_station_authoring_binding(
+        authoring_basis.target_station_id.as_str(),
         provision
             .authoring_request
             .proof
@@ -1432,7 +1430,6 @@ async fn provision_ghost_actor_endpoint(
         })?;
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id,
-            actor_principal_server_id: existing.actor_principal_server_id.clone(),
             managed_actor_provision_ref: existing.managed_actor_provision_event.event_id.clone(),
             principal_control_realm_id: existing.principal_control_realm_id(),
             profile_event_ref: existing.profile_event.event_id.clone(),
@@ -1446,14 +1443,14 @@ async fn provision_ghost_actor_endpoint(
 
     let now = chrono::Utc::now();
     for existing_record in applet_records(state).await? {
-        let candidate = ghost_actor_id.as_str();
+        let candidate = ghost_actor_id.signing_principal_id().as_str();
         if existing_record.package.service_id.as_str() == candidate
             || existing_record.package.controller_id.as_str() == candidate
             || existing_record.package.bot_actor_id.as_str() == candidate
             || existing_record
                 .ghosts
                 .iter()
-                .any(|ghost| ghost.ghost_actor_id.as_str() == candidate)
+                .any(|ghost| ghost.ghost_actor_id.signing_principal_id().as_str() == candidate)
         {
             return Err(AppError::conflict(
                 "Ghost actor identity is already used by an Applet service, controller, Bot, or Ghost",
@@ -1461,7 +1458,7 @@ async fn provision_ghost_actor_endpoint(
             .with_wire_code("applet_managed_actor_provision_invalid"));
         }
     }
-    let (authorization_ref, managed_provision) =
+    let (authorization_ref, _) =
         validate_signed_ghost_provision_events(state, &record, &provision).await?;
     let profile_event_ref = provision
         .managed_actor_bundle
@@ -1480,7 +1477,6 @@ async fn provision_ghost_actor_endpoint(
     })?;
     let outcome = GhostActorProvisionOutcome {
         ghost_actor_id: ghost_actor_id.clone(),
-        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
         managed_actor_provision_ref: provision
             .managed_actor_bundle
             .managed_actor_provision_event
@@ -1496,7 +1492,6 @@ async fn provision_ghost_actor_endpoint(
     };
     let ghost = GhostActorRecord {
         ghost_actor_id: ghost_actor_id.clone(),
-        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
         external_ref: authoring_basis.external_ref.clone(),
         display_name: authoring_basis.display_name.clone(),
         request_digest: Hash::new(request_digest.clone()).map_err(|error| {
@@ -1537,7 +1532,7 @@ async fn provision_ghost_actor_endpoint(
     let commit_result = crate::routing::events::event_log::submit_ghost_provision_batch(
         state,
         service_id.as_str(),
-        ghost_actor_id.as_str(),
+        ghost_actor_id.signing_principal_id().as_str(),
         realm_id.as_str(),
         provision
             .managed_actor_bundle
@@ -1550,7 +1545,7 @@ async fn provision_ghost_actor_endpoint(
             .clone(),
         provision.managed_actor_bundle.profile_event.clone(),
         typed_path_applet_id,
-        record.bot_actor_principal_server_id.clone(),
+        record.bot_actor_id.route_service_id().clone(),
         encode_applet_identity(&record.identity)?,
         producer_verification_method,
         producer_signing_key,
@@ -1688,7 +1683,7 @@ async fn resolve_actor_endpoint(
         if record.revoked_at.is_some() {
             continue;
         }
-        if record.bot_actor_id == actor_id {
+        if record.bot_actor_id.signing_principal_id() == &actor_id {
             return json_ok(AppletActorView {
                 exists: true,
                 actor_id: Some(actor_id),
@@ -1699,7 +1694,7 @@ async fn resolve_actor_endpoint(
         if let Some(ghost) = record
             .ghosts
             .iter()
-            .find(|ghost| ghost.ghost_actor_id == actor_id)
+            .find(|ghost| ghost.ghost_actor_id.signing_principal_id() == &actor_id)
         {
             return json_ok(AppletActorView {
                 exists: true,
@@ -1851,7 +1846,7 @@ async fn third_party_users_endpoint(
                 && ghost.external_ref.instance_id == instance_id
                 && ghost.external_ref.external_id == external_id
         }) {
-            let actor_id = ghost.ghost_actor_id.clone();
+            let actor_id = ghost.ghost_actor_id.signing_principal_id().clone();
             return json_ok(AppletActorView {
                 exists: true,
                 actor_id: Some(actor_id),
@@ -1988,7 +1983,7 @@ mod revoke_saga_tests {
     fn authoring_request_rejects_wrong_target_and_stale_but_valid_signing_key() {
         let current_server = "ak:did_core:web:principal.example";
         let current_key = "did:web:principal.example#notary-key-2";
-        let wrong_target = require_current_principal_server_authoring_binding(
+        let wrong_target = require_current_station_authoring_binding(
             "ak:did_core:web:other.example",
             current_key,
             current_server,
@@ -2005,7 +2000,7 @@ mod revoke_saga_tests {
         // admission authority.
         let retired_key_signature_is_valid = true;
         assert!(retired_key_signature_is_valid);
-        let stale_key = require_current_principal_server_authoring_binding(
+        let stale_key = require_current_station_authoring_binding(
             current_server,
             "did:web:principal.example#notary-key-1",
             current_server,

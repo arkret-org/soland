@@ -29,15 +29,15 @@ const PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 600;
 #[salvo::oapi::endpoint(operation_id = "ak.open.identity.read.resolution", tags("identity"))]
 async fn open_principal_resolution(
     principal_id: PathParam<String>,
-    principal_server_id: QueryParam<String, true>,
+    station_id: QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<PublicPrincipalResolution> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let principal_id = DidCoreId::new(principal_id.into_inner())
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
-    let principal_server_id = DidCoreId::new(principal_server_id.into_inner())
-        .map_err(|_| AppError::param_invalid("invalid principal_server_id"))?;
-    let authority = AccountId::new(principal_id.clone(), principal_server_id);
+    let station_id = DidCoreId::new(station_id.into_inner())
+        .map_err(|_| AppError::param_invalid("invalid station_id"))?;
+    let authority = AccountId::new(principal_id.clone(), station_id);
     let (evidence, _) = current_public_principal_resolution(state, &authority).await?;
     json_ok(evidence)
 }
@@ -73,7 +73,7 @@ pub(crate) async fn current_public_principal_resolution(
         arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
             PrincipalResolutionProjectionAttestationCore {
                 principal_id: authority.principal_id.clone(),
-                principal_server_id: authority.principal_server_id.clone(),
+                station_id: authority.station_id.clone(),
                 resolution_projection: record.projection.clone(),
                 method_history_evidence_digest,
                 issued_at,
@@ -88,7 +88,7 @@ pub(crate) async fn current_public_principal_resolution(
         })?;
     let evidence = PublicPrincipalResolution {
         principal_id: authority.principal_id.clone(),
-        principal_server_id: authority.principal_server_id.clone(),
+        station_id: authority.station_id.clone(),
         resolution_projection: record.projection,
         method_history_evidence,
         projection_attestation,

@@ -89,7 +89,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         reducer_profile: arkret_wire::CORE_REDUCER_PROFILE.to_owned(),
         schema_profile_refs: vec![
             arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),
-            arkret_wire::ProfileId::PRINCIPAL_SERVER_EVENTS_API_V1.to_owned(),
+            arkret_wire::ProfileId::STATION_EVENTS_API_V1.to_owned(),
         ],
         state_digest,
         frontier: arkret_state::SnapshotFrontier {
@@ -107,7 +107,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
             soft_failed_digest: None,
             quarantined_digest: None,
         }),
-        created_by: service_id.clone(),
+        created_by: arkret_wire::ActorId::service(service_id.clone()),
         created_at,
         authority_binding: arkret_state::AuthorityBinding {
             authority_kind: arkret_state::SnapshotAuthorityKind::RealmPolicySnapshotIssuer,

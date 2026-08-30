@@ -1,7 +1,6 @@
 use arkret_identifiers::DidCoreId;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
@@ -14,7 +13,6 @@ pub struct AdminInviteTokenItem {
     pub inviter_id: DidCoreId,
     pub created_by: DidCoreId,
     pub invitee_id: Option<DidCoreId>,
-    pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub token_hash: String,
     pub status: String,

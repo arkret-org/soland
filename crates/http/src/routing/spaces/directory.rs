@@ -49,8 +49,8 @@ use arkret_models_identity::{
 use arkret_server::{CursorAuthority, CursorAuthorityError, CursorBindingContext};
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AddressLinkKind, Audience, CellFamilyId, JoinRule, PayloadProof, PayloadSigner, RealmRef,
-    TargetDescriptor, parse_address, proof_kind, target_digest,
+    AccountId, AddressLinkKind, Audience, CellFamilyId, JoinRule, PayloadProof, PayloadSigner,
+    RealmRef, TargetDescriptor, parse_address, proof_kind, target_digest,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

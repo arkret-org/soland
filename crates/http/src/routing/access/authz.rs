@@ -123,8 +123,7 @@ async fn authz_check(
     let result = state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor: body.actor_id.signing_principal_id().as_str(),
-            actor_principal_server_id: Some(body.actor_id.route_service_id().as_str()),
+            actor: &body.actor_id,
             action: &body.action,
             resource: &resource_expr,
             realm_id: &realm_id,
@@ -386,11 +385,11 @@ async fn effective_grants(
         .and_then(|value| {
             DidCoreId::new(value).map_err(|_| AppError::param_invalid("subject is invalid"))
         })?;
-    let subject_principal_server_id = query_param(req, "subject_principal_server_id")
-        .ok_or_else(|| AppError::param_invalid("subject_principal_server_id is required"))
+    let subject_station_id = query_param(req, "subject_station_id")
+        .ok_or_else(|| AppError::param_invalid("subject_station_id is required"))
         .and_then(|value| {
             DidCoreId::new(value)
-                .map_err(|_| AppError::param_invalid("subject_principal_server_id is invalid"))
+                .map_err(|_| AppError::param_invalid("subject_station_id is invalid"))
         })?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::param_invalid("realm_id is required"))
@@ -406,7 +405,7 @@ async fn effective_grants(
         .transpose()?
         .unwrap_or_else(now);
     let subject_is_self = subject.as_str() == session.actor.as_str()
-        && subject_principal_server_id.as_str() == session.audience.as_str();
+        && subject_station_id.as_str() == session.audience.as_str();
     let caller_can_query_subject = subject_is_self
         || session_owns_realm(state, session.actor.as_str(), realm_id.as_str()).await;
     if !caller_can_query_subject {
@@ -417,8 +416,7 @@ async fn effective_grants(
     let grants = state
         .authorization()
         .grants_for_subject_at(
-            subject.as_str(),
-            Some(subject_principal_server_id.as_str()),
+            &arkret_wire::ActorId::hosted_principal(subject, subject_station_id),
             realm_id.as_str(),
             evaluated_at,
         )
@@ -441,7 +439,7 @@ fn capability_grant_from_authz_grant(
     let realm_id = RealmId::new(grant.realm_id.clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let issuer = grant.issuer_id.clone();
-    let subject = CapabilitySubject::CoreDid(grant.subject_id.clone());
+    let subject = CapabilitySubject::Actor(grant.subject_id.clone());
     let resource_selector = capability_resource_selector(&grant.realm_id, &grant.resource)?;
     let constraints = grant
         .constraints
@@ -454,9 +452,7 @@ fn capability_grant_from_authz_grant(
         schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
         realm_id: Some(realm_id),
         issuer_id: issuer,
-        issuer_principal_server_id: grant.issuer_principal_server_id,
         subject,
-        subject_principal_server_id: grant.subject_principal_server_id,
         actions: grant.actions,
         resources: vec![resource_selector],
         constraints,
@@ -803,10 +799,6 @@ async fn invites(
 fn invite_record_to_sdk(
     invite: soland_services::events::RealmInviteState,
 ) -> Result<Invite, AppError> {
-    let invite_delivery_target = invite
-        .invite_delivery_target
-        .clone()
-        .and_then(|target| serde_json::from_value::<InviteDeliveryTarget>(target).ok());
     let introduction_evidence_digest = invite
         .introduction_evidence_digest
         .clone()
@@ -820,14 +812,13 @@ fn invite_record_to_sdk(
             .map_err(|error| AppError::internal(error.to_string()))?,
         realm_id: RealmId::new(invite.realm_id.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-        inviter_id: arkret_wire::DidCoreId::new(invite.inviter_id.clone())
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        invitee_id: invite
+        inviter_account_id: serde_json::from_str(&invite.inviter_id)
+            .map_err(|error| AppError::internal(format!("stored inviter account id: {error}")))?,
+        invitee_account_id: invite
             .invitee_id
-            .map(arkret_wire::DidCoreId::new)
+            .map(|value| serde_json::from_str(&value))
             .transpose()
-            .map_err(|error| AppError::internal(error.to_string()))?,
-        invite_delivery_target,
+            .map_err(|error| AppError::internal(format!("stored invitee account id: {error}")))?,
         introduction_evidence_digest,
         third_party_invite: invite.third_party_invite,
         capability_grant_refs: Vec::new(),

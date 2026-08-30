@@ -108,7 +108,7 @@ impl MemoryDeviceRevocationState {
         }
         let acceptance_seq = self.allocate_seq((
             transition.selector.principal_id.clone(),
-            transition.selector.principal_server_id.clone(),
+            transition.selector.station_id.clone(),
             transition.selector.device_id.clone(),
         ));
         self.targets.insert(
@@ -296,7 +296,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
         let key = (
             (
                 request.principal_id.clone(),
-                request.principal_server_id.clone(),
+                request.station_id.clone(),
                 request.device_id.clone(),
             ),
             request.action_class.as_str().to_owned(),
@@ -319,7 +319,7 @@ impl DeviceRevocationStore for MemoryDeviceRevocationStore {
                 }),
             linearization_seq: state.allocate_seq((
                 request.principal_id.clone(),
-                request.principal_server_id.clone(),
+                request.station_id.clone(),
                 request.device_id.clone(),
             )),
             expires_at: linearized_at + chrono::Duration::seconds(30),

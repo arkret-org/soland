@@ -16,8 +16,8 @@ use super::*;
 /// introspection.
 ///
 /// Termination is two-sided and ordered:
-///  - **Auth-side (first):** call the Auth Server S2S `auth-sessions/logout` sub-operation so the
-///    grant rotation chain + browser session are terminated (§4.1 step 2).
+///  - **Auth-side (first):** call the Account Authority process S2S `auth-sessions/logout`
+///    sub-operation so the grant rotation chain + browser session are terminated (§4.1 step 2).
 ///  - **Principal-side (after Auth-side success):** revoke the principal's local bearer sessions
 ///    for the grant's device, remove push registrations, and drop queued to-device messages. It
 ///    does NOT issue an AccountStatusRecord, emit `ak.device.revoke`, or mark the durable device
@@ -32,7 +32,7 @@ pub(super) async fn logout(
     let _ = &aa; // header presence registered with the OpenAPI doc
     let state = depot.get_typed::<AppState>().expect("state injected");
 
-    // Development fallback: with no Auth Server introspection wired (dev mode
+    // Development fallback: with no Account Authority process introspection wired (dev mode
     // dev-login mints plain soland bearers, not DPoP-bound grants), treat the
     // Authorization bearer as a local session bearer and perform the
     // principal-side termination directly. Production keeps the strict
@@ -45,13 +45,13 @@ pub(super) async fn logout(
     }
 
     // §4.1 — identify the DPoP-scheme grant's subject + device by
-    // introspecting it against the Auth Server over the existing S2S channel.
+    // introspecting it against the Account Authority process over the existing S2S channel.
     let grant_jwt = dpop_token(req)
         .map(str::to_owned)
         .ok_or_else(|| AppError::unauthenticated("missing DPoP session grant"))?;
 
     let Some(grant) = introspect_session_grant_for_logout(state, &grant_jwt).await? else {
-        // A durable client logout journal can outlive the Auth Server's grant
+        // A durable client logout journal can outlive the Account Authority process's grant
         // row. `not_found` proves there is no active chain or Principal-side
         // metadata left to target, but §4.1 still requires the standard
         // Auth-side sub-operation to confirm idempotent completion before the
@@ -145,12 +145,12 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
     }
 }
 
-/// Development-mode hard logout: with no Auth Server introspection wired,
+/// Development-mode hard logout: with no Account Authority process introspection wired,
 /// `dev_login` mints plain soland session bearers (not DPoP-bound grants), so
 /// the Authorization bearer IS the local session bearer. Perform the
 /// principal-side termination directly (revoke the bearer session + remove
 /// push registrations + drop to-device), mirroring the production
-/// principal-side effects without an Auth Server round-trip. The durable
+/// principal-side effects without an Account Authority process round-trip. The durable
 /// device authorization remains active across logout and re-login.
 async fn dev_mode_local_logout(
     state: &AppState,
@@ -192,13 +192,14 @@ async fn introspect_session_grant_for_logout(
     state: &AppState,
     grant_jwt: &str,
 ) -> Result<Option<crate::wire::SessionGrantIntrospectGrant>, AppError> {
-    let response = super::super::auth_server_client::AuthServerClient::from_state(state)?
-        .introspect_logout_grant(grant_jwt)
-        .await?;
+    let response =
+        super::super::account_authority_client::AccountAuthorityClient::from_state(state)?
+            .introspect_logout_grant(grant_jwt)
+            .await?;
     classify_logout_introspection(response)
 }
 
-/// Preserve the Auth Server's closed introspection status instead of
+/// Preserve the Account Authority process's closed introspection status instead of
 /// collapsing both metadata-withholding states into the same 401.
 ///
 /// `not_found` is the expected durable-journal retry after a grant row has
@@ -239,7 +240,7 @@ fn invalid_logout_introspection(status: crate::wire::SessionGrantIntrospectStatu
     )
 }
 
-/// Auth-side trigger of the single hard logout: call the Auth Server's S2S
+/// Auth-side trigger of the single hard logout: call the Account Authority process's S2S
 /// `POST {gate_account_base_url}/auth-sessions/logout` sub-operation so the grant
 /// rotation chain + browser session are terminated (account-lifecycle §4.1
 /// step 2). When introspection returned grant metadata, the client DPoP proof
@@ -250,7 +251,7 @@ async fn trigger_auth_side_auth_session_logout(
     state: &AppState,
     grant_jwt: &str,
 ) -> Result<(), AppError> {
-    let body = super::super::auth_server_client::AuthServerClient::from_state(state)?
+    let body = super::super::account_authority_client::AccountAuthorityClient::from_state(state)?
         .logout_auth_session(grant_jwt, now())
         .await?;
     confirm_auth_side_logout(body)

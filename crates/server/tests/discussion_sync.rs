@@ -262,10 +262,6 @@ async fn seed_pending_invite(
             realm_id: realm_id.to_owned(),
             inviter_id: inviter_core,
             invitee_id: Some(invitee_core.clone()),
-            invite_delivery_target: Some(json!({
-                "recipient_id": state.service_id().clone(),
-                "recipient_kind": "principal_server"
-            })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_invite: None,
             invite_token: new_prefixed_uuid7("ak:invite-token:"),
@@ -284,12 +280,7 @@ async fn seed_pending_invite(
             realm_id: realm_id.to_owned(),
             state: "invite".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(state.service_id().to_string()),
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: Some(now),
             joined_at: now,
             updated_at: now,
@@ -717,7 +708,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         scope_ref,
         actor.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

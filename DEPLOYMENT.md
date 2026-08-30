@@ -183,7 +183,7 @@ global — soland has two distinct did:webvh paths:
   fetches `did-witness.json` whenever the log declares a witness policy and
   calls the SDK `verify_did_webvh_v1_chain_and_witness_bytes`, performing
   full chain + witness verification. The spec §3.4 requirement that every
-  v1 core principal_server MUST support did:webvh witness verification is
+  v1 core station MUST support did:webvh witness verification is
   satisfied by this external resolution path, not by the local store.
 
 ### Advanced environment reference
@@ -247,7 +247,7 @@ soland --bind "${SOLAND_BIND}" --help    # cheap startup sanity check
 
 ```ini
 [Unit]
-Description=soland — Arkret v1 principal server
+Description=soland — Arkret v1 Station
 After=network-online.target postgresql.service
 Wants=network-online.target
 

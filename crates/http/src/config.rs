@@ -257,12 +257,11 @@ pub struct AppConfig {
     /// soland consumes the resulting session grants and may expose DID provider
     /// primitives for trusted server-to-server calls.
     pub account_authority_url: Option<String>,
-    /// Optional fail-closed Account Authority service DID pin. When omitted,
-    /// the accepted AuthServer service-registration mapping for
-    /// `account_authority_url` supplies the runtime identity.
+    /// Deployment-private, fail-closed Account Authority signer identity pin.
+    /// It is never discovered or registered as an Arkret service role.
     pub account_authority_id: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
-    /// Auth Server, advertised to browser clients in
+    /// Authentication Method Provider, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
     /// client uses it verbatim as the `client_id` in its OIDC authorize
     /// request; coauth keys clients by ULID, so this MUST be the registered
@@ -276,7 +275,7 @@ pub struct AppConfig {
     /// unless `development_mode` is on. See [`crate::failpoints`].
     pub failpoints: crate::failpoints::FailpointRegistry,
     pub session_grant_introspection_url: Option<String>,
-    /// Exact Auth Server S2S hard-logout endpoint. This is intentionally
+    /// Exact Account Authority process S2S hard-logout endpoint. This is intentionally
     /// independent from session-grant introspection: the two operations may
     /// be routed or versioned separately and must never be derived from one
     /// another by string substitution.
@@ -495,7 +494,7 @@ pub struct AppConfig {
     /// Env: `SOLAND_RESUMABLE_UPLOAD_TTL_SECS` (default 86_400 = 24h).
     pub resumable_upload_incomplete_ttl_seconds: u64,
     /// Deployment trust domain id, used to bind peer authorization and
-    /// recovery transcripts to this Principal Server so the same proof bytes
+    /// recovery transcripts to this Station so the same proof bytes
     /// cannot be replayed cross-domain. Loaded from
     /// `SOLAND_TRUST_DOMAIN` (must match `ak:trust_domain:<scope>`,
     /// scope = lowercase alphanumerics/dot/dash/underscore/colon ≤128 chars).
@@ -958,9 +957,9 @@ impl AppConfig {
         let media = load_media_issuer_config(values);
         let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
         let account_authority_id = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
-        if account_authority_url.is_none() && account_authority_id.is_some() {
+        if account_authority_url.is_none() != account_authority_id.is_none() {
             anyhow::bail!(
-                "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
+                "SOLAND_ACCOUNT_AUTHORITY_URL and SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID must be configured together"
             );
         }
         if let Some(value) = account_authority_id.as_deref() {

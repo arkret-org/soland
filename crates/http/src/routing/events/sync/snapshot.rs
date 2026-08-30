@@ -175,7 +175,7 @@ pub(crate) async fn build_sync_snapshot(
             let hero_ids = roster
                 .iter()
                 .take(5)
-                .map(|member| member.actor_id.clone())
+                .map(|member| member.actor_id.signing_principal_id().clone())
                 .collect::<Vec<_>>();
             entry.timeline = Some(
                 arkret_models_collaboration::sync_frames::account_sync::Timeline {
@@ -470,7 +470,8 @@ async fn agent_signer_evidence_bundle_for_sync(
                 continue;
             };
             let expected_signer = event.executed_by.as_ref().unwrap_or(&event.actor_id);
-            if signer_id != expected_signer || verification_method != &producer.verification_method
+            if signer_id != expected_signer.signing_principal_id()
+                || verification_method != &producer.verification_method
             {
                 continue;
             }
@@ -536,10 +537,17 @@ async fn account_notification_delta(
             0,
         );
     };
+    let Ok(principal_id) = arkret_identifiers::DidCoreId::new(session.actor.clone()) else {
+        return (
+            arkret_models_collaboration::sync_frames::account_sync::NotificationContainer::default(
+            ),
+            after_cursor.notification_position,
+        );
+    };
     let Some(account) = state
         .identities()
         .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
-            actor_id: session.actor.clone(),
+            account_id: arkret_wire::AccountId::new(principal_id, state.service_core_id().clone()),
         })
         .await
         .ok()
@@ -555,7 +563,7 @@ async fn account_notification_delta(
         .deliveries()
         .list_account_deltas(
             soland_services::delivery::ListAccountNotificationDeltasQuery {
-                controller_account_pk: account.account_id,
+                controller_account_pk: account.account_pk,
                 recipient_id: state.service_id().clone(),
                 after_position: is_incremental.then_some(after_cursor.notification_position),
             },
@@ -1111,7 +1119,7 @@ pub(crate) fn annotate_message_ordered_log_siblings(
         slots
             .entry((
                 strand_id.to_owned(),
-                event.actor_id.as_str().to_owned(),
+                event.actor_id.signing_principal_id().as_str().to_owned(),
                 event.actor_seq,
             ))
             .or_default()
@@ -1479,7 +1487,10 @@ async fn notification_account_data_events(
             continue;
         };
         event.actor_id = match arkret_wire::DidCoreId::new(session.actor.clone()) {
-            Ok(actor_id) => actor_id,
+            Ok(principal_id) => arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal_id,
+                state.service_core_id().clone(),
+            )),
             Err(_) => continue,
         };
         event.payload = payload.into_iter().collect();

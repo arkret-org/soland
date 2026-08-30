@@ -126,7 +126,9 @@ const TARGET_STRAND_ID: &str = "ak:strand:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_
 fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
-        arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap(),
+        arkret_wire::ActorId::service(
+            arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap(),
+        ),
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
     )
@@ -284,8 +286,8 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     assert_eq!(decrypted.payload_sequence, 1);
     assert_eq!(decrypted.event_id.as_str(), target_event_id);
     assert_eq!(
-        decrypted.actor_id.as_str(),
-        delivered.sender_actor_id.as_str(),
+        decrypted.actor_id.signing_principal_id(),
+        &delivered.sender_actor_id,
         "§2.1 — the outer sender_actor_id MUST equal the plaintext actor_id"
     );
 }

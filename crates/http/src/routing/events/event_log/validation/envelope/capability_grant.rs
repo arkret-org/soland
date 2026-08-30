@@ -22,7 +22,7 @@ pub(super) fn validate_capability_grant_body(
                 )
             },
         )?;
-    if payload.grant.issuer_id.as_str() != actor_id {
+    if payload.grant.issuer_id.signing_principal_id().as_str() != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "invalid_proof",
@@ -46,7 +46,7 @@ mod tests {
                     "realm_id": "ak:realm:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
                     "issuer_id": actor,
                     "subject": actor,
-                    "subject_principal_server_id": "ak:did_core:web:principal.example",
+                    "subject_station_id": "ak:did_core:web:principal.example",
                     "actions": ["ak.realm.configure"],
                     "resources": [{
                         "kind": "realm",

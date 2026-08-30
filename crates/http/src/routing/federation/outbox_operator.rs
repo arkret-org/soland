@@ -266,7 +266,7 @@ pub async fn requeue_dead_letter(
     let peer_target = super::federation::resolved_peer_target(
         state,
         original.delivery.peer_id.as_str(),
-        "principal_server",
+        "station",
         true,
     )
     .await?;

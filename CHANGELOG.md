@@ -1,6 +1,6 @@
 # soland — changelog
 
-All notable wire-affecting changes to the soland Principal Server are
+All notable wire-affecting changes to the soland Station are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project tracks Arkret v1 spec revisions.
 
@@ -74,8 +74,7 @@ reason codes registered in `arkret-spec` `9cb47c1..2b0d70d`.
 - 6 AKP-0007 sub-reason codes re-exported via `crate::error::reasons::*`
   (`circle_realm_mismatch`, `circle_not_active`,
   `circle_member_must_be_realm_member`, `scope_rebind_forbidden`,
-  `metadata_encryption_floor_violation`; the 6th, top-level
-  `delivery_binding_handed_over`, was registered in round 4).
+  `metadata_encryption_floor_violation`).
 - Read path now surfaces `effective_scope` on event metadata when the
   envelope or payload pins a `scope_circle_id`.
 - `confidential_discussion_of` Relation kind accepted by the reducer
@@ -117,10 +116,6 @@ on the reducer / federation / state-machine surfaces. See
   `origin_key_state_digest`. Cache hits after key-state change return the
   cached body with diagnostic `reason_code=historical_only` (no side
   effects); cache hits re-run capability checks.
-- **Added** delivery-binding handover error codes: stale binding emits
-  `delivery_binding_stale` + `new_recipient_service_id` +
-  `handover_frontier`; post-handover replays emit
-  `delivery_binding_handed_over`.
 - **REMOVED LEGACY** the former device-hierarchy publish reducer enforced CAS
   (`expected_previous_generation == current && new_generation == current + 1`),
   evaluated before signature verification.

@@ -426,7 +426,7 @@ fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> 
 }
 
 #[must_use]
-pub fn fixture_principal_server_id() -> DidCoreId {
+pub fn fixture_station_id() -> DidCoreId {
     fixture_service_identity(&app_config())
         .identity()
         .expect("fixture has a serving identity")
@@ -454,11 +454,11 @@ fn fixture_service_identity_for_did_and_version(
     version_id: String,
 ) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
-        ServiceKind::PrincipalServer,
+        ServiceKind::Station,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
             .expect("test public base must be canonicalizable"),
     )
-    .expect("principal-server registration key");
+    .expect("station registration key");
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     let service_id =
@@ -520,7 +520,7 @@ fn fixture_stored_service_identity(
             service: vec![ServiceDidEndpoint {
                 id: format!("{}#service", identity.did),
                 endpoint_type: "ArkretService".to_owned(),
-                service_kind: ServiceKind::PrincipalServer,
+                service_kind: ServiceKind::Station,
                 service_endpoint: identity.registration_key.public_base_url().clone(),
             }],
         }
@@ -868,7 +868,7 @@ pub async fn project_authorized_principal_device(
         .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
         .expect("PCR genesis Event");
     let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
-    let principal_server_id = genesis.principal_server_id.clone();
+    let station_id = genesis.actor_id.route_service_id().clone();
     let now = chrono::Utc::now();
     let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         signing_key.verifying_key().as_bytes(),
@@ -879,7 +879,7 @@ pub async fn project_authorized_principal_device(
             realm_id: pcr_realm_id.clone(),
         },
         principal_id.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
         serde_json::json!({
@@ -928,12 +928,11 @@ pub async fn project_authorized_principal_device(
         ))
         .await
         .unwrap();
-    let authority_key =
-        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
     if state
         .test_persistence()
         .principal_resolutions()
-        .by_authority_key(&authority_key)
+        .by_account_id(&authority_key)
         .await
         .unwrap()
         .is_none()
@@ -944,7 +943,7 @@ pub async fn project_authorized_principal_device(
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key,
+                    account_id: authority_key,
                     pcr_realm_id: pcr_realm_id.clone(),
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),

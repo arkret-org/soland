@@ -143,7 +143,7 @@ pub(super) fn admin_actor_row(
     Some(AdminActor {
         id: principal_id.to_string(),
         principal_id: principal_id.clone(),
-        account_id: Some(account.id.to_string()),
+        account_id: Some(account.account_id.to_string()),
         handle: (!handle.is_empty()).then_some(handle),
         display_name: account.display_name.clone(),
         status: Some(status),
@@ -442,8 +442,8 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
     CapabilitySummary {
         grant_id: grant.grant_id.clone(),
         realm_id: (!grant.realm_id.is_empty()).then(|| grant.realm_id.clone()),
-        issuer_id: grant.issuer_id.clone(),
-        subject_id: grant.subject_id.clone(),
+        issuer_id: grant.issuer_id.signing_principal_id().clone(),
+        subject_id: grant.subject_id.signing_principal_id().clone(),
         resource: (!grant.resource.is_empty()).then(|| grant.resource.clone()),
         actions: grant.actions.clone(),
         constraints: grant

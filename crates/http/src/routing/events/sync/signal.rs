@@ -165,6 +165,10 @@ fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) 
 
 fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTreeSet<String> {
     let local_service_id = state.service_id().as_str();
+    let sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        envelope.sender_actor_id.clone(),
+        state.service_core_id().clone(),
+    ));
     let projection = state.projections().snapshot();
     projection
         .members
@@ -172,16 +176,18 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
         .filter(|membership| {
             membership.realm_id == envelope.realm_id.as_str()
                 && membership.state == "join"
-                && membership.member != envelope.sender_actor_id.as_str()
-                && membership
-                    .recipient_id
-                    .as_deref()
-                    .is_some_and(|service_id| service_id != local_service_id)
+                && membership.member != sender.to_string()
+                && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                    .is_ok_and(|actor| actor.route_service_id().as_str() != local_service_id)
                 && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
                 })
         })
-        .filter_map(|membership| membership.recipient_id.clone())
+        .filter_map(|membership| {
+            serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                .ok()
+                .map(|actor| actor.route_service_id().to_string())
+        })
         .collect()
 }
 
@@ -444,16 +450,21 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     }
 
     let projection = state.projections().snapshot();
+    let sender_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        envelope.sender_actor_id.clone(),
+        arkret_wire::DidCoreId::new(source_id.to_owned())
+            .map_err(|_| signal_invalid("source service id is invalid"))?,
+    ));
     let membership_key = (
         envelope.realm_id.as_str().to_owned(),
-        envelope.sender_actor_id.as_str().to_owned(),
+        sender_actor.to_string(),
     );
     let sender = projection
         .members
         .get(&membership_key)
         .filter(|membership| membership.state == "join")
         .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
-    if sender.recipient_id.as_deref() != Some(source_id) {
+    if sender_actor.route_service_id().as_str() != source_id {
         return Err(signal_invalid(
             "source service is not the sender current delivery binding",
         ));
@@ -509,8 +520,9 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     let has_local_recipient = projection.members.values().any(|membership| {
         membership.realm_id == envelope.realm_id.as_str()
             && membership.state == "join"
-            && membership.member != envelope.sender_actor_id.as_str()
-            && membership.recipient_id.as_deref() == Some(local_service_id)
+            && membership.member != sender_actor.to_string()
+            && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                .is_ok_and(|actor| actor.route_service_id().as_str() == local_service_id)
             && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
                 projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
             })
