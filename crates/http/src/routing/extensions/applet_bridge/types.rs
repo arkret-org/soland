@@ -475,7 +475,7 @@ impl AppletRecord {
             || self.package.controller_id != self.identity.initial_package.controller_id
             || self.package.service_id != self.identity.initial_package.service_id
             || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id
-            || self.bot_actor_id.signing_principal_id() != &self.package.bot_actor_id
+            || self.bot_actor_id != self.package.bot_actor_id
             || self.bot_actor_id != self.install_response.bot_actor_id
             || self.bot_actor_provision_ref != self.install_response.bot_actor_provision_ref
             || self.bot_principal_control_realm_id

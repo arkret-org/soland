@@ -1564,7 +1564,7 @@ async fn run_events_channel(
         .actor_ids
         .into_iter()
         .flatten()
-        .map(|actor| actor.as_str().to_owned())
+        .map(|actor| actor.to_string())
         .collect::<BTreeSet<_>>();
     let mut accessible: Vec<String> = Vec::new();
     let requested_realms = match parameters.realm_ids.filter(|realms| !realms.is_empty()) {

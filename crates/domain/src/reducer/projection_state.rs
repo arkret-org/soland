@@ -479,6 +479,9 @@ impl ProjectionState {
             .account_id
             .canonical_key()
             .expect("validated AccountId has canonical JCS bytes");
+        let actor_id =
+            serde_json::to_value(arkret_wire::ActorId::account(scope.account_id.clone()))
+                .expect("validated AccountId serializes as ActorId");
         let device_id = scope.device_id.as_str();
         let push_route = scope.push_route.as_str();
 
@@ -497,7 +500,7 @@ impl ProjectionState {
         };
         let derived_subject = match private_registry.derive_subject(
             arkret_wire::EventKind::DevicePushRoute.as_str(),
-            &account_id,
+            &actor_id,
             &operation.payload,
         ) {
             Ok(subject) => subject,

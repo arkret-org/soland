@@ -347,7 +347,7 @@ async fn validate_request_acceptance_receipt(
 async fn holder_peer(state: &AppState, session: &SessionRecord) -> Result<ContactPeer, AppError> {
     let holder_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
-    if let Some(agent) = state
+    if let Some(_agent) = state
         .agent_pairings()
         .agent(holder_id.as_str())
         .await
@@ -362,10 +362,10 @@ async fn holder_peer(state: &AppState, session: &SessionRecord) -> Result<Contac
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::unauthenticated("controller account no longer exists"))?;
-        let principal_server_id = arkret_wire::DidCoreId::new(session.audience.clone())
+        let station_id = arkret_wire::DidCoreId::new(session.audience.clone())
             .map_err(|error| AppError::internal(format!("session audience invalid: {error}")))?;
         return Ok(ContactPeer::Agent {
-            actor_id: arkret_wire::ActorId::hosted_principal(holder_id, principal_server_id),
+            actor_id: arkret_wire::ActorId::hosted_principal(holder_id, station_id),
             controller_account_id: controller_account.account_id,
         });
     }

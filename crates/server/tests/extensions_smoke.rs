@@ -94,7 +94,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
         .unwrap();
     meta.plaintext_visible_services.insert(service_id.clone());
     meta.plaintext_visible_service_classes.insert(
-        service_id,
+        service_id.clone(),
         std::collections::BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
@@ -2394,11 +2394,11 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     let mut package = AppletPackage::new(
         format!("package:{applet_id}"),
         AppletId::new(applet_id.to_owned()).unwrap(),
-        service_id,
+        service_id.clone(),
         service_did.clone(),
         controller_id.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
-        bot_actor_id,
+        arkret_wire::ActorId::hosted_principal(bot_actor_id, service_id),
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
             actors: vec![AppletNamespaceEntry::exclusive(format!(
@@ -2729,7 +2729,10 @@ async fn signed_install_events(
         .pattern
         .as_str();
     let bot_actor = managed_actor_fixture(namespace, "bot", &package.service_id);
-    assert_eq!(bot_actor.actor_id, package.bot_actor_id);
+    assert_eq!(
+        bot_actor.actor_id,
+        *package.bot_actor_id.signing_principal_id()
+    );
     if ingest_actor_document {
         ingest_managed_actor_current_document(state, &bot_actor).await;
     }
@@ -2771,7 +2774,7 @@ async fn signed_install_events(
     let service_signing_key = applet_service_signing_key(&package.webhook_auth.key_ref);
     let mut accountability_grant = AccountabilityGrantPayload::new(
         package.service_id.clone(),
-        package.bot_actor_id.clone(),
+        package.bot_actor_id.signing_principal_id().clone(),
         AccountabilityScope::Single(AccountabilityScopeKind::ContractedService),
         now - chrono::Duration::seconds(1),
         None,
@@ -2819,7 +2822,7 @@ async fn signed_install_events(
         id: None,
         schema: arkret_wire::SchemaId::ACTOR_PROFILE_V1.to_owned(),
         realm_id: Some(realm_id.clone()),
-        principal_id: package.bot_actor_id.clone(),
+        principal_id: package.bot_actor_id.signing_principal_id().clone(),
         actor_kind: arkret_wire::ActorKind::Integration,
         display_name: "Applet Bot".to_owned(),
         handle: None,
@@ -2839,7 +2842,7 @@ async fn signed_install_events(
     let mut bot_profile_event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::ProfileCreate.as_str(),
         ScopeRef::Realm { realm_id },
-        package.bot_actor_id.clone(),
+        package.bot_actor_id.signing_principal_id().clone(),
         actor_station_id,
         0,
         Hlc::new(format!("{millis:012x}-0103-a11ce001")).unwrap(),

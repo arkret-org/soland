@@ -712,7 +712,7 @@ pub(crate) async fn events_read_body(
         actors: body
             .actor_ids
             .into_iter()
-            .map(|actor| actor.into_string())
+            .map(|actor| actor.to_string())
             .collect(),
         after: body.after.map(|cursor| cursor.into_string()),
         before: body.before.map(|cursor| cursor.into_string()),

@@ -1446,7 +1446,7 @@ async fn provision_ghost_actor_endpoint(
         let candidate = ghost_actor_id.signing_principal_id().as_str();
         if existing_record.package.service_id.as_str() == candidate
             || existing_record.package.controller_id.as_str() == candidate
-            || existing_record.package.bot_actor_id.as_str() == candidate
+            || existing_record.package.bot_actor_id.to_string() == candidate
             || existing_record
                 .ghosts
                 .iter()

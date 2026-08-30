@@ -70,11 +70,9 @@ pub fn complete_realm_bootstrap_unit(
 ) -> Vec<Event> {
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
     let member_id = genesis.actor_id.clone();
-    let actor_subject = arkret_wire::composite_subject(&[
-        member_id
-            .canonical_key()
-            .expect("fixture bootstrap actor canonical key"),
-    ])
+    let actor_subject = arkret_wire::composite_subject(&[member_id
+        .canonical_key()
+        .expect("fixture bootstrap actor canonical key")])
     .expect("fixture bootstrap member cell subject");
     let followups = [
         (

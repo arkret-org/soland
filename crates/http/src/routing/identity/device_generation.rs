@@ -36,15 +36,25 @@ pub async fn current_device_generation(
     state: &AppState,
     principal_id: &str,
 ) -> Result<Option<DeviceGenerationView>, ServiceError> {
+    let principal_id =
+        arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
+            ServiceError::SchemaViolation(format!("principal id is invalid: {error}"))
+        })?;
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+        .map_err(|error| ServiceError::Internal(format!("local Station id is invalid: {error}")))?;
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        station_id,
+    ));
     let records = state
         .event_queries()
-        .accepted_events_for_actor(principal_id)
+        .accepted_events_for_actor(&actor_id.to_string())
         .await
         .map_err(|error| ServiceError::internal(error.to_string()))?
         .into_iter()
         .map(persistence_event_record)
         .collect::<Vec<_>>();
-    generation_view_from_records(state, principal_id, &records).await
+    generation_view_from_records(state, &actor_id.to_string(), &records).await
 }
 
 /// Resolve the exact accepted device authorization tuple used by every
@@ -86,10 +96,6 @@ pub async fn active_device_revocation_gate_selector(
         .ok_or_else(|| {
             ServiceError::Conflict("accepted device authorization Event is unavailable".to_owned())
         })?;
-    let event_station_id = authorize_event
-        .envelope
-        .get("station_id")
-        .and_then(Value::as_str);
     let event_device_id = authorize_event
         .envelope
         .pointer("/payload/device_id")
@@ -97,7 +103,6 @@ pub async fn active_device_revocation_gate_selector(
     if !accepted_authorization_binds_authority_tuple(
         authorize_event.actor_id.as_str(),
         authorize_event.kind.as_str(),
-        event_station_id,
         event_device_id,
         principal_id.as_str(),
         station_id.as_str(),
@@ -139,7 +144,6 @@ pub async fn active_device_revocation_gate_selector(
 fn accepted_authorization_binds_authority_tuple(
     event_actor_id: &str,
     event_kind: &str,
-    event_station_id: Option<&str>,
     event_device_id: Option<&str>,
     principal_id: &str,
     station_id: &str,
@@ -156,7 +160,6 @@ fn accepted_authorization_binds_authority_tuple(
         .as_ref()
         == expected_actor.as_ref()
         && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
-        && event_station_id == Some(station_id)
         && event_device_id == Some(device_id)
 }
 
@@ -198,17 +201,16 @@ pub(crate) fn verified_device_authorization_binding(
 
 async fn generation_view_from_records(
     _state: &AppState,
-    principal_id: &str,
+    actor_id: &str,
     records: &[AcceptedEvent],
 ) -> Result<Option<DeviceGenerationView>, ServiceError> {
-    let Some(mut last_unconflicted) = bootstrap_generation_ref(principal_id, records) else {
+    let Some(mut last_unconflicted) = bootstrap_generation_ref(actor_id, records) else {
         return Ok(None);
     };
     let mut status = DeviceGenerationStatus::Active;
     let mut slots = BTreeMap::<u64, Vec<&AcceptedEvent>>::new();
     for record in records.iter().filter(|record| {
-        record.actor_id == principal_id
-            && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
+        record.actor_id == actor_id && record.kind == arkret_wire::event_kind_str::DEVICE_REANCHOR
     }) {
         let Some(new_generation) = record
             .envelope
@@ -250,9 +252,9 @@ async fn generation_view_from_records(
     }))
 }
 
-fn bootstrap_generation_ref(principal_id: &str, records: &[AcceptedEvent]) -> Option<u64> {
+fn bootstrap_generation_ref(actor_id: &str, records: &[AcceptedEvent]) -> Option<u64> {
     let bootstrap = records.iter().find(|record| {
-        record.actor_id == principal_id
+        record.actor_id == actor_id
             && record.kind == arkret_wire::EventKind::RealmCreate.as_str()
             && record
                 .envelope
@@ -271,7 +273,7 @@ fn bootstrap_generation_ref(principal_id: &str, records: &[AcceptedEvent]) -> Op
     });
     let bootstrap = bootstrap?;
     let paired = records.iter().any(|record| {
-        record.actor_id == principal_id
+        record.actor_id == actor_id
             && record.kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
             && record
                 .envelope
@@ -564,10 +566,20 @@ mod tests {
         station_id: Option<&str>,
         device_id: Option<&str>,
     ) -> bool {
+        let actor_id = station_id
+            .and_then(|station_id| {
+                arkret_identifiers::DidCoreId::new(actor_id.to_owned())
+                    .ok()
+                    .zip(arkret_identifiers::DidCoreId::new(station_id.to_owned()).ok())
+            })
+            .map(|(principal_id, station_id)| {
+                arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
+                    .to_string()
+            })
+            .unwrap_or_default();
         accepted_authorization_binds_authority_tuple(
-            actor_id,
+            &actor_id,
             kind,
-            station_id,
             device_id,
             TUPLE_PRINCIPAL,
             TUPLE_STATION,

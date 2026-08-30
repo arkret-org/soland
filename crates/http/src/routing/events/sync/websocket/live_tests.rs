@@ -639,10 +639,15 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
                 realm_ids: Some(vec![
                     arkret_identifiers::RealmId::new(realm_id_str.clone()).unwrap(),
                 ]),
-                actor_ids: Some(vec![
-                    arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                actor_ids: Some(vec![arkret_wire::ActorId::account(
+                    arkret_wire::AccountId::new(
+                        arkret_identifiers::DidCoreId::new(
+                            "ak:did_core:web:alice.example".to_owned(),
+                        )
                         .unwrap(),
-                ]),
+                        crate::test_event::station_id(),
+                    ),
+                )]),
                 after: None,
                 catchup: Some(true),
             }),

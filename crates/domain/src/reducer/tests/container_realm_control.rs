@@ -189,7 +189,9 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             })
             .and_then(|value| value.get("signer"))
             .and_then(|signer| signer.get("actor_id"))
-            .and_then(Value::as_str),
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+            .map(|actor| actor.signing_principal_id().to_string())
+            .as_deref(),
         Some("ak:did_core:web:new-notary.example")
     );
 

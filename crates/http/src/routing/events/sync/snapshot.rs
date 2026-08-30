@@ -175,7 +175,7 @@ pub(crate) async fn build_sync_snapshot(
             let hero_ids = roster
                 .iter()
                 .take(5)
-                .map(|member| member.actor_id.signing_principal_id().clone())
+                .map(|member| member.actor_id.clone())
                 .collect::<Vec<_>>();
             entry.timeline = Some(
                 arkret_models_collaboration::sync_frames::account_sync::Timeline {
@@ -198,7 +198,7 @@ pub(crate) async fn build_sync_snapshot(
             // directory title/summary after visibility filtering and force
             // clients to fall back to the opaque Realm id.
             entry.state_at_window_start = Some(arkret_models_collaboration::sync_frames::account_sync::StateAtWindowStart {
-                actor_profiles: BTreeMap::new(),
+                actor_profiles: Vec::new(),
                 realm_metadata: arkret_models_collaboration::sync_frames::account_sync::WindowStartRealmMetadata {
                     title: (!title.trim().is_empty()).then_some(title),
                     summary,
@@ -1342,11 +1342,11 @@ async fn device_lists_for_actors(
 
     let changed = changed
         .into_iter()
-        .filter_map(|actor| arkret_identifiers::DidCoreId::new(actor).ok())
+        .filter_map(|actor| serde_json::from_str::<arkret_wire::ActorId>(&actor).ok())
         .collect();
     let left = left
         .into_iter()
-        .filter_map(|actor| arkret_identifiers::DidCoreId::new(actor).ok())
+        .filter_map(|actor| serde_json::from_str::<arkret_wire::ActorId>(&actor).ok())
         .collect();
     (
         arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {

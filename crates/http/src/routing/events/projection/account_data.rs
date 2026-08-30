@@ -62,8 +62,12 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     let actor_matches = operation
         .payload
         .get("actor_id")
-        .and_then(Value::as_str)
-        .is_some_and(|actor_id| actor_id == origin);
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .is_some_and(|actor_id| {
+            actor_id == operation.context.sender
+                && actor_id.signing_principal_id().as_str() == origin
+        });
     let device_matches = operation
         .payload
         .get("device_id")
@@ -88,7 +92,9 @@ pub(super) async fn read_cursor_reducer_context_operation(
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::ReadCursorAdvance {
         return None;
     }
-    let actor_id = operation.payload.get("actor_id")?.as_str()?;
+    let actor_id =
+        serde_json::from_value::<arkret_wire::ActorId>(operation.payload.get("actor_id")?.clone())
+            .ok()?;
     let read_scope: arkret_wire::ReadCursorScope =
         serde_json::from_value(operation.payload.get("read_scope")?.clone()).ok()?;
     let candidate_event_id = operation
@@ -102,7 +108,7 @@ pub(super) async fn read_cursor_reducer_context_operation(
             .read_cursors
             .values()
             .find(|marker| {
-                marker.actor_id.signing_principal_id().as_str() == actor_id
+                marker.actor_id == actor_id
                     && marker.realm_id.as_str() == operation.realm_id.as_str()
                     && marker.read_scope == read_scope
             })

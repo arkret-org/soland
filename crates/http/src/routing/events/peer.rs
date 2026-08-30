@@ -1016,10 +1016,10 @@ async fn peer_events_frontier(
                 .realm_policy_frontier_digest(realm_id.as_str())
                 .ok_or_else(|| AppError::internal("policy frontier state root failed"))?;
             let membership = projection
-                .realm_membership_frontier_digest(realm_id.as_str(), actor_id.as_str())
+                .realm_membership_frontier_digest(realm_id.as_str(), &actor_id.to_string())
                 .ok_or_else(|| AppError::not_found("not found"))?;
             let authorization = projection
-                .realm_authorization_state_digest(realm_id.as_str(), actor_id.as_str())
+                .realm_authorization_state_digest(realm_id.as_str(), &actor_id.to_string())
                 .ok_or_else(|| AppError::internal("authorization state root failed"))?;
             (Some(authorization), Some(policy), Some(membership))
         } else {
@@ -1159,7 +1159,7 @@ impl PeerEventsQueryParts {
             actors: body
                 .actor_ids
                 .into_iter()
-                .map(|actor| actor.into_string())
+                .map(|actor| actor.to_string())
                 .collect(),
             after: body.after.map(|cursor| cursor.into_string()),
             before: body.before.map(|cursor| cursor.into_string()),

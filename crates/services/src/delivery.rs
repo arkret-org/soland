@@ -910,7 +910,7 @@ mod tests {
                             arkret_wire::DidCoreId::new(
                                 "ak:did_core:web:principal.example".to_owned(),
                             )
-                            .expect("principal server DID"),
+                            .expect("hosting Station DID"),
                         ),
                         source: arkret_models_collaboration::objects::read_receipts::NotificationSource::Event(
                             arkret_models_collaboration::objects::read_receipts::NotificationEventSource {

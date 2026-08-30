@@ -23,9 +23,7 @@ mod strand_morph;
 pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
     let did = arkret_identifiers::Did::new(did.to_owned()).unwrap();
     let descriptor = arkret_wire::NotarySignerDescriptor {
-        actor_id: arkret_wire::ActorId::service(
-            arkret_wire::project_did_to_core_id(&did).unwrap(),
-        ),
+        actor_id: arkret_wire::ActorId::service(arkret_wire::project_did_to_core_id(&did).unwrap()),
         verification_method: arkret_wire::DidUrl::new(format!("{did}#notary-key")).unwrap(),
         key_kind: arkret_wire::NotaryKeyKind::Ed25519Raw32,
         jose_algorithm: arkret_wire::NotaryJoseAlgorithm::Ed25519,

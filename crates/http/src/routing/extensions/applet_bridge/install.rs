@@ -290,10 +290,12 @@ fn validate_bot_managed_actor_unit(
     let package = commit.applet_package();
     let expected_applet_id = package.applet_id.clone();
     let service_actor_id = ActorId::service(package.service_id.clone());
-    let bot_actor_id = ActorId::hosted_principal(
-        package.bot_actor_id.clone(),
-        basis.target_station_id.clone(),
-    );
+    let bot_actor_id = package.bot_actor_id.clone();
+    if bot_actor_id.route_service_id() != &basis.target_station_id {
+        return Err(AppError::param_invalid(
+            "Applet bot actor is not bound to the target Station",
+        ));
+    }
     if provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
         || provision_event.actor_id != service_actor_id
         || provision_event.applet_id.as_ref() != Some(&expected_applet_id)
@@ -444,7 +446,7 @@ fn validate_bot_managed_actor_unit(
             .with_wire_code("applet_managed_actor_profile_invalid")
     })?;
     if grant.issuer_id != package.service_id
-        || grant.subject_id != package.bot_actor_id
+        || grant.subject_id != *package.bot_actor_id.signing_principal_id()
         || grant.accountability_scope
             != AccountabilityScope::Single(AccountabilityScopeKind::ContractedService)
         || grant.grant_status != AccountabilityGrantStatus::Active
@@ -486,7 +488,7 @@ fn validate_bot_managed_actor_unit(
     let actor_profile = profile_payload.object;
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
         && actor_profile.accountable_principal_ids[0].as_str() == package.service_id.as_str();
-    if actor_profile.principal_id.as_str() != package.bot_actor_id.as_str()
+    if actor_profile.principal_id != *package.bot_actor_id.signing_principal_id()
         || actor_profile.realm_id.as_ref() != Some(basis.effective_scope.realm_id())
         || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
         || actor_profile
@@ -1694,11 +1696,14 @@ mod tests {
             "package:ak:applet:test".to_owned(),
             arkret_identifiers::AppletId::new("ak:applet:01974100-0000-7000-8000-000000000001")
                 .unwrap(),
-            service_id,
+            service_id.clone(),
             service_did.clone(),
             controller_id.clone(),
             "https://test-applet.example".to_owned(),
-            DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
+            arkret_wire::ActorId::hosted_principal(
+                DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
+                service_id,
+            ),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
@@ -1823,7 +1828,13 @@ mod tests {
             service_did,
             DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
-            DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
+            arkret_wire::ActorId::hosted_principal(
+                DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
+                arkret_wire::project_did_to_core_id(
+                    &Did::new("did:web:test-applet.example".to_owned()).unwrap(),
+                )
+                .unwrap(),
+            ),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],

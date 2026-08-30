@@ -1541,11 +1541,11 @@ async fn accepted_account_profile_in_realm(
 
 async fn resolved_actor_profile_evidence(
     state: &AppState,
-    actor_id: &DidCoreId,
+    actor_id: &arkret_wire::ActorId,
 ) -> Result<Option<ResolvedActorProfile>, AppError> {
     let mut candidates = state
         .event_queries()
-        .canonical_events_for_actor(actor_id.as_str())
+        .canonical_events_for_actor(&actor_id.to_string())
         .await
         .map_err(|error| AppError::internal(format!("load Actor Profile Events: {error}")))?
         .into_iter()
@@ -1571,8 +1571,12 @@ async fn resolved_actor_profile_evidence(
                 continue;
             }
         };
-        let Some(accepted) =
-            accepted_account_profile_in_realm(state, actor_id, &event.realm_id).await?
+        let Some(accepted) = accepted_account_profile_in_realm(
+            state,
+            actor_id.signing_principal_id(),
+            &event.realm_id,
+        )
+        .await?
         else {
             continue;
         };
@@ -1633,8 +1637,12 @@ async fn resolve_actor_profiles(
     let mut failures = Vec::new();
     for actor_id in &body.actor_ids {
         let target_joined = caller_joined
-            && crate::routing::realm_has_member(state, body.realm_id.as_str(), actor_id.as_str())
-                .await;
+            && crate::routing::realm_has_member(
+                state,
+                body.realm_id.as_str(),
+                &actor_id.to_string(),
+            )
+            .await;
         let resolved = if target_joined {
             resolved_actor_profile_evidence(state, actor_id).await?
         } else {

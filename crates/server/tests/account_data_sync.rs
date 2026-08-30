@@ -533,175 +533,181 @@ fn strand_id_for_realm(realm_id: &str) -> String {
         .unwrap_or_else(|_| "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC".to_owned())
 }
 
-#[tokio::test]
-async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
-    let state = soland_test_support::app_state(test_config());
-    let actor = test_event_signer_did();
-    let actor_core = actor_core_id(&actor);
-    // Principal Control Realms use their distinct subject-derived bootstrap
-    // path. Materialize its create-locked reducer cells through the SDK's PCR
-    // genesis builder rather than through an ordinary Realm bootstrap.
-    soland_test_support::cba_basis::seed_realm_genesis_event(
-        &state,
-        &soland_test_support::fixture_principal_control_realm(&actor),
-        &actor,
-    )
-    .await;
-    let desktop = dev_token(
-        state.clone(),
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000011",
-        "Alice Desktop",
-    )
-    .await;
-    let phone = dev_token(
-        state.clone(),
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000012",
-        "Alice Phone",
-    )
-    .await;
-    // `account-data.md` §4 / §5.4 make `account-data-key-registry.json` the whole
-    // key space, and all 23 registered patterns are `storage=encrypted_account_data`.
-    // There is no unregistered plaintext key to probe with; this exercise uses a
-    // registered principal-private key and the encrypted carrier it declares.
-    let account_data_key = "ak.dnd_schedule";
-    let first_value = encrypted_account_data_value(
-        &actor_core,
-        account_data_key,
-        &json!({ "version": 1, "label": "first" }),
-    );
-    let second_value =
-        encrypted_account_data_value(&actor_core, account_data_key, &json!("second"));
-    let stale_value =
-        encrypted_account_data_value(&actor_core, account_data_key, &json!("stale retry"));
-
-    let (first_status, first) = put_account_data(
-        state.clone(),
-        &desktop,
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000011",
-        account_data_key,
-        0,
-        first_value.clone(),
-    )
-    .await;
-    assert_eq!(first_status, StatusCode::CREATED, "first PUT: {first}");
-    assert_eq!(first["content"], first_value);
-
-    let (second_status, second) = put_account_data(
-        state.clone(),
-        &desktop,
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000011",
-        account_data_key,
-        first["revision"].as_u64().unwrap(),
-        second_value.clone(),
-    )
-    .await;
-    assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
-    assert_eq!(second["content"], second_value);
-
-    let (stale_status, stale) = put_account_data(
-        state.clone(),
-        &desktop,
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000011",
-        account_data_key,
-        first["revision"].as_u64().unwrap(),
-        stale_value,
-    )
-    .await;
-    assert_eq!(stale_status, StatusCode::CONFLICT, "{stale}");
-    assert_eq!(
-        stale["type"], "https://arkret.org/problems/cas_conflict",
-        "{stale}"
-    );
-    assert_eq!(stale["account_data_key"], account_data_key);
-    assert_eq!(stale["current_revision"], second["revision"]);
-    assert_eq!(stale["current_entry"]["content"], second_value);
-
-    let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
-    let event = account_data_entry(&phone_sync, account_data_key)
-        .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
-    assert_eq!(
-        event["kind"],
-        arkret_wire::EventKind::AccountDataSet.as_str()
-    );
-    assert_eq!(event["actor_id"].as_str(), Some(actor_core.as_str()));
-    assert_eq!(event["payload"]["holder_id"], actor_core.as_str());
-    assert_eq!(event["payload"]["expected_revision"], 1);
-    assert_eq!(event["payload"]["body"], second_value);
-    assert!(
-        event["proofs"]
-            .as_array()
-            .is_some_and(|proofs| !proofs.is_empty())
-    );
-    assert!(
-        !event.to_string().contains(
-            first_value["ciphertext"]
-                .as_str()
-                .expect("sealed first value carries ciphertext")
+#[test]
+fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
+    run_large_stack_async_test(|| async {
+        let state = soland_test_support::app_state(test_config());
+        let actor = test_event_signer_did();
+        let actor_core = actor_core_id(&actor);
+        // Principal Control Realms use their distinct subject-derived bootstrap
+        // path. Materialize its create-locked reducer cells through the SDK's PCR
+        // genesis builder rather than through an ordinary Realm bootstrap.
+        soland_test_support::cba_basis::seed_realm_genesis_event(
+            &state,
+            &soland_test_support::fixture_principal_control_realm(&actor),
+            &actor,
         )
-    );
-    serde_json::from_value::<arkret_wire::Event>(event.clone())
-        .expect("sync account_data entry is a typed canonical Event");
+        .await;
+        let desktop = dev_token(
+            state.clone(),
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            "Alice Desktop",
+        )
+        .await;
+        let phone = dev_token(
+            state.clone(),
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000012",
+            "Alice Phone",
+        )
+        .await;
+        // `account-data.md` §4 / §5.4 make `account-data-key-registry.json` the whole
+        // key space, and all 23 registered patterns are `storage=encrypted_account_data`.
+        // There is no unregistered plaintext key to probe with; this exercise uses a
+        // registered principal-private key and the encrypted carrier it declares.
+        let account_data_key = "ak.dnd_schedule";
+        let first_value = encrypted_account_data_value(
+            &actor_core,
+            account_data_key,
+            &json!({ "version": 1, "label": "first" }),
+        );
+        let second_value =
+            encrypted_account_data_value(&actor_core, account_data_key, &json!("second"));
+        let stale_value =
+            encrypted_account_data_value(&actor_core, account_data_key, &json!("stale retry"));
 
-    let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
-    assert_eq!(
-        account_data_entry(&rebuilt_sync, account_data_key).map(|entry| &entry["payload"]["body"]),
-        Some(&second_value),
-        "initial baseline must come from the durable Event store"
-    );
+        let (first_status, first) = put_account_data(
+            state.clone(),
+            &desktop,
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            account_data_key,
+            0,
+            first_value.clone(),
+        )
+        .await;
+        assert_eq!(first_status, StatusCode::CREATED, "first PUT: {first}");
+        assert_eq!(first["content"], first_value);
 
-    let delete_event = signed_account_data_submission(
-        state.clone(),
-        &desktop,
-        &actor,
-        "ak:device:01904100-0000-7000-8000-a11ce0000011",
-        account_data_key,
-        second["revision"].as_u64().unwrap(),
-        None,
-        true,
-    )
-    .await;
-    let mut delete = TestClient::delete(format!(
-        "http://server/_arkret/self/account_data/{account_data_key}"
-    ))
-    .add_header("authorization", format!("Bearer {desktop}"), true)
-    .add_header(
-        "Arkret-Operation",
-        arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
-        true,
-    )
-    .json(&json!({"set_event": delete_event}))
-    .send(&app_from_state(state.clone()))
-    .await;
-    assert_eq!(delete.status_code, Some(StatusCode::OK));
-    let delete_body: Value = delete.take_json().await.unwrap();
-    assert_eq!(delete_body["revision"], 3);
+        let (second_status, second) = put_account_data(
+            state.clone(),
+            &desktop,
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            account_data_key,
+            first["revision"].as_u64().unwrap(),
+            second_value.clone(),
+        )
+        .await;
+        assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
+        assert_eq!(second["content"], second_value);
 
-    let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
-    assert!(account_data_entry(&after_delete, account_data_key).is_none());
-    let latest = state
-        .test_persistence()
-        .events()
-        .snapshot_all()
-        .await
-        .unwrap()
-        .into_iter()
-        .filter(|record| {
-            record.kind == arkret_wire::EventKind::AccountDataSet.as_str()
-                && record
-                    .envelope
-                    .get("payload")
-                    .and_then(|payload| payload.get("key"))
-                    .and_then(Value::as_str)
-                    == Some(account_data_key)
-        })
-        .max_by_key(|record| record.received_at)
-        .expect("account_data tombstone Event remains durable");
-    assert_eq!(latest.envelope["payload"]["tombstone"], true);
+        let (stale_status, stale) = put_account_data(
+            state.clone(),
+            &desktop,
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            account_data_key,
+            first["revision"].as_u64().unwrap(),
+            stale_value,
+        )
+        .await;
+        assert_eq!(stale_status, StatusCode::CONFLICT, "{stale}");
+        assert_eq!(
+            stale["type"], "https://arkret.org/problems/cas_conflict",
+            "{stale}"
+        );
+        assert_eq!(stale["account_data_key"], account_data_key);
+        assert_eq!(stale["current_revision"], second["revision"]);
+        assert_eq!(stale["current_entry"]["content"], second_value);
+
+        let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+        let event = account_data_entry(&phone_sync, account_data_key)
+            .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
+        assert_eq!(
+            event["kind"],
+            arkret_wire::EventKind::AccountDataSet.as_str()
+        );
+        assert_eq!(
+            event["actor_id"],
+            serde_json::to_value(local_account_actor(&state, actor_core.clone())).unwrap()
+        );
+        assert_eq!(event["payload"]["holder_id"], actor_core.as_str());
+        assert_eq!(event["payload"]["expected_revision"], 1);
+        assert_eq!(event["payload"]["body"], second_value);
+        assert!(
+            event["proofs"]
+                .as_array()
+                .is_some_and(|proofs| !proofs.is_empty())
+        );
+        assert!(
+            !event.to_string().contains(
+                first_value["ciphertext"]
+                    .as_str()
+                    .expect("sealed first value carries ciphertext")
+            )
+        );
+        serde_json::from_value::<arkret_wire::Event>(event.clone())
+            .expect("sync account_data entry is a typed canonical Event");
+
+        let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+        assert_eq!(
+            account_data_entry(&rebuilt_sync, account_data_key)
+                .map(|entry| &entry["payload"]["body"]),
+            Some(&second_value),
+            "initial baseline must come from the durable Event store"
+        );
+
+        let delete_event = signed_account_data_submission(
+            state.clone(),
+            &desktop,
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            account_data_key,
+            second["revision"].as_u64().unwrap(),
+            None,
+            true,
+        )
+        .await;
+        let mut delete = TestClient::delete(format!(
+            "http://server/_arkret/self/account_data/{account_data_key}"
+        ))
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_DELETE_V1,
+            true,
+        )
+        .json(&json!({"set_event": delete_event}))
+        .send(&app_from_state(state.clone()))
+        .await;
+        assert_eq!(delete.status_code, Some(StatusCode::OK));
+        let delete_body: Value = delete.take_json().await.unwrap();
+        assert_eq!(delete_body["revision"], 3);
+
+        let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
+        assert!(account_data_entry(&after_delete, account_data_key).is_none());
+        let latest = state
+            .test_persistence()
+            .events()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|record| {
+                record.kind == arkret_wire::EventKind::AccountDataSet.as_str()
+                    && record
+                        .envelope
+                        .get("payload")
+                        .and_then(|payload| payload.get("key"))
+                        .and_then(Value::as_str)
+                        == Some(account_data_key)
+            })
+            .max_by_key(|record| record.received_at)
+            .expect("account_data tombstone Event remains durable");
+        assert_eq!(latest.envelope["payload"]["tombstone"], true);
+    });
 }
 
 #[test]
@@ -984,7 +990,12 @@ fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
         );
 
         let markers_a = projected_read_markers(&state, alice_actor_core.as_str(), Some(&realm_a));
-        assert_eq!(markers_a.len(), 1);
+        assert_eq!(
+            markers_a.len(),
+            1,
+            "all projected markers: {:?}",
+            projected_read_markers(&state, alice_actor_core.as_str(), None)
+        );
         assert_eq!(markers_a[0]["position"]["event_id"], event_a);
         assert_eq!(markers_a[0]["realm_id"], realm_a);
         assert_eq!(markers_a[0]["read_scope"]["track_name"], "discussion");

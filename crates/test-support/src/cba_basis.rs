@@ -640,11 +640,9 @@ async fn persist_and_project_realm_genesis_event(
 ) {
     let realm_id = realm.as_str();
     let actor_id = event.actor_id.clone();
-    let actor_subject = arkret_wire::composite_subject(&[
-        actor_id
-            .canonical_key()
-            .expect("fixture bootstrap actor canonical key"),
-    ])
+    let actor_subject = arkret_wire::composite_subject(&[actor_id
+        .canonical_key()
+        .expect("fixture bootstrap actor canonical key")])
     .expect("fixture bootstrap member cell subject");
     let stored_event_ids = state
         .test_persistence()
