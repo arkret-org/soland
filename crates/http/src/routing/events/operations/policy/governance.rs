@@ -178,7 +178,7 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
-            Some(operation.context.principal_server_id.as_str()),
+            Some(operation.context.station_id.as_str()),
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
@@ -201,7 +201,7 @@ pub(super) async fn validate_member_state_policy(
             state,
             realm_id,
             actor,
-            Some(operation.context.principal_server_id.as_str()),
+            Some(operation.context.station_id.as_str()),
             REALM_MEMBERSHIP_ADMIN_ACTIONS,
             operation.created_at,
         )
@@ -224,7 +224,7 @@ pub(super) async fn validate_member_state_policy(
         state,
         realm_id,
         actor,
-        Some(operation.context.principal_server_id.as_str()),
+        Some(operation.context.station_id.as_str()),
         &[arkret_wire::CapabilityActionId::REALM_ADMIN],
         operation.created_at,
     )
@@ -351,7 +351,7 @@ pub(super) async fn validate_set_default_strand_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -369,7 +369,7 @@ pub(super) async fn validate_set_default_strand_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+                actor_station_id: Some(operation.context.station_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -493,7 +493,7 @@ pub(super) async fn validate_realm_organization_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -504,7 +504,7 @@ pub(super) async fn validate_realm_organization_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+            actor_station_id: Some(operation.context.station_id.as_str()),
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
@@ -585,7 +585,7 @@ pub(super) async fn validate_moderation_event_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -602,7 +602,7 @@ pub(super) async fn validate_moderation_event_policy(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+                actor_station_id: Some(operation.context.station_id.as_str()),
                 action,
                 resource: realm_id,
                 realm_id,
@@ -634,7 +634,7 @@ pub(super) async fn validate_call_recording_start_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -645,7 +645,7 @@ pub(super) async fn validate_call_recording_start_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+            actor_station_id: Some(operation.context.station_id.as_str()),
             action,
             resource: realm_id,
             realm_id,

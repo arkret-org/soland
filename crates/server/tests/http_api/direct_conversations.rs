@@ -63,10 +63,10 @@ fn normal_contact_evidence(
             request_event_ref: request_event_ref.clone(),
             source_checkpoint: fixture_hash('2'),
             accepted_at: now,
-            issuer_id: soland_test_support::fixture_principal_server_id(),
+            issuer_id: soland_test_support::fixture_station_id(),
         },
         receipt_digest: fixture_hash('0'),
-        signature: fixture_protocol_signature("did:web:principal-server.example", now),
+        signature: fixture_protocol_signature("did:web:station.example", now),
     };
     request_receipt.receipt_digest = request_receipt.computed_core_digest().unwrap();
     let request_acceptance_receipt_digest =

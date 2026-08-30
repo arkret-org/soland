@@ -264,7 +264,7 @@ async fn seed_pending_invite(
             invitee_id: Some(invitee_core.clone()),
             invite_delivery_target: Some(json!({
                 "recipient_id": state.service_id().clone(),
-                "recipient_kind": "principal_server"
+                "recipient_kind": "station"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_invite: None,
@@ -717,7 +717,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         scope_ref,
         actor.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",

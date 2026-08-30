@@ -18,12 +18,12 @@ pub(crate) async fn federation_actor_origin_acceptable(
     state: &AppState,
     actor: &str,
     source_id: &str,
-    event_principal_server_id: Option<&str>,
+    event_station_id: Option<&str>,
     binding_realm: &str,
     event_kind: Option<&str>,
 ) -> bool {
-    if let Some(principal_server_id) = event_principal_server_id {
-        if !event_origin_matches_source(source_id, principal_server_id) {
+    if let Some(station_id) = event_station_id {
+        if !event_origin_matches_source(source_id, station_id) {
             return false;
         }
         if did_deployment_authority(actor).is_some()
@@ -34,7 +34,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
         let projection = state.projections().snapshot();
         return membership_authority_pair_acceptable(
             projection.member(binding_realm, actor),
-            principal_server_id,
+            station_id,
             event_kind,
         );
     }
@@ -52,20 +52,20 @@ pub(crate) async fn federation_actor_origin_acceptable(
             .invite_member_is_invited(binding_realm, actor)
 }
 
-fn event_origin_matches_source(source_id: &str, principal_server_id: &str) -> bool {
-    !source_id.is_empty() && source_id == principal_server_id
+fn event_origin_matches_source(source_id: &str, station_id: &str) -> bool {
+    !source_id.is_empty() && source_id == station_id
 }
 
 fn membership_authority_pair_acceptable(
     membership: Option<&soland_domain::reducer::SolandMembershipState>,
-    principal_server_id: &str,
+    station_id: &str,
     event_kind: Option<&str>,
 ) -> bool {
     membership.is_some_and(|membership| {
         let acceptable_state = membership.state == "join"
             || (event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
                 && membership.state == "invite");
-        acceptable_state && membership.recipient_id.as_deref() == Some(principal_server_id)
+        acceptable_state && membership.recipient_id.as_deref() == Some(station_id)
     })
 }
 
@@ -94,10 +94,7 @@ mod tests {
         did_deployment_authority, event_origin_matches_source, membership_authority_pair_acceptable,
     };
 
-    fn membership(
-        state: &str,
-        principal_server_id: &str,
-    ) -> soland_domain::reducer::SolandMembershipState {
+    fn membership(state: &str, station_id: &str) -> soland_domain::reducer::SolandMembershipState {
         let now = chrono::Utc::now();
         soland_domain::reducer::SolandMembershipState {
             member: "ak:did_core:web:alice.example".to_owned(),
@@ -105,7 +102,7 @@ mod tests {
             state: state.to_owned(),
             role: "member".to_owned(),
             delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(principal_server_id.to_owned()),
+            recipient_id: Some(station_id.to_owned()),
             recipient_service_resolution: None,
             membership_event_ref: None,
             delivery_binding_frontier: None,
@@ -141,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn membership_and_invite_authorization_are_bound_to_the_exact_principal_server() {
+    fn membership_and_invite_authorization_are_bound_to_the_exact_station() {
         let source = "ak:did_core:web:remote.example";
         let other = "ak:did_core:web:other.example";
         let joined = membership("join", source);

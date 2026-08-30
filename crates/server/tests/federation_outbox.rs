@@ -47,7 +47,7 @@ const DENIED_PEER_SERVICE_DID: &str = "did:web:denied-peer.example";
 const DENIED_PEER_SERVICE_ID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
-const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[],"service_binding_ref":{"delivery_binding_frontier":[],"destination_kind":"principal_server","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
+const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[],"service_binding_ref":{"delivery_binding_frontier":[],"destination_kind":"station","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
 
 #[derive(Clone)]
 struct VerifiedPeerRoute {
@@ -72,7 +72,7 @@ impl FixtureVerifiedRouteFetcher {
                     (
                         (
                             route.service_id.to_string(),
-                            ServiceKind::PrincipalServer.as_str().to_owned(),
+                            ServiceKind::Station.as_str().to_owned(),
                         ),
                         route.candidate.clone(),
                     )
@@ -127,7 +127,7 @@ fn verified_peer_route(
     };
     let describe_digest = arkret_models_identity::route_binding_describe_digest(
         &service_id,
-        ServiceKind::PrincipalServer.as_str(),
+        ServiceKind::Station.as_str(),
         &commitment,
         &base_url,
     )
@@ -141,7 +141,7 @@ fn verified_peer_route(
     let record = ServiceResolutionRecord {
         record: ServiceResolutionRecordCore {
             service_id: service_id.clone(),
-            service_kind: ServiceKind::PrincipalServer.as_str().to_owned(),
+            service_kind: ServiceKind::Station.as_str().to_owned(),
             did: did.clone(),
             method_history_head: method_history_head.clone(),
             version_id: version_id.clone(),
@@ -169,7 +169,7 @@ fn verified_peer_route(
             record,
             description: VerifiedServiceDescribeMetadata {
                 service_id,
-                service_kind: ServiceKind::PrincipalServer.as_str().to_owned(),
+                service_kind: ServiceKind::Station.as_str().to_owned(),
                 service_resolution: commitment,
                 http_json_base_url: base_url,
                 route_binding_digest: describe_digest,

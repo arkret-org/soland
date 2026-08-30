@@ -49,7 +49,7 @@ pub(crate) async fn set_account_lifecycle_state(
         .map_err(|_| AppError::param_invalid("invalid account identity core"))?;
     let changed_by = arkret_wire::DidCoreId::new(changed_by.to_owned())
         .map_err(|_| AppError::param_invalid("invalid state-change actor identity core"))?;
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().to_owned())
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().to_owned())
         .map_err(|_| AppError::internal("configured service identity is invalid"))?;
     let principal_id_value = principal_id.as_str();
     let changed_by_id_value = changed_by.as_str();
@@ -97,7 +97,7 @@ pub(crate) async fn set_account_lifecycle_state(
             reason: reason.clone(),
             changed_by: Some(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 changed_by.clone(),
-                principal_server_id,
+                station_id,
             ))),
             changed_at,
         };
@@ -361,8 +361,8 @@ async fn append_account_deactivation_propagation_state(
     let peer_targets = arkret_wire::DidCoreId::new(principal_id.to_owned())
         .ok()
         .zip(arkret_wire::DidCoreId::new(state.service_id().to_owned()).ok())
-        .map(|(principal_id, principal_server_id)| {
-            let account_id = arkret_wire::AccountId::new(principal_id, principal_server_id);
+        .map(|(principal_id, station_id)| {
+            let account_id = arkret_wire::AccountId::new(principal_id, station_id);
             deactivation_peer_service_targets_for_account(state, &account_id)
         })
         .unwrap_or_default();

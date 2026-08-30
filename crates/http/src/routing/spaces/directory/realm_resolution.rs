@@ -775,7 +775,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .flatten()
         .filter(|record| {
             record.record.service_id.as_str() == state.service_id()
-                && record.record.service_kind == "principal_server"
+                && record.record.service_kind == "station"
                 && observed_at < record.record.refresh_after
                 && observed_at < record.record.expires_at
         });
@@ -873,8 +873,8 @@ pub(super) async fn join_candidates_for_resolved_realm(
             service_resolution: ServiceResolutionCarrier::Inline {
                 inline: own_resolution,
             },
-            service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
-            role: RealmJoinCandidateRole::JoinedMemberPrincipalServer,
+            service_kind: RealmJoinCandidateServiceKind::Station,
+            role: RealmJoinCandidateRole::JoinedMemberStation,
             endpoint: None,
             operations: vec![
                 arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1.to_owned(),

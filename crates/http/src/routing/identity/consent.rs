@@ -45,7 +45,7 @@ use soland_services::identity::{
 
 use super::{AuthArgs, append_audit_log, now, query_param};
 use crate::routing::identity::device_messages::{
-    fanout_actor_private_update, principal_server_device_message_sender,
+    fanout_actor_private_update, station_device_message_sender,
 };
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -200,7 +200,7 @@ pub(crate) async fn apply_committed_consent_admission(
                     state,
                     admission.holder.as_str(),
                     ActorPrivateDeviceUpdate::AccountData {
-                        sender: principal_server_device_message_sender(state),
+                        sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
                             operation: ActorPrivateAccountDataOperation::Put,
                             account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -1289,7 +1289,7 @@ mod tests {
             "realm_id": HOLDER_PCR,
             "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
             "actor_id": actor,
-            "principal_server_id": "ak:did_core:web:soland.test",
+            "station_id": "ak:did_core:web:soland.test",
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
             "prev_refs": [],

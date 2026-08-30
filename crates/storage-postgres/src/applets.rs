@@ -84,17 +84,17 @@ impl AppletStore for PgAppletStore {
     async fn get_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> PersistenceResult<Option<Value>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT record FROM applet_managed_identities \
-             WHERE applet_id = $1 AND target_principal_server_id = $2",
+             WHERE applet_id = $1 AND target_station_id = $2",
         )
         .bind::<Text, _>(applet_id)
-        .bind::<Text, _>(target_principal_server_id)
+        .bind::<Text, _>(target_station_id)
         .get_result::<AppletRegistrationRow>(&mut *conn)
         .await
         .optional()
@@ -162,7 +162,7 @@ impl AppletStore for PgAppletStore {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: chrono::DateTime<chrono::Utc>,
@@ -191,16 +191,16 @@ impl AppletStore for PgAppletStore {
             // identity.
             let identity = sql_query(
                 "SELECT record FROM applet_managed_identities \
-                 WHERE applet_id = $1 AND target_principal_server_id = $2 FOR UPDATE",
+                 WHERE applet_id = $1 AND target_station_id = $2 FOR UPDATE",
             )
             .bind::<Text, _>(applet_id)
-            .bind::<Text, _>(target_principal_server_id)
+            .bind::<Text, _>(target_station_id)
             .get_result::<AppletRegistrationRow>(&mut *conn)
             .await
             .optional()?;
             if identity.is_none() {
                 return Err(PersistenceError::NotFound(format!(
-                    "Applet identity winner missing for {applet_id}/{target_principal_server_id}"
+                    "Applet identity winner missing for {applet_id}/{target_station_id}"
                 ))
                 .into());
             }
@@ -243,10 +243,10 @@ impl AppletStore for PgAppletStore {
             let globally_fenced = sql_query(
                 "UPDATE applet_managed_identities \
                  SET record = jsonb_set(record, '{globally_fenced_at}', $3, true) \
-                 WHERE applet_id = $1 AND target_principal_server_id = $2",
+                 WHERE applet_id = $1 AND target_station_id = $2",
             )
             .bind::<Text, _>(applet_id)
-            .bind::<Text, _>(target_principal_server_id)
+            .bind::<Text, _>(target_station_id)
             .bind::<Jsonb, _>(&fenced_at)
             .execute(&mut *conn)
             .await?;

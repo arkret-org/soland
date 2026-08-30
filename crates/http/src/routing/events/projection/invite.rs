@@ -884,7 +884,7 @@ fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> 
         return None;
     }
     if let Some(service_kind) = object.get("recipient_kind").and_then(Value::as_str)
-        && service_kind != "principal_server"
+        && service_kind != "station"
     {
         tracing::warn!(
             operation_id = %operation.operation_id,
@@ -1063,7 +1063,7 @@ mod tests {
                 invite_delivery_target: (!third_party).then(|| {
                     json!({
                         "recipient_id": "ak:did_core:web:soland.example",
-                        "recipient_kind": "principal_server"
+                        "recipient_kind": "station"
                     })
                 }),
                 introduction_evidence_digest: None,
@@ -1272,7 +1272,7 @@ mod tests {
         let expires_at = "2026-08-05T10:00:00Z".parse().unwrap();
         let delivery_target = json!({
             "recipient_id": "ak:did_core:web:beta.example",
-            "recipient_kind": "principal_server"
+            "recipient_kind": "station"
         });
         let evidence_digest = format!("sha256:{}", "a".repeat(64));
         state

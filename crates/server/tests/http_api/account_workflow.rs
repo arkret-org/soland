@@ -119,7 +119,7 @@ async fn create_and_dispatch_local_realm_invite(
     let mut receive_policy = InviteReceivePolicy::spec_default(bob_core.clone());
     receive_policy
         .holder_allowed_introduction_kinds
-        .push("same_principal_server".to_owned());
+        .push("same_station".to_owned());
     let receive_policy_response =
         TestClient::put("http://server/_arkret/self/invite-receive-policy")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
@@ -142,9 +142,9 @@ async fn create_and_dispatch_local_realm_invite(
         ),
         pinned_record_digest: None,
     };
-    let introduction_evidence = IntroductionEvidence::SamePrincipalServer;
+    let introduction_evidence = IntroductionEvidence::SameStation;
     let introduction_evidence_digest = arkret_canonical::canonical_sha256(&introduction_evidence)
-        .expect("same-principal-server evidence digest");
+        .expect("same-station evidence digest");
     let mut invite_event = signed_canonical_event(
         "account-workflow-invite",
         arkret_wire::EventKind::InviteCreate.as_str(),
@@ -158,7 +158,7 @@ async fn create_and_dispatch_local_realm_invite(
             "invite_delivery_target": {
                 "recipient_id": recipient_id.clone(),
                 "service_resolution": service_resolution.clone(),
-                "recipient_kind": "principal_server"
+                "recipient_kind": "station"
             },
             "introduction_evidence_digest": introduction_evidence_digest,
             "expires_at": "2099-01-01T00:00:00.000Z"
@@ -196,7 +196,7 @@ async fn create_and_dispatch_local_realm_invite(
     let dispatch = SelfInviteDispatchRequestBody {
         schema: arkret_wire::SchemaId::INVITE_DELIVERY_REQUEST_V1.to_owned(),
         invite_event_id,
-        invite_address: InviteAddress::principal_server(bob_core, recipient_id, service_resolution),
+        invite_address: InviteAddress::station(bob_core, recipient_id, service_resolution),
         introduction_evidence,
         idempotency_key: "ak:idempotency:account-workflow-invite".to_owned(),
     };
@@ -318,7 +318,7 @@ async fn create_contact_request(
         },
         granted_to_peer_scopes: vec![ContactScope::DirectMessage],
         introduction_evidence:
-            arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SamePrincipalServer,
+            arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence::SameStation,
         previous_terminal_contact_round_id: None,
         continuity_evidence: None,
         message: None,
@@ -1268,8 +1268,8 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     );
     assert_eq!(
         bob_invites["invites"][0]["introduction_evidence_digest"],
-        arkret_canonical::canonical_sha256(&IntroductionEvidence::SamePrincipalServer)
-            .expect("same-principal-server evidence digest")
+        arkret_canonical::canonical_sha256(&IntroductionEvidence::SameStation)
+            .expect("same-station evidence digest")
     );
     // The private delivery token is transport material and MUST NOT be surfaced
     // through the Invite read model (`governance-objects.md` §5.3). It is read

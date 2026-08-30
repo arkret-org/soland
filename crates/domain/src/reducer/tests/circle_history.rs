@@ -234,12 +234,10 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let controller_generation =
         arkret_identifiers::EventId::new("ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim")
             .unwrap();
-    let controller_authority = arkret_wire::PrincipalAuthorityKey {
+    let controller_authority = arkret_wire::AccountId {
         principal_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
-        principal_server_id: arkret_identifiers::DidCoreId::new(
-            "ak:did_core:web:principal.example",
-        )
-        .unwrap(),
+        station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example")
+            .unwrap(),
     };
     state
         .members

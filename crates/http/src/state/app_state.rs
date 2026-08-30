@@ -175,7 +175,7 @@ pub struct AppState {
     /// (the HTTP Message Signature key) or by an exact verification-method
     /// DID URL (artifact-specific assertion keys). Configuration contains
     /// endpoints, not copied service DIDs or public-key pins; discovery
-    /// validates the document's Principal Server endpoint binding before
+    /// validates the document's Station endpoint binding before
     /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
     /// Live event notification bus for `ak.self.events.stream.subscribe.v1`.
@@ -213,7 +213,7 @@ pub struct AppState {
     notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// G4.T3 — verified-profile descriptors loaded from the artifact path in
     /// `SOLAND_VERIFIED_PROFILES_ARTIFACT` at startup. Filtered to entries
-    /// whose `service_role == "principal_server"` and additionally
+    /// whose `service_role == "station"` and additionally
     /// cross-checked against the local `claimed_profiles[]` set inside
     /// `describe.rs::apply_claim_level_partition`. Empty when the env var
     /// is unset / file missing / file malformed — that's the dev-mode
@@ -395,11 +395,11 @@ pub fn build_realm_directory(
 #[cfg(test)]
 fn development_fixture_service_identity(config: &AppConfig) -> DidCoreIdentityState {
     let registration_key = ServiceRegistrationKey::new(
-        ServiceKind::PrincipalServer,
+        ServiceKind::Station,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
             .expect("test/development public base must be canonicalizable"),
     )
-    .expect("principal-server registration key");
+    .expect("station registration key");
     let signing_key_ref =
         DidCoreIdentityKeyRef::new("fixture:soland:service-signing-key").expect("fixture key ref");
     DidCoreIdentityState::Ready {
@@ -2080,7 +2080,7 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
         let AuthorizationCheck {
             actor,
-            actor_principal_server_id,
+            actor_station_id,
             action,
             resource,
             realm_id,
@@ -2090,7 +2090,7 @@ impl AuthorizationPort for SolandAuthzEngine {
         } = request;
         let decision = self.check_for_authority(
             actor,
-            actor_principal_server_id,
+            actor_station_id,
             action,
             resource,
             realm_id,
@@ -2117,9 +2117,9 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn mark_projected_grants_revoked_for_subject(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
     ) -> usize {
-        self.mark_projected_grants_revoked_for_subject(subject, subject_principal_server_id)
+        self.mark_projected_grants_revoked_for_subject(subject, subject_station_id)
     }
 
     fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
@@ -2129,28 +2129,28 @@ impl AuthorizationPort for SolandAuthzEngine {
     fn grants_for_subject(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
         realm_id: &str,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject(subject, subject_principal_server_id, realm_id)
+        self.grants_for_subject(subject, subject_station_id, realm_id)
     }
 
     fn grants_for_subject_at(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
         realm_id: &str,
         evaluated_at: chrono::DateTime<chrono::Utc>,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_at(subject, subject_principal_server_id, realm_id, evaluated_at)
+        self.grants_for_subject_at(subject, subject_station_id, realm_id, evaluated_at)
     }
 
     fn grants_for_subject_all_realms(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
     ) -> Vec<arkret_policy::authz::authority::Grant> {
-        self.grants_for_subject_all_realms(subject, subject_principal_server_id)
+        self.grants_for_subject_all_realms(subject, subject_station_id)
     }
 
     fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {

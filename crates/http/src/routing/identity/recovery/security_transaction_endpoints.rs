@@ -52,7 +52,7 @@ async fn enforce_recovery_grant_transaction_binding(
         .map_err(recovery_service_error)?
         .ok_or_else(|| AppError::not_found("recovery session not found"))?;
     if recovery.principal_id.as_str() != session.actor
-        || recovery.principal_server_id.as_str() != session.audience
+        || recovery.station_id.as_str() != session.audience
         || recovery.requesting_device_id != session.device_id
         || recovery.session_grant_id != grant.grant_id.as_str()
         || recovery.session_grant_cnf_jkt != grant.cnf_jkt
@@ -1271,7 +1271,7 @@ async fn continue_issue_terminal_receipt(
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
         || recovery_session.principal_id != transaction.resource.principal_id
-        || recovery_session.principal_server_id.as_str() != state.service_id()
+        || recovery_session.station_id.as_str() != state.service_id()
         || recovery_session.requesting_device_id != expected_device_id.as_str()
         || recovery_session.policy_id != receipt.policy_id.as_str()
         || u64::from(recovery_session.policy_version) != receipt.policy_version

@@ -29,11 +29,10 @@ pub fn decode_session_agent_payload(payload: &Value) -> Option<AgentSessionRecor
 mod tests {
     use arkret_wire::FreshnessState;
 
-    use crate::AccountPk;
-
     use super::{
         AgentSessionRecord, SessionRecord, decode_session_agent_payload, encode_session_payload,
     };
+    use crate::AccountPk;
 
     #[test]
     fn session_payload_round_trips_agent_session() {

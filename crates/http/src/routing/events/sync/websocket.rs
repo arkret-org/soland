@@ -213,7 +213,7 @@ pub(crate) fn advertise_websocket_binding(
     );
     description
         .supported_operation_bundles
-        .push("ak.operation_bundle.principal_server.websocket.v1".to_owned());
+        .push("ak.operation_bundle.station.websocket.v1".to_owned());
     if !description
         .supported_profiles
         .iter()

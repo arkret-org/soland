@@ -268,7 +268,7 @@ struct RecoverySessionRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: arkret_identifiers::DidCoreId,
+    station_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     requesting_device_id: String,
     #[diesel(sql_type = Text)]
@@ -388,7 +388,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             session_grant_id: row.session_grant_id,
             session_grant_cnf_jkt: row.session_grant_cnf_jkt,
             principal_id: row.principal_id,
-            principal_server_id: row.principal_server_id,
+            station_id: row.station_id,
             requesting_device_id: row.requesting_device_id,
             trust_domain: row.trust_domain,
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
@@ -413,7 +413,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
         })
     }
 }
-const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, principal_server_id, requesting_device_id, \
+const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, identity_model, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
      policy_payload, publication_authority_context, publication_authority_context_digest, \
@@ -504,7 +504,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         };
         sql_query(
             "INSERT INTO recovery_sessions \
-             (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, principal_server_id, requesting_device_id, trust_domain, policy_id, \
+             (id, request_id, create_intent_digest, session_grant_id, session_grant_cnf_jkt, principal_id, station_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, identity_model, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
               publication_authority_context, publication_authority_context_digest, challenge, \
@@ -519,7 +519,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.session_grant_id)
         .bind::<Text, _>(&record.session_grant_cnf_jkt)
         .bind::<Text, _>(&record.principal_id)
-        .bind::<Text, _>(&record.principal_server_id)
+        .bind::<Text, _>(&record.station_id)
         .bind::<Text, _>(&record.requesting_device_id)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))

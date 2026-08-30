@@ -823,7 +823,7 @@ fn validate_registration_receipt_signature(stored: &StoredDidCoreIdentity) -> an
 fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey> {
     let public_base_url = CanonicalServiceUrl::canonicalize(&config.public_base_url)
         .map_err(|error| anyhow::anyhow!("invalid SOLAND_PUBLIC_BASE_URL: {error}"))?;
-    ServiceRegistrationKey::new(ServiceKind::PrincipalServer, public_base_url)
+    ServiceRegistrationKey::new(ServiceKind::Station, public_base_url)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 

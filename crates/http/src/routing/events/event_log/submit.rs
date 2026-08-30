@@ -45,10 +45,8 @@ pub(super) fn validate_initial_publication_session_context(
         .as_ref()
         .unwrap_or(&submission.event.actor_id)
         .clone();
-    let request_authority = arkret_wire::AccountId::new(
-        request_principal,
-        submission.event.principal_server_id.clone(),
-    );
+    let request_authority =
+        arkret_wire::AccountId::new(request_principal, submission.event.station_id.clone());
     let session_principal =
         arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
             SubmitOneError::new(
@@ -70,7 +68,7 @@ pub(super) fn validate_initial_publication_session_context(
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
-            "online Event principal/executor and principal_server_id must match the authenticated session authority",
+            "online Event principal/executor and station_id must match the authenticated session authority",
         ));
     }
     if let Some(grant) = session.session_grant.as_ref() {
@@ -2226,11 +2224,11 @@ async fn verify_federated_event_admission(
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
     event
-        .validate_principal_server_admission_binding(digest_suite)
+        .validate_station_admission_binding(digest_suite)
         .map_err(|error| error.to_string())?;
     let [
         arkret_wire::EventProof::Producer(producer),
-        arkret_wire::EventProof::PrincipalServerAdmission(admission),
+        arkret_wire::EventProof::StationAdmission(admission),
     ] = event.proofs.as_slice()
     else {
         return Err("accepted Event proof set is not closed".to_owned());
@@ -2260,7 +2258,7 @@ async fn verify_federated_event_admission(
         &admission_bytes,
         &admission.jws,
         admission.verification_method.as_str(),
-        event.principal_server_id.as_str(),
+        event.station_id.as_str(),
         state,
     )
     .await?;
@@ -2496,7 +2494,7 @@ pub(crate) async fn submit_federation_events(
                     res,
                     StatusCode::BAD_REQUEST,
                     "invalid_proof",
-                    "federated Event does not carry a valid origin Principal Server admission proof",
+                    "federated Event does not carry a valid origin Station admission proof",
                 );
                 return;
             }
@@ -2890,13 +2888,11 @@ pub(crate) async fn submit_federation_events(
             continue;
         }
         let event_kind = event_string_field_from_value(&envelope, "kind");
-        let Some(event_principal_server_id) =
-            event_string_field_from_value(&envelope, "principal_server_id")
-        else {
+        let Some(event_station_id) = event_string_field_from_value(&envelope, "station_id") else {
             rejected.push(rejected_item(
                 id,
                 ReasonCode::from_wire("missing_param"),
-                Some("principal_server_id is required".to_owned()),
+                Some("station_id is required".to_owned()),
             ));
             continue;
         };
@@ -2904,7 +2900,7 @@ pub(crate) async fn submit_federation_events(
             state,
             &actor,
             &source_id,
-            Some(&event_principal_server_id),
+            Some(&event_station_id),
             &binding_realm,
             event_kind.as_deref(),
         )
@@ -3196,10 +3192,10 @@ async fn prepare_agent_event_admission_receipt(
         return Ok(None);
     }
     let Some(admission) = event.proofs.iter().find_map(|proof| match proof {
-        arkret_wire::EventProof::PrincipalServerAdmission(value) => Some(value),
+        arkret_wire::EventProof::StationAdmission(value) => Some(value),
         arkret_wire::EventProof::Producer(_) => None,
     }) else {
-        return Err("federated Event omitted its Principal Server admission proof".to_owned());
+        return Err("federated Event omitted its Station admission proof".to_owned());
     };
     let (Some(producer_evidence_ref), Some(producer_evidence_digest)) = (
         admission.producer_signer_resolution_evidence_ref.clone(),
@@ -3287,9 +3283,9 @@ async fn load_agent_event_admission_receipt(
     event
         .proofs
         .iter()
-        .any(|proof| matches!(proof, arkret_wire::EventProof::PrincipalServerAdmission(_)))
+        .any(|proof| matches!(proof, arkret_wire::EventProof::StationAdmission(_)))
         .then_some(())
-        .ok_or_else(|| "federated Event omitted its Principal Server admission proof".to_owned())?;
+        .ok_or_else(|| "federated Event omitted its Station admission proof".to_owned())?;
     let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| format!("receiver service id is invalid: {error}"))?;
     let receipt_key = format!(
@@ -3362,23 +3358,23 @@ async fn submit_direct_conversation_federation(
         .get("source-service-id")
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let event_principal_server_ids = submission
+    let event_station_ids = submission
         .events
         .iter()
-        .map(|item| item.event.principal_server_id.as_str())
+        .map(|item| item.event.station_id.as_str())
         .collect::<Vec<_>>();
     if arkret_wire::DidCoreId::new(source_id.to_owned()).is_err()
         || !direct_founding_origin_ids_match(
             source_id,
             receipt.issuer_id.as_str(),
-            &event_principal_server_ids,
+            &event_station_ids,
         )
     {
         render_error(
             res,
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "authenticated source, founding receipt issuer and every Event principal server must match",
+            "authenticated source, founding receipt issuer and every Event Station must match",
         );
         return;
     }
@@ -3553,14 +3549,14 @@ async fn submit_direct_conversation_federation(
 fn direct_founding_origin_ids_match(
     source_id: &str,
     receipt_issuer_id: &str,
-    event_principal_server_ids: &[&str],
+    event_station_ids: &[&str],
 ) -> bool {
     !source_id.is_empty()
         && source_id == receipt_issuer_id
-        && event_principal_server_ids.len() == 3
-        && event_principal_server_ids
+        && event_station_ids.len() == 3
+        && event_station_ids
             .iter()
-            .all(|principal_server_id| *principal_server_id == source_id)
+            .all(|station_id| *station_id == source_id)
 }
 
 pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {

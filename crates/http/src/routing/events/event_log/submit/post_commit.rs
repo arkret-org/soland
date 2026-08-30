@@ -415,7 +415,7 @@ pub(super) async fn peer_event_batch_fanout_records(
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await
@@ -546,7 +546,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await
@@ -677,7 +677,7 @@ pub(super) async fn peer_event_fanout_records(
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await
@@ -712,7 +712,7 @@ pub(super) async fn peer_event_fanout_records(
         }
         let dependencies = realm_event_dependency_records(state, parsed, envelope, &peer).await?;
         // A directed Event can be the first reason this Realm is routed to a
-        // remote principal server. Preserve the receiver's fail-closed
+        // remote Station. Preserve the receiver's fail-closed
         // dependency admission by delivering the original atomic Realm
         // genesis unit immediately before that Event. The deterministic
         // idempotency key collapses this prerequisite for later fanout.
@@ -1145,7 +1145,7 @@ async fn dynamic_peer_event_targets(
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             &service_id,
-            "principal_server",
+            "station",
             false,
         )
         .await
@@ -1186,7 +1186,7 @@ fn service_binding_ref_for_realm_target(
             realm_id: RealmId::new(realm_id.to_owned()).ok()?,
             realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
             membership_frontier,
-            destination_kind: "principal_server".to_owned(),
+            destination_kind: "station".to_owned(),
         },
     )
 }
@@ -1243,7 +1243,7 @@ mod tests {
                     "kind": "account",
                     "account_id": {
                         "principal_id": "ak:did_core:web:bob.example",
-                        "principal_server_id": "ak:did_core:web:soland-beta.example"
+                        "station_id": "ak:did_core:web:soland-beta.example"
                     }
                 },
                 "membership": "join"
@@ -1270,7 +1270,7 @@ mod tests {
                             "kind": "account",
                             "account_id": {
                                 "principal_id": "ak:did_core:web:bob.example",
-                                "principal_server_id": "ak:did_core:web:soland-beta.example"
+                                "station_id": "ak:did_core:web:soland-beta.example"
                             }
                         },
                         "membership": "leave"

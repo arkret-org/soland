@@ -24,7 +24,7 @@ const MAX_REALM_ATTEMPTS_PER_PASS: usize = 512;
 const MAX_SCHEDULE_REPAIRS_PER_PASS: usize = 512;
 const MAX_CONTROL_MOVES_PER_REALM: usize = 256;
 const MAX_DEVICE_REVOCATION_CLEANUPS_PER_PASS: usize = 512;
-// A full Principal Server can have many independent Realms become pending at
+// A full Station can have many independent Realms become pending at
 // once. Processing them serially lets an otherwise healthy queue age beyond
 // the Event replay window. The durable signing lease remains the per-Realm
 // exclusion mechanism; this bound only permits independent Realms to make

@@ -134,7 +134,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
                 )
                 .unwrap(),
             ],
-            destination_kind: "principal_server".to_owned(),
+            destination_kind: "station".to_owned(),
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),
@@ -161,7 +161,7 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
             ))
             .unwrap(),
             membership_frontier: vec![event_id.clone()],
-            destination_kind: "principal_server".to_owned(),
+            destination_kind: "station".to_owned(),
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),

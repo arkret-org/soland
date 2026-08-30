@@ -1494,7 +1494,7 @@ pub(crate) async fn actor_has_call_capability(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(state.service_id()),
+            actor_station_id: Some(state.service_id()),
             action,
             resource: realm_id,
             realm_id,

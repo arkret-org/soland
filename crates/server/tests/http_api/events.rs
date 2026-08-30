@@ -1340,7 +1340,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     assert_eq!(
         describe_response.status_code,
         Some(StatusCode::OK),
-        "the local Principal Server must publish its current service resolution before it can be a join candidate"
+        "the local Station must publish its current service resolution before it can be a join candidate"
     );
     let _: Value = describe_response
         .take_json()
@@ -1468,7 +1468,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
                     )
                 )
             },
-            "recipient_kind": "principal_server"
+            "recipient_kind": "station"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2099-01-01T00:00:00.000Z"

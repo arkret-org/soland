@@ -202,7 +202,7 @@ pub(super) async fn provision_agent(
             operation_id,
             idempotency_key,
             did,
-            controller_principal_server_id,
+            controller_station_id,
             slug,
             requested_scope,
             pairing_ttl_ms,
@@ -247,7 +247,7 @@ pub(super) async fn provision_agent(
                 AppError::internal(format!("authenticated controller id is invalid: {error}"))
             })?;
             let controller_authority =
-                arkret_wire::AccountId::new(controller_id.clone(), controller_principal_server_id);
+                arkret_wire::AccountId::new(controller_id.clone(), controller_station_id);
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(controller_id.as_str())
@@ -415,10 +415,7 @@ pub(super) async fn provision_agent(
                     operation_id: operation_id.clone(),
                     idempotency_key: idempotency_key.clone(),
                     did: did.clone(),
-                    controller_principal_server_id: prepared
-                        .controller_authority
-                        .principal_server_id
-                        .clone(),
+                    controller_station_id: prepared.controller_authority.station_id.clone(),
                     slug: slug.clone(),
                     requested_scope: requested_scope.clone(),
                     pairing_ttl_ms,

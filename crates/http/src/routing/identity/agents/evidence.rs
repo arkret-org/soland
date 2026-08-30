@@ -305,8 +305,8 @@ async fn current_controller_signer_evidence(
     verification_method: &arkret_wire::DidUrl,
     attester: &AuthenticatedSignerResolutionEvidence,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentSignerEvidenceQueryFailureReason> {
-    let principal_server_id = attester.signer_id().clone();
-    let authority = arkret_wire::AccountId::new(controller_id.clone(), principal_server_id);
+    let station_id = attester.signer_id().clone();
+    let authority = arkret_wire::AccountId::new(controller_id.clone(), station_id);
     let (public_resolution, normalized_did_document) =
         crate::routing::system::principal_resolution::current_public_principal_resolution(
             state, &authority,

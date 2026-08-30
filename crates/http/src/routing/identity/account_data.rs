@@ -139,15 +139,15 @@ fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), Ap
 }
 
 /// Resource reads cover both holder-authored encrypted cells and the two
-/// registry-declared plaintext inboxes written by the Principal Server.  The
+/// registry-declared plaintext inboxes written by the Station.  The
 /// write validator above deliberately remains narrower: a holder must never
-/// gain PUT/DELETE authority over a `principal_server_cas` cell merely because
+/// gain PUT/DELETE authority over a `station_cas` cell merely because
 /// it is readable through the actor-private account-data resource.
 fn validate_readable_account_data_key(account_data_key: &str) -> Result<(), AppError> {
     let is_plaintext_service_cas = arkret_schema::account_data_pattern(account_data_key)
         .is_some_and(|descriptor| {
             descriptor.storage == "plaintext_account_data"
-                && descriptor.writer_authorities == ["principal_server_cas"]
+                && descriptor.writer_authorities == ["station_cas"]
                 && descriptor.holder_self_operations.is_empty()
                 && descriptor.write_event_kinds.is_empty()
         });

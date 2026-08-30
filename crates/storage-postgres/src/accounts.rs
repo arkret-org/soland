@@ -20,9 +20,9 @@ impl AccountStore for PgAccountStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(account_with_primary_localpart_select(
-            "WHERE a.principal_server_id = $1 AND a.principal_id = $2",
+            "WHERE a.station_id = $1 AND a.principal_id = $2",
         ))
-        .bind::<Text, _>(account_id.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .bind::<Text, _>(account_id.principal_id.as_str())
         .get_result::<AccountRow>(&mut *conn)
         .await
@@ -53,14 +53,14 @@ impl AccountStore for PgAccountStore {
             "avatar_blob_ref": record.avatar_blob_ref,
         });
         let row = sql_query(
-            "INSERT INTO accounts (principal_id, principal_server_id, display_name, payload, created_at, updated_at) \
+            "INSERT INTO accounts (principal_id, station_id, display_name, payload, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $5) \
-             ON CONFLICT (principal_server_id, principal_id) DO UPDATE SET \
+             ON CONFLICT (station_id, principal_id) DO UPDATE SET \
              display_name = EXCLUDED.display_name, payload = EXCLUDED.payload, updated_at = NOW() \
              RETURNING pk",
         )
         .bind::<Text, _>(record.principal_id.as_str())
-        .bind::<Text, _>(record.principal_server_id.as_str())
+        .bind::<Text, _>(record.station_id.as_str())
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(record.created_at)
@@ -117,7 +117,7 @@ impl AccountStore for PgAccountStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(account_with_primary_localpart_select(
-            "ORDER BY a.principal_server_id, a.principal_id",
+            "ORDER BY a.station_id, a.principal_id",
         ))
         .load::<AccountRow>(&mut *conn)
         .await
@@ -129,8 +129,8 @@ impl AccountStore for PgAccountStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM accounts WHERE principal_server_id = $1 AND principal_id = $2")
-            .bind::<Text, _>(account_id.principal_server_id.as_str())
+        sql_query("DELETE FROM accounts WHERE station_id = $1 AND principal_id = $2")
+            .bind::<Text, _>(account_id.station_id.as_str())
             .bind::<Text, _>(account_id.principal_id.as_str())
             .execute(&mut *conn)
             .await
@@ -378,11 +378,11 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT a.principal_id, a.principal_server_id, l.state, l.reason, \
+            "SELECT a.principal_id, a.station_id, l.state, l.reason, \
                     l.changed_by, l.changed_at \
              FROM account_lifecycle l \
              JOIN accounts a ON a.pk = l.account_pk \
-             ORDER BY a.principal_server_id, a.principal_id",
+             ORDER BY a.station_id, a.principal_id",
         )
         .load::<AccountLifecycleRow>(&mut *conn)
         .await
@@ -397,7 +397,7 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
                         PersistenceError::database(format!("stored changed_by JSON: {error}"))
                     })?;
                 Ok((
-                    arkret_wire::AccountId::new(row.principal_id, row.principal_server_id),
+                    arkret_wire::AccountId::new(row.principal_id, row.station_id),
                     AccountLifecycleRecord {
                         state: row.state,
                         reason: row.reason,
@@ -517,7 +517,7 @@ struct AccountRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: arkret_wire::DidCoreId,
+    station_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     localpart: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -557,7 +557,7 @@ struct AccountLifecycleRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: arkret_wire::DidCoreId,
+    station_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -588,7 +588,7 @@ impl TryFrom<AccountRow> for AccountRecord {
         Ok(Self {
             pk: AccountPk(row.pk),
             principal_id: row.principal_id,
-            principal_server_id: row.principal_server_id,
+            station_id: row.station_id,
             localpart: row.localpart,
             display_name: row.display_name,
             bio: row

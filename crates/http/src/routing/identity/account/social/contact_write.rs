@@ -387,7 +387,7 @@ fn contact_scope_strings(scopes: &[ContactScope]) -> Vec<String> {
 
 fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     holder: &ContactPeer,
-    principal_server_id: arkret_wire::DidCoreId,
+    station_id: arkret_wire::DidCoreId,
     realm_id: RealmId,
     actor_seq: u64,
     hlc: arkret_identifiers::Hlc,
@@ -400,7 +400,7 @@ fn new_unsigned_contact_event<K: arkret_event_draft::EventSpec>(
     arkret_event_draft::TypedEventDraft::<K>::new(
         arkret_wire::ScopeRef::Realm { realm_id },
         holder.contact_actor_id(),
-        principal_server_id,
+        station_id,
         payload,
     )
     .map(|draft| draft.with_prev_refs(prev_refs).with_seal_basis(seal_basis))
@@ -596,7 +596,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         return json_ok(outcome);
     }
     // The authenticated device (or managed-Agent allocation) selects one exact
-    // `(principal_id, principal_server_id)` pair and its local lifetime PCR
+    // `(principal_id, station_id)` pair and its local lifetime PCR
     // lineage. Never resolve account state from the principal core alone.
     let realm_id = contact_authority_realm(state, session, &holder).await?;
     let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
@@ -630,12 +630,12 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         leaves: vec![accepted_seal.id],
     };
     let created_at = now();
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let event = new_unsigned_contact_event::<K>(
         &holder,
-        principal_server_id,
+        station_id,
         realm_id,
         frontier.next_actor_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
@@ -769,7 +769,7 @@ async fn contact_authority_realm(
         })?;
     if authority.account_id.principal_id != holder.contact_actor_id()
         || authority.pcr_realm_id != realm_id
-        || authority.account_id.principal_server_id.as_str() != state.service_id()
+        || authority.account_id.station_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1054,7 +1054,7 @@ async fn local_requester_current_proof(
     };
     if resolution.account_id.principal_id != *request_event.actor_id.signing_principal_id()
         || resolution.pcr_realm_id != request_event.realm_id
-        || resolution.account_id.principal_server_id.as_str() != state.service_id()
+        || resolution.account_id.station_id.as_str() != state.service_id()
     {
         return Ok(None);
     }
@@ -1218,7 +1218,7 @@ async fn plan_contact_commit(
             let peer_id = if same_service_target
                 || matches!(
                     introduction_evidence.as_ref(),
-                    ContactIntroductionEvidence::SamePrincipalServer
+                    ContactIntroductionEvidence::SameStation
                 ) {
                 Some(
                     arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
@@ -1758,7 +1758,7 @@ fn imported_contact_continuity_history(
     for checkpoint_signature in &evidence.checkpoint.signatures {
         verify_contact_service_signature_bytes(
             state,
-            checkpoint_signature.signer.principal_server_id.as_str(),
+            checkpoint_signature.signer.station_id.as_str(),
             &checkpoint_signature.signature,
             &signing_bytes,
             "continuity_evidence.checkpoint",
@@ -1957,7 +1957,7 @@ async fn contact_introduction_service_resolution(
             })
             .and_then(|member| member.recipient_service_resolution.clone())
             .and_then(|value| serde_json::from_value(value).ok()),
-        ContactIntroductionEvidence::SamePrincipalServer => state
+        ContactIntroductionEvidence::SameStation => state
             .current_signed_service_resolution()
             .await
             .map_err(|error| {

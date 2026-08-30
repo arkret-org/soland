@@ -100,17 +100,17 @@ pub fn realm_basis(
     subject: &arkret_identifiers::DidCoreId,
     basis: FixtureBasis<'_>,
 ) -> ConformanceRealmBasis {
-    realm_basis_for_principal_server(state, realm_id, subject, state.service_id(), basis)
+    realm_basis_for_station(state, realm_id, subject, state.service_id(), basis)
 }
 
-/// The sealed genesis unit for an actor whose exact Principal Server differs
+/// The sealed genesis unit for an actor whose exact Station differs
 /// from the Realm notary. Federation fixtures use this to preserve the
-/// `(subject, principal_server_id)` capability authority pair.
-pub fn realm_basis_for_principal_server(
+/// `(subject, station_id)` capability authority pair.
+pub fn realm_basis_for_station(
     state: &AppState,
     realm_id: &str,
     subject: &arkret_identifiers::DidCoreId,
-    principal_server_id: &str,
+    station_id: &str,
     basis: FixtureBasis<'_>,
 ) -> ConformanceRealmBasis {
     let subject = subject.as_str();
@@ -123,7 +123,7 @@ pub fn realm_basis_for_principal_server(
     let key = (
         realm_id.to_owned(),
         subject.to_owned(),
-        principal_server_id.to_owned(),
+        station_id.to_owned(),
         notary,
         basis.id_domain.to_owned(),
         actions.clone(),
@@ -144,7 +144,7 @@ pub fn realm_basis_for_principal_server(
         realm_id,
         subject,
         soland_services::conformance_basis::RealmBasisFixtureOptions {
-            principal_server_id,
+            station_id,
             notary_signer: &notary_signer,
             install_notary: true,
             data_plane_actions: &actions,
@@ -281,16 +281,13 @@ fn fixture_pcr_founding_device_descriptor(
 /// Deterministic, fully content-bound PCR create Event shared by fixtures that
 /// need to name the PCR before seeding its accepted projection.
 pub fn fixture_principal_control_realm_create(principal_did: &str) -> arkret_wire::AuthoredEvent {
-    fixture_principal_control_realm_create_for_server(
-        principal_did,
-        crate::fixture_principal_server_id(),
-    )
+    fixture_principal_control_realm_create_for_server(principal_did, crate::fixture_station_id())
 }
 
-/// Deterministic PCR create Event for the exact Principal Server authority.
+/// Deterministic PCR create Event for the exact Station authority.
 pub fn fixture_principal_control_realm_create_for_server(
     principal_did: &str,
-    principal_server_id: arkret_identifiers::DidCoreId,
+    station_id: arkret_identifiers::DidCoreId,
 ) -> arkret_wire::AuthoredEvent {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture PCR genesis timestamp")
@@ -302,7 +299,7 @@ pub fn fixture_principal_control_realm_create_for_server(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: principal.clone(),
             principal_did: principal_did.clone(),
-            principal_server_id,
+            station_id,
             notary: test_single_signer_notary(principal_did.as_str()),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -623,7 +620,7 @@ pub async fn seed_event_derived_realm_genesis_event(
             &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         )
         .expect("fixture genesis actor projection"),
-        crate::fixture_principal_server_id(),
+        crate::fixture_station_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -699,7 +696,7 @@ async fn persist_and_project_realm_genesis_event(
                 realm_id: realm.clone(),
             },
             actor_id.clone(),
-            event.principal_server_id.clone(),
+            event.station_id.clone(),
             actor_seq,
             Hlc::new(format!("0196419b0000-{actor_seq:04x}-51c0a1ed"))
                 .expect("fixture bootstrap HLC"),

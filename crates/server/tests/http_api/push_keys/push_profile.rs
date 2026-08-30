@@ -1006,9 +1006,9 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
-    grant.issuer_principal_server_id =
+    grant.issuer_station_id =
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
-    grant.subject_principal_server_id =
+    grant.subject_station_id =
         Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
     let granted = post_signal(

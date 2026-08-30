@@ -1026,7 +1026,7 @@ pub(super) fn verify_with_federated_signer_evidence(
         value: multibase.to_owned(),
     };
     // The producer key is bound into the independently verified origin
-    // Principal Server admission proof; no device-history sidecar is needed.
+    // Station admission proof; no device-history sidecar is needed.
     let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
         jws,
         canonical_bytes,

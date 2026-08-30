@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 }
 
 /// Product-surface (`/_soland/gate/account/...`) router carrying the
-/// server-to-server device signing-key directory read used by the Auth Server
+/// server-to-server device signing-key directory read used by the Account Authority process
 /// (coauth) to verify device holder proofs. Mounted under `_soland`, not the
 /// `/_arkret` protocol root: it is a deployment-local integration read, not a
 /// spec operation.
@@ -213,12 +213,12 @@ async fn keys_upload(
 /// Freshness window of a device projection attestation.
 ///
 /// Short by design: `device-lifecycle.md` §8.3 lets a consumer cache the
-/// verified projection under `(principal_id, principal_server_id, device_id,
+/// verified projection under `(principal_id, station_id, device_id,
 /// authorized_generation_ref, attested_at)`, and this bound is what stops that
 /// cache from outliving a device revocation the caller has not re-fetched.
 const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
 
-/// Build one complete, origin-Principal-Server-attested `keys/query` row.
+/// Build one complete, origin-Station-attested `keys/query` row.
 ///
 /// Returns `None` when the device is not currently usable. §8.2 makes that the
 /// only two outcomes: the surface returns a fully attested row, or it returns
@@ -272,7 +272,7 @@ async fn attested_device_record(
     let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
         arkret_models_crypto::DeviceProjectionAttestationCore {
             principal_id: principal_id.clone(),
-            principal_server_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
+            station_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
                 |error| AppError::internal(format!("service id is not a did_core_id: {error}")),
             )?,
             device_id: device_id.clone(),

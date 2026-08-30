@@ -1,9 +1,9 @@
-//! Cross-Principal-Server contact fact delivery (spec
+//! Cross-Station contact fact delivery (spec
 //! `contact-and-direct-conversation.md` §2 / §4.1).
 //!
 //! Contact facts (`ak.contact.requested` / `accepted` / `rejected` /
 //! `tombstoned`) are principal-scoped and cross-Realm. When the issuer and the
-//! target holder live on different Principal Servers, the issuer-side server
+//! target holder live on different Stations, the issuer-side server
 //! federates the signed fact to the target holder's server via
 //! `ak.peer.contacts.command.submit.v1` (`POST /_arkret/peer/contacts`); the recipient
 //! projects the original signed envelope into the target holder's contact
@@ -81,7 +81,7 @@ pub(crate) fn peer_router() -> Router {
 }
 
 /// Enqueue the exact typed `ak.peer.contacts.command.submit.v1` carrier for a
-/// remote Principal Server. Same-server delivery is a no-op because the local
+/// remote Station. Same-server delivery is a no-op because the local
 /// Contact projection was already committed by the self operation.
 pub(crate) async fn enqueue_peer_contact_carrier(
     state: &AppState,
@@ -125,7 +125,7 @@ pub(crate) async fn prepare_peer_contact_carrier(
         .resolve_carrier(
             &contact_address.service_resolution,
             &contact_address.recipient_id,
-            "principal_server",
+            "station",
             chrono::Utc::now(),
         )
         .await
@@ -488,7 +488,7 @@ async fn peer_contacts_submit(
         )?;
     }
 
-    // Originating Principal Server of this delivery: the peer end of the
+    // Originating Station of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
     // above already verified this header is a present, well-formed DID, so we
     // record it on the projection as the contact's `peer_id` — that is
@@ -907,16 +907,15 @@ fn participant_authority_pair(
     let mut pair = [
         AccountId {
             principal_id: local_principal_id,
-            principal_server_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
-                .map_err(|error| {
-                    AppError::internal(format!("local Contact service invalid: {error}"))
-                })?,
+            station_id: arkret_wire::DidCoreId::new(state.service_id().to_owned()).map_err(
+                |error| AppError::internal(format!("local Contact service invalid: {error}")),
+            )?,
         },
         AccountId {
             principal_id: peer_principal_id.clone(),
-            principal_server_id: arkret_wire::DidCoreId::new(peer_id.to_owned()).map_err(
-                |error| AppError::internal(format!("peer Contact service invalid: {error}")),
-            )?,
+            station_id: arkret_wire::DidCoreId::new(peer_id.to_owned()).map_err(|error| {
+                AppError::internal(format!("peer Contact service invalid: {error}"))
+            })?,
         },
     ];
     pair.sort();
@@ -1041,7 +1040,7 @@ pub(crate) fn create_continuity_checkpoint_proposal(
         .iter()
         .find(|participant| {
             participant.principal_id.as_str() == local_principal_id
-                && participant.principal_server_id.as_str() == state.service_id()
+                && participant.station_id.as_str() == state.service_id()
         })
         .cloned()
         .ok_or_else(|| AppError::internal("checkpoint has no local proposer authority"))?;
@@ -1131,7 +1130,7 @@ pub(crate) async fn commit_same_service_continuity_checkpoint(
         .find(|participant| participant.principal_id.as_str() != local_principal_id)
         .cloned()
         .ok_or_else(|| AppError::internal("same-service checkpoint peer authority missing"))?;
-    if peer_signer.principal_server_id.as_str() != state.service_id() {
+    if peer_signer.station_id.as_str() != state.service_id() {
         return Err(AppError::internal(
             "same-service checkpoint selected a remote authority",
         ));
@@ -1242,7 +1241,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
     for signature in &checkpoint.signatures {
         verify_contact_service_signature_bytes(
             state,
-            signature.signer.principal_server_id.as_str(),
+            signature.signer.station_id.as_str(),
             &signature.signature,
             &signing_bytes,
             "continuity_checkpoint.signature",
@@ -1325,13 +1324,7 @@ async fn finalize_continuity_checkpoint(
             "invalid continuity checkpoint proposal: {error}"
         ))
     })?;
-    if proposal
-        .proposer_signature
-        .signer
-        .principal_server_id
-        .as_str()
-        != source_id
-    {
+    if proposal.proposer_signature.signer.station_id.as_str() != source_id {
         return Err(super::super::events::peer::cross_domain_replay(
             "checkpoint proposer service does not match Source-Service-ID",
         ));
@@ -1396,7 +1389,7 @@ async fn finalize_continuity_checkpoint(
         .core
         .participants
         .iter()
-        .find(|participant| participant.principal_server_id.as_str() == state.service_id())
+        .find(|participant| participant.station_id.as_str() == state.service_id())
         .cloned()
         .ok_or_else(|| {
             super::super::events::peer::cross_domain_replay(
@@ -4095,7 +4088,7 @@ mod tests {
 
     /// Cross-PS `ak.contact.requested` delivery: the projected pending_incoming
     /// row on the recipient (target holder) MUST record the *originating*
-    /// requester_id's home Principal Server as `peer_id` — the
+    /// requester_id's home Station as `peer_id` — the
     /// `source-service-id` of the delivery, NOT the recipient's own service
     /// DID. This is exactly the address inkson reads back as
     /// `requester_id` to federate the reverse `respond` delivery.

@@ -812,7 +812,7 @@ async fn enqueue_member_history_request_replicas(
         let route = super::federation::federation::resolved_peer_target(
             state,
             destination_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await
@@ -1528,7 +1528,7 @@ async fn enqueue_remote_history_response(
     let route = super::federation::federation::resolved_peer_target(
         state,
         destination.as_str(),
-        "principal_server",
+        "station",
         false,
     )
     .await
@@ -3990,8 +3990,8 @@ async fn build_history_recipient_authority_views(
         .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?;
     if status.account_authority_id != local_service_id
         || status.account_id.as_str() != account.account_id.as_str()
-        || status.principal_authority.principal_id != request.requester_actor_id
-        || status.principal_authority.principal_server_id != local_service_id
+        || status.account_id.principal_id != request.requester_actor_id
+        || status.account_id.station_id != local_service_id
         || status.status
             != arkret_models_collaboration::objects::account_status::AccountStatus::Active
         || status.effective_at > observed_at

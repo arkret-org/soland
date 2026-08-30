@@ -107,10 +107,10 @@ pub async fn seal_accepted_capability_grant(
             .value
             .as_ref()
             .and_then(|value| value.get("grant"))
-            .and_then(|grant| grant.get("issuer_principal_server_id"))
+            .and_then(|grant| grant.get("issuer_station_id"))
             .and_then(Value::as_str),
-        Some(event.principal_server_id.as_str()),
-        "canonical registry projection materializes the accepted issuer Principal Server"
+        Some(event.station_id.as_str()),
+        "canonical registry projection materializes the accepted issuer Station"
     );
     let op = IssuedOp {
         issuer_id: event.actor_id.clone(),

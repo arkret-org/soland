@@ -245,7 +245,7 @@ fn signed_event(
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         },
         arkret_wire::project_did_to_core_id(&actor_did).unwrap(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -344,7 +344,7 @@ async fn rebind_session_to_foreign_auth_account(
         .get(actor_id.as_str())
         .await
         .unwrap()
-        .expect("Principal Server local account");
+        .expect("Station local account");
     let foreign_auth_account_id = ServiceAccountId::new("auth-server-alice-account").unwrap();
     assert_ne!(local_account.id, foreign_auth_account_id);
 
@@ -366,8 +366,7 @@ async fn project_authorized_principal_device(
 ) -> String {
     let principal_did = arkret_identifiers::Did::new(principal_did.to_owned()).unwrap();
     let principal_id = arkret_wire::project_did_to_core_id(&principal_did).unwrap();
-    let principal_server_id =
-        arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
     let pcr_realm_id = arkret_identifiers::RealmId::new(
         soland_test_support::fixture_principal_control_realm(principal_did.as_str()),
     )
@@ -395,7 +394,7 @@ async fn project_authorized_principal_device(
             realm_id: pcr_realm_id.clone(),
         },
         principal_id.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
         json!({
@@ -438,8 +437,7 @@ async fn project_authorized_principal_device(
         ))
         .await
         .unwrap();
-    let authority_key =
-        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
     if state
         .test_persistence()
         .principal_resolutions()
@@ -507,8 +505,8 @@ async fn mls_lifecycle_end_to_end_body() {
     let alice_core =
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(alice_did).unwrap())
             .unwrap();
-    // A production session grant carries the Auth Server's service-local
-    // account id. It is intentionally different from this Principal Server's
+    // A production session grant carries the Account Authority process's service-local
+    // account id. It is intentionally different from this Station's
     // account id and must not be used as the KeyPackage owner lookup key.
     let alice_local_account_id =
         rebind_session_to_foreign_auth_account(&state, &alice_core, alice_device).await;
@@ -667,7 +665,7 @@ async fn mls_lifecycle_end_to_end_body() {
         .expect("publish must mirror into the store");
     assert_eq!(
         persisted_keypackage.owner_account_id, alice_local_account_id,
-        "KeyPackage owner must use the Principal Server local account id"
+        "KeyPackage owner must use the Station local account id"
     );
     for rejected_id in [mismatched_capabilities_id, noncanonical_capabilities_id] {
         assert!(

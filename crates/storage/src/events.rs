@@ -192,7 +192,7 @@ pub struct IdentityAnchorAccountSlot {
 #[derive(Clone, Debug)]
 pub struct IdentityAnchorReanchorSlot {
     pub actor_id: String,
-    pub principal_server_id: String,
+    pub station_id: String,
     pub new_device_generation: u64,
     pub reanchor_digest: String,
     pub authorize_digest: String,
@@ -296,13 +296,13 @@ pub fn identity_anchor_slot_conflicts(
         else {
             return false;
         };
-        let candidate_principal_server_id = record
+        let candidate_station_id = record
             .envelope
-            .pointer("/principal_server_id")
+            .pointer("/station_id")
             .and_then(Value::as_str);
         let same_slot = candidate_generation == slot.new_device_generation;
         same_slot
-            && (candidate_principal_server_id != Some(slot.principal_server_id.as_str())
+            && (candidate_station_id != Some(slot.station_id.as_str())
                 || record.canonical_digest != slot.reanchor_digest
                 || paired_replacement_authorize(record, records.iter().copied())
                     .map(|paired| paired.canonical_digest.as_str())

@@ -224,10 +224,9 @@ pub(crate) async fn active_series_pointer_is_current(
     if pointer.actor_id != controller_core {
         return Ok(false);
     }
-    let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!("local Principal Server id is invalid: {error}"))
-    })?;
-    let authority = arkret_wire::AccountId::new(controller_core, principal_server_id);
+    let station_id = DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
+    let authority = arkret_wire::AccountId::new(controller_core, station_id);
     let verification_method = pointer.auth_data.verification_method.as_str();
     let Some((_, device_fragment)) = verification_method.rsplit_once('#') else {
         return Ok(false);
@@ -876,7 +875,7 @@ mod tests {
             "service": [
                 {
                     "id": format!("{AGENT_DID}#soland"),
-                    "type": "ArkretPrincipalServer",
+                    "type": "ArkretStation",
                     "serviceEndpoint": "https://agent.example"
                 },
                 {

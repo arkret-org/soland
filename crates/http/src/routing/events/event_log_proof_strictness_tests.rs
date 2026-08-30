@@ -688,11 +688,9 @@ async fn applet_registration_requires_realm_admin() {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
             issuer_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            issuer_principal_server_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            issuer_station_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
             subject_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            subject_principal_server_id: Some(
-                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            ),
+            subject_station_id: Some(arkret_wire::DidCoreId::new(owner.to_owned()).unwrap()),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             constraints: Vec::new(),
@@ -1289,7 +1287,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
 
 const DATA_EVENT_REALM: &str = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
 const DATA_EVENT_ACTOR: &str = "ak:did_core:web:alice.example";
-const DATA_EVENT_PRINCIPAL_SERVER: &str = "ak:did_core:web:principal.example";
+const DATA_EVENT_STATION: &str = "ak:did_core:web:principal.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
 /// The MLS group named by every E2EE fixture ciphertext.
 fn data_event_placeholder_seal_id() -> arkret_identifiers::SealId {
@@ -1359,13 +1357,10 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
         issuer_id: arkret_wire::DidCoreId::new("ak:did_core:web:owner.example".to_owned()).unwrap(),
-        issuer_principal_server_id: arkret_wire::DidCoreId::new(
-            DATA_EVENT_PRINCIPAL_SERVER.to_owned(),
-        )
-        .unwrap(),
+        issuer_station_id: arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
         subject_id: arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR.to_owned()).unwrap(),
-        subject_principal_server_id: Some(
-            arkret_wire::DidCoreId::new(DATA_EVENT_PRINCIPAL_SERVER.to_owned()).unwrap(),
+        subject_station_id: Some(
+            arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
         ),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
@@ -1391,7 +1386,7 @@ fn historical_data_event_grant_value(
         "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": DATA_EVENT_REALM,
         "issuer_id": issuer,
-        "issuer_principal_server_id": DATA_EVENT_PRINCIPAL_SERVER,
+        "issuer_station_id": DATA_EVENT_STATION,
         "issuer_authority_refs": [{
             "kind": "realm_root",
             "realm_id": DATA_EVENT_REALM,
@@ -1400,7 +1395,7 @@ fn historical_data_event_grant_value(
             "authority_generation": 0
         }],
         "subject": subject,
-        "subject_principal_server_id": DATA_EVENT_PRINCIPAL_SERVER,
+        "subject_station_id": DATA_EVENT_STATION,
         "actions": [action],
         "resources": [DATA_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
@@ -1429,7 +1424,7 @@ fn insert_historical_data_event_grant(
         grant_id,
         action,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         revoked,
     )
 }
@@ -1439,7 +1434,7 @@ fn insert_historical_data_event_grant_for_subject(
     grant_id: &str,
     action: &str,
     subject: &str,
-    subject_principal_server_id: &str,
+    subject_station_id: &str,
     revoked: bool,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
@@ -1458,7 +1453,7 @@ fn insert_historical_data_event_grant_for_subject(
         revoked,
         None,
     );
-    value["subject_principal_server_id"] = json!(subject_principal_server_id);
+    value["subject_station_id"] = json!(subject_station_id);
     let op = arkret_wire::LatticeOp {
         op_type: arkret_wire::LatticeOpType::Add,
         tag: Some("ak:operation:01904100-0000-7000-8000-000000000999".to_owned()),
@@ -1693,7 +1688,7 @@ fn data_event_capability_ref_must_resolve() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1718,7 +1713,7 @@ fn data_event_capability_must_cover_derived_cell() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1736,7 +1731,7 @@ fn data_event_capability_must_cover_derived_cell() {
     let err = validate_data_event_capability_refs(
         &wrong_state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &wrong_action_object,
@@ -1764,7 +1759,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &with_capability_refs,
@@ -1786,7 +1781,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &with_effects,
@@ -1811,7 +1806,7 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1831,7 +1826,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         grant_id,
         "ak.message.create",
         APPLET_SERVICE,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         false,
     );
     let mut object = data_event_object_with_refs(&seal_ref, vec![]);
@@ -1845,7 +1840,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1861,7 +1856,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1883,7 +1878,7 @@ fn data_event_capability_ref_must_not_be_revoked() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1912,7 +1907,7 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1938,7 +1933,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1959,7 +1954,7 @@ fn data_event_revocation_successor_within_window_is_accepted() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -1980,7 +1975,7 @@ fn data_event_revocation_successor_at_window_boundary_is_accepted() {
     validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2001,7 +1996,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
@@ -2024,7 +2019,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
     let err = validate_data_event_capability_refs(
         &state,
         DATA_EVENT_ACTOR,
-        DATA_EVENT_PRINCIPAL_SERVER,
+        DATA_EVENT_STATION,
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,

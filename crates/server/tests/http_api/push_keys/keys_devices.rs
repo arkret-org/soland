@@ -24,7 +24,7 @@ fn accepted_device_authorize_operation(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm { realm_id },
         actor,
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         payload,

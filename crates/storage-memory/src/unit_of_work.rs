@@ -1161,16 +1161,16 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             }
             let identity_key = (
                 mutation.applet_id.to_string(),
-                mutation.identity.target_principal_server_id.to_string(),
+                mutation.identity.target_station_id.to_string(),
             );
             if soland_storage::applet_id_from_record(&mutation.identity.record)?
                 != mutation.applet_id.as_str()
                 || mutation
                     .identity
                     .record
-                    .get("bot_actor_principal_server_id")
+                    .get("bot_actor_station_id")
                     .and_then(serde_json::Value::as_str)
-                    != Some(mutation.identity.target_principal_server_id.as_str())
+                    != Some(mutation.identity.target_station_id.as_str())
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: Applet identity winner key does not match its record"
@@ -1391,7 +1391,7 @@ mod tests {
     ) -> serde_json::Value {
         let object = record.as_object_mut().unwrap();
         object.remove("bot_actor_id");
-        object.remove("bot_actor_principal_server_id");
+        object.remove("bot_actor_station_id");
         object.insert("applet_id".to_owned(), serde_json::json!(applet_id));
         object.insert(
             "effective_scope".to_owned(),
@@ -1404,13 +1404,13 @@ mod tests {
         serde_json::json!({
             "applet_id": applet_id,
             "bot_actor_id": bot_actor_id,
-            "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+            "bot_actor_station_id": "ak:did_core:web:soland.example",
         })
     }
 
     fn existing_identity_commit(identity: &serde_json::Value) -> AppletIdentityCommit {
         AppletIdentityCommit {
-            target_principal_server_id: arkret_wire::DidCoreId::new(
+            target_station_id: arkret_wire::DidCoreId::new(
                 "ak:did_core:web:soland.example".to_owned(),
             )
             .unwrap(),
@@ -1511,19 +1511,18 @@ mod tests {
 
     fn membership_compensation_request() -> EventCommitRequest {
         let realm_id = realm_id();
-        let principal_server_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
+        let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
         let join_actor_id = arkret_wire::ActorId::hosted_principal(
             arkret_wire::DidCoreId::new("ak:did_core:web:join-actor.example").unwrap(),
-            principal_server_id.clone(),
+            station_id.clone(),
         );
         let member_id = arkret_wire::ActorId::hosted_principal(
             arkret_wire::DidCoreId::new("ak:did_core:web:join-subject.example").unwrap(),
-            principal_server_id.clone(),
+            station_id.clone(),
         );
         let executor_id = arkret_wire::ActorId::hosted_principal(
             arkret_wire::DidCoreId::new("ak:did_core:web:executor.example").unwrap(),
-            principal_server_id,
+            station_id,
         );
         let join_event_id =
             arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x41; 32]);
@@ -1848,16 +1847,17 @@ mod tests {
             audience: None,
             jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
         };
-        let admission = arkret_wire::PrincipalServerAdmissionProof {
-            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        let admission = arkret_wire::StationAdmissionProof {
+            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new(format!(
-                "{actor_did}#principal-server-admission-key"
+                "{actor_did}#station-admission-key"
             ))
             .unwrap(),
             event_digest: event_digest.clone(),
-            producer_proof_digest:
-                arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
-                    .unwrap(),
+            producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(
+                &producer,
+            )
+            .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
@@ -1877,7 +1877,7 @@ mod tests {
         };
         event.proofs = vec![producer.into(), admission.into()];
         event
-            .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+            .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
             .expect("fixture accepted Event proof set");
         let event_id = event.event_id.to_string();
         let canonical_bytes =
@@ -1922,8 +1922,7 @@ mod tests {
     fn device_revoke_request() -> (EventCommitRequest, DeviceRevocationGateSelector) {
         let realm_id = realm_id();
         let actor_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
-        let principal_server_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap();
+        let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap();
         let created_at = Utc::now();
         let event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::DeviceRevoke.as_str(),
@@ -1931,7 +1930,7 @@ mod tests {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
             actor_id.clone(),
-            principal_server_id.clone(),
+            station_id.clone(),
             0,
             arkret_wire::Hlc::new("019f00000000-0000-00000002").unwrap(),
             serde_json::json!({
@@ -1978,7 +1977,7 @@ mod tests {
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         let selector = DeviceRevocationGateSelector {
             principal_id: actor_id.clone(),
-            principal_server_id,
+            station_id,
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             target_device_authorize_event_id:
                 "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
@@ -2752,7 +2751,7 @@ mod tests {
 
         let linearization_request = DeviceRevocationGateLinearizationRequest {
             principal_id: selector.principal_id.clone(),
-            principal_server_id: selector.principal_server_id.clone(),
+            station_id: selector.station_id.clone(),
             device_id: selector.device_id.clone(),
             expected_device_authorize_event_id: Some(
                 selector.target_device_authorize_event_id.clone(),
@@ -2905,7 +2904,7 @@ mod tests {
                 "status": "installed",
                 "revoked_at": null,
                 "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                "bot_actor_station_id": "ak:did_core:web:soland.example",
                 "package": {"namespaces": {}},
                 "ghosts": [],
             }),
@@ -2976,11 +2975,11 @@ mod tests {
                         "status": "installed",
                         "revoked_at": null,
                         "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:one",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "one",
                         }],
                     }),
@@ -3026,11 +3025,11 @@ mod tests {
                     "status": "installed",
                     "revoked_at": null,
                     "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                    "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                    "bot_actor_station_id": "ak:did_core:web:soland.example",
                     "package": {"namespaces": {}},
                     "ghosts": [{
                         "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                        "actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "actor_station_id": "ak:did_core:web:soland.example",
                         "external_id": "first",
                     }],
                 }),
@@ -3064,11 +3063,11 @@ mod tests {
                         "status": "installed",
                         "revoked_at": null,
                         "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }],
                     }),
@@ -3080,15 +3079,15 @@ mod tests {
                         "status": "installed",
                         "revoked_at": null,
                         "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }, {
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:second",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "second",
                         }],
                     }),
@@ -3151,11 +3150,11 @@ mod tests {
                         "status": "installed",
                         "revoked_at": null,
                         "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }],
                     }),
@@ -3167,15 +3166,15 @@ mod tests {
                         "status": "installed",
                         "revoked_at": null,
                         "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "first",
                         }, {
                             "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:third",
-                            "actor_principal_server_id": "ak:did_core:web:soland.example",
+                            "actor_station_id": "ak:did_core:web:soland.example",
                             "external_id": "third",
                         }],
                     }),
@@ -3222,7 +3221,7 @@ mod tests {
         let store = SolandMemoryPersistenceStore::new();
         let authority = soland_storage::ManagedAuthorityClaim {
             actor_id: "ak:did_core:web:managed.example".to_owned(),
-            principal_server_id: "ak:did_core:web:soland.example".to_owned(),
+            station_id: "ak:did_core:web:soland.example".to_owned(),
         };
         let namespaces = arkret_models_integration::AppletWireNamespaces {
             realms: vec![arkret_models_integration::AppletNamespaceEntry::exclusive(
@@ -3246,8 +3245,8 @@ mod tests {
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                     identity: AppletIdentityCommit {
-                        target_principal_server_id: arkret_wire::DidCoreId::new(
-                            authority.principal_server_id.clone(),
+                        target_station_id: arkret_wire::DidCoreId::new(
+                            authority.station_id.clone(),
                         )
                         .unwrap(),
                         expected_record: None,
@@ -3259,7 +3258,7 @@ mod tests {
                             "status": "installed",
                             "revoked_at": null,
                             "bot_actor_id": authority.actor_id.clone(),
-                            "bot_actor_principal_server_id": authority.principal_server_id.clone(),
+                            "bot_actor_station_id": authority.station_id.clone(),
                             "package": {"namespaces": namespaces.clone()},
                             "ghosts": [],
                         }),
@@ -3289,7 +3288,7 @@ mod tests {
         let identity = serde_json::json!({
             "applet_id": applet_id,
             "bot_actor_id": "ak:did_core:web:shared-bot.example",
-            "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+            "bot_actor_station_id": "ak:did_core:web:soland.example",
         });
         let install = |scope: arkret_wire::ScopeRef, identity: serde_json::Value, reuse: bool| {
             let event_realm_id = scope.realm_id().to_string();
@@ -3313,7 +3312,7 @@ mod tests {
                 applet_record: Some(AppletRecordCommit {
                     applet_id: arkret_wire::AppletId::new(applet_id.clone()).unwrap(),
                     identity: AppletIdentityCommit {
-                        target_principal_server_id: arkret_wire::DidCoreId::new(
+                        target_station_id: arkret_wire::DidCoreId::new(
                             "ak:did_core:web:soland.example".to_owned(),
                         )
                         .unwrap(),
@@ -3342,7 +3341,7 @@ mod tests {
         let conflicting_identity = serde_json::json!({
             "applet_id": applet_id,
             "bot_actor_id": "ak:did_core:web:different-bot.example",
-            "bot_actor_principal_server_id": "ak:did_core:web:soland.example",
+            "bot_actor_station_id": "ak:did_core:web:soland.example",
         });
         let error = store
             .commit_event_batch(install(test_applet_scope(), conflicting_identity, true))

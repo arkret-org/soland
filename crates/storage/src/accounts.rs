@@ -76,7 +76,7 @@ pub trait AccountDataStore: Send + Sync {
 #[doc(hidden)]
 pub fn account_with_primary_localpart_select(where_clause: &str) -> String {
     format!(
-        "SELECT a.pk, a.principal_id, a.principal_server_id, COALESCE(lp.localpart, '') AS localpart, \
+        "SELECT a.pk, a.principal_id, a.station_id, COALESCE(lp.localpart, '') AS localpart, \
          a.display_name, a.payload, a.created_at \
          FROM accounts a \
          LEFT JOIN LATERAL ( \

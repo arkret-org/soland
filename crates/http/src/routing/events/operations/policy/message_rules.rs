@@ -214,7 +214,7 @@ pub(super) async fn validate_applet_registration_authz(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -225,7 +225,7 @@ pub(super) async fn validate_applet_registration_authz(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+            actor_station_id: Some(operation.context.station_id.as_str()),
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: realm_id,
             realm_id,
@@ -438,7 +438,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
 
     let grants = state.authorization().grants_for_subject(
         actor,
-        Some(operation.context.principal_server_id.as_str()),
+        Some(operation.context.station_id.as_str()),
         realm_id,
     );
 

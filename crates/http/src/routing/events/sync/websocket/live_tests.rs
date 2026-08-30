@@ -242,14 +242,13 @@ async fn install_alice_device_authority(
 
     let actor =
         arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
-    let principal_server_id =
-        arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap();
     let created_at = chrono::Utc::now();
     let mut genesis = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         actor.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         0,
         arkret_identifiers::Hlc::new("0196419b0000-0000-00000001".to_owned()).unwrap(),
         serde_json::json!({"object": {"purpose": "principal_control"}}),
@@ -269,7 +268,7 @@ async fn install_alice_device_authority(
             realm_id: genesis.realm_id.clone(),
         },
         actor.clone(),
-        principal_server_id,
+        station_id,
         1,
         arkret_identifiers::Hlc::new("0196419b0000-0001-00000001".to_owned()).unwrap(),
         serde_json::json!({"device_id": ALICE_DEVICE}),

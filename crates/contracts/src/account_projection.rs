@@ -1,4 +1,4 @@
-//! Deployment-private Account Authority -> Principal Server projection contract.
+//! Deployment-private Account Authority -> Station projection contract.
 //!
 //! This edge materializes an already verified account binding before an initial
 //! session grant may escape the Account Authority. It is deliberately outside

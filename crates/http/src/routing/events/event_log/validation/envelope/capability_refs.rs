@@ -23,7 +23,7 @@ use super::*;
 pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
     state: &AppState,
     actor_id: &str,
-    principal_server_id: &str,
+    station_id: &str,
     realm_id: &str,
     kind: &str,
     object: &serde_json::Map<String, Value>,
@@ -147,17 +147,17 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     } else {
         actor_id
     };
-    // The complete capability authority is `(subject, subject_principal_server_id)`.
+    // The complete capability authority is `(subject, subject_station_id)`.
     // Applet delegation changes only the subject to the executing service;
-    // the authority's Principal Server remains the exact PS carried by the
+    // the authority's Station remains the exact PS carried by the
     // canonical Event. Substituting the service DID here would make the
-    // formally installed `(service_id, target_principal_server_id)` grant
+    // formally installed `(service_id, target_station_id)` grant
     // permanently unreachable.
-    let capability_subject_principal_server_id = principal_server_id;
+    let capability_subject_station_id = station_id;
     let effective_by_id = effective_historical_grants_for_subject(
         &historical_grants,
         capability_subject,
-        capability_subject_principal_server_id,
+        capability_subject_station_id,
         realm_id,
         auth_time,
     );
@@ -190,10 +190,10 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         })?;
         if stored.subject_id.as_str() != capability_subject
             || stored
-                .subject_principal_server_id
+                .subject_station_id
                 .as_ref()
                 .map(arkret_wire::DidCoreId::as_str)
-                != Some(capability_subject_principal_server_id)
+                != Some(capability_subject_station_id)
             || stored.realm_id != realm_id
         {
             return Err(event_validation_error(
@@ -655,7 +655,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
 pub(super) fn effective_historical_grants_for_subject(
     grants: &std::collections::BTreeMap<String, crate::authz::Grant>,
     actor_id: &str,
-    principal_server_id: &str,
+    station_id: &str,
     realm_id: &str,
     auth_time: chrono::DateTime<chrono::Utc>,
 ) -> std::collections::BTreeMap<String, crate::authz::Grant> {
@@ -665,10 +665,10 @@ pub(super) fn effective_historical_grants_for_subject(
         .filter(|grant| {
             grant.subject_id.as_str() == actor_id
                 && grant
-                    .subject_principal_server_id
+                    .subject_station_id
                     .as_ref()
                     .map(arkret_wire::DidCoreId::as_str)
-                    == Some(principal_server_id)
+                    == Some(station_id)
                 && grant.realm_id == realm_id
                 && !grant.revoked
                 && crate::authz::grant_scope_valid(grant).is_ok()
@@ -1061,12 +1061,12 @@ mod constraint_tests {
     }
 
     #[test]
-    fn applet_service_grant_requires_the_exact_target_principal_server() {
+    fn applet_service_grant_requires_the_exact_target_station() {
         const SERVICE: &str = "ak:did_core:web:applet.example";
         const TARGET_PS: &str = "ak:did_core:web:principal.example";
         let mut applet_grant = grant(Vec::new());
         applet_grant.subject_id = arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap();
-        applet_grant.subject_principal_server_id =
+        applet_grant.subject_station_id =
             Some(arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap());
         let grant_id = applet_grant.grant_id.clone();
         let grants = std::collections::BTreeMap::from([(grant_id.clone(), applet_grant)]);
@@ -1088,7 +1088,7 @@ mod constraint_tests {
         );
         assert!(
             effective_historical_grants_for_subject(&grants, SERVICE, "", REALM, now).is_empty(),
-            "a missing Principal Server coordinate cannot match an Applet grant"
+            "a missing Station coordinate cannot match an Applet grant"
         );
     }
 

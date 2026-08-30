@@ -552,7 +552,7 @@ fn validate_webvh_provider_describe(
         .map_err(|error| format!("webvh provider ServiceDescribe is invalid: {error}"))?;
     if !matches!(
         description.service_kind,
-        arkret_wire::ServiceKind::IdentityRegistry | arkret_wire::ServiceKind::PrincipalServer
+        arkret_wire::ServiceKind::IdentityRegistry | arkret_wire::ServiceKind::Station
     ) {
         return Err(format!(
             "webvh provider service_kind must be an identity registry, got {:?}",

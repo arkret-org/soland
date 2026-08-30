@@ -7,7 +7,7 @@ pub use arkret_models_discovery::VerifiedProfileArtifactEntry;
 use arkret_models_discovery::parse_verified_profiles_artifact;
 
 pub const VERIFIED_PROFILES_ARTIFACT_ENV: &str = "SOLAND_VERIFIED_PROFILES_ARTIFACT";
-pub const SOLAND_SERVICE_ROLE: &str = "principal_server";
+pub const SOLAND_SERVICE_ROLE: &str = "station";
 
 /// Load the descriptors named by the configured artifact path.
 ///
@@ -94,7 +94,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_to_principal_server_role() {
+    fn filters_to_station_role() {
         let path = std::env::temp_dir().join(format!(
             "soland-verified-profiles-role-{}.json",
             std::process::id()
@@ -102,8 +102,8 @@ mod tests {
         std::fs::write(
             &path,
             br#"{"verified":[
-                {"profile_id":"principal","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"principal_server","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"},
-                {"profile_id":"auth","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"auth_server","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"}
+                {"profile_id":"principal","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"station","artifact_digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"},
+                {"profile_id":"push","claim_kind":"conformance_verified","verification_run_id":"run","service_role":"push_gateway","artifact_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","artifact_ref":"file:///artifact","verifier_id":"ak:did_core:web:cotest.example","signature":"sig","timestamp":"2026-05-20T00:00:00.000Z"}
             ]}"#,
         )
         .unwrap();

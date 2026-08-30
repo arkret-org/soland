@@ -354,7 +354,7 @@ pub(crate) async fn relay_signal_once(
     let body =
         arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
     let peer_target =
-        super::federation::resolved_peer_target(state, peer_id, "principal_server", false).await?;
+        super::federation::resolved_peer_target(state, peer_id, "station", false).await?;
     let target = format!("{}/_arkret/peer/signal", peer_target.base_url);
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target,
@@ -812,7 +812,7 @@ impl FederationDispatcher {
             let peer_target = super::federation::resolved_peer_target(
                 &self.state,
                 row.delivery.peer_id.as_str(),
-                "principal_server",
+                "station",
                 false,
             )
             .await
@@ -915,7 +915,7 @@ impl FederationDispatcher {
         let peer_target = super::federation::resolved_peer_target(
             &self.state,
             row.delivery.peer_id.as_str(),
-            "principal_server",
+            "station",
             false,
         )
         .await;
@@ -1385,7 +1385,7 @@ impl FederationDispatcher {
                 .proofs
                 .iter()
                 .find_map(|proof| match proof {
-                    arkret_wire::EventProof::PrincipalServerAdmission(value) => Some(value),
+                    arkret_wire::EventProof::StationAdmission(value) => Some(value),
                     arkret_wire::EventProof::Producer(_) => None,
                 })
             else {
@@ -2573,14 +2573,14 @@ mod tests {
                 .expect("fixture producer proof")
                 .clone();
             event.proofs.push(
-                arkret_wire::primitives::PrincipalServerAdmissionProof {
-                    kind: arkret_wire::primitives::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+                arkret_wire::primitives::StationAdmissionProof {
+                    kind: arkret_wire::primitives::StationAdmissionProofKind::StationAdmission,
                     verification_method: arkret_wire::DidUrl::new(
                         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#federation-fanout-key",
                     )
                     .unwrap(),
                     event_digest: producer_proof.event_digest.clone(),
-                    producer_proof_digest: arkret_wire::primitives::PrincipalServerAdmissionProof::producer_proof_digest(&producer_proof).unwrap(),
+                    producer_proof_digest: arkret_wire::primitives::StationAdmissionProof::producer_proof_digest(&producer_proof).unwrap(),
                     producer_verification_method: producer_proof.verification_method.clone(),
                     producer_signing_key_did: arkret_wire::DidKey::new(
                         "did:key:z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuVkhY7g94pVQyG98x",
@@ -2692,7 +2692,7 @@ mod tests {
                         ))
                         .unwrap(),
                         membership_frontier: Vec::new(),
-                        destination_kind: "principal_server".to_owned(),
+                        destination_kind: "station".to_owned(),
                     },
                 events: vec![
                     submission("000000000001", "00000000ae01", "00000000ce01"),

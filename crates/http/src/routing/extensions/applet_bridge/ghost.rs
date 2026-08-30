@@ -423,7 +423,7 @@ async fn validate_ghost_managed_actor_unit(
         || payload.service_id != basis.service_id
         || payload.actor_id == record.package.controller_id
         || payload.actor_id == record.package.bot_actor_id
-        || payload.actor_principal_server_id.as_str() != state.service_id()
+        || payload.actor_station_id.as_str() != state.service_id()
         || record.registration_event.event_id != payload.registration_ref
         || payload.applet_authority_ref.as_str() != authorization_ref
         || payload.external_ref.as_ref() != Some(&basis.external_ref)
@@ -490,7 +490,7 @@ async fn validate_ghost_managed_actor_unit(
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != payload.actor_id
         || genesis.executed_by.as_ref() != Some(&basis.service_id)
-        || genesis.principal_server_id != payload.actor_principal_server_id
+        || genesis.station_id != payload.actor_station_id
         || genesis.applet_id.as_ref() != Some(&basis.applet_id)
         || genesis.realm_id != expected_realm_id
         || genesis.authorization_ref.as_deref() != Some(authorization_ref)

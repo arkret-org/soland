@@ -227,13 +227,13 @@ async fn validate_event_envelope_with_ingress(
             "actor_id must be a Core DidCoreId",
         )
     })?;
-    let principal_server_id = event_string_field(object, &["principal_server_id"])
+    let station_id = event_string_field(object, &["station_id"])
         .and_then(|value| arkret_wire::DidCoreId::new(value).ok())
         .ok_or_else(|| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "param_invalid",
-                "principal_server_id must be a Core DidCoreId",
+                "station_id must be a Core DidCoreId",
             )
         })?;
     let actor_seq = object
@@ -617,7 +617,7 @@ async fn validate_event_envelope_with_ingress(
     }
     require_object_field(object, "payload")?;
     validate_event_schema_and_payload(state, &kind, &schema_id, envelope, object)?;
-    // The Principal Server owns only deterministic wire admission and epoch
+    // The Station owns only deterministic wire admission and epoch
     // CAS. RFC 9420 group-state/frontier verification remains receiver-owned;
     // accepting a durable Commit never authorizes a member to apply it.
     let payload = object.get("payload").expect("payload required above");
@@ -707,7 +707,7 @@ async fn validate_event_envelope_with_ingress(
     validate_data_event_capability_refs(
         state,
         actor_id.as_str(),
-        principal_server_id.as_str(),
+        station_id.as_str(),
         realm_id.as_str(),
         &kind,
         object,

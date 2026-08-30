@@ -145,13 +145,13 @@ async fn install_preview_endpoint(
     let session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
     let basis = &preview.authoring_request_basis;
-    if basis.target_principal_server_id.as_str() != state.service_id()
+    if basis.target_station_id.as_str() != state.service_id()
         || basis.install_actor_id.as_str() != session.actor
         || basis.applet_id != preview.applet_package.applet_id
         || basis.service_id != preview.applet_package.service_id
         || preview.applet_package.package_digest.as_ref() != Some(&basis.package_digest)
     {
-        return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Principal Server, or Applet package")
+        return Err(AppError::conflict("install authoring request basis does not match the authenticated actor, target Station, or Applet package")
             .with_wire_code("applet_install_plan_mismatch"));
     }
     let issued_at = arkret_canonical::canonical::normalize_timestamp_canonical(chrono::Utc::now());
@@ -280,8 +280,8 @@ async fn install_endpoint(
     let expected_ps_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    require_current_principal_server_authoring_binding(
-        basis.target_principal_server_id.as_str(),
+    require_current_station_authoring_binding(
+        basis.target_station_id.as_str(),
         &authoring_request.proof.verification_method,
         state.service_id(),
         &expected_ps_method,
@@ -414,13 +414,13 @@ fn applet_authoring_preview_subject_key(
         json!({
             "purpose": "install_bot",
             "applet_id": basis.applet_id,
-            "target_principal_server_id": basis.target_principal_server_id,
+            "target_station_id": basis.target_station_id,
         })
     } else if let Some(basis) = request.basis.ghost() {
         json!({
             "purpose": "provision_ghost",
             "applet_id": basis.applet_id,
-            "target_principal_server_id": basis.target_principal_server_id,
+            "target_station_id": basis.target_station_id,
             "external_ref": basis.external_ref,
         })
     } else {
@@ -551,19 +551,19 @@ fn require_first_install_commit_fresh(
     )
 }
 
-fn require_current_principal_server_authoring_binding(
-    target_principal_server_id: &str,
+fn require_current_station_authoring_binding(
+    target_station_id: &str,
     proof_verification_method: &str,
-    current_principal_server_id: &str,
+    current_station_id: &str,
     current_verification_method: &str,
 ) -> Result<(), AppError> {
-    if target_principal_server_id == current_principal_server_id
+    if target_station_id == current_station_id
         && proof_verification_method == current_verification_method
     {
         return Ok(());
     }
     Err(AppError::param_invalid(
-        "install authoring request targets or is signed by a non-current Principal Server key",
+        "install authoring request targets or is signed by a non-current Station key",
     )
     .with_wire_code("authoring_request_proof_invalid"))
 }
@@ -917,7 +917,7 @@ fn build_revoke_plan(
             .authorization()
             .grants_for_subject(
                 package.service_id.as_str(),
-                Some(record.bot_actor_principal_server_id.as_str()),
+                Some(record.bot_actor_station_id.as_str()),
                 &scope_realm_id,
             )
             .into_iter()
@@ -1215,10 +1215,9 @@ async fn preview_ghost_actor_endpoint(
     let basis = AppletGhostAuthoringRequestBasis {
         schema: AppletGhostAuthoringRequestBasis::SCHEMA.to_owned(),
         purpose: AppletManagedActorPurpose::ProvisionGhost,
-        target_principal_server_id: arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| {
-                AppError::internal(format!("configured service_id is invalid: {error}"))
-            })?,
+        target_station_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
+            |error| AppError::internal(format!("configured service_id is invalid: {error}")),
+        )?,
         applet_id: record.applet_id.clone(),
         service_id: record.package.service_id,
         realm_id: preview.realm_id,
@@ -1319,8 +1318,8 @@ async fn provision_ghost_actor_endpoint(
     let expected_ps_method = state
         .service_verification_method("notary-key")
         .map_err(AppError::internal)?;
-    require_current_principal_server_authoring_binding(
-        authoring_basis.target_principal_server_id.as_str(),
+    require_current_station_authoring_binding(
+        authoring_basis.target_station_id.as_str(),
         provision
             .authoring_request
             .proof
@@ -1432,7 +1431,7 @@ async fn provision_ghost_actor_endpoint(
         })?;
         let outcome = GhostActorProvisionOutcome {
             ghost_actor_id,
-            actor_principal_server_id: existing.actor_principal_server_id.clone(),
+            actor_station_id: existing.actor_station_id.clone(),
             managed_actor_provision_ref: existing.managed_actor_provision_event.event_id.clone(),
             principal_control_realm_id: existing.principal_control_realm_id(),
             profile_event_ref: existing.profile_event.event_id.clone(),
@@ -1480,7 +1479,7 @@ async fn provision_ghost_actor_endpoint(
     })?;
     let outcome = GhostActorProvisionOutcome {
         ghost_actor_id: ghost_actor_id.clone(),
-        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
+        actor_station_id: managed_provision.actor_station_id.clone(),
         managed_actor_provision_ref: provision
             .managed_actor_bundle
             .managed_actor_provision_event
@@ -1496,7 +1495,7 @@ async fn provision_ghost_actor_endpoint(
     };
     let ghost = GhostActorRecord {
         ghost_actor_id: ghost_actor_id.clone(),
-        actor_principal_server_id: managed_provision.actor_principal_server_id.clone(),
+        actor_station_id: managed_provision.actor_station_id.clone(),
         external_ref: authoring_basis.external_ref.clone(),
         display_name: authoring_basis.display_name.clone(),
         request_digest: Hash::new(request_digest.clone()).map_err(|error| {
@@ -1550,7 +1549,7 @@ async fn provision_ghost_actor_endpoint(
             .clone(),
         provision.managed_actor_bundle.profile_event.clone(),
         typed_path_applet_id,
-        record.bot_actor_principal_server_id.clone(),
+        record.bot_actor_station_id.clone(),
         encode_applet_identity(&record.identity)?,
         producer_verification_method,
         producer_signing_key,
@@ -1988,7 +1987,7 @@ mod revoke_saga_tests {
     fn authoring_request_rejects_wrong_target_and_stale_but_valid_signing_key() {
         let current_server = "ak:did_core:web:principal.example";
         let current_key = "did:web:principal.example#notary-key-2";
-        let wrong_target = require_current_principal_server_authoring_binding(
+        let wrong_target = require_current_station_authoring_binding(
             "ak:did_core:web:other.example",
             current_key,
             current_server,
@@ -2005,7 +2004,7 @@ mod revoke_saga_tests {
         // admission authority.
         let retired_key_signature_is_valid = true;
         assert!(retired_key_signature_is_valid);
-        let stale_key = require_current_principal_server_authoring_binding(
+        let stale_key = require_current_station_authoring_binding(
             current_server,
             "did:web:principal.example#notary-key-1",
             current_server,

@@ -188,7 +188,7 @@ pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value
         "verificationMethod": verification_methods,
         "authentication": authentication,
         "assertionMethod": assertion_method,
-        "service": [{"id": "soland", "type": "ArkretPrincipalServer", "serviceEndpoint": "/_arkret"}]
+        "service": [{"id": "soland", "type": "ArkretStation", "serviceEndpoint": "/_arkret"}]
     })
 }
 

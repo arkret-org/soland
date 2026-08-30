@@ -1024,7 +1024,7 @@ async fn actor_has_exact_scope_moderation_capability(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(state.service_id()),
+                actor_station_id: Some(state.service_id()),
                 action,
                 resource,
                 realm_id,
@@ -1357,7 +1357,7 @@ async fn moderation_routing_visible_to_actor(
             .authorization()
             .check(soland_services::authorization::AuthorizationCheck {
                 actor,
-                actor_principal_server_id: Some(state.service_id()),
+                actor_station_id: Some(state.service_id()),
                 action,
                 resource: realm_id,
                 realm_id,

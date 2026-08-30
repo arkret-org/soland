@@ -83,7 +83,7 @@ use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
 
-/// Deployment-local Principal Server projection result. The Account
+/// Deployment-local Station projection result. The Account
 /// Authority owns `AccountRegisterOutcome` and its signed binding receipt;
 /// this internal edge only confirms the durable local projection.
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
@@ -113,14 +113,14 @@ pub(crate) async fn record_handle_release(
     Ok(())
 }
 
-/// The account's Principal-Server-signed primary handle claim, re-derived on
+/// The account's Station-signed primary handle claim, re-derived on
 /// demand from the primary `account_localparts` row. `None` means the account
 /// has no published localpart binding, so the client renders "not published".
 async fn account_primary_handle_claim(state: &AppState, account: &AccountRecord) -> Option<Value> {
     account_primary_handle_claim_for(state, account, state.service_id().as_str()).await
 }
 
-/// Re-derive `account`'s Principal-Server-signed primary handle claim
+/// Re-derive `account`'s Station-signed primary handle claim
 /// bound to `audience`. `None` when the account has no published localpart
 /// binding, so the client renders "not published".
 pub(crate) async fn account_primary_handle_claim_for(
@@ -180,7 +180,7 @@ pub(crate) use lifecycle::{
 
 /// Deployment-private Account Authority projection edge. The canonical
 /// `ak.gate.account.command.register.v1` operation is owned by the Account
-/// Authority and must never be shadowed by this Principal Server materializer.
+/// Authority and must never be shadowed by this Station materializer.
 pub(super) fn local_gate_router() -> Router {
     Router::with_path("account").push(Router::with_path("project").post(project_account))
 }
@@ -1071,11 +1071,11 @@ async fn account_viewer_impl(
     })
 }
 
-/// `POST /_soland/gate/account/project` — deployment-local Principal Server
+/// `POST /_soland/gate/account/project` — deployment-local Station
 /// projection invoked only after the Account Authority has completed the
 /// canonical registration operation.
 ///
-/// This Principal Server endpoint is the deployment projection edge used by
+/// This Station endpoint is the deployment projection edge used by
 /// the Account Authority after it has verified the published-DID registration
 /// branch.
 /// It requires the configured service bearer, never accepts the client-facing
@@ -1384,10 +1384,9 @@ pub(crate) async fn accepted_account_profile(
     let principal_id = DidCoreId::new(principal.to_owned()).map_err(|error| {
         AppError::internal(format!("stored account principal id is invalid: {error}"))
     })?;
-    let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
-        AppError::internal(format!("local Principal Server id is invalid: {error}"))
-    })?;
-    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), principal_server_id);
+    let station_id = DidCoreId::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
+    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
     let Some(authority) = state
         .persistence()
         .principal_resolution_by_account_id(&authority_key)
@@ -1630,8 +1629,8 @@ async fn read_principal_resolution_audit(
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if body.principal_authority.principal_id.as_str() != session.actor
-        || body.principal_authority.principal_server_id.as_str() != state.service_id()
+    if body.account_id.principal_id.as_str() != session.actor
+        || body.account_id.station_id.as_str() != state.service_id()
     {
         return Err(AppError::not_found(
             "principal resolution audit unavailable",
@@ -1639,14 +1638,14 @@ async fn read_principal_resolution_audit(
     }
     let record = state
         .persistence()
-        .principal_resolution_by_account_id(&body.principal_authority)
+        .principal_resolution_by_account_id(&body.account_id)
         .await
         .map_err(|error| AppError::internal(format!("load principal resolution audit: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
 
     let full_history = state
         .persistence()
-        .principal_resolution_history(&body.principal_authority, None, 258)
+        .principal_resolution_history(&body.account_id, None, 258)
         .await
         .map_err(|error| {
             AppError::internal(format!("load principal resolution history: {error}"))
@@ -1721,7 +1720,7 @@ async fn read_principal_resolution_audit(
     );
     let evidence = PrincipalResolutionAuditEvidence {
         principal_id: record.account_id.principal_id,
-        principal_server_id: record.account_id.principal_server_id,
+        station_id: record.account_id.station_id,
         principal_control_realm_id: record.pcr_realm_id,
         principal_genesis_receipt,
         principal_genesis_event: record.genesis_event,
@@ -2180,8 +2179,8 @@ async fn account_device_summary(
             principal_id: DidCoreId::new(actor).map_err(|error| {
                 AppError::internal(format!("authenticated principal_id is invalid: {error}"))
             })?,
-            principal_server_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
-                AppError::internal(format!("service principal_server_id is invalid: {error}"))
+            station_id: DidCoreId::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("service station_id is invalid: {error}"))
             })?,
             device_id: device_id.to_string(),
             target_device_authorize_event_id: event_id.to_string(),
@@ -2283,7 +2282,7 @@ fn device_revocation_gate_record(
         Ok((
             AccountId {
                 principal_id: selector.principal_id.clone(),
-                principal_server_id: selector.principal_server_id.clone(),
+                station_id: selector.station_id.clone(),
             },
             DeviceId::new(selector.device_id.clone()).map_err(|error| {
                 AppError::internal(format!("stored revocation device invalid: {error}"))
@@ -2308,7 +2307,7 @@ fn device_revocation_gate_record(
             decisions,
             decision_overdue,
         } => Some(common.and_then(
-            |(principal_authority, device_id, authorize_event_id, proposal_event_id, digest)| {
+            |(account_id, device_id, authorize_event_id, proposal_event_id, digest)| {
                 let (decision_state, decisions, fault_reason) = if decision_overdue {
                     (
                         DeviceRevocationDecisionState::Overdue,
@@ -2326,7 +2325,7 @@ fn device_revocation_gate_record(
                 };
                 let state = DeviceRevocationPendingState {
                     schema: DeviceRevocationStateSchema::V1,
-                    principal_authority,
+                    account_id,
                     device_id,
                     target_device_authorize_event_id: authorize_event_id,
                     target_device_generation_ref: selector.target_device_generation_ref,
@@ -2351,10 +2350,10 @@ fn device_revocation_gate_record(
             covering_seal_id,
             sealed_at,
         } => Some(common.and_then(
-            |(principal_authority, device_id, authorize_event_id, proposal_event_id, digest)| {
+            |(account_id, device_id, authorize_event_id, proposal_event_id, digest)| {
                 let state = DeviceRevokedState {
                     schema: DeviceRevocationStateSchema::V1,
-                    principal_authority,
+                    account_id,
                     device_id,
                     target_device_authorize_event_id: authorize_event_id,
                     target_device_generation_ref: selector.target_device_generation_ref,

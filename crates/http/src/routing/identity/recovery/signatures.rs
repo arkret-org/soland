@@ -195,9 +195,8 @@ pub(super) async fn verify_recovery_auth_signature(
         arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
             AppError::internal(format!("recovery policy principal id is invalid: {error}"))
         })?,
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            AppError::internal(format!("local Principal Server id is invalid: {error}"))
-        })?,
+        arkret_identifiers::DidCoreId::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?,
     );
     let authority = state
         .persistence()

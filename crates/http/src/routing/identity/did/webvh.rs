@@ -302,10 +302,10 @@ pub(super) fn embedded_webvh_document_value(
     // document byte-for-byte (canonical JSON does not sort array elements), or
     // the SCID / entry hash / log proof recomputed here will not verify. coauth's
     // embedded_webvh provider (coauth services/soland_webvh.rs) emits the same
-    // principal-server service entry; mirror that exactly.
+    // station service entry; mirror that exactly.
     let service = vec![json!({
         "id": format!("{did}#soland"),
-        "type": "ArkretPrincipalServer",
+        "type": "ArkretStation",
         "serviceEndpoint": service_endpoint,
     })];
     json!({

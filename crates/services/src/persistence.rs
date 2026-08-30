@@ -595,10 +595,8 @@ impl PersistenceHandle {
             pk: soland_storage::AccountPk(0),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .expect("demo principal id is canonical"),
-            principal_server_id: arkret_wire::DidCoreId::new(
-                "ak:did_core:web:server.example".to_owned(),
-            )
-            .expect("demo principal server id is canonical"),
+            station_id: arkret_wire::DidCoreId::new("ak:did_core:web:server.example".to_owned())
+                .expect("demo Station id is canonical"),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,

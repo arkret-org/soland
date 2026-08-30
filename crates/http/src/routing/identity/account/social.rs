@@ -206,11 +206,11 @@ pub(crate) async fn contact_continuity_checkpoint(
             })?;
         let peer_id = peer_id.clone();
         let contact_address =
-            arkret_models_collaboration::governance::peer_contact::PeerContactAddress::principal_server(
+            arkret_models_collaboration::governance::peer_contact::PeerContactAddress::station(
                 peer.clone(),
                 arkret_wire::AccountId {
                     principal_id: peer.clone(),
-                    principal_server_id: peer_id.clone(),
+                    station_id: peer_id.clone(),
                 },
                 peer_id.clone(),
                 service_resolution,

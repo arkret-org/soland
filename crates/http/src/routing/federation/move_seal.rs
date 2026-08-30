@@ -1836,7 +1836,7 @@ mod seal_delta_tests {
                     "realm_id": realm_id,
                     "issuer_id": issuer,
                     "subject": subject,
-                    "subject_principal_server_id": state.service_id(),
+                    "subject_station_id": state.service_id(),
                     "actions": ["ak.strand.read"],
                     "resources": [{
                         "kind": "realm",

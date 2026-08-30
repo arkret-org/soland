@@ -24,12 +24,12 @@ impl AppletStore for MemoryAppletStore {
     async fn get_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> PersistenceResult<Option<Value>> {
         Ok(self
             .identities
             .lock()
-            .get(&(applet_id.to_owned(), target_principal_server_id.to_owned()))
+            .get(&(applet_id.to_owned(), target_station_id.to_owned()))
             .cloned())
     }
 
@@ -77,7 +77,7 @@ impl AppletStore for MemoryAppletStore {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: chrono::DateTime<chrono::Utc>,
@@ -96,7 +96,7 @@ impl AppletStore for MemoryAppletStore {
         }
         let mut identities = self.identities.lock();
         let mut records = self.records.lock();
-        let identity_key = (applet_id.to_owned(), target_principal_server_id.to_owned());
+        let identity_key = (applet_id.to_owned(), target_station_id.to_owned());
         let identity = identities
             .get(&identity_key)
             .ok_or_else(|| PersistenceError::NotFound("applet managed identity".to_owned()))?;

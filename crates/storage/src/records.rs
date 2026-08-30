@@ -19,7 +19,7 @@ use crate::DeviceRevocationGateSelector;
 /// Service-local primary key of one row in `accounts`.
 ///
 /// This integer never appears on the wire and must not be confused with the
-/// protocol `AccountId` value `(principal_server_id, principal_id)`.
+/// protocol `AccountId` value `(station_id, principal_id)`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AccountPk(pub i64);
@@ -78,8 +78,8 @@ pub struct AccountRecord {
     /// An ordinary account projection does not carry a W3C DID. Registration
     /// and resolution surfaces carry that evidence separately when required.
     pub principal_id: DidCoreId,
-    /// Principal Server component of the protocol AccountId.
-    pub principal_server_id: DidCoreId,
+    /// Station component of the protocol AccountId.
+    pub station_id: DidCoreId,
     /// Primary bare handle localpart (`alice` — never `@alice` or
     /// `alice:domain`). This is derived from `account_localparts`, not stored
     /// on the account row. Wire/display surfaces use [`AccountRecord::handle`]
@@ -165,7 +165,7 @@ pub struct RecoverySessionRecord {
     pub session_grant_id: String,
     pub session_grant_cnf_jkt: String,
     pub principal_id: arkret_identifiers::DidCoreId,
-    pub principal_server_id: arkret_identifiers::DidCoreId,
+    pub station_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,

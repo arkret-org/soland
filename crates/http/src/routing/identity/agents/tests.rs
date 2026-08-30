@@ -209,7 +209,7 @@ fn key_authorize_envelope(
         "event_id": "ak:event:AaWlxNyGs0FzlOCJpyhjSRcmOcoYvk0qQ4X91NlGuKSZ",
         "kind": "ak.agent.key.authorize",
         "actor_id": agent_id,
-        "principal_server_id": service_id,
+        "station_id": service_id,
         "executed_by": controller,
         "authorization_ref": record.controller_authorization_ref.as_str(),
         "realm_id": record.principal_control_realm_id.as_str(),

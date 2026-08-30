@@ -327,13 +327,13 @@ async fn prepare_ghost_event(
             Some(parsed.actor_id.as_str()),
         )
     });
-    // Applet-managed authority creation is Principal-Server-local. The unit
+    // Applet-managed authority creation is Station-local. The unit
     // spans the portal registration lineage and the actor's new PCR, so
     // splitting it into ordinary per-Event federation deliveries would lose
     // its closed aggregate admission and would let a remote peer observe a
     // partial authority. Peers learn later collaboration facts through their
     // normal Realm events; the immutable provision/PCR authority remains on
-    // the exact actor_principal_server_id named by the unit.
+    // the exact actor_station_id named by the unit.
     let outbox = Vec::new();
     let device_id = parsed.device_id_str().to_owned();
     let command = soland_services::events::CommitAcceptedEventCommand {
@@ -393,7 +393,7 @@ async fn submit_applet_record_event_batch(
     state: &AppState,
     events: Vec<Event>,
     applet_id: arkret_wire::AppletId,
-    target_principal_server_id: arkret_wire::DidCoreId,
+    target_station_id: arkret_wire::DidCoreId,
     expected_applet_identity: Option<Value>,
     applet_identity: Value,
     staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
@@ -492,7 +492,7 @@ async fn submit_applet_record_event_batch(
             applet_record: Some(soland_services::events::CommitAppletRecord {
                 applet_id,
                 identity: soland_services::events::CommitAppletIdentity {
-                    target_principal_server_id,
+                    target_station_id,
                     expected_record: expected_applet_identity,
                     record: applet_identity,
                 },
@@ -586,7 +586,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     accountability: Event,
     profile: Event,
     applet_id: arkret_wire::AppletId,
-    target_principal_server_id: arkret_wire::DidCoreId,
+    target_station_id: arkret_wire::DidCoreId,
     applet_identity: Value,
     producer_verification_method: arkret_wire::DidUrl,
     producer_signing_key: arkret_wire::DidKey,
@@ -612,7 +612,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         state,
         vec![managed_provision, pcr_genesis, accountability, profile],
         applet_id,
-        target_principal_server_id,
+        target_station_id,
         Some(applet_identity.clone()),
         applet_identity,
         Some((producer_verification_method, producer_signing_key)),
@@ -631,7 +631,7 @@ pub(in crate::routing) async fn submit_applet_install_batch(
     state: &AppState,
     events: Vec<Event>,
     applet_id: arkret_wire::AppletId,
-    target_principal_server_id: arkret_wire::DidCoreId,
+    target_station_id: arkret_wire::DidCoreId,
     expected_applet_identity: Option<Value>,
     applet_identity: Value,
     producer_verification_method: arkret_wire::DidUrl,
@@ -646,7 +646,7 @@ pub(in crate::routing) async fn submit_applet_install_batch(
         state,
         events,
         applet_id,
-        target_principal_server_id,
+        target_station_id,
         expected_applet_identity,
         applet_identity,
         Some((producer_verification_method, producer_signing_key)),

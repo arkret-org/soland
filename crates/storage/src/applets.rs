@@ -4,7 +4,7 @@ pub trait AppletStore: Send + Sync {
     async fn get_identity(
         &self,
         applet_id: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
     ) -> PersistenceResult<Option<Value>>;
     async fn get(
         &self,
@@ -24,7 +24,7 @@ pub trait AppletStore: Send + Sync {
         &self,
         applet_id: &str,
         effective_scope_key: &str,
-        target_principal_server_id: &str,
+        target_station_id: &str,
         expected: &Value,
         replacement: Value,
         fenced_at: chrono::DateTime<chrono::Utc>,

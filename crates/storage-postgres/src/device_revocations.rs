@@ -45,7 +45,7 @@ struct CleanupRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
-    principal_server_id: arkret_identifiers::DidCoreId,
+    station_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     device_id: String,
     #[diesel(sql_type = Text)]
@@ -89,27 +89,27 @@ fn generation_as_i64(selector: &DeviceRevocationGateSelector) -> PersistenceResu
 async fn ensure_head_locked(
     conn: &mut AsyncPgConnection,
     principal_id: &str,
-    principal_server_id: &str,
+    station_id: &str,
     device_id: &str,
 ) -> PersistenceResult<i64> {
     sql_query(
         "INSERT INTO device_revocation_linearization_heads \
-         (principal_id, principal_server_id, device_id) VALUES ($1, $2, $3) \
+         (principal_id, station_id, device_id) VALUES ($1, $2, $3) \
          ON CONFLICT DO NOTHING",
     )
     .bind::<Text, _>(principal_id)
-    .bind::<Text, _>(principal_server_id)
+    .bind::<Text, _>(station_id)
     .bind::<Text, _>(device_id)
     .execute(&mut *conn)
     .await
     .map_err(PersistenceError::database)?;
     sql_query(
         "SELECT last_seq FROM device_revocation_linearization_heads \
-         WHERE principal_id = $1 AND principal_server_id = $2 AND device_id = $3 \
+         WHERE principal_id = $1 AND station_id = $2 AND device_id = $3 \
          FOR UPDATE",
     )
     .bind::<Text, _>(principal_id)
-    .bind::<Text, _>(principal_server_id)
+    .bind::<Text, _>(station_id)
     .bind::<Text, _>(device_id)
     .get_result::<HeadSeqRow>(&mut *conn)
     .await
@@ -120,17 +120,17 @@ async fn ensure_head_locked(
 async fn allocate_seq(
     conn: &mut AsyncPgConnection,
     principal_id: &str,
-    principal_server_id: &str,
+    station_id: &str,
     device_id: &str,
 ) -> PersistenceResult<u64> {
-    ensure_head_locked(conn, principal_id, principal_server_id, device_id).await?;
+    ensure_head_locked(conn, principal_id, station_id, device_id).await?;
     let row = sql_query(
         "UPDATE device_revocation_linearization_heads SET last_seq = last_seq + 1, updated_at = now() \
-         WHERE principal_id = $1 AND principal_server_id = $2 AND device_id = $3 \
+         WHERE principal_id = $1 AND station_id = $2 AND device_id = $3 \
          RETURNING last_seq",
     )
     .bind::<Text, _>(principal_id)
-    .bind::<Text, _>(principal_server_id)
+    .bind::<Text, _>(station_id)
     .bind::<Text, _>(device_id)
     .get_result::<HeadSeqRow>(&mut *conn)
     .await
@@ -160,13 +160,13 @@ async fn target_rows(
                                WHERE q.seal_id = binding.seal_id) \
              ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \
          ) b ON true \
-         WHERE t.principal_id = $1 AND t.principal_server_id = $2 AND t.device_id = $3 \
+         WHERE t.principal_id = $1 AND t.station_id = $2 AND t.device_id = $3 \
            AND t.target_device_authorize_event_id = $4 \
            AND t.target_device_generation_ref = $5 \
          ORDER BY t.acceptance_seq, t.proposal_digest",
     )
     .bind::<Text, _>(&selector.principal_id)
-    .bind::<Text, _>(&selector.principal_server_id)
+    .bind::<Text, _>(&selector.station_id)
     .bind::<Text, _>(&selector.device_id)
     .bind::<Text, _>(&selector.target_device_authorize_event_id)
     .bind::<BigInt, _>(generation_as_i64(selector)?)
@@ -221,7 +221,7 @@ pub(crate) async fn gate_status_in_transaction(
     ensure_head_locked(
         conn,
         selector.principal_id.as_str(),
-        selector.principal_server_id.as_str(),
+        selector.station_id.as_str(),
         &selector.device_id,
     )
     .await?;
@@ -247,7 +247,7 @@ pub(crate) async fn insert_transition_in_transaction(
     ensure_head_locked(
         conn,
         transition.selector.principal_id.as_str(),
-        transition.selector.principal_server_id.as_str(),
+        transition.selector.station_id.as_str(),
         &transition.selector.device_id,
     )
     .await?;
@@ -312,20 +312,20 @@ pub(crate) async fn insert_transition_in_transaction(
     let acceptance_seq = allocate_seq(
         conn,
         transition.selector.principal_id.as_str(),
-        transition.selector.principal_server_id.as_str(),
+        transition.selector.station_id.as_str(),
         &transition.selector.device_id,
     )
     .await?;
     sql_query(
         "INSERT INTO device_revocation_targets \
-         (proposal_digest, principal_id, principal_server_id, device_id, \
+         (proposal_digest, principal_id, station_id, device_id, \
           target_device_authorize_event_id, target_device_generation_ref, proposal_event_id, \
           accepted_at, acceptance_seq, control_proposal_ack) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind::<Text, _>(&transition.proposal_digest)
     .bind::<Text, _>(&transition.selector.principal_id)
-    .bind::<Text, _>(&transition.selector.principal_server_id)
+    .bind::<Text, _>(&transition.selector.station_id)
     .bind::<Text, _>(&transition.selector.device_id)
     .bind::<Text, _>(&transition.selector.target_device_authorize_event_id)
     .bind::<BigInt, _>(generation_as_i64(&transition.selector)?)
@@ -428,17 +428,17 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             ensure_head_locked(
                 conn,
                 request.principal_id.as_str(),
-                request.principal_server_id.as_str(),
+                request.station_id.as_str(),
                 &request.device_id,
             )
             .await?;
             let existing = sql_query(
                 "SELECT decision_payload FROM device_revocation_gate_receipts \
-                 WHERE principal_id=$1 AND principal_server_id=$2 AND device_id=$3 \
+                 WHERE principal_id=$1 AND station_id=$2 AND device_id=$3 \
                    AND action_class=$4 AND intent_digest=$5 FOR UPDATE",
             )
             .bind::<Text, _>(&request.principal_id)
-            .bind::<Text, _>(&request.principal_server_id)
+            .bind::<Text, _>(&request.station_id)
             .bind::<Text, _>(&request.device_id)
             .bind::<Text, _>(request.action_class.as_str())
             .bind::<Text, _>(&request.intent_digest)
@@ -466,7 +466,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                 linearization_seq: allocate_seq(
                     conn,
                     request.principal_id.as_str(),
-                    request.principal_server_id.as_str(),
+                    request.station_id.as_str(),
                     &request.device_id,
                 )
                 .await?,
@@ -476,12 +476,12 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             };
             sql_query(
                 "INSERT INTO device_revocation_gate_receipts \
-                 (principal_id,principal_server_id,device_id,action_class,intent_digest, \
+                 (principal_id,station_id,device_id,action_class,intent_digest, \
                   decision_payload,linearization_seq,linearized_at,expires_at) \
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
             )
             .bind::<Text, _>(&record.request.principal_id)
-            .bind::<Text, _>(&record.request.principal_server_id)
+            .bind::<Text, _>(&record.request.station_id)
             .bind::<Text, _>(&record.request.device_id)
             .bind::<Text, _>(record.request.action_class.as_str())
             .bind::<Text, _>(&record.request.intent_digest)
@@ -612,7 +612,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
             .map_err(PersistenceError::database)?;
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
         sql_query(
-            "SELECT proposal_digest,proposal_event_id,covering_seal_id,principal_id,principal_server_id,device_id, \
+            "SELECT proposal_digest,proposal_event_id,covering_seal_id,principal_id,station_id,device_id, \
                     target_device_authorize_event_id,target_device_generation_ref,created_at, \
                     material_cleanup_completed_at,mls_obligation_completed_at \
              FROM device_revocation_cleanup_intents \
@@ -631,7 +631,7 @@ impl DeviceRevocationStore for PgDeviceRevocationStore {
                 covering_seal_id: row.covering_seal_id,
                 selector: DeviceRevocationGateSelector {
                     principal_id: row.principal_id,
-                    principal_server_id: row.principal_server_id,
+                    station_id: row.station_id,
                     device_id: row.device_id,
                     target_device_authorize_event_id: row.target_device_authorize_event_id,
                     target_device_generation_ref: u64::try_from(row.target_device_generation_ref)
@@ -737,9 +737,9 @@ pub(crate) async fn stage_sealed_revocation_in_transaction(
 ) -> PersistenceResult<bool> {
     let inserted = sql_query(
         "INSERT INTO device_revocation_cleanup_intents \
-         (proposal_digest,proposal_event_id,covering_seal_id,principal_id,principal_server_id,device_id, \
+         (proposal_digest,proposal_event_id,covering_seal_id,principal_id,station_id,device_id, \
           target_device_authorize_event_id,target_device_generation_ref,created_at) \
-         SELECT proposal_digest,proposal_event_id,$2,principal_id,principal_server_id,device_id, \
+         SELECT proposal_digest,proposal_event_id,$2,principal_id,station_id,device_id, \
                 target_device_authorize_event_id,target_device_generation_ref,$3 \
          FROM device_revocation_targets WHERE proposal_digest=$1 \
          ON CONFLICT (proposal_digest) DO NOTHING",

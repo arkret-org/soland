@@ -289,10 +289,8 @@ pub async fn assert_device_message_snapshot_guard_contract(
         }),
         device_revocation_gate: Some(DeviceRevocationGateSelector {
             principal_id: arkret_identifiers::DidCoreId::new(actor.clone()).unwrap(),
-            principal_server_id: arkret_identifiers::DidCoreId::new(
-                "ak:did_core:web:soland.example",
-            )
-            .unwrap(),
+            station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example")
+                .unwrap(),
             device_id: "sender-device".to_owned(),
             target_device_authorize_event_id: format!("ak:event:A{}", "a".repeat(43)),
             target_device_generation_ref: 1,
@@ -1295,7 +1293,7 @@ fn contract_applet_identity(applet_id: &arkret_wire::AppletId) -> serde_json::Va
     serde_json::json!({
         "applet_id": applet_id,
         "bot_actor_id": format!("ak:did_core:web:bot-{bot_suffix}.example"),
-        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
+        "bot_actor_station_id": "ak:did_core:webvh:z6mkcontractservice"
     })
 }
 
@@ -1316,7 +1314,7 @@ fn contract_ghost(
 ) -> serde_json::Value {
     serde_json::json!({
         "ghost_actor_id": ghost_actor_id,
-        "actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice",
+        "actor_station_id": "ak:did_core:webvh:z6mkcontractservice",
         "managed_actor_provision_ref": "ak:event:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
         "principal_control_realm_id": "ak:realm:AXTOWXiR0H0NRFksL2Dt7uYvlaNckYIqkzsoMPPxW5MH",
         "external_ref": {
@@ -1391,10 +1389,10 @@ fn contract_applet_batch(
         applet_record: Some(AppletRecordCommit {
             applet_id: applet_id.clone(),
             identity: AppletIdentityCommit {
-                target_principal_server_id: arkret_wire::DidCoreId::new(
+                target_station_id: arkret_wire::DidCoreId::new(
                     "ak:did_core:webvh:z6mkcontractservice".to_owned(),
                 )
-                .expect("contract target Principal Server id"),
+                .expect("contract target Station id"),
                 expected_record: expected_identity,
                 record: identity,
             },
@@ -1517,10 +1515,10 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     fresh_retry.applet_record = Some(AppletRecordCommit {
         applet_id: stale_applet_id.clone(),
         identity: AppletIdentityCommit {
-            target_principal_server_id: arkret_wire::DidCoreId::new(
+            target_station_id: arkret_wire::DidCoreId::new(
                 "ak:did_core:webvh:z6mkcontractservice".to_owned(),
             )
-            .expect("contract target Principal Server id"),
+            .expect("contract target Station id"),
             expected_record: Some(contract_applet_identity(&stale_applet_id)),
             record: contract_applet_identity(&stale_applet_id),
         },
@@ -1896,7 +1894,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     let conflicting_identity = serde_json::json!({
         "applet_id": winner_applet_id,
         "bot_actor_id": "ak:did_core:web:different-winner.example",
-        "bot_actor_principal_server_id": "ak:did_core:webvh:z6mkcontractservice"
+        "bot_actor_station_id": "ak:did_core:webvh:z6mkcontractservice"
     });
     let conflicting_mutation = conflicting_winner
         .applet_record
@@ -2000,12 +1998,12 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     right_replacement["revoked_at"] = serde_json::Value::String(
         arkret_canonical::format_timestamp_canonical(right_fenced_at),
     );
-    let target_principal_server_id = "ak:did_core:webvh:z6mkcontractservice";
+    let target_station_id = "ak:did_core:webvh:z6mkcontractservice";
     let (left_outcome, right_outcome) = tokio::join!(
         stores.applets.fence_installation(
             fence_applet_id.as_str(),
             &left_scope_key,
-            target_principal_server_id,
+            target_station_id,
             &left_record,
             left_replacement,
             left_fenced_at,
@@ -2013,7 +2011,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
         stores.applets.fence_installation(
             fence_applet_id.as_str(),
             &right_scope_key,
-            target_principal_server_id,
+            target_station_id,
             &right_record,
             right_replacement,
             right_fenced_at,
@@ -2029,7 +2027,7 @@ pub async fn assert_applet_formal_commit_transaction_contract(
     );
     let fenced_identity = stores
         .applets
-        .get_identity(fence_applet_id.as_str(), target_principal_server_id)
+        .get_identity(fence_applet_id.as_str(), target_station_id)
         .await
         .expect("read globally fenced Applet identity")
         .expect("Applet identity winner remains durable after fencing");
@@ -3605,10 +3603,8 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
         device_revocation_gate: Some(DeviceRevocationGateSelector {
             principal_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:contract.example")
                 .unwrap(),
-            principal_server_id: arkret_identifiers::DidCoreId::new(
-                "ak:did_core:web:soland.example",
-            )
-            .unwrap(),
+            station_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example")
+                .unwrap(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             target_device_authorize_event_id:
                 "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD".to_owned(),
@@ -4121,7 +4117,7 @@ fn account_status_record(
         account_id: arkret_wire::AccountId::new(
             DidCoreId::new(format!("ak:did_core:web:{account_id}.example"))
                 .expect("principal core id"),
-            DidCoreId::new("ak:did_core:web:principal.example").expect("principal server core id"),
+            DidCoreId::new("ak:did_core:web:principal.example").expect("Station core id"),
         ),
         principal_control_realm_id: RealmId::new(
             "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
@@ -4853,8 +4849,8 @@ fn contract_device_revoke_fixture(
     let realm_id = contract_realm_id(&format!("device-revocation-seal:{namespace}"));
     let actor_id = arkret_wire::DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
         .expect("contract actor core id");
-    let principal_server_id = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example")
-        .expect("contract principal server core id");
+    let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example")
+        .expect("contract Station core id");
     let created_at = database_timestamp_now();
     let event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceRevoke.as_str(),
@@ -4862,7 +4858,7 @@ fn contract_device_revoke_fixture(
             realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("contract realm id"),
         },
         actor_id.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         0,
         arkret_wire::Hlc::new("019f00000000-0000-00000002").expect("contract HLC"),
         serde_json::json!({
@@ -4899,7 +4895,7 @@ fn contract_device_revoke_fixture(
     let control_proposal_ack = contract_control_proposal_ack(&record, &realm_id, created_at);
     let selector = DeviceRevocationGateSelector {
         principal_id: actor_id,
-        principal_server_id,
+        station_id,
         device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
         target_device_authorize_event_id: "ak:event:AcIMom-0qqAXx_hmDJfxxaUJb_oJ64S3ARW1-WKFDCoD"
             .to_owned(),

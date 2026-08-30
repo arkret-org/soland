@@ -765,7 +765,7 @@ pub(crate) async fn seed_did_document_also_known_as(state: &AppState, did: &str,
                 "assertionMethod": [],
                 "service": [{
                     "id": format!("{did}#soland"),
-                    "type": "ArkretPrincipalServer",
+                    "type": "ArkretStation",
                     "serviceEndpoint": "/_arkret"
                 }]
             }),
@@ -929,7 +929,7 @@ pub(crate) async fn seed_test_realm(
                     "service_resolution": {
                         "current_record_url": current_record_url
                     },
-                    "recipient_kind": "principal_server"
+                    "recipient_kind": "station"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_invite: None,
@@ -1682,12 +1682,12 @@ pub(crate) async fn project_test_authorized_device(
     let actor_did = Did::new(actor.to_owned()).expect("fixture actor DID");
     let actor_core =
         arkret_wire::project_did_to_core_id(&actor_did).expect("fixture actor core DID");
-    let principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
-        .expect("fixture local principal server core DID");
+    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
+        .expect("fixture local Station core DID");
     let realm_id =
         soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
             actor,
-            principal_server_id.clone(),
+            station_id.clone(),
         )
         .realm_id
         .clone();
@@ -1728,7 +1728,7 @@ pub(crate) async fn project_test_authorized_device(
             realm_id: realm_id.clone(),
         },
         actor_core.clone(),
-        principal_server_id.clone(),
+        station_id.clone(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({
@@ -1777,10 +1777,8 @@ pub(crate) async fn project_test_authorized_device(
         ))
         .await
         .expect("persist accepted device authorization Event");
-    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-        genesis.actor_id.clone(),
-        genesis.principal_server_id.clone(),
-    );
+    let authority_key =
+        arkret_wire::AccountId::new(genesis.actor_id.clone(), genesis.station_id.clone());
     let persistence = state.test_persistence();
     let resolutions = persistence.principal_resolutions();
     if resolutions
@@ -1927,31 +1925,30 @@ fn test_realm_basis(
     )
 }
 
-pub(crate) fn test_realm_basis_for_principal_server(
+pub(crate) fn test_realm_basis_for_station(
     state: &AppState,
     realm_id: &str,
     subject: &str,
-    principal_server_id: &str,
+    station_id: &str,
 ) -> soland_services::conformance_basis::ConformanceRealmBasis {
     let subject_core = fixture_actor_core_id(subject);
-    soland_test_support::cba_basis::realm_basis_for_principal_server(
+    soland_test_support::cba_basis::realm_basis_for_station(
         state,
         realm_id,
         &subject_core,
-        principal_server_id,
+        station_id,
         HTTP_API_FIXTURE_BASIS,
     )
 }
 
-pub(crate) async fn seed_test_realm_basis_seal_for_principal_server(
+pub(crate) async fn seed_test_realm_basis_seal_for_station(
     state: &AppState,
     realm_id: &str,
     subject: &str,
-    principal_server_id: &str,
+    station_id: &str,
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis =
-        test_realm_basis_for_principal_server(state, realm_id, subject, principal_server_id);
+    let basis = test_realm_basis_for_station(state, realm_id, subject, station_id);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
         .unwrap();
@@ -2371,7 +2368,7 @@ pub(crate) async fn signal_subscribe_envelopes(
     reason = "the fixture exposes each signed did:webvh proof component"
 )]
 pub(crate) fn test_embedded_webvh_proof(
-    principal_server_url: &str,
+    station_url: &str,
     local_id: &str,
     did_public_key_multibase: &str,
     update_public_key_multibase: &str,
@@ -2380,7 +2377,7 @@ pub(crate) fn test_embedded_webvh_proof(
     update_signing: &SigningKey,
     version_time: &str,
 ) -> Value {
-    let method_authority = test_webvh_method_authority(principal_server_url);
+    let method_authority = test_webvh_method_authority(station_url);
     let placeholder_did = format!("did:webvh:{{SCID}}:{method_authority}:webvh:{local_id}");
     let did_key_id = format!("{placeholder_did}#{did_key_fragment}");
     let skeleton = serde_json::json!({
@@ -2408,8 +2405,8 @@ pub(crate) fn test_embedded_webvh_proof(
             "alsoKnownAs": ["acct:alice@example.com"],
             "service": [{
                 "id": format!("{placeholder_did}#soland"),
-                "type": "ArkretPrincipalServer",
-                "serviceEndpoint": principal_server_url.trim_end_matches('/'),
+                "type": "ArkretStation",
+                "serviceEndpoint": station_url.trim_end_matches('/'),
             }],
         },
     });

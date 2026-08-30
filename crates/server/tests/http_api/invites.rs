@@ -58,7 +58,7 @@ impl ServiceRouteFetcher for RemoteCarrierFetcher {
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
         Ok((service_id == &self.service_id
-            && service_kind == arkret_wire::ServiceKind::PrincipalServer.as_str())
+            && service_kind == arkret_wire::ServiceKind::Station.as_str())
         .then(|| self.candidate.clone()))
     }
 
@@ -84,7 +84,7 @@ fn remote_route_candidate() -> (DidCoreId, ServiceResolutionCarrier, VerifiedRou
     let service_id =
         arkret_wire::project_did_to_core_id(&did).expect("remote service core DID projection");
     assert_eq!(service_id.as_str(), REMOTE_SERVICE_ID);
-    let service_kind = arkret_wire::ServiceKind::PrincipalServer;
+    let service_kind = arkret_wire::ServiceKind::Station;
     let base_url = "https://remote.example/";
     let issued_at = chrono::Utc::now();
     let method_history_head = format!("sha256:{}", "1".repeat(64));
@@ -279,7 +279,7 @@ async fn seed_dispatch_fixture_for_target(
             "recipient_id": recipient_id.clone(),
             "service_resolution": serde_json::to_value(&service_resolution)
                 .expect("service resolution carrier serializes"),
-            "recipient_kind": "principal_server"
+            "recipient_kind": "station"
         },
         "introduction_evidence_digest": evidence_digest,
         "expires_at": "2099-01-01T00:00:00.000Z"
@@ -337,11 +337,8 @@ async fn seed_dispatch_fixture_for_target(
             panic!("accepted invite Event is not resolvable: {error}; {resolved}")
         });
 
-    let invite_address = InviteAddress::principal_server(
-        fixture_actor_core_id(BOB),
-        recipient_id,
-        service_resolution,
-    );
+    let invite_address =
+        InviteAddress::station(fixture_actor_core_id(BOB), recipient_id, service_resolution);
     DispatchFixture {
         state,
         alice_token,

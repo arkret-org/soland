@@ -1,6 +1,6 @@
 //! `/_arkret/self/*` inbound credential: `ak.session.grant` + DPoP (RFC 9449).
 //!
-//! Per api-conventions.md §3.3 the Principal Server (soland) no longer mints a
+//! Per api-conventions.md §3.3 the Station (soland) no longer mints a
 //! local credential from a session grant. The client
 //! presents the `ak.session.grant` directly on every `/_arkret/self/*` request
 //! as `Authorization: DPoP <ak.session.grant>` plus a sender-constrained
@@ -106,7 +106,7 @@ struct CachedIntrospectionHttpClient {
     inserted_at: Instant,
 }
 
-/// Reuse the connection pool for the configured Auth Server instead of
+/// Reuse the connection pool for the configured Account Authority process instead of
 /// constructing a fresh reqwest client for every force-fresh introspection.
 ///
 /// Sensitive self operations intentionally bypass the grant-result cache, so a
@@ -299,7 +299,7 @@ async fn introspect_session_grant_remote(
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
     // Introspection is read-only. A pooled keep-alive connection can be closed
-    // by the Auth Server between requests, especially during long conformance
+    // by the Account Authority process between requests, especially during long conformance
     // runs that force fresh introspection on every sensitive operation. Retry
     // one transport failure after discarding the pinned client; URL validation
     // and address pinning are repeated before the replacement connection is
@@ -351,7 +351,7 @@ async fn introspect_session_grant_remote(
     ))?;
     if !response.status().is_success() {
         return Err(unauthenticated(
-            "session grant introspection was rejected by the Auth Server",
+            "session grant introspection was rejected by the Account Authority process",
         ));
     }
     let outcome = response
@@ -459,10 +459,8 @@ pub(crate) fn is_grant_dpop_presentation(req: &Request) -> bool {
 fn session_binding_from_introspection(
     grant: &SessionGrantIntrospectGrant,
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
-    let authority = grant.principal_authority_key();
-    if authority.principal_id != grant.subject_id
-        || authority.principal_server_id != grant.audience_id
-    {
+    let authority = grant.account_id();
+    if authority.principal_id != grant.subject_id || authority.station_id != grant.audience_id {
         return Err(unauthenticated(
             "session grant authority context does not match its subject/audience",
         ));
@@ -547,7 +545,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
 ) -> Result<SessionRecord, AuthError> {
     if grant.audience_id.as_str() != state.service_id() {
         return Err(unauthenticated(
-            "session grant audience does not match this principal server",
+            "session grant audience does not match this Station",
         ));
     }
     let (device_id, agent_session) = session_binding_from_introspection(grant)?;
@@ -650,7 +648,7 @@ pub(crate) async fn grant_dpop_session(
     // 5. audience == this service's service_id.
     if grant.audience_id.as_str() != state.service_id() {
         return Err(unauthenticated(
-            "session grant audience does not match this principal server",
+            "session grant audience does not match this Station",
         ));
     }
 

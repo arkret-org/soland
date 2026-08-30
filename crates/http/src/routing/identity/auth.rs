@@ -77,7 +77,7 @@ pub(super) fn router() -> Router {
 pub(super) fn protocol_account_router() -> Router {
     Router::with_path("account")
         .push(
-            // ② (api-conventions.md §3.3): the Principal Server no longer issues
+            // ② (api-conventions.md §3.3): the Station no longer issues
             // a local credential from the session grant. The client presents the
             // ak.session.grant directly to `/_arkret/self/*` with a DPoP proof,
             // so there is no `session-grants .post(...)` mount here — only `revoke`.
@@ -87,12 +87,12 @@ pub(super) fn protocol_account_router() -> Router {
             Router::with_path("session-grants")
                 .push(Router::with_path("revoke").post(session_revoke)),
         )
-        // Spec `ak.gate.account.command.logout.v1` — Principal Server device
+        // Spec `ak.gate.account.command.logout.v1` — Station device
         // logout (account-lifecycle §4.1): revoke this session credential and
         // drop the device's queued to-device while preserving its durable
         // authorization. Canonical `/_arkret/gate/account/logout`; deployment
         // gateways route this longer prefix to soland even though `/_arkret/gate/`
-        // otherwise goes to the Auth Server.
+        // otherwise goes to the Account Authority process.
         .push(Router::with_path("logout").post(logout::logout))
         .push(Router::with_path("device-pair").post(account_device_pair))
 }
@@ -101,7 +101,7 @@ pub(super) fn local_router() -> Router {
     // Device logout is the spec op `ak.gate.account.command.logout.v1`, served at
     // the canonical `/_arkret/gate/account/logout` (see `protocol_account_router`).
     // Deployment gateways route that longer prefix to soland (the Principal
-    // Server) even though `/_arkret/gate/` otherwise goes to the Auth Server, so
+    // Server) even though `/_arkret/gate/` otherwise goes to the Account Authority process, so
     // no `/_soland/gate/auth/logout` product alias is needed.
     // ② (api-conventions.md §3.3): no local credential issuance endpoint is
     // mounted under `session-grants`. dev-login remains the only local

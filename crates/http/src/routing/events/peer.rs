@@ -19,7 +19,7 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
 };
-use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+use arkret_models_identity::service_identity::CanonicalServiceUrl;
 use arkret_wire::{ServiceKind, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
@@ -132,56 +132,26 @@ async fn trusted_account_authority_binding(
         .account_authority_url
         .as_deref()
         .ok_or_else(|| AppError::capability_denied("Account Authority is not configured"))?;
-    let registration_key = ServiceRegistrationKey::new(
-        ServiceKind::AuthServer,
-        CanonicalServiceUrl::canonicalize(authority_url).map_err(|error| {
-            AppError::internal(format!(
-                "configured Account Authority URL is invalid: {error}"
-            ))
-        })?,
-    )
-    .map_err(|error| AppError::internal(error.to_string()))?;
-    let registration = state
-        .dids()
-        .service_registration(&registration_key)
-        .await
-        .map_err(|error| {
-            AppError::new(
-                soland_http::error::ErrorCode::TemporarilyUnavailable,
-                format!("Account Authority service registration is unavailable: {error}"),
-            )
-        })?
+    let authority_id = state
+        .config()
+        .account_authority_id
+        .as_deref()
         .ok_or_else(|| {
-            AppError::capability_denied(
-                "Account Authority URL has no accepted service identity registration",
-            )
+            AppError::capability_denied("Account Authority identity pin is not configured")
+        })
+        .and_then(|value| {
+            DidCoreId::new(value.to_owned()).map_err(|error| {
+                AppError::internal(format!(
+                    "configured Account Authority identity is invalid: {error}"
+                ))
+            })
         })?;
-    registration
-        .validate_for(&registration_key)
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "Account Authority service identity registration is invalid: {error}"
-            ))
-        })?;
-    let registered_id =
-        arkret_wire::project_did_to_core_id(registration.did()).map_err(|error| {
-            AppError::internal(format!(
-                "registered Account Authority DID cannot be projected: {error}"
-            ))
-        })?;
-    if let Some(configured_id) = state.config().account_authority_id.as_deref() {
-        let configured_id = DidCoreId::new(configured_id.to_owned()).map_err(|error| {
-            AppError::internal(format!(
-                "configured Account Authority service identity is invalid: {error}"
-            ))
-        })?;
-        if configured_id != registered_id {
-            return Err(AppError::capability_denied(
-                "accepted Account Authority service registration does not match the configured service identity pin",
-            ));
-        }
-    }
-    Ok((registered_id, registration_key.public_base_url().clone()))
+    let authority_url = CanonicalServiceUrl::canonicalize(authority_url).map_err(|error| {
+        AppError::internal(format!(
+            "configured Account Authority URL is invalid: {error}"
+        ))
+    })?;
+    Ok((authority_id, authority_url))
 }
 
 pub(crate) async fn trusted_account_authority_id(state: &AppState) -> Result<DidCoreId, AppError> {
@@ -356,7 +326,7 @@ async fn enqueue_account_status_fanout(
     record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
     receipt: &arkret_models_collaboration::account_lifecycle::AccountStatusReceipt,
 ) -> Result<(AccountStatusPropagationState, Option<u64>), AppError> {
-    if record.account_id.principal_server_id.as_str() != state.service_id() {
+    if record.account_id.station_id.as_str() != state.service_id() {
         return Ok((AccountStatusPropagationState::NotRequired, None));
     }
     let targets =
@@ -366,7 +336,7 @@ async fn enqueue_account_status_fanout(
         );
     if targets.len() > 256 {
         return Err(AppError::internal(
-            "account-status affected Principal Server set exceeds 256",
+            "account-status affected Station set exceeds 256",
         ));
     }
     if targets.is_empty() {
@@ -488,7 +458,7 @@ fn sign_account_status_receipt(
 async fn historical_account_status_service_key(
     state: &AppState,
     service_id: &DidCoreId,
-    service_kind: ServiceKind,
+    pinned_base_url: Option<&CanonicalServiceUrl>,
     verification_method: &str,
     at: chrono::DateTime<chrono::Utc>,
     label: &str,
@@ -507,19 +477,19 @@ async fn historical_account_status_service_key(
             "account-status {label} verification method invalid: {error}"
         ))
     })?;
-    let base_url = if service_kind == ServiceKind::AuthServer {
-        let (registered_id, registered_base_url) = trusted_account_authority_binding(state).await?;
-        if registered_id != *service_id {
+    let base_url = if let Some(pinned_base_url) = pinned_base_url {
+        let (configured_id, configured_base_url) = trusted_account_authority_binding(state).await?;
+        if configured_id != *service_id || configured_base_url != *pinned_base_url {
             return Err(AppError::capability_denied(format!(
-                "account-status {label} service identity does not match the accepted Account Authority registration"
+                "account-status {label} identity does not match the deployment-private Account Authority pin"
             )));
         }
-        registered_base_url.as_str().to_owned()
+        pinned_base_url.as_str().to_owned()
     } else {
         crate::routing::federation::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
-            service_kind.as_str(),
+            ServiceKind::Station.as_str(),
             false,
         )
         .await
@@ -587,10 +557,11 @@ async fn validate_account_status_publication(
     let local_server = DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(error.to_string()))?;
     let method = record.proof.verification_method.as_str();
+    let (_, authority_url) = trusted_account_authority_binding(state).await?;
     let public_key = historical_account_status_service_key(
         state,
         &record.account_authority_id,
-        ServiceKind::AuthServer,
+        Some(&authority_url),
         method,
         record.proof.created_at,
         "Account Authority",
@@ -607,9 +578,9 @@ async fn validate_account_status_publication(
     })?;
 
     if source_id != record.account_authority_id.as_str() {
-        if source_id != record.principal_authority.principal_server_id.as_str() {
+        if source_id != record.account_id.station_id.as_str() {
             return Err(AppError::capability_denied(
-                "account-status fanout source is not the origin Principal Server",
+                "account-status fanout source is not the origin Station",
             ));
         }
         let source_receipt = request
@@ -619,14 +590,14 @@ async fn validate_account_status_publication(
             .find(|receipt| receipt.receiver_id.as_str() == source_id)
             .ok_or_else(|| {
                 AppError::capability_denied(
-                    "account-status fanout omits the origin Principal Server receipt",
+                    "account-status fanout omits the origin Station receipt",
                 )
             })?;
         let receipt_method = source_receipt.proof.verification_method.as_str();
         let receipt_key = historical_account_status_service_key(
             state,
             &source_receipt.receiver_id,
-            ServiceKind::PrincipalServer,
+            None,
             receipt_method,
             source_receipt.accepted_at,
             "receipt issuer",
@@ -644,16 +615,14 @@ async fn validate_account_status_publication(
         return Ok(());
     }
 
-    if record.principal_authority.principal_server_id != local_server {
+    if record.account_id.station_id != local_server {
         return Err(AppError::capability_denied(
-            "initial account-status record is addressed to another Principal Server",
+            "initial account-status record is addressed to another Station",
         ));
     }
 
-    let authority = arkret_wire::AccountId::new(
-        record.principal_authority.principal_id.clone(),
-        local_server,
-    );
+    let authority =
+        arkret_wire::AccountId::new(record.account_id.principal_id.clone(), local_server);
     let resolution = state
         .persistence()
         .principal_resolution_by_account_id(&authority)
@@ -663,7 +632,7 @@ async fn validate_account_status_publication(
         })?
         .ok_or_else(|| AppError::capability_denied("account-status PCR binding is not accepted"))?;
     // `account_id` is the Account Authority's own deployment-local service
-    // account id (account-lifecycle.md §3.1); a Principal Server never mints or
+    // account id (account-lifecycle.md §3.1); a Station never mints or
     // stores it, so it can only be bound to the Event payload and to the
     // monotonic authority floor below. The local `AccountRecord.id` is an
     // unrelated soland-local identifier and comparing the two rejects every

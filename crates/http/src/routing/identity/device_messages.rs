@@ -42,10 +42,10 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 /// Build the only service sender accepted by the internal actor-private
 /// materializer. Keeping this constructor beside the fanout prevents CAS
 /// producers from accepting or copying a caller-supplied service identity.
-pub(crate) fn principal_server_device_message_sender(state: &AppState) -> DeviceMessageSender {
+pub(crate) fn station_device_message_sender(state: &AppState) -> DeviceMessageSender {
     DeviceMessageSender::Service {
         sender_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
-            .expect("the loaded Principal Server identity is a core DID"),
+            .expect("the loaded Station identity is a core DID"),
     }
 }
 
@@ -390,7 +390,7 @@ fn device_message_intent_conflict() -> AppError {
 
 /// Fan an actor-private update (account-data / blocklist / read-cursor
 /// deltas, plaintext `content`) out to the holder's active devices. A real
-/// device sender excludes its origin device; the local Principal Server
+/// device sender excludes its origin device; the local Station
 /// materializer has no origin device and therefore reaches every active one.
 ///
 /// Sidecar isolation note (zh/models/sidecar.md §7 / private-objects.md
@@ -463,7 +463,7 @@ pub(crate) async fn fanout_actor_private_update(
                 return 0;
             }
             // This internal materializer always writes `sender == recipient ==
-            // actor` below. A Principal Server update is therefore scoped to
+            // actor` below. A Station update is therefore scoped to
             // the holder whose cell changed, does not borrow a holder device's
             // authority, and has neither a device-revocation gate nor an
             // origin device to exclude.
@@ -1025,7 +1025,7 @@ mod tests {
             &state,
             holder,
             ActorPrivateDeviceUpdate::AccountData {
-                sender: principal_server_device_message_sender(&state),
+                sender: station_device_message_sender(&state),
                 content: ActorPrivateAccountDataUpdate {
                     operation: ActorPrivateAccountDataOperation::Put,
                     account_data_key: "ak.account.invite_delivery".to_owned(),

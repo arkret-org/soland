@@ -46,7 +46,7 @@ fn join_op(member: &str, binding: Value) -> Operation {
 
 fn complete_binding(mut binding: Value) -> Value {
     if binding.get("recipient_kind").is_none() {
-        binding["recipient_kind"] = json!("principal_server");
+        binding["recipient_kind"] = json!("station");
     }
     if binding.get("binding_scope").is_none() {
         binding["binding_scope"] = json!("realm");
@@ -107,7 +107,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) -> S
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         creator_actor_id,
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         0,
         arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
         payload.clone(),

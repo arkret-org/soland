@@ -124,7 +124,7 @@ pub fn has_self_principal_pcr_device_authorized_shape(
     let mut admissions = event
         .proofs
         .iter()
-        .filter_map(|proof| proof.as_principal_server_admission());
+        .filter_map(|proof| proof.as_station_admission());
     let Some(_) = admissions.next() else {
         return false;
     };
@@ -132,7 +132,7 @@ pub fn has_self_principal_pcr_device_authorized_shape(
         return false;
     }
     if event
-        .validate_principal_server_admission_binding(digest_suite)
+        .validate_station_admission_binding(digest_suite)
         .is_err()
     {
         return false;
@@ -196,14 +196,15 @@ mod tests {
             proof_purpose: None,
             jws: "producer..signature".to_owned(),
         };
-        let admission = arkret_wire::PrincipalServerAdmissionProof {
-            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        let admission = arkret_wire::StationAdmissionProof {
+            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new("did:web:soland.example#service-key")
                 .unwrap(),
             event_digest: event_digest.clone(),
-            producer_proof_digest:
-                arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
-                    .unwrap(),
+            producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(
+                &producer,
+            )
+            .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
@@ -255,9 +256,7 @@ mod tests {
         ));
 
         let mut wrong_binding = event;
-        if let arkret_wire::EventProof::PrincipalServerAdmission(admission) =
-            &mut wrong_binding.proofs[1]
-        {
+        if let arkret_wire::EventProof::StationAdmission(admission) = &mut wrong_binding.proofs[1] {
             admission.producer_proof_digest =
                 arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
         }
@@ -284,7 +283,7 @@ pub struct AppletRecordCommit {
 
 #[derive(Clone, Debug)]
 pub struct AppletIdentityCommit {
-    pub target_principal_server_id: arkret_wire::DidCoreId,
+    pub target_station_id: arkret_wire::DidCoreId,
     pub expected_record: Option<serde_json::Value>,
     pub record: serde_json::Value,
 }
@@ -337,7 +336,7 @@ pub fn validate_applet_installation_record(record: &serde_json::Value) -> Persis
         "identity",
         "registry_id",
         "bot_actor_id",
-        "bot_actor_principal_server_id",
+        "bot_actor_station_id",
         "bot_actor_provision_ref",
         "bot_principal_control_realm_id",
         "initial_package",
@@ -410,7 +409,7 @@ pub fn applet_managed_authorities_from_record(
     };
     let mut authorities = std::collections::BTreeSet::from([ManagedAuthorityClaim {
         actor_id: required("bot_actor_id")?.to_owned(),
-        principal_server_id: required("bot_actor_principal_server_id")?.to_owned(),
+        station_id: required("bot_actor_station_id")?.to_owned(),
     }]);
     let ghosts = installation
         .get("ghosts")
@@ -429,18 +428,17 @@ pub fn applet_managed_authorities_from_record(
                     "schema_violation: durable Applet Ghost omits ghost_actor_id".to_owned(),
                 )
             })?;
-        let principal_server_id = ghost
-            .get("actor_principal_server_id")
+        let station_id = ghost
+            .get("actor_station_id")
             .and_then(serde_json::Value::as_str)
             .ok_or_else(|| {
                 PersistenceError::Conflict(
-                    "schema_violation: durable Applet Ghost omits actor_principal_server_id"
-                        .to_owned(),
+                    "schema_violation: durable Applet Ghost omits actor_station_id".to_owned(),
                 )
             })?;
         if !authorities.insert(ManagedAuthorityClaim {
             actor_id: actor_id.to_owned(),
-            principal_server_id: principal_server_id.to_owned(),
+            station_id: station_id.to_owned(),
         }) {
             return Err(PersistenceError::Conflict(
                 "applet_managed_authority_conflict".to_owned(),
@@ -453,7 +451,7 @@ pub fn applet_managed_authorities_from_record(
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ManagedAuthorityClaim {
     pub actor_id: String,
-    pub principal_server_id: String,
+    pub station_id: String,
 }
 
 /// All durable writes produced by accepting a closed multi-Event aggregate.

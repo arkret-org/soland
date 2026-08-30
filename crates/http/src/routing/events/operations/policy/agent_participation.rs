@@ -324,7 +324,7 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state.authorization().grants_for_subject(
         agent_id,
-        Some(operation.context.principal_server_id.as_str()),
+        Some(operation.context.station_id.as_str()),
         operation.realm_id.as_str(),
     );
     let Some(grant) = grants
@@ -601,7 +601,7 @@ pub(super) fn validate_agent_context_authorization_ref(
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state.authorization().grants_for_subject(
         agent_id,
-        Some(operation.context.principal_server_id.as_str()),
+        Some(operation.context.station_id.as_str()),
         operation.realm_id.as_str(),
     );
     let Some(grant) = grants

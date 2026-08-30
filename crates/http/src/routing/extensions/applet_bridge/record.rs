@@ -44,14 +44,14 @@ pub(super) fn encode_applet_identity(
 pub(super) async fn applet_identity(
     state: &AppState,
     applet_id: &str,
-    target_principal_server_id: &str,
+    target_station_id: &str,
 ) -> Result<Option<AppletIdentityRecord>, AppError> {
     state
         .event_queries()
-        .applet_identity(applet_id, target_principal_server_id)
+        .applet_identity(applet_id, target_station_id)
         .await
         .map_err(|error| {
-            tracing::error!(%error, %applet_id, %target_principal_server_id, "failed to read applet identity winner");
+            tracing::error!(%error, %applet_id, %target_station_id, "failed to read applet identity winner");
             AppError::internal("failed to read applet identity winner")
         })?
         .map(|value| {
@@ -195,7 +195,7 @@ pub(super) async fn fence_applet_record(
         .fence_applet_installation(
             replacement.applet_id.as_str(),
             &effective_scope_key,
-            replacement.bot_actor_principal_server_id.as_str(),
+            replacement.bot_actor_station_id.as_str(),
             &expected_value,
             replacement_value,
             fenced_at,

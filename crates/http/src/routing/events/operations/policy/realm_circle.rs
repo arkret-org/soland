@@ -57,7 +57,7 @@ pub(super) async fn validate_circle_create_policy(
                 .authorization()
                 .check(soland_services::authorization::AuthorizationCheck {
                     actor,
-                    actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+                    actor_station_id: Some(operation.context.station_id.as_str()),
                     action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE_V1,
                     resource: realm_id,
                     realm_id,
@@ -96,7 +96,7 @@ pub(super) async fn validate_circle_create_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -107,7 +107,7 @@ pub(super) async fn validate_circle_create_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+            actor_station_id: Some(operation.context.station_id.as_str()),
             action: arkret_wire::CapabilityActionId::CIRCLE_CREATE,
             resource: realm_id,
             realm_id,
@@ -182,7 +182,7 @@ pub(super) async fn validate_circle_management_policy(
         .actor_holds_effective_realm_owner(
             realm_id,
             actor,
-            operation.context.principal_server_id.as_str(),
+            operation.context.station_id.as_str(),
             operation.created_at,
         )
     {
@@ -193,7 +193,7 @@ pub(super) async fn validate_circle_management_policy(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(operation.context.principal_server_id.as_str()),
+            actor_station_id: Some(operation.context.station_id.as_str()),
             action,
             resource: circle_id,
             realm_id,

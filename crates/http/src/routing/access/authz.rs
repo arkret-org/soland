@@ -103,7 +103,7 @@ async fn authz_check(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor: body.actor_id.as_str(),
-            actor_principal_server_id: Some(state.service_id()),
+            actor_station_id: Some(state.service_id()),
             action: &body.action,
             resource: &resource_expr,
             realm_id: &realm_id,
@@ -371,11 +371,11 @@ async fn effective_grants(
         .and_then(|value| {
             DidCoreId::new(value).map_err(|_| AppError::param_invalid("subject is invalid"))
         })?;
-    let subject_principal_server_id = query_param(req, "subject_principal_server_id")
-        .ok_or_else(|| AppError::param_invalid("subject_principal_server_id is required"))
+    let subject_station_id = query_param(req, "subject_station_id")
+        .ok_or_else(|| AppError::param_invalid("subject_station_id is required"))
         .and_then(|value| {
             DidCoreId::new(value)
-                .map_err(|_| AppError::param_invalid("subject_principal_server_id is invalid"))
+                .map_err(|_| AppError::param_invalid("subject_station_id is invalid"))
         })?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::param_invalid("realm_id is required"))
@@ -391,7 +391,7 @@ async fn effective_grants(
         .transpose()?
         .unwrap_or_else(now);
     let subject_is_self = subject.as_str() == session.actor.as_str()
-        && subject_principal_server_id.as_str() == session.audience.as_str();
+        && subject_station_id.as_str() == session.audience.as_str();
     let caller_can_query_subject = subject_is_self
         || session_owns_realm(state, session.actor.as_str(), realm_id.as_str()).await;
     if !caller_can_query_subject {
@@ -403,7 +403,7 @@ async fn effective_grants(
         .authorization()
         .grants_for_subject_at(
             subject.as_str(),
-            Some(subject_principal_server_id.as_str()),
+            Some(subject_station_id.as_str()),
             realm_id.as_str(),
             evaluated_at,
         )
@@ -439,9 +439,9 @@ fn capability_grant_from_authz_grant(
         schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
         realm_id: Some(realm_id),
         issuer_id: issuer,
-        issuer_principal_server_id: grant.issuer_principal_server_id,
+        issuer_station_id: grant.issuer_station_id,
         subject,
-        subject_principal_server_id: grant.subject_principal_server_id,
+        subject_station_id: grant.subject_station_id,
         actions: grant.actions,
         resources: vec![resource_selector],
         constraints,

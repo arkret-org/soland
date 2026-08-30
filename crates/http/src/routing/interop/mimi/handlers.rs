@@ -851,7 +851,7 @@ async fn verify_mimi_consent_actor_proof(
     })?;
     let authority = arkret_wire::AccountId::new(
         body.actor_id.clone(),
-        body.consent_event.event.principal_server_id.clone(),
+        body.consent_event.event.station_id.clone(),
     );
     verify_mimi_operation_proof(
         state,
@@ -1357,13 +1357,13 @@ mod consent_proof_tests {
             .expect("device verification method");
         let actor_did = Did::new(actor_did.to_owned()).unwrap();
         let device_id = DeviceId::new(device_id.to_owned()).unwrap();
-        let principal_server_id = request.consent_event.event.principal_server_id.clone();
+        let station_id = request.consent_event.event.station_id.clone();
         let created_at = now();
         let mut genesis = arkret_wire::test_support::raw_event_at(
             EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
             request.actor_id.clone(),
-            principal_server_id.clone(),
+            station_id.clone(),
             0,
             Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
             json!({"object": {"purpose": "principal_control"}}),
@@ -1390,7 +1390,7 @@ mod consent_proof_tests {
                 realm_id: pcr_realm_id.clone(),
             },
             request.actor_id.clone(),
-            principal_server_id.clone(),
+            station_id.clone(),
             1,
             Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
             json!({
@@ -1431,7 +1431,7 @@ mod consent_proof_tests {
                 soland_storage::PrincipalResolutionRecord {
                     authority_key: arkret_wire::AccountId::new(
                         request.actor_id.clone(),
-                        principal_server_id,
+                        station_id,
                     ),
                     pcr_realm_id,
                     genesis_event: genesis.clone(),
@@ -1514,12 +1514,12 @@ mod consent_proof_tests {
     }
 
     #[tokio::test]
-    async fn consent_actor_proof_rejects_wrong_principal_server() {
+    async fn consent_actor_proof_rejects_wrong_station() {
         let state = state();
         let mut request = request(&state);
         install_authorized_actor_device(&state, &request).await;
-        request.consent_event.event.principal_server_id =
-            DidCoreId::new("ak:did_core:web:other-principal-server.invalid".to_owned()).unwrap();
+        request.consent_event.event.station_id =
+            DidCoreId::new("ak:did_core:web:other-station.invalid".to_owned()).unwrap();
         request
             .consent_event
             .event
@@ -1528,7 +1528,7 @@ mod consent_proof_tests {
 
         let error = verify_mimi_consent_actor_proof(&state, &request)
             .await
-            .expect_err("a different Principal Server authority must fail closed");
+            .expect_err("a different Station authority must fail closed");
 
         assert_eq!(error.code, ErrorCode::ParamInvalid);
         assert_eq!(error.wire_code_override.as_deref(), Some("invalid_proof"));

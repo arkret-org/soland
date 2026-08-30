@@ -94,7 +94,7 @@ use crate::artifacts;
 // `ak.device.push_route` (device / actor_private_event / reducer_input):
 //   per-device push route binding for `(account_id, device_id, push_route)`.
 //   MUST NOT be replicated outside the AccountId context. Stored
-//   as actor-private state on the recipient Principal Server only.
+//   as actor-private state on the recipient Station only.
 // `ak.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.
 // Reducer maintains a `ak.component.realm.inheritance_policy.v1`

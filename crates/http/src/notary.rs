@@ -1541,7 +1541,7 @@ impl NotaryWorker {
         .await?
         {
             return Err(NotaryError::NotAuthorized(
-                "local Principal Server is not the create-locked availability holder".to_owned(),
+                "local Station is not the create-locked availability holder".to_owned(),
             ));
         }
 
@@ -1875,10 +1875,10 @@ async fn local_service_is_eligible_availability_holder(
             | arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
     ) {
         create
-            .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+            .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {
                 NotaryError::Construction(format!(
-                    "PCR create Principal Server admission binding is invalid: {error}"
+                    "PCR create Station admission binding is invalid: {error}"
                 ))
             })?;
         return Ok(create.actor_id.route_service_id() == service_id);
@@ -2477,7 +2477,7 @@ mod tests {
         });
         let payload = serde_json::from_value(json!({
             "principal_id": principal_id,
-            "principal_server_id": "ak:did_core:web:principal.example",
+            "station_id": "ak:did_core:web:principal.example",
             "recovery_authority_kind": "pcr_policy",
             "recovery_policy_id": "ak:policy:01904100-0000-7000-8000-000000000001",
             "recovery_policy_version": 1,

@@ -352,7 +352,7 @@ pub fn verify_jws_with_pinned_document(
 /// Principal-authorization verification error.
 ///
 /// Principal authorization has no core-only entry point: every verifier below
-/// takes an exact `(principal_id, principal_server_id)` account authority
+/// takes an exact `(principal_id, station_id)` account authority
 /// context plus accepted local device evidence. The sole current-DID path is
 /// restricted to registered identity-resolution updates.
 #[derive(Debug)]
@@ -437,9 +437,9 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     PrincipalAuthorizedJwsError,
 > {
     let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
-    if authority.principal_server_id.as_str() != state.service_id() {
+    if authority.station_id.as_str() != state.service_id() {
         return Err(fail(
-            "principal authorization is addressed to a different Principal Server".to_owned(),
+            "principal authorization is addressed to a different Station".to_owned(),
         ));
     }
     let (method_did, fragment) = verification_method
@@ -528,12 +528,12 @@ async fn principal_authorized_device_binding_with_account_authority_async(
             ))
         })?
         .ok_or_else(|| fail("principal device authorization Event is unavailable".to_owned()))?;
-    let authorize_principal_server_id = authorize_event
+    let authorize_station_id = authorize_event
         .envelope
-        .get("principal_server_id")
+        .get("station_id")
         .and_then(Value::as_str);
     if authorize_event.actor_id != authority.principal_id.as_str()
-        || authorize_principal_server_id != Some(authority.principal_server_id.as_str())
+        || authorize_station_id != Some(authority.station_id.as_str())
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
     {
@@ -729,15 +729,15 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
         let envelope: Value = serde_json::from_slice(envelope_bytes)
             .map_err(|error| fail(format!("principal Event envelope is invalid: {error}")))?;
 
-        let principal_server_id = envelope
-            .get("principal_server_id")
+        let station_id = envelope
+            .get("station_id")
             .and_then(Value::as_str)
-            .ok_or_else(|| fail("principal Event has no principal_server_id".to_owned()))?;
-        let principal_server_id = arkret_wire::DidCoreId::new(principal_server_id.to_owned())
+            .ok_or_else(|| fail("principal Event has no station_id".to_owned()))?;
+        let station_id = arkret_wire::DidCoreId::new(station_id.to_owned())
             .map_err(|error| fail(format!("principal Event server is invalid: {error}")))?;
-        if principal_server_id.as_str() != state.service_id() {
+        if station_id.as_str() != state.service_id() {
             return Err(fail(
-                "principal Event is not addressed to this Principal Server".to_owned(),
+                "principal Event is not addressed to this Station".to_owned(),
             ));
         }
         if actor_id != &expected_principal_id {
@@ -772,8 +772,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 ));
             }
         }
-        let authority_key =
-            arkret_wire::AccountId::new(expected_principal_id.clone(), principal_server_id);
+        let authority_key = arkret_wire::AccountId::new(expected_principal_id.clone(), station_id);
         let durable = state
             .persistence()
             .principal_resolution_by_account_id(&authority_key)

@@ -271,7 +271,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             realm_id: agent_pcr_realm.clone(),
         },
         outcome.agent_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0007-a13f9c2e")).unwrap(),
         serde_json::to_value(&payload).unwrap(),

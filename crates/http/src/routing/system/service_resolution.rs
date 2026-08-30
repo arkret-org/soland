@@ -213,9 +213,7 @@ pub(crate) async fn ensure_current_record(
             .map_or(0, |record| record.record.record_sequence.saturating_add(1));
         let core = ServiceResolutionRecordCore {
             service_id: service_id.clone(),
-            service_kind: arkret_wire::ServiceKind::PrincipalServer
-                .as_str()
-                .to_owned(),
+            service_kind: arkret_wire::ServiceKind::Station.as_str().to_owned(),
             did: did.clone(),
             method_history_head: commitment.method_history_head.clone(),
             version_id: commitment.version_id.clone(),

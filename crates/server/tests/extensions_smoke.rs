@@ -318,7 +318,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": demo_realm_id(),
                     "issuer_id": "ak:did_core:web:alice.example",
-                    "issuer_principal_server_id": state.service_id(),
+                    "issuer_station_id": state.service_id(),
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": demo_realm_id(),
@@ -327,7 +327,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                         "authority_generation": 0
                     }],
                     "subject": "ak:did_core:web:alice.example",
-                    "subject_principal_server_id": state.service_id(),
+                    "subject_station_id": state.service_id(),
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",
@@ -644,7 +644,7 @@ fn managed_actor_provision_event(
     package: &AppletPackage,
     actor: &ManagedActorFixture,
     actor_role: AppletManagedActorRole,
-    actor_principal_server_id: arkret_identifiers::DidCoreId,
+    actor_station_id: arkret_identifiers::DidCoreId,
     realm_id: RealmId,
     registration_ref: EventId,
     applet_authority_ref: arkret_identifiers::GrantId,
@@ -659,7 +659,7 @@ fn managed_actor_provision_event(
         applet_id: package.applet_id.clone(),
         service_id: package.service_id.clone(),
         actor_id: actor.actor_id.clone(),
-        actor_principal_server_id: actor_principal_server_id.clone(),
+        actor_station_id: actor_station_id.clone(),
         actor_role,
         initial_resolution: actor.initial_resolution.clone(),
         method_history_evidence: actor.method_history_evidence.clone().try_into().unwrap(),
@@ -672,7 +672,7 @@ fn managed_actor_provision_event(
         "ak.applet.managed_actor.provision",
         ScopeRef::Realm { realm_id },
         package.service_id.clone(),
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         actor_seq,
         Hlc::new(format!(
             "{:012x}-0100-a11ce001",
@@ -693,8 +693,8 @@ fn managed_actor_provision_event(
 fn applet_managed_pcr_genesis_event(
     package: &AppletPackage,
     actor: &ManagedActorFixture,
-    actor_principal_server_id: arkret_identifiers::DidCoreId,
-    target_principal_server_notary: arkret_wire::NotarySignerDescriptor,
+    actor_station_id: arkret_identifiers::DidCoreId,
+    target_station_notary: arkret_wire::NotarySignerDescriptor,
     applet_authority_ref: arkret_identifiers::GrantId,
     provision_ref: EventId,
     now: chrono::DateTime<chrono::Utc>,
@@ -713,14 +713,14 @@ fn applet_managed_pcr_genesis_event(
         arkret_canonical::DigestSuite::Sha256,
         arkret_wire::SecurityClass::HighAssurance,
         arkret_wire::EncryptionProfile::MlsRfc9420,
-        arkret_wire::NotaryValue::single_signer(target_principal_server_notary),
+        arkret_wire::NotaryValue::single_signer(target_station_notary),
     )
     .expect("fixture Applet-managed PCR genesis");
     let mut event = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::RealmCreate.as_str(),
         ScopeRef::RealmGenesis,
         actor.actor_id.clone(),
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         0,
         Hlc::new(format!(
             "{:012x}-0101-a11ce001",
@@ -771,10 +771,10 @@ async fn signed_ghost_provision_body(
     } else {
         "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk".to_owned()
     };
-    let actor_principal_server_id = arkret_identifiers::DidCoreId::new(
-        install["bot_actor_principal_server_id"]
+    let actor_station_id = arkret_identifiers::DidCoreId::new(
+        install["bot_actor_station_id"]
             .as_str()
-            .expect("install outcome has actor Principal Server")
+            .expect("install outcome has actor Station")
             .to_owned(),
     )
     .unwrap();
@@ -822,7 +822,7 @@ async fn signed_ghost_provision_body(
         package,
         ghost_actor,
         AppletManagedActorRole::Ghost,
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         realm_id.clone(),
         registration_ref,
         applet_authority_ref.clone(),
@@ -843,7 +843,7 @@ async fn signed_ghost_provision_body(
     let pcr_genesis_event = applet_managed_pcr_genesis_event(
         package,
         ghost_actor,
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         state.service_notary_signer_descriptor().unwrap(),
         applet_authority_ref,
         managed_actor_provision_event.event_id.clone(),
@@ -877,7 +877,7 @@ async fn signed_ghost_provision_body(
             realm_id: realm_id.clone(),
         },
         package.service_id.clone(),
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         3,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0102-a11ce001",
@@ -930,7 +930,7 @@ async fn signed_ghost_provision_body(
             realm_id: realm_id.clone(),
         },
         ghost_actor_id.clone(),
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         0,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0103-a11ce001",
@@ -963,7 +963,7 @@ async fn signed_ghost_provision_body(
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: now,
-            audience_id: actor_principal_server_id,
+            audience_id: actor_station_id,
             jws: String::new(),
         },
     };
@@ -2230,7 +2230,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
             .as_array()
             .expect("install outcome capability grants")
             .len(),
-        "revoke preview must resolve every exact (service_id, target_principal_server_id) grant"
+        "revoke preview must resolve every exact (service_id, target_station_id) grant"
     );
     let (capability_revoke_events, membership_state_events) =
         signed_revoke_events(&state, realm_id, &revoke_preview).await;
@@ -2637,7 +2637,7 @@ async fn signed_install_events(
             realm_id: Some(realm_id.clone()),
             issuer_id: actor_core_id.clone(),
             subject: CapabilitySubject::CoreDid(package.service_id.clone()),
-            subject_principal_server_id: Some(
+            subject_station_id: Some(
                 arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
             ),
             actions: vec![action.clone()],
@@ -2724,7 +2724,7 @@ async fn signed_install_events(
     if ingest_actor_document {
         ingest_managed_actor_current_document(state, &bot_actor).await;
     }
-    let actor_principal_server_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
+    let actor_station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .expect("extension test service core DID");
     let applet_authority_ref = arkret_identifiers::GrantId::from_event_id(
         &capability_grant_events
@@ -2736,7 +2736,7 @@ async fn signed_install_events(
         package,
         &bot_actor,
         AppletManagedActorRole::Bot,
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         realm_id.clone(),
         registration_event.event_id.clone(),
         applet_authority_ref.clone(),
@@ -2749,7 +2749,7 @@ async fn signed_install_events(
     let bot_pcr_genesis_event = applet_managed_pcr_genesis_event(
         package,
         &bot_actor,
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         state.service_notary_signer_descriptor().unwrap(),
         applet_authority_ref.clone(),
         bot_actor_provision_event.event_id.clone(),
@@ -2792,7 +2792,7 @@ async fn signed_install_events(
             realm_id: realm_id.clone(),
         },
         package.service_id.clone(),
-        actor_principal_server_id.clone(),
+        actor_station_id.clone(),
         1,
         Hlc::new(format!("{millis:012x}-0102-a11ce001")).unwrap(),
         serde_json::to_value(accountability_grant).unwrap(),
@@ -2831,7 +2831,7 @@ async fn signed_install_events(
         arkret_wire::EventKind::ProfileCreate.as_str(),
         ScopeRef::Realm { realm_id },
         package.bot_actor_id.clone(),
-        actor_principal_server_id,
+        actor_station_id,
         0,
         Hlc::new(format!("{millis:012x}-0103-a11ce001")).unwrap(),
         serde_json::to_value(ActorProfileCreatePayload {
@@ -2992,7 +2992,7 @@ async fn install_applet_package_with_approved_actions(
         None,
     )
     .await;
-    let target_principal_server_id = state.service_id().clone();
+    let target_station_id = state.service_id().clone();
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
         .add_header("Arkret-Operation", "ak.self.applet.install.command.preview.v1", true)
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -3006,7 +3006,7 @@ async fn install_applet_package_with_approved_actions(
             "authoring_request_basis": {
                 "schema": "ak.schema.applet_install_authoring_request_basis.v1",
                 "purpose": "install_bot",
-                "target_principal_server_id": target_principal_server_id,
+                "target_station_id": target_station_id,
                 "install_actor_id": registration_event.actor_id,
                 "applet_id": package.applet_id,
                 "service_id": package.service_id,
@@ -3061,11 +3061,11 @@ async fn install_applet_package_with_approved_actions(
     )
     .await;
     let bot_accountability_ref = bot_accountability_grant_event.event_id.to_string();
-    let target_principal_server_id = authoring_request
+    let target_station_id = authoring_request
         .basis
         .install()
         .expect("install preview returns install_bot basis")
-        .target_principal_server_id
+        .target_station_id
         .clone();
     let mut managed_actor_bundle = arkret_models_integration::AppletManagedActorAuthoringBundle {
         schema: arkret_models_integration::AppletManagedActorAuthoringBundle::SCHEMA.to_owned(),
@@ -3080,7 +3080,7 @@ async fn install_applet_package_with_approved_actions(
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: now,
-            audience_id: target_principal_server_id,
+            audience_id: target_station_id,
             jws: String::new(),
         },
     };

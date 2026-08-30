@@ -49,13 +49,12 @@ pub(super) fn approved_scopes_from_formal_install_events(
     state: &AppState,
     commit: &AppletInstallRequestBody,
     install_actor: &str,
-    principal_server_id: &str,
+    station_id: &str,
 ) -> Result<Vec<ScopeGrant>, AppError> {
     let basis = commit.authoring_request().basis.install().ok_or_else(|| {
         AppError::param_invalid("install commit basis purpose is not install_bot")
     })?;
-    let validated =
-        validate_formal_install_events(state, commit, install_actor, principal_server_id)?;
+    let validated = validate_formal_install_events(state, commit, install_actor, station_id)?;
     approved_scope_grants(&basis.effective_scope, validated.approved_actions)
 }
 
@@ -95,7 +94,7 @@ pub(super) fn validate_hosted_applet_pcr_notary(
 ) -> Result<(), AppError> {
     if actual != expected {
         return Err(AppError::param_invalid(
-            "Applet-managed PCR genesis notary must equal the exact hosting Principal Server notary",
+            "Applet-managed PCR genesis notary must equal the exact hosting Station notary",
         )
         .with_wire_code("applet_managed_pcr_genesis_invalid"));
     }
@@ -106,7 +105,7 @@ fn validate_formal_install_events(
     state: &AppState,
     commit: &AppletInstallRequestBody,
     install_actor: &str,
-    principal_server_id: &str,
+    station_id: &str,
 ) -> Result<ValidatedInstallEvents, AppError> {
     let package = commit.applet_package();
     let basis = commit.authoring_request().basis.install().ok_or_else(|| {
@@ -118,7 +117,7 @@ fn validate_formal_install_events(
             state,
             commit,
             &admin.grant_ids,
-            principal_server_id,
+            station_id,
         )?)
     } else {
         None
@@ -228,7 +227,7 @@ pub(super) fn validate_admin_install_events(
                 CapabilitySubject::CoreDid(subject)
                     if subject.as_str() == package.service_id.as_str()
             )
-            || grant.subject_principal_server_id.as_ref() != Some(&basis.target_principal_server_id)
+            || grant.subject_station_id.as_ref() != Some(&basis.target_station_id)
             || grant.resources.len() != 1
             || grant.resources[0] != expected_resource
         {
@@ -276,7 +275,7 @@ fn validate_bot_managed_actor_unit(
     state: &AppState,
     commit: &AppletInstallRequestBody,
     grant_ids: &[GrantId],
-    principal_server_id: &str,
+    station_id: &str,
 ) -> Result<AppletManagedActorProvisionPayload, AppError> {
     let basis = commit.authoring_request().basis.install().ok_or_else(|| {
         AppError::param_invalid("install commit basis purpose is not install_bot")
@@ -318,12 +317,12 @@ fn validate_bot_managed_actor_unit(
         || provision.service_id != package.service_id
         || provision.actor_id != package.bot_actor_id
         || provision.actor_id == package.controller_id
-        || provision.actor_principal_server_id.as_str() != principal_server_id
+        || provision.actor_station_id.as_str() != station_id
         || provision.registration_ref != basis.registration_event.event_id
         || !grant_ids.contains(&provision.applet_authority_ref)
     {
         return Err(AppError::param_invalid(
-            "Bot provision authority does not exactly bind the staged registration, grant, actor, or hosting Principal Server",
+            "Bot provision authority does not exactly bind the staged registration, grant, actor, or hosting Station",
         )
         .with_wire_code("applet_managed_actor_provision_invalid"));
     }
@@ -366,7 +365,7 @@ fn validate_bot_managed_actor_unit(
     if genesis.kind != arkret_wire::EventKind::RealmCreate
         || genesis.actor_id != package.bot_actor_id
         || genesis.executed_by.as_ref() != Some(&package.service_id)
-        || genesis.principal_server_id != provision.actor_principal_server_id
+        || genesis.station_id != provision.actor_station_id
         || genesis.applet_id.as_ref() != Some(&expected_applet_id)
         || genesis.realm_id != expected_realm_id
         || genesis.authorization_ref.as_deref() != Some(provision.applet_authority_ref.as_str())
@@ -681,7 +680,7 @@ pub(super) async fn register_package_install(
     let package = commit.applet_package().clone();
     let typed_applet_id = package.applet_id.clone();
     let applet_id = package.applet_id.to_string();
-    let target_principal_server_id = basis.target_principal_server_id.clone();
+    let target_station_id = basis.target_station_id.clone();
     let realm_id = effective_scope_realm_id(&effective_scope);
     let ghost_actors_allowed =
         ghost_actors_allowed_for_install(&package, &approved_actions, actor_policy.as_ref());
@@ -703,8 +702,7 @@ pub(super) async fn register_package_install(
         );
     }
 
-    let existing_identity =
-        applet_identity(state, &applet_id, target_principal_server_id.as_str()).await?;
+    let existing_identity = applet_identity(state, &applet_id, target_station_id.as_str()).await?;
     let (identity, include_identity_events, expected_identity) = match commit {
         AppletInstallRequestBody::Create(create) => {
             if existing_identity.is_some() {
@@ -723,7 +721,7 @@ pub(super) async fn register_package_install(
                     applet_id: package.applet_id.clone(),
                     registry_id: package.controller_id.clone(),
                     bot_actor_id: package.bot_actor_id.clone(),
-                    bot_actor_principal_server_id: bot_provision.actor_principal_server_id.clone(),
+                    bot_actor_station_id: bot_provision.actor_station_id.clone(),
                     bot_actor_provision_ref: bundle.managed_actor_provision_event.event_id.clone(),
                     bot_principal_control_realm_id: RealmId::from_event_id(
                         &bundle.pcr_genesis_event.event_id,
@@ -767,7 +765,7 @@ pub(super) async fn register_package_install(
                 || package.service_id != initial_package.service_id
                 || package.bot_actor_id != initial_package.bot_actor_id
                 || reference.actor_id != existing.bot_actor_id
-                || reference.actor_principal_server_id != existing.bot_actor_principal_server_id
+                || reference.actor_station_id != existing.bot_actor_station_id
                 || reference.managed_actor_provision_ref != existing.bot_actor_provision_ref
                 || reference.pcr_genesis_ref != existing.bot_pcr_genesis_event.event_id
                 || reference.accountability_grant_ref
@@ -819,7 +817,7 @@ pub(super) async fn register_package_install(
         registration_event_ref: registration_event.event_id.clone(),
         registration_epoch: package.registration_epoch.clone(),
         bot_actor_id: identity.bot_actor_id.clone(),
-        bot_actor_principal_server_id: identity.bot_actor_principal_server_id.clone(),
+        bot_actor_station_id: identity.bot_actor_station_id.clone(),
         bot_actor_provision_ref: identity.bot_actor_provision_ref.clone(),
         bot_principal_control_realm_id: identity.bot_principal_control_realm_id.clone(),
         capability_grant_refs,
@@ -886,7 +884,7 @@ pub(super) async fn register_package_install(
         state,
         formal_events,
         typed_applet_id,
-        target_principal_server_id,
+        target_station_id,
         expected_identity,
         identity_value,
         producer_verification_method,
@@ -1526,7 +1524,7 @@ pub(super) async fn require_realm_admin(
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
             actor,
-            actor_principal_server_id: Some(state.service_id()),
+            actor_station_id: Some(state.service_id()),
             action: arkret_wire::CapabilityActionId::REALM_ADMIN,
             resource: &realm_id,
             realm_id: &realm_id,

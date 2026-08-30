@@ -108,7 +108,7 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         .and_then(|member| member.recipient_id.clone());
     if recipient_device_is_remote(state.service_id(), recipient_id.as_deref()) {
         // The canonical member delivery binding assigns this recipient to a
-        // different Principal Server. That server validates its local device
+        // different Station. That server validates its local device
         // record when the Welcome crosses federation ingress; treating the
         // absent device row on the source server as revocation would make
         // every cross-PS Welcome impossible.

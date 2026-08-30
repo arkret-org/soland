@@ -1055,7 +1055,7 @@ async fn validate_agent_signing_key_binding_parts(
     };
     // The controller proof is a principal-device detached JWS. Verify it
     // against the controller's explicit local account authority: the pairing
-    // endpoint runs on the controller's Principal Server (the session was
+    // endpoint runs on the controller's Station (the session was
     // already bound to the local controller account), so the authority
     // coordinate is `(controller_id, this service)` and the signer device is
     // the fragment of the controller proof's verification method.
@@ -1465,7 +1465,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         .any(|value| value.as_str() == Some(service_id))
     {
         return Err(AppError::param_invalid(
-            "authorize_event.payload.audience must include this principal server",
+            "authorize_event.payload.audience must include this Station",
         ));
     }
     if let Some(expires_at) = payload.get("expires_at") {
@@ -1705,7 +1705,7 @@ fn verify_runtime_key_proof_of_possession(
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
     if proof_of_possession.audience_id != service_id {
         return Err(AppError::param_invalid(
-            "proof_of_possession.audience_id must match this principal server",
+            "proof_of_possession.audience_id must match this Station",
         ));
     }
     let expected_binding =

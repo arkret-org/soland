@@ -1402,9 +1402,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     || mutation
                         .identity
                         .record
-                        .get("bot_actor_principal_server_id")
+                        .get("bot_actor_station_id")
                         .and_then(serde_json::Value::as_str)
-                        != Some(mutation.identity.target_principal_server_id.as_str())
+                        != Some(mutation.identity.target_station_id.as_str())
                 {
                     return Err(PersistenceError::Conflict(
                         "schema_violation: Applet identity/installation key does not match its record"
@@ -1423,10 +1423,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     }
                     sql_query(
                         "UPDATE applet_managed_identities SET record = record \
-                         WHERE applet_id = $1 AND target_principal_server_id = $2 AND record = $3",
+                         WHERE applet_id = $1 AND target_station_id = $2 AND record = $3",
                     )
                     .bind::<Text, _>(mutation.applet_id.as_str())
-                    .bind::<Text, _>(mutation.identity.target_principal_server_id.as_str())
+                    .bind::<Text, _>(mutation.identity.target_station_id.as_str())
                     .bind::<Jsonb, _>(expected_identity)
                     .execute(conn)
                     .await
@@ -1434,12 +1434,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 } else {
                     sql_query(
                         "INSERT INTO applet_managed_identities \
-                         (applet_id, target_principal_server_id, record, accepted_at) \
+                         (applet_id, target_station_id, record, accepted_at) \
                          VALUES ($1, $2, $3, NOW()) \
-                         ON CONFLICT (applet_id, target_principal_server_id) DO NOTHING",
+                         ON CONFLICT (applet_id, target_station_id) DO NOTHING",
                     )
                     .bind::<Text, _>(mutation.applet_id.as_str())
-                    .bind::<Text, _>(mutation.identity.target_principal_server_id.as_str())
+                    .bind::<Text, _>(mutation.identity.target_station_id.as_str())
                     .bind::<Jsonb, _>(&mutation.identity.record)
                     .execute(conn)
                     .await
@@ -1588,12 +1588,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
 
                 for claim in new_managed_authorities {
                     let inserted = sql_query(
-                        "INSERT INTO managed_authority_claims (actor_id, principal_server_id, applet_id) VALUES ($1, $2, $3) \
-                         ON CONFLICT (actor_id, principal_server_id) DO UPDATE SET applet_id = EXCLUDED.applet_id \
+                        "INSERT INTO managed_authority_claims (actor_id, station_id, applet_id) VALUES ($1, $2, $3) \
+                         ON CONFLICT (actor_id, station_id) DO UPDATE SET applet_id = EXCLUDED.applet_id \
                          WHERE managed_authority_claims.applet_id = EXCLUDED.applet_id",
                     )
                     .bind::<Text, _>(&claim.actor_id)
-                    .bind::<Text, _>(&claim.principal_server_id)
+                    .bind::<Text, _>(&claim.station_id)
                     .bind::<Text, _>(mutation.applet_id.as_str())
                     .execute(conn)
                     .await

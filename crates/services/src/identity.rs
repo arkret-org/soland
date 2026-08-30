@@ -1620,7 +1620,7 @@ pub struct RecoverySessionState {
     pub session_grant_id: String,
     pub session_grant_cnf_jkt: String,
     pub principal_id: arkret_identifiers::DidCoreId,
-    pub principal_server_id: arkret_identifiers::DidCoreId,
+    pub station_id: arkret_identifiers::DidCoreId,
     pub requesting_device_id: String,
     pub trust_domain: String,
     pub policy_id: String,

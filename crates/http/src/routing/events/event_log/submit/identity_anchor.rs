@@ -562,7 +562,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.to_string(),
-            principal_server_id: payload.principal_server_id.to_string(),
+            station_id: payload.station_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
@@ -1063,7 +1063,7 @@ pub(super) async fn identical_historical_retry(
                     event.proofs.as_slice(),
                     [
                         arkret_wire::EventProof::Producer(_),
-                        arkret_wire::EventProof::PrincipalServerAdmission(_)
+                        arkret_wire::EventProof::StationAdmission(_)
                     ]
                 ) {
                     event.proofs.truncate(1);
@@ -1117,8 +1117,8 @@ fn conflicting_reanchor_slot(
     else {
         return Vec::new();
     };
-    let Some(principal_server_id) = reanchor_envelope
-        .pointer("/principal_server_id")
+    let Some(station_id) = reanchor_envelope
+        .pointer("/station_id")
         .and_then(Value::as_str)
     else {
         return Vec::new();
@@ -1137,14 +1137,14 @@ fn conflicting_reanchor_slot(
             if candidate_generation != Some(new_generation) {
                 return false;
             }
-            let candidate_principal_server_id = record
+            let candidate_station_id = record
                 .envelope
-                .pointer("/principal_server_id")
+                .pointer("/station_id")
                 .and_then(Value::as_str);
             let candidate_authorize_digest =
                 soland_services::events::paired_replacement_authorize(record, existing)
                     .map(|paired| paired.canonical_digest.as_str());
-            candidate_principal_server_id != Some(principal_server_id)
+            candidate_station_id != Some(station_id)
                 || record.canonical_digest != reanchor.canonical_digest
                 || candidate_authorize_digest != Some(authorize.canonical_digest.as_str())
         })
@@ -1900,7 +1900,7 @@ async fn build_reanchor_batch_receipt(
             arkret_wire::DeviceReanchorReceiptScope {
                 kind: arkret_wire::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
                 principal_id: payload.principal_id,
-                principal_server_id: payload.principal_server_id,
+                station_id: payload.station_id,
                 realm_id: reanchor.realm_id.clone(),
                 previous_device_generation: payload.previous_device_generation,
                 new_device_generation: payload.new_device_generation,
@@ -2150,7 +2150,7 @@ mod tests {
             arkret_bootstrap::SelfPrincipalPcrCreateInput {
                 principal_id: principal.clone(),
                 principal_did: principal_did.clone(),
-                principal_server_id: arkret_identifiers::DidCoreId::new(
+                station_id: arkret_identifiers::DidCoreId::new(
                     "ak:did_core:webvh:z6mkfixture".to_owned(),
                 )
                 .unwrap(),

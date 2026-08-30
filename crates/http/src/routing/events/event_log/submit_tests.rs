@@ -243,7 +243,7 @@ mod federated_producer_event_proof_tests {
     fn fixture_event() -> arkret_wire::Event {
         let actor = arkret_wire::Did::new("did:web:alice.example".to_owned()).unwrap();
         let actor_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
-        let principal_server_id =
+        let station_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:remote.example".to_owned()).unwrap();
         let verification_method = arkret_wire::DidUrl::new(format!(
             "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000001"
@@ -259,7 +259,7 @@ mod federated_producer_event_proof_tests {
                 .unwrap(),
             },
             actor_id,
-            principal_server_id,
+            station_id,
             1,
             arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
             serde_json::json!({

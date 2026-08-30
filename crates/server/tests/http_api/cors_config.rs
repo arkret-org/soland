@@ -244,7 +244,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
                     )
                 )
             },
-            "recipient_kind": "principal_server"
+            "recipient_kind": "station"
         },
         "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
         "expires_at": "2099-01-01T00:00:00.000Z"

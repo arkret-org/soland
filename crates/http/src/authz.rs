@@ -92,17 +92,17 @@ impl SolandAuthzEngine {
     pub fn mark_projected_grants_revoked_for_subject(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
     ) -> usize {
         let mut count = 0usize;
         let mut grants = self.grants.lock();
         for grant in grants.values_mut() {
             if grant.subject_id.as_str() == subject
                 && grant
-                    .subject_principal_server_id
+                    .subject_station_id
                     .as_ref()
                     .map(arkret_wire::DidCoreId::as_str)
-                    == subject_principal_server_id
+                    == subject_station_id
                 && !grant.revoked
             {
                 grant.revoked = true;
@@ -123,22 +123,17 @@ impl SolandAuthzEngine {
     pub fn grants_for_subject(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
         realm_id: &str,
     ) -> Vec<Grant> {
-        self.grants_for_subject_at(
-            subject,
-            subject_principal_server_id,
-            realm_id,
-            chrono::Utc::now(),
-        )
+        self.grants_for_subject_at(subject, subject_station_id, realm_id, chrono::Utc::now())
     }
 
     /// Return grants effective at the caller-selected evaluation instant.
     pub fn grants_for_subject_at(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
         realm_id: &str,
         evaluated_at: chrono::DateTime<chrono::Utc>,
     ) -> Vec<Grant> {
@@ -147,10 +142,10 @@ impl SolandAuthzEngine {
             .iter()
             .filter(|g| {
                 g.subject_id.as_str() == subject
-                    && g.subject_principal_server_id
+                    && g.subject_station_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
-                        == subject_principal_server_id
+                        == subject_station_id
                     && g.realm_id == realm_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
@@ -169,7 +164,7 @@ impl SolandAuthzEngine {
     pub fn grants_for_subject_all_realms(
         &self,
         subject: &str,
-        subject_principal_server_id: Option<&str>,
+        subject_station_id: Option<&str>,
     ) -> Vec<Grant> {
         let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
         let now = chrono::Utc::now();
@@ -177,10 +172,10 @@ impl SolandAuthzEngine {
             .iter()
             .filter(|g| {
                 g.subject_id.as_str() == subject
-                    && g.subject_principal_server_id
+                    && g.subject_station_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
-                        == subject_principal_server_id
+                        == subject_station_id
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
@@ -224,7 +219,7 @@ impl SolandAuthzEngine {
     pub fn check_for_authority(
         &self,
         actor: &str,
-        actor_principal_server_id: Option<&str>,
+        actor_station_id: Option<&str>,
         action: &str,
         resource: &str,
         realm_id: &str,
@@ -252,10 +247,10 @@ impl SolandAuthzEngine {
                 !g.revoked
                     && g.realm_id == realm_id
                     && g.subject_id.as_str() == actor
-                    && g.subject_principal_server_id
+                    && g.subject_station_id
                         .as_ref()
                         .map(arkret_wire::DidCoreId::as_str)
-                        == actor_principal_server_id
+                        == actor_station_id
                     && grant_scope_valid(g).is_ok()
                     && g.actions.iter().any(|a| a == action)
                     && resource_matches(&g.resource, resource)
@@ -332,7 +327,7 @@ impl SolandAuthzEngine {
         let has_revoked_upstream_grant = matching_request_has_revoked_upstream_grant(
             &snapshot,
             actor,
-            actor_principal_server_id,
+            actor_station_id,
             action,
             resource,
             realm_id,
@@ -395,10 +390,10 @@ pub fn projected_grant_fixture(
             arkret_identifiers::GrantId::from_event_id(&event_id).into_string()
         },
         realm_id,
-        issuer_principal_server_id: arkret_wire::DidCoreId::new(issuer.clone()).unwrap(),
+        issuer_station_id: arkret_wire::DidCoreId::new(issuer.clone()).unwrap(),
         issuer_id: arkret_wire::DidCoreId::new(issuer).unwrap(),
         subject_id: arkret_wire::DidCoreId::new(subject).unwrap(),
-        subject_principal_server_id: None,
+        subject_station_id: None,
         resource,
         actions,
         constraints,
@@ -483,7 +478,7 @@ pub(crate) fn grant_revoked_upstream(
 fn matching_request_has_revoked_upstream_grant(
     snapshot: &[Grant],
     actor: &str,
-    actor_principal_server_id: Option<&str>,
+    actor_station_id: Option<&str>,
     action: &str,
     resource: &str,
     realm_id: &str,
@@ -493,10 +488,10 @@ fn matching_request_has_revoked_upstream_grant(
         grant.realm_id == realm_id
             && grant.subject_id.as_str() == actor
             && grant
-                .subject_principal_server_id
+                .subject_station_id
                 .as_ref()
                 .map(arkret_wire::DidCoreId::as_str)
-                == actor_principal_server_id
+                == actor_station_id
             && grant_scope_valid(grant).is_ok()
             && grant.actions.iter().any(|candidate| candidate == action)
             && resource_matches(&grant.resource, resource)

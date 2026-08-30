@@ -103,9 +103,9 @@ async fn local_keypackage_owner_account_pk(
 ) -> Result<soland_storage::AccountPk, AppError> {
     let principal_id = arkret_wire::DidCoreId::new(actor_id.to_owned())
         .map_err(|_| AppError::capability_denied("owner principal id is invalid"))?;
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("local Principal Server id is invalid"))?;
-    let account_id = arkret_wire::AccountId::new(principal_id, principal_server_id);
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|_| AppError::internal("local Station id is invalid"))?;
+    let account_id = arkret_wire::AccountId::new(principal_id, station_id);
     let account = state
         .identities()
         .account(&account_id)
@@ -291,7 +291,7 @@ async fn upload_keypackage(
         AppError::capability_denied("KeyPackage upload requires an account-bound session")
     })?;
     // `account_pk` belongs to the credential issuer (normally the
-    // Auth Server), whereas KeyPackage rows are owned by this Principal
+    // Account Authority process), whereas KeyPackage rows are owned by this Principal
     // Server's local account id. Resolve that local id through the stable
     // principal carried by the authenticated session; never reinterpret one
     // service's local account id in another service's account namespace.
@@ -1987,7 +1987,7 @@ async fn claim_keypackage(
         let target = crate::routing::federation::federation::resolved_peer_target(
             state,
             destination,
-            "principal_server",
+            "station",
             false,
         )
         .await

@@ -1116,7 +1116,7 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
 /// Select the one proof that can author an Ack-less self-PCR Control Move.
 ///
 /// A freshly submitted Event contains only this producer proof. Once admitted,
-/// the canonical envelope also contains the Principal Server admission proof
+/// the canonical envelope also contains the Station admission proof
 /// required for federation. Revalidation must ignore that transport-origin
 /// attestation without ever accepting two producer authorities.
 fn sole_self_principal_pcr_producer_proof(
@@ -1404,11 +1404,11 @@ pub(super) async fn accepted_event_envelope(
         return Ok((event, envelope, parsed.canonical_bytes.clone(), None));
     }
     let mut event = event;
-    if event.principal_server_id.as_str() != state.service_id() {
+    if event.station_id.as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "caller Event must be submitted to its declared Principal Server",
+            "caller Event must be submitted to its declared Station",
         ));
     }
     let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
@@ -1434,7 +1434,7 @@ pub(super) async fn accepted_event_envelope(
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "internal_error",
-                    format!("Principal Server signing method is unavailable: {error}"),
+                    format!("Station signing method is unavailable: {error}"),
                 )
             })?;
     let event_digest =
@@ -1449,7 +1449,7 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server id is invalid: {error}"),
+            format!("Station id is invalid: {error}"),
         )
     })?;
     let producer_signer_evidence = if session.agent_session.is_some() {
@@ -1511,7 +1511,7 @@ pub(super) async fn accepted_event_envelope(
                 SubmitOneError::new(
                     StatusCode::SERVICE_UNAVAILABLE,
                     "temporarily_unavailable",
-                    format!("Principal Server signer evidence is unavailable: {error}"),
+                    format!("Station signer evidence is unavailable: {error}"),
                 )
             })?;
     let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
@@ -1523,7 +1523,7 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",
-            format!("Principal Server signer evidence is invalid: {error}"),
+            format!("Station signer evidence is invalid: {error}"),
         )
     })?;
     let signer_resolution_evidence_digest =
@@ -1531,14 +1531,14 @@ pub(super) async fn accepted_event_envelope(
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("Principal Server signer evidence digest failed: {error}"),
+                format!("Station signer evidence digest failed: {error}"),
             )
         })?;
     let signer_resolution_evidence_ref = signer_evidence.evidence_ref().map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server signer evidence ref failed: {error}"),
+            format!("Station signer evidence ref failed: {error}"),
         )
     })?;
     let dependency = arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
@@ -1556,7 +1556,7 @@ pub(super) async fn accepted_event_envelope(
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal_error",
-                format!("Principal Server signer evidence retention failed: {error}"),
+                format!("Station signer evidence retention failed: {error}"),
             )
         })?;
     let governance_dependency =
@@ -1571,20 +1571,18 @@ pub(super) async fn accepted_event_envelope(
                 edge_index: 0,
                 item: dependency,
             });
-    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
-        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    let mut admission = arkret_wire::StationAdmissionProof {
+        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method,
         event_digest,
-        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
-            &producer,
-        )
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                error.to_string(),
-            )
-        })?,
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    error.to_string(),
+                )
+            })?,
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key_did: producer_signing_key,
         producer_signer_resolution_evidence_ref: producer_signer_evidence
@@ -1612,12 +1610,12 @@ pub(super) async fn accepted_event_envelope(
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            format!("Principal Server admission proof signing failed: {error}"),
+            format!("Station admission proof signing failed: {error}"),
         )
     })?;
     event.proofs.push(admission.into());
     event
-        .validate_principal_server_admission_binding(parsed.digest_suite)
+        .validate_station_admission_binding(parsed.digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1652,11 +1650,11 @@ pub(super) fn validate_origin_submission_shape(
     if session.token_hash.starts_with("federation:") {
         return Ok(());
     }
-    if event.principal_server_id.as_str() != state.service_id() {
+    if event.station_id.as_str() != state.service_id() {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
             "capability_denied",
-            "caller Event must be submitted to its declared Principal Server",
+            "caller Event must be submitted to its declared Station",
         ));
     }
     if !matches!(
@@ -1680,7 +1678,7 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> 
         existing.proofs.as_slice(),
         [
             arkret_wire::EventProof::Producer(_),
-            arkret_wire::EventProof::PrincipalServerAdmission(_)
+            arkret_wire::EventProof::StationAdmission(_)
         ]
     ) || !matches!(
         submitted.proofs.as_slice(),
@@ -1881,7 +1879,7 @@ async fn validate_membership_compensation_live_state(
     if accepted_join_digest != core.join_event_digest.as_str()
         || accepted_join_event.kind != arkret_wire::EventKind::MemberState
         || accepted_join_event.realm_id != core.resource_id
-        || evidence.join_accepted_proof.issuer_id != accepted_join_event.principal_server_id
+        || evidence.join_accepted_proof.issuer_id != accepted_join_event.station_id
         || accepted_join_event.actor_id != core.join_actor_id
         || accepted_join_event.executed_by != core.executed_by
         || accepted_join_event.authorization_ref != core.authorization_ref
@@ -4032,9 +4030,9 @@ mod local_device_authorization_tests {
 
     fn admission_proof(
         producer: &arkret_wire::ProducerEventProof,
-    ) -> arkret_wire::PrincipalServerAdmissionProof {
-        arkret_wire::PrincipalServerAdmissionProof {
-            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    ) -> arkret_wire::StationAdmissionProof {
+        arkret_wire::StationAdmissionProof {
+            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:QmService:local.host:webvh:service#notary-key",
             )
@@ -4069,7 +4067,7 @@ mod local_device_authorization_tests {
         let producer = producer_proof();
         let proofs = vec![
             arkret_wire::EventProof::Producer(producer.clone()),
-            arkret_wire::EventProof::PrincipalServerAdmission(admission_proof(&producer)),
+            arkret_wire::EventProof::StationAdmission(admission_proof(&producer)),
         ];
 
         assert_eq!(

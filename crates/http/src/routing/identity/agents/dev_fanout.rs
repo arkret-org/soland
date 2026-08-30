@@ -45,14 +45,14 @@ pub(super) async fn require_controller_principal_control_realm(
     let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
     if authority.principal_id != controller_id
-        || authority.principal_server_id.as_str() != state.service_id()
+        || authority.station_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "controller authority does not bind this session and Principal Server",
+            "controller authority does not bind this session and Station",
         )
         .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("principal_authority_mismatch"));
+        .with_reason_code("account_id_mismatch"));
     }
     let record = state
         .persistence()
@@ -64,10 +64,10 @@ pub(super) async fn require_controller_principal_control_realm(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "controller authority is not accepted by this Principal Server",
+                "controller authority is not accepted by this Station",
             )
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-            .with_reason_code("principal_authority_mismatch")
+            .with_reason_code("account_id_mismatch")
         })?;
     let realm_id = record.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {

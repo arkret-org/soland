@@ -11,7 +11,7 @@ pub(super) struct HandleLookup {
 }
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
-    // Public handles are issued by the Principal Server. The Account
+    // Public handles are issued by the Station. The Account
     // Authority's service-account handle is a separate unsigned UX hint and
     // must never select this namespace.
     handle_domain_from_url(&state.config().public_base_url)
@@ -166,7 +166,7 @@ pub(super) async fn contact_request_resolve_allowed(
     )
 }
 
-/// Issue a Principal-Server-signed, SDK-validated handle claim for
+/// Issue a Station-signed, SDK-validated handle claim for
 /// `handle` → `principal_id` as a JSON value. Used by the account viewer / register
 /// outcome to expose the primary handle claim re-derived on demand from the
 /// account's durable localpart (the claim itself is never persisted).
@@ -1125,7 +1125,7 @@ mod tests {
     }
 
     #[test]
-    fn handle_domain_normalizes_public_principal_server_host() {
+    fn handle_domain_normalizes_public_station_host() {
         assert_eq!(
             handle_domain_from_url("https://Principal.Example.test/base").as_deref(),
             Some("principal.example.test")

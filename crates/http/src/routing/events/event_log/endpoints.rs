@@ -1798,9 +1798,9 @@ async fn events_frontier(
         .as_ref()
         .filter(|access| access.owned_by_session)
         .map(|access| access.pcr_realm_id.as_str());
-    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("local principal server id is invalid"))?;
-    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), principal_server_id);
+    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|_| AppError::internal("local Station id is invalid"))?;
+    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), station_id);
     let own_actor_pcr = if actor_id == session_core_id {
         state
             .persistence()
@@ -1912,7 +1912,7 @@ async fn applet_managed_actor_pcr_access(
         let record_active = record.revoked_at.is_none()
             && matches!(record.status.as_str(), "installed" | "partially_installed");
         if record.bot_actor_id.as_str() == actor_id {
-            if record.bot_actor_principal_server_id.as_str() != state.service_id() {
+            if record.bot_actor_station_id.as_str() != state.service_id() {
                 continue;
             }
             let owned_by_session =
@@ -1921,7 +1921,7 @@ async fn applet_managed_actor_pcr_access(
                 .authorization()
                 .grants_for_subject(
                     record.package.service_id.as_str(),
-                    Some(record.bot_actor_principal_server_id.as_str()),
+                    Some(record.bot_actor_station_id.as_str()),
                     record.portal_realm_id.as_str(),
                 )
                 .into_iter()
@@ -1947,7 +1947,7 @@ async fn applet_managed_actor_pcr_access(
             .iter()
             .find(|ghost| ghost.ghost_actor_id.as_str() == actor_id)
         {
-            if ghost.actor_principal_server_id.as_str() != state.service_id() {
+            if ghost.actor_station_id.as_str() != state.service_id() {
                 continue;
             }
             let owned_by_session = record.package.service_id.as_str() == session_service_id;
@@ -1960,7 +1960,7 @@ async fn applet_managed_actor_pcr_access(
                 .authorization()
                 .grants_for_subject(
                     record.package.service_id.as_str(),
-                    Some(ghost.actor_principal_server_id.as_str()),
+                    Some(ghost.actor_station_id.as_str()),
                     record.portal_realm_id.as_str(),
                 )
                 .iter()

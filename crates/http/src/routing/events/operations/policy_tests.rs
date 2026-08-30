@@ -257,7 +257,7 @@ fn op(
         kind.as_ref(),
         payload,
     );
-    operation.context.principal_server_id = crate::test_event::principal_server_id();
+    operation.context.station_id = crate::test_event::station_id();
     if let Some(executed_by) = executed_by {
         operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
     }
@@ -444,11 +444,9 @@ fn install_projected_grant(
         actions,
         constraints,
     );
-    let principal_server_id = crate::test_event::principal_server_id().into_string();
-    grant.issuer_principal_server_id =
-        arkret_wire::DidCoreId::new(principal_server_id.clone()).unwrap();
-    grant.subject_principal_server_id =
-        Some(arkret_wire::DidCoreId::new(principal_server_id).unwrap());
+    let station_id = crate::test_event::station_id().into_string();
+    grant.issuer_station_id = arkret_wire::DidCoreId::new(station_id.clone()).unwrap();
+    grant.subject_station_id = Some(arkret_wire::DidCoreId::new(station_id).unwrap());
     authorization.upsert_projected_grant(grant.clone());
     grant
 }
@@ -1108,7 +1106,7 @@ async fn register_native_agent_membership_context(
         .expect("realm meta");
     let controller_authority = arkret_wire::AccountId {
         principal_id: arkret_identifiers::DidCoreId::new(controller.to_owned()).unwrap(),
-        principal_server_id: crate::test_event::principal_server_id(),
+        station_id: crate::test_event::station_id(),
     };
     {
         let mut projection = state.test_projection().lock();
@@ -1235,7 +1233,7 @@ fn native_agent_controller_binding() -> serde_json::Value {
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
             controller_authority: arkret_wire::AccountId {
                 principal_id: arkret_identifiers::DidCoreId::new(ALICE_CORE_ID.to_owned()).unwrap(),
-                principal_server_id: crate::test_event::principal_server_id(),
+                station_id: crate::test_event::station_id(),
             },
             controller_membership_generation_ref: arkret_identifiers::EventId::new(
                 AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned(),
@@ -1435,7 +1433,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             "invitee_id": "ak:did_core:web:charlie.example",
             "invite_delivery_target": {
                 "recipient_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
-                "recipient_kind": "principal_server"
+                "recipient_kind": "station"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "expires_at": "2026-08-05T10:00:00.000Z"
@@ -1498,7 +1496,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
                 "service_resolution": {
                     "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
                 },
-                "recipient_kind": "principal_server"
+                "recipient_kind": "station"
             },
             "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "expires_at": "2026-08-05T10:00:00.000Z"

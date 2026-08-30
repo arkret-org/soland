@@ -1,6 +1,6 @@
 # soland — changelog
 
-All notable wire-affecting changes to the soland Principal Server are
+All notable wire-affecting changes to the soland Station are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project tracks Arkret v1 spec revisions.
 

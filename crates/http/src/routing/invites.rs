@@ -47,7 +47,7 @@ use soland_services::identity::{
 };
 
 use crate::routing::identity::device_messages::{
-    fanout_actor_private_update, principal_server_device_message_sender,
+    fanout_actor_private_update, station_device_message_sender,
 };
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -566,7 +566,7 @@ async fn require_dispatchable_invite_event(
     else {
         return Err(invite_event_precondition(
             arkret_wire::ReasonCode::INVITE_EVENT_UNACCEPTED,
-            "invite_event has not been accepted by this Principal Server",
+            "invite_event has not been accepted by this Station",
         ));
     };
     let session_actor = DidCoreId::new(session.actor.clone())
@@ -611,7 +611,7 @@ async fn enqueue_remote_invite_delivery(
         .resolve_carrier(
             &delivery.invite_address.service_resolution,
             recipient_id,
-            "principal_server",
+            "station",
             now(),
         )
         .await
@@ -919,7 +919,7 @@ async fn deliver_invite_credential(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender: principal_server_device_message_sender(state),
+            sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
@@ -1077,7 +1077,7 @@ async fn resolve_invite_locator(
 
 /// Spec invite-addressing.md §2 — introduction-evidence trust tiers.
 /// High = `{locator_ref, consent_grant, shared_realm}`; Low =
-/// `{same_principal_server, explicit_address, missing/invalid evidence}`. The tier
+/// `{same_station, explicit_address, missing/invalid evidence}`. The tier
 /// drives both the receive action and the §5.1 graded disclosure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TrustTier {
@@ -1229,7 +1229,7 @@ async fn persist_invite_quarantine_entry(
         state,
         subject,
         ActorPrivateDeviceUpdate::AccountData {
-            sender: principal_server_device_message_sender(state),
+            sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
                 account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -1274,7 +1274,7 @@ fn trust_tier_for_kind(kind: &str) -> TrustTier {
     match kind {
         "locator_ref" | "consent_grant" | "shared_realm" => TrustTier::High,
         "handle_claim" => TrustTier::Discovery,
-        // same_principal_server / explicit_address / unknown → low
+        // same_station / explicit_address / unknown → low
         _ => TrustTier::Low,
     }
 }
@@ -1604,7 +1604,7 @@ pub(crate) fn evaluate_contact_receive(
                 "explicit_address"
             }
         }
-        ContactIntroductionEvidence::SamePrincipalServer => "same_principal_server",
+        ContactIntroductionEvidence::SameStation => "same_station",
         ContactIntroductionEvidence::ExplicitAddress => "explicit_address",
     };
 
@@ -2023,10 +2023,10 @@ fn validate_invite_delivery_event_binding(
         .get("invite_delivery_target")
         .and_then(|target| target.get("recipient_kind"))
         .and_then(Value::as_str)
-        && service_kind != "principal_server"
+        && service_kind != "station"
     {
         return Err(super::events::peer::schema_violation(
-            "invite_delivery_target.recipient_kind must be principal_server",
+            "invite_delivery_target.recipient_kind must be station",
         ));
     }
     let evidence_digest =
@@ -2180,7 +2180,7 @@ mod invite_locator_security_tests {
             "realm_id": PRODUCTION_REALM,
             "scope_ref": { "kind": "realm", "realm_id": PRODUCTION_REALM },
             "actor_id": PRODUCTION_INVITER,
-            "principal_server_id": state.service_id(),
+            "station_id": state.service_id(),
             "actor_seq": 0,
             "created_at": "2026-08-21T00:00:00.000Z",
             "prev_refs": [],
@@ -2193,14 +2193,15 @@ mod invite_locator_security_tests {
         }))
         .expect("invite Event");
         let service_id = DidCoreId::new(state.service_id().to_owned()).unwrap();
-        let address = arkret_models_collaboration::governance::invite_addressing::InviteAddress::principal_server(
-            DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
-            service_id,
-            ServiceResolutionCarrier::CurrentRecordUrl {
-                current_record_url: "https://soland.test/.well-known/arkret/current".to_owned(),
-                pinned_record_digest: None,
-            },
-        );
+        let address =
+            arkret_models_collaboration::governance::invite_addressing::InviteAddress::station(
+                DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                service_id,
+                ServiceResolutionCarrier::CurrentRecordUrl {
+                    current_record_url: "https://soland.test/.well-known/arkret/current".to_owned(),
+                    pinned_record_digest: None,
+                },
+            );
         InviteDeliveryRequestBody::new(
             event,
             address,
@@ -2494,7 +2495,7 @@ mod invite_locator_security_tests {
                     "invite_id": invite_id,
                     "invite_delivery_target": {
                         "recipient_id": state.service_id(),
-                        "recipient_kind": "principal_server"
+                        "recipient_kind": "station"
                     },
                     "introduction_evidence_digest":
                         format!("sha256:{}", "a".repeat(64)),

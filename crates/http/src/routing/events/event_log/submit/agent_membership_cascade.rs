@@ -126,7 +126,7 @@ fn frozen_controller_membership(
         })?;
     let authority = arkret_wire::AccountId {
         principal_id: controller.actor_id.clone(),
-        principal_server_id: controller.principal_server_id.clone(),
+        station_id: controller.station_id.clone(),
     };
     if projection.membership_authority(realm_id, controller_id) != Some(&authority) {
         return Err(cascade_error(
@@ -664,7 +664,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 controller_membership_generation_ref: frozen.generation,
                 initiator_authority: arkret_wire::AccountId {
                     principal_id: initiator,
-                    principal_server_id: local_service_id(state)?,
+                    station_id: local_service_id(state)?,
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
@@ -729,7 +729,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 })?;
             if record.controller_terminal_event_id != controller_event_id
                 || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.principal_server_id.as_str() != state.service_id()
+                || record.initiator_authority.station_id.as_str() != state.service_id()
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1141,7 +1141,7 @@ async fn submit_federated_cascade_after_transport_validation(
                 controller_membership_generation_ref: frozen.generation,
                 initiator_authority: arkret_wire::AccountId {
                     principal_id: initiator,
-                    principal_server_id: source_id.clone(),
+                    station_id: source_id.clone(),
                 },
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
@@ -1206,7 +1206,7 @@ async fn submit_federated_cascade_after_transport_validation(
                 })?;
             if record.controller_terminal_event_id != controller_event_id
                 || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.principal_server_id != *source_id
+                || record.initiator_authority.station_id != *source_id
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1472,7 +1472,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         };
     let mut admitted_producers = BTreeMap::new();
     for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
-        if event.realm_id.as_str() != realm_id || event.principal_server_id != source_id {
+        if event.realm_id.as_str() != realm_id || event.station_id != source_id {
             render_error(
                 res,
                 StatusCode::FORBIDDEN,
@@ -1485,7 +1485,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             state,
             event.actor_id.as_str(),
             source_id.as_str(),
-            Some(event.principal_server_id.as_str()),
+            Some(event.station_id.as_str()),
             realm_id,
             Some(event.kind.as_str()),
         )
@@ -1680,7 +1680,7 @@ mod tests {
     #[test]
     fn delegated_cascade_device_comes_from_the_initiator_proof_method() {
         let actor = core("ak:did_core:web:agent.example");
-        let principal_server = core("ak:did_core:web:principal.example");
+        let station = core("ak:did_core:web:principal.example");
         let initiator = core("ak:did_core:web:controller.example");
         let mut event = arkret_wire::test_support::raw_event(
             arkret_wire::EventKind::MemberState.as_str(),
@@ -1691,7 +1691,7 @@ mod tests {
                 )),
             },
             actor,
-            principal_server,
+            station,
             1,
             arkret_wire::Hlc::new("019f00000000-0000-00000001").unwrap(),
             serde_json::json!({"membership": "leave"}),

@@ -118,17 +118,15 @@ fn attach_fixture_service_admission(
     };
     let producer = producer.clone();
     let evidence_digest = arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
-    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
-        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    let mut admission = arkret_wire::StationAdmissionProof {
+        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method: state
             .service_notary_signer_descriptor()
             .unwrap()
             .verification_method,
         event_digest: producer.event_digest.clone(),
-        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
-            &producer,
-        )
-        .unwrap(),
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
+            .unwrap(),
         producer_verification_method: producer.verification_method.clone(),
         producer_signing_key_did: arkret_wire::DidKey::new(format!(
             "did:key:{producer_public_key_multibase}"
@@ -151,9 +149,9 @@ fn attach_fixture_service_admission(
     .unwrap();
     event
         .proofs
-        .push(arkret_wire::EventProof::PrincipalServerAdmission(admission));
+        .push(arkret_wire::EventProof::StationAdmission(admission));
     event
-        .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+        .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
         .unwrap();
 }
 
@@ -227,7 +225,7 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
 pub(crate) async fn seed_active_controller_device_generation(
     state: &AppState,
     controller: &str,
-) -> arkret_wire::PrincipalAuthorityKey {
+) -> arkret_wire::AccountId {
     let now = chrono::Utc::now();
     let generation_ref = 1_u64;
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
@@ -279,8 +277,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: controller_id.clone(),
             principal_did: actor.clone(),
-            principal_server_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned())
-                .unwrap(),
+            station_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
             notary: soland_test_support::cba_basis::test_single_signer_notary(actor.as_str()),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
@@ -305,7 +302,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     .into_event();
     let realm = arkret_identifiers::RealmId::from_event_id(&bootstrap.event_id);
     let realm_id = realm.to_string();
-    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+    let authority_key = arkret_wire::AccountId::new(
         bootstrap.actor_id.clone(),
         arkret_wire::DidCoreId::new(state.service_id().to_owned()).unwrap(),
     );
@@ -340,7 +337,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             realm_id: realm.clone(),
         },
         controller_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
@@ -653,7 +650,7 @@ pub(super) async fn provision_agent_with_sdk_events(
     state: &AppState,
     token: &str,
     controller: &str,
-    controller_authority: &arkret_wire::PrincipalAuthorityKey,
+    controller_authority: &arkret_wire::AccountId,
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
@@ -693,7 +690,7 @@ fn provision_agent_sdk_commit_attempt<'a>(
     state: &'a AppState,
     token: &'a str,
     controller: &'a str,
-    controller_authority: &'a arkret_wire::PrincipalAuthorityKey,
+    controller_authority: &'a arkret_wire::AccountId,
     slug: &'a str,
     requested_scope: Value,
     fault: Option<(
@@ -716,7 +713,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     state: &AppState,
     token: &str,
     controller: &str,
-    controller_authority: &arkret_wire::PrincipalAuthorityKey,
+    controller_authority: &arkret_wire::AccountId,
     slug: &str,
     requested_scope: Value,
     fault: Option<(
@@ -771,7 +768,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             operation_id: operation_id.clone(),
             idempotency_key: idempotency_key.clone(),
             did: did.clone(),
-            controller_principal_server_id: controller_authority.principal_server_id.clone(),
+            controller_station_id: controller_authority.station_id.clone(),
             slug: slug.to_owned(),
             requested_scope: scope.clone(),
             pairing_ttl_ms: None,
@@ -856,7 +853,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_wire::EventKind::RealmCreate.as_str(),
         arkret_wire::ScopeRef::RealmGenesis,
         agent_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         0,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0000-a13f9c2e")).unwrap(),
         serde_json::to_value(create_payload).unwrap(),
@@ -913,7 +910,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_identity::handle::HandleVisibility::Private,
         None,
         arkret_bootstrap::AgentProvisionIntentOptions {
-            controller_principal_server_id: arkret_identifiers::DidCoreId::new(
+            controller_station_id: arkret_identifiers::DidCoreId::new(
                 state.service_id().to_owned(),
             )
             .unwrap(),
@@ -1419,7 +1416,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
             event
                 .proofs
                 .iter()
-                .filter(|proof| proof.as_principal_server_admission().is_some())
+                .filter(|proof| proof.as_station_admission().is_some())
                 .count(),
             1
         );
@@ -1631,7 +1628,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
             realm_id: controller_realm_id.clone(),
         },
         controller_id.clone(),
-        soland_test_support::fixture_principal_server_id(),
+        soland_test_support::fixture_station_id(),
         1,
         hlc.clone(),
         serde_json::json!({}),
@@ -1859,7 +1856,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
                     .to_owned(),
             )
             .unwrap(),
-            controller_principal_server_id: controller_authority.principal_server_id.clone(),
+            controller_station_id: controller_authority.station_id.clone(),
             slug: "summary".to_owned(),
             requested_scope: duplicate_scope,
             pairing_ttl_ms: None,

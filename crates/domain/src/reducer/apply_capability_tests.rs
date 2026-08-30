@@ -34,7 +34,7 @@ mod cba_capability_cell_tests {
                     "id": grant_id,
                     "realm_id": realm_id,
                     "issuer_id": "ak:did_core:web:owner.example",
-                    "issuer_principal_server_id": "ak:did_core:web:owner.example",
+                    "issuer_station_id": "ak:did_core:web:owner.example",
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": realm_id,
@@ -43,7 +43,7 @@ mod cba_capability_cell_tests {
                         "authority_generation": 0
                     }],
                     "subject": "ak:did_core:web:owner.example",
-                    "subject_principal_server_id": "ak:did_core:web:owner.example",
+                    "subject_station_id": "ak:did_core:web:owner.example",
                     "actions": ["ak.realm.admin"],
                     "resources": [{
                         "kind": "realm",
@@ -73,9 +73,9 @@ mod cba_capability_cell_tests {
         let body = json!({
             "realm_id": "ak:realm:AW629k2g_XE37cPwN8MimS3euJY2Vc__Knn5F9_x0pic",
             "issuer_id": "ak:did_core:web:owner.example",
-            "issuer_principal_server_id": "ak:did_core:web:owner.example",
+            "issuer_station_id": "ak:did_core:web:owner.example",
             "subject": "ak:did_core:web:writer.example",
-            "subject_principal_server_id": "ak:did_core:web:writer.example",
+            "subject_station_id": "ak:did_core:web:writer.example",
             "actions": ["ak.strand.update"],
             "resources": [{
                 "kind": "strand",
@@ -209,7 +209,7 @@ mod agent_key_tests {
                     "authority_generation": 0
                 }],
                 "subject": subject,
-                "subject_principal_server_id": subject,
+                "subject_station_id": subject,
                 "actions": actions,
                 "resources": resources,
             }
@@ -986,7 +986,7 @@ mod authority_cycle_tests {
                 "grant": {
                     "issuer_id": "ak:did_core:web:alice.example",
                     "subject": "ak:did_core:web:alice.example",
-                    "subject_principal_server_id": "ak:did_core:web:alice.example",
+                    "subject_station_id": "ak:did_core:web:alice.example",
                     "issuer_authority_refs": [
                         { "kind": "grant", "grant_id": authority_grant_id }
                     ],
@@ -1022,7 +1022,7 @@ mod authority_cycle_tests {
                         "authority_generation": 0
                     }],
                     "subject": subject,
-                    "subject_principal_server_id": subject,
+                    "subject_station_id": subject,
                     "issuer_authority_refs": [{
                         "kind": "realm_root",
                         "realm_id": REALM,
@@ -1205,7 +1205,7 @@ mod authority_cycle_tests {
             }]),
         );
         terminal_child.payload["grant"]["subject"] = json!("ak:did_core:web:alice.example");
-        terminal_child.payload["grant"]["subject_principal_server_id"] =
+        terminal_child.payload["grant"]["subject_station_id"] =
             json!("ak:did_core:web:alice.example");
         let accepted = proj.apply_capability_grant(&terminal_child, chrono::Utc::now());
         assert!(matches!(
@@ -1601,7 +1601,7 @@ mod realm_owner_authority_tests {
                         "authority_generation": 0
                     }],
                     "subject": subject,
-                    "subject_principal_server_id": subject,
+                    "subject_station_id": subject,
                     "actions": actions,
                     "resources": [{
                         "kind": "realm",

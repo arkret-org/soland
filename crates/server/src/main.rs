@@ -725,8 +725,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 };
                 match client.describe().await {
                     Ok(description)
-                        if description.service_kind
-                            == arkret_wire::ServiceKind::PrincipalServer
+                        if description.service_kind == arkret_wire::ServiceKind::Station
                             && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
@@ -772,7 +771,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             }
                         };
                         let registration_key = match arkret_models_identity::service_identity::ServiceRegistrationKey::new(
-                            arkret_wire::ServiceKind::PrincipalServer,
+                            arkret_wire::ServiceKind::Station,
                             public_base_url,
                         ) {
                             Ok(key) => key,
@@ -801,7 +800,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             tracing::warn!(
                                 %endpoint,
                                 peer_id = %description.service_id,
-                                "federation peer DID document does not bind the described Principal Server identity"
+                                "federation peer DID document does not bind the described Station identity"
                             );
                             continue;
                         }

@@ -46,7 +46,7 @@ mod tests {
                     "realm_id": "ak:realm:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
                     "issuer_id": actor,
                     "subject": actor,
-                    "subject_principal_server_id": "ak:did_core:web:principal.example",
+                    "subject_station_id": "ak:did_core:web:principal.example",
                     "actions": ["ak.realm.configure"],
                     "resources": [{
                         "kind": "realm",

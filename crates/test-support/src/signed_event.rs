@@ -274,7 +274,7 @@ impl<'a> CallerSignedEvent<'a> {
                 }
             },
             actor_id,
-            crate::fixture_principal_server_id(),
+            crate::fixture_station_id(),
             self.actor_seq,
             Hlc::new(format!(
                 "{:012x}-0000-00000000",

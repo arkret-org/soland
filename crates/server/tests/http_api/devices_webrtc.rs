@@ -1378,9 +1378,9 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
         vec![action.to_owned()],
         vec![],
     );
-    grant.issuer_principal_server_id =
+    grant.issuer_station_id =
         arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
-    grant.subject_principal_server_id =
+    grant.subject_station_id =
         Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
 }
