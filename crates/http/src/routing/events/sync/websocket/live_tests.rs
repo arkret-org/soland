@@ -707,10 +707,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
 
     let signal = signal_record(&realm_id_str, &bob_actor);
     assert_eq!(signal.sender_actor_id, bob_actor.to_string());
-    assert_eq!(
-        &signal.envelope.sender_actor_id,
-        bob_actor.signing_principal_id()
-    );
+    assert_eq!(&signal.envelope.sender_actor_id, &bob_actor);
     state
         .deliveries()
         .append_signal(signal)
