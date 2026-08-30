@@ -1,10 +1,10 @@
 use arkret_identifiers::{Did, DidCoreId, project_did_to_core_id};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_wire::{DidUrl, OpaqueLocalId, ServiceAccountId};
+use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use diesel::{AsChangeset, Insertable, Queryable, Selectable};
 use serde_json::Value;
-use soland_storage::{AgentPrincipalRecord, PersistenceError};
+use soland_storage::{AccountPk, AgentPrincipalRecord, PersistenceError};
 use uuid::Uuid;
 
 use crate::schema::agent_principals;
@@ -37,7 +37,7 @@ pub(crate) struct AgentPrincipalRow {
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
-    pub controller_account_id: Option<String>,
+    pub controller_account_pk: Option<i64>,
     pub recipient_id: Option<DidCoreId>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
@@ -104,9 +104,7 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
             pairing_code: record.pairing_code,
             pairing_expires_at: record.pairing_expires_at,
             approval_request_id: record.approval_request_id,
-            controller_account_id: record
-                .controller_account_id
-                .map(ServiceAccountId::into_string),
+            controller_account_pk: record.controller_account_pk.map(AccountPk::get),
             recipient_id,
             runtime_key_binding_digest: record.runtime_key_binding_digest,
             runtime_public_key_digest: record.runtime_public_key_digest,
@@ -219,15 +217,7 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             pairing_code: row.pairing_code,
             pairing_expires_at: row.pairing_expires_at,
             approval_request_id: row.approval_request_id,
-            controller_account_id: row
-                .controller_account_id
-                .map(ServiceAccountId::new)
-                .transpose()
-                .map_err(|error| {
-                    PersistenceError::SchemaViolation(format!(
-                        "stored Agent controller_account_id is invalid: {error}"
-                    ))
-                })?,
+            controller_account_pk: row.controller_account_pk.map(AccountPk),
             recipient_id: row.recipient_id.map(|id| id.to_string()),
             runtime_key_binding_digest: row.runtime_key_binding_digest,
             runtime_public_key_digest: row.runtime_public_key_digest,

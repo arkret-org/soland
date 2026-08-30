@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_wire::{Event, PrincipalAuthorityKey, RealmId};
+use arkret_wire::{AccountId, Event, RealmId};
 use soland_storage::{
     PersistenceError, PersistenceResult, PrincipalResolutionCasResult, PrincipalResolutionRecord,
     PrincipalResolutionStore, validate_principal_resolution_record,
@@ -26,23 +26,20 @@ impl MemoryPrincipalResolutionStore {
     }
 }
 
-fn authority_map_key(authority: &PrincipalAuthorityKey) -> String {
-    format!(
-        "{}\0{}",
-        authority.principal_id, authority.principal_server_id
-    )
+fn account_map_key(account_id: &AccountId) -> String {
+    account_id.to_string()
 }
 
 #[async_trait]
 impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
-    async fn by_authority_key(
+    async fn by_account_id(
         &self,
-        authority_key: &PrincipalAuthorityKey,
+        account_id: &AccountId,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
         Ok(self
             .rows
             .lock()
-            .get(&authority_map_key(authority_key))
+            .get(&account_map_key(account_id))
             .map(|state| state.current.clone()))
     }
 
@@ -64,17 +61,17 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
         next: PrincipalResolutionRecord,
     ) -> PersistenceResult<PrincipalResolutionCasResult> {
         validate_principal_resolution_record(&next)?;
-        let authority_map_key = authority_map_key(&next.authority_key);
+        let account_map_key = account_map_key(&next.account_id);
         let mut rows = self.rows.lock();
         if rows.values().any(|state| {
             state.current.pcr_realm_id == next.pcr_realm_id
-                && state.current.authority_key != next.authority_key
+                && state.current.account_id != next.account_id
         }) {
             return Err(PersistenceError::SchemaViolation(
                 "a PCR Realm cannot be rebound to another account authority key".to_owned(),
             ));
         }
-        let current = rows.get(&authority_map_key);
+        let current = rows.get(&account_map_key);
         let observed_ref = current.map(|state| state.current.current_event.event_id.as_str());
         if observed_ref != expected_current_event_ref {
             return Ok(PrincipalResolutionCasResult::Conflict(
@@ -88,7 +85,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
         }
 
         if let Some(current) = current
-            && (current.current.authority_key != next.authority_key
+            && (current.current.account_id != next.account_id
                 || current.current.pcr_realm_id != next.pcr_realm_id
                 || current.current.genesis_event.event_id != next.genesis_event.event_id)
         {
@@ -108,7 +105,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
             history.push(next.current_event.clone());
         }
         rows.insert(
-            authority_map_key,
+            account_map_key,
             MemoryPrincipalResolutionState {
                 current: next.clone(),
                 history,
@@ -119,12 +116,12 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
 
     async fn history_newest_first(
         &self,
-        authority_key: &PrincipalAuthorityKey,
+        account_id: &AccountId,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> PersistenceResult<Vec<Event>> {
         let rows = self.rows.lock();
-        let Some(state) = rows.get(&authority_map_key(authority_key)) else {
+        let Some(state) = rows.get(&account_map_key(account_id)) else {
             return Ok(Vec::new());
         };
         let mut newest_first = state.history.iter().rev();

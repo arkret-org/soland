@@ -1,6 +1,6 @@
-use arkret_wire::{OpaqueLocalId, ServiceAccountId};
+use arkret_wire::OpaqueLocalId;
 
-use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
+use super::{AccountPk, AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
 /// projection are stored as JSON records. A selection record contains only
@@ -72,7 +72,7 @@ pub struct AgentRuntimeApprovalWrite {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: chrono::DateTime<chrono::Utc>,
-    pub controller_account_id: ServiceAccountId,
+    pub controller_account_pk: AccountPk,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,

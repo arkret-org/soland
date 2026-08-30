@@ -5,7 +5,6 @@ pub(crate) mod audit;
 mod cells;
 mod collection;
 mod control;
-mod delivery_binding;
 mod handles;
 mod introspect;
 mod media;
@@ -161,20 +160,6 @@ pub fn admin_router() -> Router {
         .push(
             Router::with_path("realms/{realm_id}/gc-candidates")
                 .get(seal::admin_list_gc_candidates),
-        )
-        .push(
-            Router::with_path("realms/{realm_id}/delivery-binding-policy")
-                .get(delivery_binding::admin_get_realm_delivery_binding_policy),
-        )
-        // B3 — read-only member-routability view.
-        .push(
-            Router::with_path("realms/{realm_id}/member-routability")
-                .get(delivery_binding::admin_list_member_routability),
-        )
-        // B4 — read-only delivery-binding handover audit view.
-        .push(
-            Router::with_path("realms/{realm_id}/delivery-binding/handovers")
-                .get(delivery_binding::admin_list_delivery_binding_handovers),
         )
         // B2 — operator handle cluster (list / get / audit / revoke / reassign).
         .push(handles::router())

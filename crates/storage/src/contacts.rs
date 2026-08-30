@@ -1,5 +1,6 @@
 use arkret_identifiers::{CellRef, DidCoreId};
 use arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt;
+use arkret_wire::ActorId;
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
 
 use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
@@ -42,8 +43,8 @@ pub trait ContactVerifiedMirrorStore: Send + Sync {
 pub trait ContactStore: Send + Sync {
     async fn get(
         &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
+        requester_id: &ActorId,
+        target_id: &ActorId,
     ) -> PersistenceResult<Option<ContactRecord>>;
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
     /// Replace one existing Contact row only when its durable revision still
@@ -55,12 +56,8 @@ pub trait ContactStore: Send + Sync {
         expected_updated_at: chrono::DateTime<chrono::Utc>,
         record: &ContactRecord,
     ) -> PersistenceResult<bool>;
-    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>>;
-    async fn delete(
-        &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
-    ) -> PersistenceResult<()>;
+    async fn list_for_actor(&self, actor_id: &ActorId) -> PersistenceResult<Vec<ContactRecord>>;
+    async fn delete(&self, requester_id: &ActorId, target_id: &ActorId) -> PersistenceResult<()>;
 }
 /// Durable backing for per-subject private `invite_receive_policy` overrides
 /// (spec `sync/invite-addressing.md` §5). The in-memory
@@ -135,7 +132,7 @@ pub trait MimiConsentCorrelationStore: Send + Sync {
     async fn put(&self, record: &MimiConsentCorrelationRecord) -> PersistenceResult<()>;
 }
 #[doc(hidden)]
-pub type ContactKey = (DidCoreId, DidCoreId);
+pub type ContactKey = (ActorId, ActorId);
 /// Decode a persisted `grant_dots` JSONB object back into the in-memory
 /// `BTreeMap<String, ConsentGrantDot>`.
 pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {

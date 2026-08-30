@@ -16,7 +16,7 @@ use arkret_models_collaboration::governance::agent_membership_cascade::AgentCont
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
 use arkret_wire::cba::ProjectedCellWrite;
-use arkret_wire::{AppletId, PrincipalAuthorityKey, ProfileId};
+use arkret_wire::{AppletId, ProfileId};
 use serde_json::Value;
 
 use super::*;
@@ -61,10 +61,6 @@ pub struct ProjectionState {
     /// Banned and knocking members are derived via `members_in_state`
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
-    /// Accepted membership authority for the current member-cell generation,
-    /// keyed by `(realm_id, actor_id)`. This is side-band data reconstructed
-    /// from accepted Events; it never replaces the canonical member FSM cell.
-    pub membership_authorities: BTreeMap<(String, String), PrincipalAuthorityKey>,
     /// Exact controller authority and controller join generation carried by a
     /// Native Personal Agent membership Event. Effective Agent membership is
     /// derived by joining this binding with the current controller member cell.
@@ -460,7 +456,7 @@ impl ProjectionState {
 
     pub(crate) fn apply_device_push_route(&mut self, operation: &Operation) -> ProjectionEffect {
         let payload = match serde_json::from_value::<
-            arkret_models_identity::delivery_binding::DevicePushRoutePayload,
+            arkret_models_identity::device_push_route::DevicePushRoutePayload,
         >(operation.payload.clone())
         {
             Ok(payload) => payload,
@@ -471,7 +467,7 @@ impl ProjectionState {
             }
         };
         let scope = payload.scope();
-        let recipient_id = scope.recipient_id.as_str();
+        let recipient_id = scope.account_id.principal_server_id.as_str();
         if let Some(local_service_id) = self.local_service_id.as_deref()
             && local_service_id != recipient_id
         {
@@ -479,13 +475,15 @@ impl ProjectionState {
                 reason: "recipient_id_mismatch".to_owned(),
             };
         }
-        let principal_id = scope.principal_id.as_str();
+        let account_id = scope
+            .account_id
+            .canonical_key()
+            .expect("validated AccountId has canonical JCS bytes");
         let device_id = scope.device_id.as_str();
         let push_route = scope.push_route.as_str();
 
         let subject = PushRouteSubject {
-            recipient_id: recipient_id.to_owned(),
-            principal_id: scope.principal_id.clone(),
+            account_id: scope.account_id.clone(),
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
         };
@@ -499,7 +497,7 @@ impl ProjectionState {
         };
         let derived_subject = match private_registry.derive_subject(
             arkret_wire::EventKind::DevicePushRoute.as_str(),
-            principal_id,
+            &account_id,
             &operation.payload,
         ) {
             Ok(subject) => subject,
@@ -509,19 +507,15 @@ impl ProjectionState {
                 };
             }
         };
-        let expected_subject = match arkret_wire::composite_subject(&[
-            recipient_id,
-            principal_id,
-            device_id,
-            push_route,
-        ]) {
-            Ok(subject) => subject,
-            Err(error) => {
-                return ProjectionEffect::Rejected {
-                    reason: format!("push_route_private_subject_invalid:{error}"),
-                };
-            }
-        };
+        let expected_subject =
+            match arkret_wire::composite_subject(&[&account_id, device_id, push_route]) {
+                Ok(subject) => subject,
+                Err(error) => {
+                    return ProjectionEffect::Rejected {
+                        reason: format!("push_route_private_subject_invalid:{error}"),
+                    };
+                }
+            };
         if derived_subject != expected_subject {
             return ProjectionEffect::Rejected {
                 reason: "push_route_private_subject_mismatch".to_owned(),
@@ -542,8 +536,7 @@ impl ProjectionState {
         let current = self.push_routes.get(&subject).map(|value| {
             arkret_lattice_registry::ActorPrivateCandidate {
                 value: serde_json::json!({
-                    "recipient_id": &subject.recipient_id,
-                    "principal_id": &subject.principal_id,
+                    "account_id": &subject.account_id,
                     "device_id": &subject.device_id,
                     "push_route": &subject.push_route,
                     "push_target_id": &value.push_target_id,
@@ -589,7 +582,7 @@ impl ProjectionState {
         }
 
         match payload {
-            arkret_models_identity::delivery_binding::DevicePushRoutePayload::Revoked(_) => {
+            arkret_models_identity::device_push_route::DevicePushRoutePayload::Revoked(_) => {
                 self.store_push_route_cell(
                     subject.clone(),
                     PushRouteCellValue {
@@ -606,7 +599,7 @@ impl ProjectionState {
                     action: "revoked".to_owned(),
                 }
             }
-            arkret_models_identity::delivery_binding::DevicePushRoutePayload::Active(active) => {
+            arkret_models_identity::device_push_route::DevicePushRoutePayload::Active(active) => {
                 let action = if self
                     .push_routes
                     .get(&subject)

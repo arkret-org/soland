@@ -1957,7 +1957,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     ) -> ServiceResult<Vec<MlsKeyPackageState>>;
     async fn retire_owner_account_keypackages(
         &self,
-        owner_account_id: &str,
+        owner_account_pk: soland_storage::AccountPk,
         retired_at: i64,
     ) -> ServiceResult<usize>;
     async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()>;
@@ -1992,11 +1992,11 @@ impl MlsKeyPackageService {
 
     pub async fn retire_owner_account_keypackages(
         &self,
-        owner_account_id: &str,
+        owner_account_pk: soland_storage::AccountPk,
         retired_at: i64,
     ) -> ServiceResult<usize> {
         self.key_packages
-            .retire_owner_account_keypackages(owner_account_id, retired_at)
+            .retire_owner_account_keypackages(owner_account_pk, retired_at)
             .await
     }
 

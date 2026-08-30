@@ -488,7 +488,7 @@ enum MimiProofSigner<'a> {
     /// The `update_consent` family uses this: the proof is authored by the
     /// consent actor's own device.
     PrincipalDevice {
-        authority: arkret_wire::PrincipalAuthorityKey,
+        authority: arkret_wire::AccountId,
         device_id: arkret_identifiers::DeviceId,
     },
     /// A verification method controlled by the originator DID carried on the
@@ -707,7 +707,7 @@ async fn verify_mimi_consent_update_authority(
             })?;
         (
             soland_services::identity::SessionIdentityState {
-                service_account_id: None,
+                account_pk: None,
                 token_hash: format!("mimi-event:{}", body.consent_event.event.event_id),
                 actor: body.actor_id.to_string(),
                 device_id,
@@ -849,7 +849,7 @@ async fn verify_mimi_consent_actor_proof(
         ))
         .with_wire_code("invalid_proof")
     })?;
-    let authority = arkret_wire::PrincipalAuthorityKey::new(
+    let authority = arkret_wire::AccountId::new(
         body.actor_id.clone(),
         body.consent_event.event.principal_server_id.clone(),
     );
@@ -1429,7 +1429,7 @@ mod consent_proof_tests {
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key: arkret_wire::PrincipalAuthorityKey::new(
+                    authority_key: arkret_wire::AccountId::new(
                         request.actor_id.clone(),
                         principal_server_id,
                     ),

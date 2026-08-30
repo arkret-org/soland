@@ -27,10 +27,10 @@ use arkret_models_crypto::{
     TrustedRecoveryServiceSessionProof,
 };
 use arkret_wire::{
-    AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
+    AccountId, AuthoritySetAuthorizationRule, AuthoritySetPolicy, AuthoritySetPolicyKind,
     AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, DeviceId, DidUrl,
-    LeaseBasisRef, PrincipalAuthorityKey, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, RequestId,
-    SchemaId, SecurityTransaction, SecurityTransactionCreateRequest, SessionGrantId, TransactionId,
+    LeaseBasisRef, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, RequestId, SchemaId,
+    SecurityTransaction, SecurityTransactionCreateRequest, SessionGrantId, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

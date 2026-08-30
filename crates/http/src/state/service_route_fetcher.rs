@@ -48,37 +48,6 @@ impl VerifiedBindingRouteFetcher {
         }
     }
 
-    fn current_member_carriers(
-        &self,
-        service_id: &DidCoreId,
-        service_kind: &str,
-    ) -> Vec<ServiceResolutionCarrier> {
-        if service_kind != "principal_server" {
-            return Vec::new();
-        }
-        let snapshot = self.projections.snapshot();
-        let mut bindings = snapshot
-            .members
-            .values()
-            .filter(|member| {
-                member.state == "join"
-                    && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_id.as_deref() == Some(service_id.as_str())
-            })
-            .filter_map(|member| {
-                let carrier = member.recipient_service_resolution.as_ref()?;
-                serde_json::from_value::<ServiceResolutionCarrier>(carrier.clone())
-                    .ok()
-                    .map(|carrier| (member.updated_at, member.realm_id.as_str(), carrier))
-            })
-            .collect::<Vec<_>>();
-        bindings.sort_by(|left, right| (right.0, right.1).cmp(&(left.0, left.1)));
-        bindings
-            .into_iter()
-            .map(|(_, _, carrier)| carrier)
-            .collect()
-    }
-
     async fn verify_carrier(
         &self,
         carrier: &ServiceResolutionCarrier,
@@ -477,21 +446,23 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
         service_id: &DidCoreId,
         service_kind: &str,
     ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
-        let carriers = self.current_member_carriers(service_id, service_kind);
-        let mut last_error = None;
-        for carrier in carriers {
-            match self
-                .verify_carrier(&carrier, service_id, service_kind)
-                .await
-            {
-                Ok(candidate) => return Ok(Some(candidate)),
-                Err(error) => last_error = Some(error),
-            }
+        let Some(cache) = self
+            .route_store
+            .route_cache(service_id, service_kind)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !cache.is_routable_at(Utc::now()) {
+            return Ok(None);
         }
-        if let Some(error) = last_error {
-            return Err(error);
-        }
-        Ok(None)
+        let carrier = ServiceResolutionCarrier::CurrentRecordUrl {
+            current_record_url: cache.current_record_url,
+            pinned_record_digest: Some(cache.record_digest),
+        };
+        self.verify_carrier(&carrier, service_id, service_kind)
+            .await
+            .map(Some)
     }
 
     async fn fetch_notice_candidate(

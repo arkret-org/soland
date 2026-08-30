@@ -117,18 +117,23 @@ pub(super) async fn dev_login(
     // threshold gets a 403 `policy_denied` (lockout) until the lockout window
     // expires, without revealing whether the credential would otherwise
     // have been valid.
+    let principal_server_id =
+        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("invalid local Principal Server id: {error}"))
+        })?;
+    let account_id = arkret_wire::AccountId::new(actor.clone(), principal_server_id);
     let account = state
         .identities()
         .find_account_by_actor(FindAccountByActorQuery {
-            actor_id: actor_str.to_owned(),
+            account_id: account_id.clone(),
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(error) = account_new_session_error(state, actor_str) {
         return Err(error);
     }
-    let service_account_id = if let Some(account) = account {
-        account.account_id
+    let account_pk = if let Some(account) = account {
+        account.account_pk
     } else {
         let synthetic_handle = handle_for_did(actor_str);
         let synthetic_display = body
@@ -137,13 +142,12 @@ pub(super) async fn dev_login(
             .unwrap_or_else(|| synthetic_handle.trim_start_matches('@').to_owned());
         let localpart = normalize_localpart(&synthetic_handle);
         let record = RegisterAccountCommand {
-            account_id: crate::ids::generate_account_id(),
-            principal_id: actor.clone(),
+            account_id,
             localpart: localpart.clone(),
             display_name: Some(synthetic_display),
             created_at: now(),
         };
-        state
+        let registered = state
             .identities()
             .register_account(record.clone())
             .await
@@ -156,7 +160,7 @@ pub(super) async fn dev_login(
             "accepted",
         )
         .await;
-        record.account_id
+        registered.account_pk
     };
 
     let expires_at = now() + Duration::hours(12);
@@ -164,7 +168,7 @@ pub(super) async fn dev_login(
     let token_hash = session_credential_hash(&token, state.service_id());
     let session = SessionIdentityState {
         token_hash,
-        service_account_id: Some(service_account_id),
+        account_pk: Some(account_pk),
         actor: actor_str.to_owned(),
         device_id: device_id_str.to_owned(),
         audience: state.service_id().clone(),

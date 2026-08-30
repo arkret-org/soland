@@ -93,10 +93,13 @@ fn stage_agent_membership_cascade(
                         ))
                     })?;
             let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
-            if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
+            let controller = arkret_wire::ActorId::account(record.controller_authority.clone());
+            let expected_initiator =
+                arkret_wire::ActorId::account(record.initiator_authority.clone());
+            if terminal.event.actor_id != controller.to_string()
                 || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
-                || typed.principal_server_id != record.controller_authority.principal_server_id
-                || initiator != &record.initiator_authority.principal_id
+                || typed.actor_id != controller
+                || initiator != &expected_initiator
             {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: emergency terminal Event does not bind cleanup intent"

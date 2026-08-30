@@ -18,8 +18,7 @@ use serde_json::Value;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PushRouteSubject {
-    pub recipient_id: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub device_id: String,
     pub push_route: String,
 }
@@ -259,7 +258,8 @@ pub struct MlsKeyPackageProjection {
     pub id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
-    pub owner_account_id: arkret_identifiers::ServiceAccountId,
+    /// Local `accounts.pk`; never serialized as a protocol identifier.
+    pub owner_account_pk: i64,
     pub actor_id: String,
     pub device_id: Option<String>,
     /// Exact did:key/Native-Agent verification method used by non-device endpoints.
@@ -1005,27 +1005,8 @@ pub struct SolandMembershipState {
     /// mirror updated on every membership transition.
     pub state: String,
     pub role: String,
-    /// Effective member delivery status from the accepted
-    /// `ak.member.state{membership=join}` payload. Only `routable` joins
-    /// participate in Realm-scoped service fanout.
-    pub delivery_status: Option<String>,
-    /// Principal Server service DID materialized from the member
-    /// `delivery_binding`. This is the single routing source for federated
-    /// Realm event delivery; senders must not re-resolve DID Documents.
-    pub recipient_id: Option<String>,
-    /// Exact first-hop carrier accepted with the current delivery binding.
-    /// This remains business-binding evidence, not a URL authority: outbound
-    /// routing must materialize and independently verify it before use.
-    pub recipient_service_resolution: Option<serde_json::Value>,
     /// Event frontier that established the current member state.
     pub membership_event_ref: Option<String>,
-    /// Event frontier used for the current delivery binding. Falls back to
-    /// the membership event when the binding does not carry a narrower
-    /// frontier.
-    pub delivery_binding_frontier: Option<String>,
-    /// Hard validity bound carried by the accepted delivery binding. An
-    /// expired binding is not an effective Realm delivery relationship.
-    pub delivery_binding_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     /// First effective invite frontier retained after a later join so
     /// `history_access=since_join` can start at the invite boundary while
     /// `history_access=since_join` starts at the join boundary.

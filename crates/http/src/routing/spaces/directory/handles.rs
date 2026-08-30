@@ -209,7 +209,6 @@ pub(super) fn local_handle_resolution_outcome(
     audience: String,
     handle_claim: SdkHandleClaim,
 ) -> Result<DirectoryHandleResolutionOutcome, AppError> {
-    let member_delivery_binding = handle_claim.member_delivery_binding.clone();
     handle_claim
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
@@ -226,7 +225,6 @@ pub(super) fn local_handle_resolution_outcome(
         claims: Some(vec![handle_claim.clone()]),
         audience: Some(audience),
         handle_claim: Some(handle_claim),
-        member_delivery_binding,
         as_of: Some(now()),
         source_refs: Vec::new(),
         policy_revision: None,
@@ -417,25 +415,6 @@ async fn validate_remote_handle_resolution(
     {
         return Err("remote handle claim issuer service mismatch".to_owned());
     }
-    if claim
-        .member_delivery_binding
-        .as_ref()
-        .map(|binding| binding.recipient_id.as_str())
-        != Some(peer_id)
-    {
-        return Err("remote handle claim delivery binding service mismatch".to_owned());
-    }
-    if outcome
-        .member_delivery_binding
-        .as_ref()
-        .map(|binding| &binding.recipient_id)
-        != claim
-            .member_delivery_binding
-            .as_ref()
-            .map(|binding| &binding.recipient_id)
-    {
-        return Err("remote handle top-level delivery binding mismatch".to_owned());
-    }
     Ok(())
 }
 
@@ -556,11 +535,7 @@ pub(super) async fn resolve_handle(
             let handle_claim =
                 signed_handle_claim(state, &lookup.canonical, &principal_id, &audience, true)
                     .await?;
-            let recipient_id = handle_claim
-                .member_delivery_binding
-                .as_ref()
-                .map(|binding| binding.recipient_id.as_str())
-                .unwrap_or(state.service_id().as_str());
+            let recipient_id = state.service_id().as_str();
             let resolved_by = arkret_identifiers::DidCoreId::new(state.service_id().clone()).ok();
             if !crate::routing::invites::directory_handle_claim_resolve_allowed(
                 state,
@@ -678,20 +653,6 @@ pub(super) async fn signed_handle_claim(
     })?;
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
-    let member_delivery_binding = DeliveryBindingHint {
-        recipient_id: signer_id.clone(),
-        recipient_kind: RecipientServiceKind::PrincipalServer,
-        binding_source: HandleHintBindingSource::Explicit,
-        delivery_modes: BTreeSet::from([
-            DeliveryMode::Events,
-            DeliveryMode::Sync,
-            DeliveryMode::ToDevice,
-            DeliveryMode::Push,
-            DeliveryMode::KeyPackages,
-        ]),
-        service_acceptance_ref: None,
-        policy_event_ref: None,
-    };
     let mut claim = SdkHandleClaim {
         schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
         handle: Some(handle),
@@ -705,7 +666,6 @@ pub(super) async fn signed_handle_claim(
         audience: Some(audience.to_owned()),
         challenge: None,
         claim_scope: BTreeMap::new(),
-        member_delivery_binding: Some(member_delivery_binding),
         claims: Vec::new(),
         created_at,
         expires_at: Some(expires_at),

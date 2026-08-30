@@ -72,12 +72,9 @@ ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
 CREATE TABLE public.accounts (
-    id text PRIMARY KEY CHECK (
-        length(id) BETWEEN 1 AND 255
-        AND id NOT LIKE 'ak:%'
-        AND id NOT LIKE 'did:%'
-    ),
+    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    principal_server_id text NOT NULL CHECK (principal_server_id LIKE 'ak:did_core:%'),
     display_name text,
     payload jsonb DEFAULT '{}'::jsonb NOT NULL,
     disabled_at timestamp with time zone,
@@ -86,11 +83,11 @@ CREATE TABLE public.accounts (
 );
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_principal_id_key UNIQUE (principal_id);
+    ADD CONSTRAINT accounts_principal_server_key UNIQUE (principal_id, principal_server_id);
 
 CREATE TABLE public.account_localparts (
     id uuid PRIMARY KEY,
-    account_id text NOT NULL,
+    account_pk bigint NOT NULL,
     localpart text NOT NULL,
     is_primary boolean DEFAULT false NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -100,18 +97,18 @@ CREATE TABLE public.account_localparts (
 ALTER TABLE ONLY public.account_localparts
     ADD CONSTRAINT account_localparts_localpart_key UNIQUE (localpart);
 
-CREATE INDEX account_localparts_account_idx ON public.account_localparts USING btree (account_id);
+CREATE INDEX account_localparts_account_idx ON public.account_localparts USING btree (account_pk);
 
-CREATE UNIQUE INDEX account_localparts_primary_account_idx ON public.account_localparts USING btree (account_id) WHERE (is_primary);
+CREATE UNIQUE INDEX account_localparts_primary_account_idx ON public.account_localparts USING btree (account_pk) WHERE (is_primary);
 
 ALTER TABLE ONLY public.account_localparts
-    ADD CONSTRAINT account_localparts_account_id_fkey FOREIGN KEY (account_id) REFERENCES public.accounts(id) ON DELETE CASCADE;
+    ADD CONSTRAINT account_localparts_account_pk_fkey FOREIGN KEY (account_pk) REFERENCES public.accounts(pk) ON DELETE CASCADE;
 
 CREATE TABLE public.account_lifecycle (
-    principal_id text PRIMARY KEY CHECK (principal_id LIKE 'ak:did_core:%'),
+    account_pk bigint PRIMARY KEY REFERENCES public.accounts(pk) ON DELETE CASCADE,
     state text NOT NULL,
     reason text,
-    changed_by text CHECK (changed_by LIKE 'ak:did_core:%'),
+    changed_by jsonb,
     changed_at timestamp with time zone NOT NULL,
     CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
 );
@@ -120,7 +117,7 @@ CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree
 
 CREATE TABLE public.account_status_replica_records (
     account_authority_id text NOT NULL CHECK (account_authority_id LIKE 'ak:did_core:%'),
-    account_id text NOT NULL,
+    account_id jsonb NOT NULL,
     status_seq bigint NOT NULL CHECK (status_seq >= 1),
     record_id text NOT NULL UNIQUE CHECK (record_id LIKE 'ak:account_status_record:%'),
     record jsonb NOT NULL,
@@ -193,7 +190,7 @@ CREATE TABLE public.agent_principals (
     pairing_code text,
     pairing_expires_at timestamp with time zone,
     approval_request_id text,
-    controller_account_id text,
+    controller_account_pk bigint,
     recipient_id text,
     runtime_key_binding_digest text,
     runtime_public_key_digest text,
@@ -216,6 +213,10 @@ CREATE TABLE public.agent_principals (
 );
 
 CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
+
+ALTER TABLE ONLY public.agent_principals
+    ADD CONSTRAINT agent_principals_controller_account_pk_fkey
+    FOREIGN KEY (controller_account_pk) REFERENCES public.accounts(pk);
 
 CREATE UNIQUE INDEX agent_principals_pcr_idx ON public.agent_principals USING btree (principal_control_realm_id);
 
@@ -1643,7 +1644,7 @@ CREATE INDEX invite_locators_subject_active_idx ON public.invite_locators USING 
 CREATE TABLE public.server_settings (
     key text NOT NULL,
     value jsonb NOT NULL,
-    updated_by text NOT NULL,
+    updated_by jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT server_settings_pkey PRIMARY KEY (key)
 );
@@ -1656,7 +1657,7 @@ CREATE TABLE public.key_backups (
     backup_version text,
     payload jsonb NOT NULL,
     last_accessed_at timestamp with time zone,
-    account_id text,
+    account_pk bigint,
     scheme text,
     version integer DEFAULT 0 NOT NULL,
     key_material_encrypted bytea,
@@ -1681,7 +1682,7 @@ CREATE TABLE public.key_backups (
 ALTER TABLE ONLY public.key_backups
     ADD CONSTRAINT key_backups_series_seq_key UNIQUE (series_actor_id, series_id, series_seq);
 
-CREATE INDEX key_backups_account_idx ON public.key_backups USING btree (account_id);
+CREATE INDEX key_backups_account_idx ON public.key_backups USING btree (account_pk);
 
 CREATE INDEX key_backups_actor_idx ON public.key_backups USING btree (actor_id);
 
@@ -1744,11 +1745,7 @@ CREATE TABLE public.mls_key_packages (
     id text PRIMARY KEY,
     keypackage_ref text NOT NULL,
     keypackage_digest text NOT NULL,
-    owner_account_id text NOT NULL CHECK (
-        length(owner_account_id) BETWEEN 1 AND 255
-        AND owner_account_id NOT LIKE 'ak:%'
-        AND owner_account_id NOT LIKE 'did:%'
-    ),
+    owner_account_pk bigint NOT NULL,
     actor_id text NOT NULL,
     device_id text,
     endpoint_verification_method text,
@@ -1790,10 +1787,10 @@ ALTER TABLE ONLY public.mls_key_packages
     ADD CONSTRAINT mls_key_packages_keypackage_ref_key UNIQUE (keypackage_ref);
 
 ALTER TABLE ONLY public.mls_key_packages
-    ADD CONSTRAINT mls_key_packages_owner_account_id_fkey
-    FOREIGN KEY (owner_account_id) REFERENCES public.accounts(id);
+    ADD CONSTRAINT mls_key_packages_owner_account_pk_fkey
+    FOREIGN KEY (owner_account_pk) REFERENCES public.accounts(pk);
 
-CREATE INDEX mls_key_packages_by_owner_endpoint ON public.mls_key_packages USING btree (owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
+CREATE INDEX mls_key_packages_by_owner_endpoint ON public.mls_key_packages USING btree (owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, claimed_by_mls_group_id);
 
 CREATE TABLE public.peer_keypackage_claims (
     source_id text NOT NULL,
@@ -1898,7 +1895,7 @@ CREATE TABLE public.organizations (
     verified boolean DEFAULT true NOT NULL,
     members jsonb DEFAULT '[]'::jsonb NOT NULL,
     member_count bigint DEFAULT 0 NOT NULL,
-    created_by text NOT NULL,
+    created_by jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
@@ -1982,7 +1979,7 @@ CREATE TABLE public.organization_policies (
     policy_id text NOT NULL,
     payload jsonb NOT NULL,
     version bigint NOT NULL,
-    updated_by text NOT NULL,
+    updated_by jsonb NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT organization_policies_version_check CHECK ((version >= 0))
 );
@@ -2033,14 +2030,14 @@ CREATE INDEX realm_owning_organizations_organization_idx ON public.realm_owning_
 CREATE TABLE public.realm_moderation_policies (
     realm_id text PRIMARY KEY,
     payload jsonb NOT NULL,
-    updated_by text NOT NULL,
+    updated_by jsonb NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
 
 CREATE TABLE public.retention_policies (
     realm_id text PRIMARY KEY,
     ttl_seconds bigint NOT NULL,
-    updated_by text NOT NULL,
+    updated_by jsonb NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     CONSTRAINT retention_policies_ttl_seconds_check CHECK ((ttl_seconds >= 0))
 );
@@ -2100,7 +2097,7 @@ CREATE TABLE public.notifications (
     -- backs a UNIQUE dedup key, so the fallback has to be removed before the
     -- column can become a 33-octet Event identity.
     source_event_id text,
-    controller_account_id text,
+    controller_account_pk bigint,
     recipient_id text,
     source_account_artifact_kind text,
     source_account_artifact_id text,
@@ -2119,7 +2116,7 @@ CREATE TABLE public.notifications (
     read_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
-    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_id IS NULL) AND (recipient_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_id IS NOT NULL) AND (recipient_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
+    CONSTRAINT notifications_source_boundary_check CHECK (((source_event_id IS NOT NULL) AND (realm_id IS NOT NULL) AND (controller_account_pk IS NULL) AND (recipient_id IS NULL) AND (source_account_artifact_kind IS NULL) AND (source_account_artifact_id IS NULL) AND (notification_kind IS NOT NULL) AND (projection_action IS NULL) AND (projection_data IS NULL)) OR ((source_event_id IS NULL) AND (realm_id IS NULL) AND (controller_account_pk IS NOT NULL) AND (recipient_id IS NOT NULL) AND (source_account_artifact_kind = 'agent_runtime_approval'::text) AND (source_account_artifact_id IS NOT NULL) AND (notification_kind IS NULL) AND (projection_action IS NOT NULL))),
     CONSTRAINT notifications_projection_action_check CHECK ((projection_action IS NULL) OR (projection_action = ANY (ARRAY['upsert'::text, 'remove'::text])))
 );
 
@@ -2127,9 +2124,9 @@ CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (re
 
 CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_actor_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
 
-CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
+CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_pk, recipient_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_pk IS NOT NULL);
 
-CREATE INDEX notifications_account_position_idx ON public.notifications USING btree (controller_account_id, recipient_id, projection_position) WHERE (controller_account_id IS NOT NULL);
+CREATE INDEX notifications_account_position_idx ON public.notifications USING btree (controller_account_pk, recipient_id, projection_position) WHERE (controller_account_pk IS NOT NULL);
 
 CREATE INDEX notifications_source_idx ON public.notifications USING btree (source_event_id);
 
@@ -2142,7 +2139,7 @@ DECLARE
     delta_action text;
     terminal_reason text;
     notification_id uuid;
-    account_id text;
+    account_pk bigint;
     service_id text;
     recipient_id text;
     artifact_id text;
@@ -2150,11 +2147,11 @@ DECLARE
 BEGIN
     IF NEW.approval_request_id IS NOT NULL
        AND NEW.approval_notification_id IS NOT NULL
-       AND NEW.controller_account_id IS NOT NULL
+       AND NEW.controller_account_pk IS NOT NULL
        AND NEW.recipient_id IS NOT NULL THEN
         delta_action := 'upsert';
         notification_id := NEW.approval_notification_id;
-        account_id := NEW.controller_account_id;
+        account_pk := NEW.controller_account_pk;
         service_id := NEW.recipient_id;
         recipient_id := NEW.controller_id;
         artifact_id := NEW.approval_request_id;
@@ -2178,7 +2175,7 @@ BEGIN
         END;
         delta_action := 'remove';
         notification_id := OLD.approval_notification_id;
-        account_id := OLD.controller_account_id;
+        account_pk := OLD.controller_account_pk;
         service_id := OLD.recipient_id;
         recipient_id := OLD.controller_id;
         artifact_id := OLD.approval_request_id;
@@ -2190,19 +2187,19 @@ BEGIN
     END IF;
 
     INSERT INTO public.notifications (
-        id, recipient_actor_id, controller_account_id, recipient_id,
+        id, recipient_actor_id, controller_account_pk, recipient_id,
         source_account_artifact_kind, source_account_artifact_id,
         priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
-        notification_id, recipient_id, account_id, service_id,
+        notification_id, recipient_id, account_pk, service_id,
         'agent_runtime_approval', artifact_id,
         'normal', 'unread', delta_action,
         notification_data, now(), now()
     )
-    ON CONFLICT (controller_account_id, recipient_id,
+    ON CONFLICT (controller_account_pk, recipient_id,
                  source_account_artifact_kind, source_account_artifact_id)
-        WHERE controller_account_id IS NOT NULL
+        WHERE controller_account_pk IS NOT NULL
     DO UPDATE SET
         projection_action = EXCLUDED.projection_action,
         projection_data = EXCLUDED.projection_data,
@@ -2273,8 +2270,8 @@ CREATE TABLE public.projection_circles (
     durability_policy text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by text NOT NULL,
-    updated_by text,
+    created_by jsonb NOT NULL,
+    updated_by jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_circles_content_encryption_floor_check CHECK ((content_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
@@ -2358,9 +2355,9 @@ CREATE TABLE public.projection_strands (
     encrypted_content jsonb,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by text NOT NULL,
+    created_by jsonb NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by text,
+    updated_by jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     -- common-fields.md 5.2: an active object carries exactly one content slot,
@@ -2393,9 +2390,9 @@ CREATE TABLE public.projection_morphs (
     title text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by text NOT NULL,
+    created_by jsonb NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by text,
+    updated_by jsonb,
     fields jsonb DEFAULT '{}'::jsonb NOT NULL,
     schema_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     facets jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -2438,9 +2435,9 @@ CREATE TABLE public.projection_spaces (
     rank text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
-    created_by text NOT NULL,
+    created_by jsonb NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
-    updated_by text,
+    updated_by jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT projection_spaces_child_scope_policy_check CHECK ((child_scope_policy = ANY (ARRAY['allow_any'::text, 'require_e2ee'::text, 'require_same_scope'::text, 'require_scope_circle_id'::text]))),
@@ -2634,11 +2631,7 @@ CREATE TABLE public.security_transaction_step_attempts (
 
 CREATE TABLE public.sessions (
     id text PRIMARY KEY,
-    service_account_id text NOT NULL CHECK (
-        length(service_account_id) BETWEEN 1 AND 255
-        AND service_account_id NOT LIKE 'ak:%'
-        AND service_account_id NOT LIKE 'did:%'
-    ),
+    account_pk bigint NOT NULL,
     actor_id text NOT NULL,
     device_id text NOT NULL,
     audience text NOT NULL,
@@ -2653,8 +2646,8 @@ CREATE TABLE public.sessions (
 CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id, device_id, expires_at) WHERE (revoked_at IS NULL);
 
 ALTER TABLE ONLY public.sessions
-    ADD CONSTRAINT sessions_service_account_id_fkey
-    FOREIGN KEY (service_account_id) REFERENCES public.accounts(id);
+    ADD CONSTRAINT sessions_account_pk_fkey
+    FOREIGN KEY (account_pk) REFERENCES public.accounts(pk);
 
 CREATE TABLE public.sync_cursor_handles (
     id text PRIMARY KEY,

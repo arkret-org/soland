@@ -88,7 +88,6 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     record.invite_token.clear();
     let realm_id = record.realm_id.clone();
     let invite_created_at = record.created_at;
-    let invite_delivery_target = record.invite_delivery_target.clone();
     if let Err(error) = invites.put(record).await {
         tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
         return;
@@ -103,14 +102,7 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
             .realm_directory()
             .add_member(&realm_id_typed, member_did);
     }
-    project_invite_accept_membership(
-        state,
-        &realm_id,
-        &accepter,
-        invite_created_at,
-        invite_delivery_target.as_ref(),
-        operation,
-    );
+    project_invite_accept_membership(state, &realm_id, &accepter, invite_created_at, operation);
     touch_realm(state, &realm_id).await;
     tracing::info!(
         invite_id = %invite_id,
@@ -125,21 +117,11 @@ fn project_invite_accept_membership(
     realm_id: &str,
     member: &str,
     invite_created_at: chrono::DateTime<chrono::Utc>,
-    invite_delivery_target: Option<&Value>,
     operation: &Operation,
 ) {
-    let recipient_id = invite_delivery_target
-        .and_then(|target| target.get("recipient_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
-    state.projections().project_invite_acceptance(
-        realm_id,
-        member,
-        invite_created_at,
-        recipient_id,
-        operation,
-    );
+    state
+        .projections()
+        .project_invite_acceptance(realm_id, member, invite_created_at, operation);
 }
 
 pub(super) async fn project_invite_cancel_operation(

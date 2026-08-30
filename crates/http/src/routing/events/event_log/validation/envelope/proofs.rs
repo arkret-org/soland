@@ -1127,7 +1127,7 @@ mod tests {
     fn session(actor: &str, state: &AppState) -> SessionRecord {
         let created_at = chrono::Utc::now();
         SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "event-proof-root-test".to_owned(),
             actor: actor.to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
@@ -1189,7 +1189,7 @@ mod tests {
         )
         .unwrap();
         let session = SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "franking-proof-service-test".to_owned(),
             actor: state.service_id().clone(),
             device_id: String::new(),

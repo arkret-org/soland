@@ -16,15 +16,15 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NotaryJoseAlgorithm, NotaryKeyKind,
-    NotarySignerDescriptor, OpaqueLocalId, ServiceAccountId,
+    AccountId, DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NotaryJoseAlgorithm,
+    NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer as _;
 use parking_lot::Mutex;
 use serde_json::Value;
-use soland_storage::{AgentRuntimeEnqueueOutcome, EnqueueAgentRuntimeMessage};
+use soland_storage::{AccountPk, AgentRuntimeEnqueueOutcome, EnqueueAgentRuntimeMessage};
 
 /// Freeze one locally held Ed25519 notary key into the canonical Realm
 /// notary descriptor. Callers must pass the verification key belonging to the
@@ -189,8 +189,8 @@ pub struct MimiConsentCorrelation {
 
 #[derive(Clone, Debug)]
 pub struct ContactRecord {
-    pub requester_id: DidCoreId,
-    pub target_id: DidCoreId,
+    pub requester_id: arkret_wire::ActorId,
+    pub target_id: arkret_wire::ActorId,
     pub contact_round_id: Option<Hash>,
     pub version: Option<u64>,
     pub granted_to_target_scopes: Vec<String>,
@@ -358,17 +358,19 @@ fn lifecycle_status_from_wire(value: &str) -> AccountStatus {
 
 #[derive(Clone, Debug)]
 pub struct FindAccountByActorQuery {
-    pub actor_id: String,
+    pub account_id: AccountId,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountIdentity {
-    pub account_id: arkret_identifiers::ServiceAccountId,
+    pub account_pk: AccountPk,
+    pub account_id: AccountId,
 }
 
 #[derive(Clone, Debug)]
 pub struct AccountProfileState {
-    pub id: arkret_identifiers::ServiceAccountId,
+    pub pk: AccountPk,
+    pub account_id: AccountId,
     pub principal_id: DidCoreId,
     pub localpart: String,
     pub display_name: Option<String>,
@@ -390,7 +392,7 @@ impl AccountProfileState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AccountLocalpartState {
     pub id: String,
-    pub account_principal_id: DidCoreId,
+    pub account_pk: AccountPk,
     pub localpart: String,
     pub is_primary: bool,
     pub created_at: DateTime<Utc>,
@@ -407,8 +409,7 @@ pub struct AccountLifecycleState {
 
 #[derive(Clone, Debug)]
 pub struct RegisterAccountCommand {
-    pub account_id: arkret_identifiers::ServiceAccountId,
-    pub principal_id: DidCoreId,
+    pub account_id: AccountId,
     pub localpart: String,
     pub display_name: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -478,10 +479,13 @@ pub struct ConsentService {
 pub trait ContactPort: Send + Sync {
     async fn contact_any(
         &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
+        requester_id: &arkret_wire::ActorId,
+        target_id: &arkret_wire::ActorId,
     ) -> ServiceResult<Option<ContactRecord>>;
-    async fn contacts_for_actor(&self, actor_id: &DidCoreId) -> ServiceResult<Vec<ContactRecord>>;
+    async fn contacts_for_actor(
+        &self,
+        actor_id: &arkret_wire::ActorId,
+    ) -> ServiceResult<Vec<ContactRecord>>;
     async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()>;
     async fn save_contact_if_updated_at(
         &self,
@@ -545,26 +549,17 @@ impl ContactService {
 
     pub async fn contact_any(
         &self,
-        requester_id: impl AsRef<str>,
-        target_id: impl AsRef<str>,
+        requester_id: &arkret_wire::ActorId,
+        target_id: &arkret_wire::ActorId,
     ) -> ServiceResult<Option<ContactRecord>> {
-        let requester_id = DidCoreId::new(requester_id.as_ref().to_owned()).map_err(|_| {
-            crate::ServiceError::SchemaViolation("invalid Contact requester_id".to_owned())
-        })?;
-        let target_id = DidCoreId::new(target_id.as_ref().to_owned()).map_err(|_| {
-            crate::ServiceError::SchemaViolation("invalid Contact target_id".to_owned())
-        })?;
-        self.contacts.contact_any(&requester_id, &target_id).await
+        self.contacts.contact_any(requester_id, target_id).await
     }
 
     pub async fn contacts_for_actor(
         &self,
-        actor_id: impl AsRef<str>,
+        actor_id: &arkret_wire::ActorId,
     ) -> ServiceResult<Vec<ContactRecord>> {
-        let actor_id = DidCoreId::new(actor_id.as_ref().to_owned()).map_err(|_| {
-            crate::ServiceError::SchemaViolation("invalid Contact actor_id".to_owned())
-        })?;
-        self.contacts.contacts_for_actor(&actor_id).await
+        self.contacts.contacts_for_actor(actor_id).await
     }
 
     pub async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()> {
@@ -972,33 +967,43 @@ pub struct AgentController {
 
 #[async_trait]
 pub trait AccountLookupPort: Send + Sync {
-    async fn find_account_by_actor(&self, actor_id: &str)
-    -> ServiceResult<Option<AccountIdentity>>;
-    async fn account_by_id(&self, account_id: &str) -> ServiceResult<Option<AccountProfileState>>;
-    async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()>;
-    async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>>;
+    async fn find_account_by_actor(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<AccountIdentity>>;
+    async fn account_by_id(
+        &self,
+        account_pk: AccountPk,
+    ) -> ServiceResult<Option<AccountProfileState>>;
+    async fn register_account(
+        &self,
+        command: RegisterAccountCommand,
+    ) -> ServiceResult<AccountIdentity>;
+    async fn account(&self, account_id: &AccountId) -> ServiceResult<Option<AccountProfileState>>;
     async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>>;
     async fn save_account(&self, account: AccountProfileState) -> ServiceResult<()>;
-    async fn delete_account(&self, actor_id: &str) -> ServiceResult<()>;
-    async fn account_localparts(&self, actor_id: &str)
-    -> ServiceResult<Vec<AccountLocalpartState>>;
+    async fn delete_account(&self, account_id: &AccountId) -> ServiceResult<()>;
+    async fn account_localparts(
+        &self,
+        account_pk: AccountPk,
+    ) -> ServiceResult<Vec<AccountLocalpartState>>;
     async fn localpart_owner(
         &self,
         localpart: &str,
     ) -> ServiceResult<Option<AccountLocalpartState>>;
     async fn add_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
         primary: bool,
     ) -> ServiceResult<AccountLocalpartState>;
     async fn set_primary_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
     ) -> ServiceResult<AccountLocalpartState>;
-    async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ServiceResult<()>;
-    async fn clear_localparts(&self, actor_id: &str) -> ServiceResult<()>;
+    async fn remove_localpart(&self, account_pk: AccountPk, localpart: &str) -> ServiceResult<()>;
+    async fn clear_localparts(&self, account_pk: AccountPk) -> ServiceResult<()>;
     async fn record_handle_release(
         &self,
         localpart: &str,
@@ -1100,7 +1105,7 @@ pub struct AgentPairingState {
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
-    pub controller_account_id: Option<ServiceAccountId>,
+    pub controller_account_pk: Option<AccountPk>,
     pub recipient_id: Option<String>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
@@ -1179,7 +1184,7 @@ impl AgentPairingState {
             pairing_code: None,
             pairing_expires_at: None,
             approval_request_id: None,
-            controller_account_id: None,
+            controller_account_pk: None,
             recipient_id: None,
             runtime_key_binding_digest: None,
             runtime_public_key_digest: None,
@@ -1402,7 +1407,7 @@ pub struct StoreAgentRuntimeApprovalCommand {
     pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: DateTime<Utc>,
-    pub controller_account_id: ServiceAccountId,
+    pub controller_account_pk: AccountPk,
     pub recipient_id: String,
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
@@ -1959,7 +1964,7 @@ pub struct SessionIdentityState {
     pub token_hash: String,
     /// Exact service-local account binding carried by the credential that
     /// established this session. It must never be derived from `actor`.
-    pub service_account_id: Option<arkret_identifiers::ServiceAccountId>,
+    pub account_pk: Option<AccountPk>,
     pub actor: String,
     pub device_id: String,
     pub audience: String,
@@ -2277,22 +2282,28 @@ impl IdentityService {
         &self,
         query: FindAccountByActorQuery,
     ) -> ServiceResult<Option<AccountIdentity>> {
-        self.accounts.find_account_by_actor(&query.actor_id).await
+        self.accounts.find_account_by_actor(&query.account_id).await
     }
 
     pub async fn account_by_id(
         &self,
-        account_id: &str,
+        account_pk: AccountPk,
     ) -> ServiceResult<Option<AccountProfileState>> {
-        self.accounts.account_by_id(account_id).await
+        self.accounts.account_by_id(account_pk).await
     }
 
-    pub async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()> {
+    pub async fn register_account(
+        &self,
+        command: RegisterAccountCommand,
+    ) -> ServiceResult<AccountIdentity> {
         self.accounts.register_account(command).await
     }
 
-    pub async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
-        self.accounts.account(actor_id).await
+    pub async fn account(
+        &self,
+        account_id: &AccountId,
+    ) -> ServiceResult<Option<AccountProfileState>> {
+        self.accounts.account(account_id).await
     }
 
     pub async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>> {
@@ -2303,15 +2314,15 @@ impl IdentityService {
         self.accounts.save_account(account).await
     }
 
-    pub async fn delete_account(&self, actor_id: &str) -> ServiceResult<()> {
-        self.accounts.delete_account(actor_id).await
+    pub async fn delete_account(&self, account_id: &AccountId) -> ServiceResult<()> {
+        self.accounts.delete_account(account_id).await
     }
 
     pub async fn account_localparts(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
     ) -> ServiceResult<Vec<AccountLocalpartState>> {
-        self.accounts.account_localparts(actor_id).await
+        self.accounts.account_localparts(account_pk).await
     }
 
     pub async fn localpart_owner(
@@ -2323,31 +2334,35 @@ impl IdentityService {
 
     pub async fn add_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
         primary: bool,
     ) -> ServiceResult<AccountLocalpartState> {
         self.accounts
-            .add_localpart(actor_id, localpart, primary)
+            .add_localpart(account_pk, localpart, primary)
             .await
     }
 
     pub async fn set_primary_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
     ) -> ServiceResult<AccountLocalpartState> {
         self.accounts
-            .set_primary_localpart(actor_id, localpart)
+            .set_primary_localpart(account_pk, localpart)
             .await
     }
 
-    pub async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ServiceResult<()> {
-        self.accounts.remove_localpart(actor_id, localpart).await
+    pub async fn remove_localpart(
+        &self,
+        account_pk: AccountPk,
+        localpart: &str,
+    ) -> ServiceResult<()> {
+        self.accounts.remove_localpart(account_pk, localpart).await
     }
 
-    pub async fn clear_localparts(&self, actor_id: &str) -> ServiceResult<()> {
-        self.accounts.clear_localparts(actor_id).await
+    pub async fn clear_localparts(&self, account_pk: AccountPk) -> ServiceResult<()> {
+        self.accounts.clear_localparts(account_pk).await
     }
 
     pub async fn record_handle_release(

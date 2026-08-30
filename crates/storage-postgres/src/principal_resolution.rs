@@ -1,5 +1,5 @@
 use arkret_models_identity::PrincipalResolutionProjection;
-use arkret_wire::{DidCoreId, Event, PrincipalAuthorityKey, RealmId};
+use arkret_wire::{AccountId, DidCoreId, Event, RealmId};
 use diesel::sql_types::{BigInt, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::RunQueryDsl;
@@ -47,7 +47,7 @@ impl TryFrom<CurrentRow> for PrincipalResolutionRecord {
 
     fn try_from(row: CurrentRow) -> Result<Self, Self::Error> {
         let record = Self {
-            authority_key: PrincipalAuthorityKey::new(row.principal_id, row.principal_server_id),
+            account_id: AccountId::new(row.principal_id, row.principal_server_id),
             pcr_realm_id: RealmId::new(row.pcr_realm_id)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             genesis_event: serde_json::from_value(row.genesis_event)
@@ -63,9 +63,9 @@ impl TryFrom<CurrentRow> for PrincipalResolutionRecord {
 }
 
 impl PgPrincipalResolutionStore {
-    async fn load_by_authority_key(
+    async fn load_by_account_id(
         &self,
-        authority_key: &PrincipalAuthorityKey,
+        account_id: &AccountId,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -85,8 +85,8 @@ impl PgPrincipalResolutionStore {
               AND current.event_id = p.current_event_id \
              WHERE p.principal_id = $1 AND p.principal_server_id = $2",
         )
-        .bind::<Text, _>(authority_key.principal_id.as_str())
-        .bind::<Text, _>(authority_key.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.principal_id.as_str())
+        .bind::<Text, _>(account_id.principal_server_id.as_str())
         .get_result::<CurrentRow>(&mut *conn)
         .await
         .optional()
@@ -129,11 +129,11 @@ impl PgPrincipalResolutionStore {
 
 #[async_trait]
 impl PrincipalResolutionStore for PgPrincipalResolutionStore {
-    async fn by_authority_key(
+    async fn by_account_id(
         &self,
-        authority_key: &PrincipalAuthorityKey,
+        account_id: &AccountId,
     ) -> PersistenceResult<Option<PrincipalResolutionRecord>> {
-        self.load_by_authority_key(authority_key).await
+        self.load_by_account_id(account_id).await
     }
 
     async fn for_realm(
@@ -184,8 +184,8 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                  ) \
                  SELECT EXISTS(SELECT 1 FROM updated) AS applied",
             )
-            .bind::<Text, _>(next.authority_key.principal_id.as_str())
-            .bind::<Text, _>(next.authority_key.principal_server_id.as_str())
+            .bind::<Text, _>(next.account_id.principal_id.as_str())
+            .bind::<Text, _>(next.account_id.principal_server_id.as_str())
             .bind::<Text, _>(next.pcr_realm_id.as_str())
             .bind::<Text, _>(next.genesis_event.event_id.as_str())
             .bind::<Text, _>(expected)
@@ -220,8 +220,8 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                  ) \
                  SELECT EXISTS(SELECT 1 FROM inserted) AS applied",
             )
-            .bind::<Text, _>(next.authority_key.principal_id.as_str())
-            .bind::<Text, _>(next.authority_key.principal_server_id.as_str())
+            .bind::<Text, _>(next.account_id.principal_id.as_str())
+            .bind::<Text, _>(next.account_id.principal_server_id.as_str())
             .bind::<Text, _>(next.pcr_realm_id.as_str())
             .bind::<Text, _>(next.genesis_event.event_id.as_str())
             .bind::<Jsonb, _>(&projection)
@@ -238,14 +238,14 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
             Ok(PrincipalResolutionCasResult::Applied(next))
         } else {
             Ok(PrincipalResolutionCasResult::Conflict(
-                self.load_by_authority_key(&next.authority_key).await?,
+                self.load_by_account_id(&next.account_id).await?,
             ))
         }
     }
 
     async fn history_newest_first(
         &self,
-        authority_key: &PrincipalAuthorityKey,
+        account_id: &AccountId,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> PersistenceResult<Vec<Event>> {
@@ -257,8 +257,8 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                 "SELECT EXISTS(SELECT 1 FROM principal_resolution_events \
                   WHERE principal_id = $1 AND principal_server_id = $2 AND event_id = $3) AS applied",
             )
-            .bind::<Text, _>(authority_key.principal_id.as_str())
-            .bind::<Text, _>(authority_key.principal_server_id.as_str())
+            .bind::<Text, _>(account_id.principal_id.as_str())
+            .bind::<Text, _>(account_id.principal_server_id.as_str())
             .bind::<Text, _>(after)
             .get_result::<AppliedRow>(&mut *conn)
             .await
@@ -293,8 +293,8 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
               ORDER BY depth ASC \
               LIMIT $4",
         )
-        .bind::<Text, _>(authority_key.principal_id.as_str())
-        .bind::<Text, _>(authority_key.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.principal_id.as_str())
+        .bind::<Text, _>(account_id.principal_server_id.as_str())
         .bind::<Nullable<Text>, _>(after_event_ref)
         .bind::<BigInt, _>(i64::try_from(limit).unwrap_or(i64::MAX))
         .load::<EventRow>(&mut *conn)

@@ -145,7 +145,7 @@ fn admission_conflict(
     head: &AccountStatusRecord,
 ) -> Option<AccountStatusReplicaConflictKind> {
     if record.binding_version == head.binding_version
-        && (record.principal_authority != head.principal_authority
+        && (record.account_id != head.account_id
             || record.principal_control_realm_id != head.principal_control_realm_id)
     {
         return Some(AccountStatusReplicaConflictKind::Fork);

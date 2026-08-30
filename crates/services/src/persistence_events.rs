@@ -1452,13 +1452,13 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
 
     async fn retire_owner_account_keypackages(
         &self,
-        owner_account_id: &str,
+        owner_account_pk: soland_storage::AccountPk,
         retired_at: i64,
     ) -> crate::ServiceResult<usize> {
         let rows = self.0.mls_key_packages().snapshot_all().await?;
         let mut retired = 0;
         for row in rows.into_iter().filter(|row| {
-            row.owner_account_id.as_str() == owner_account_id
+            row.owner_account_pk == owner_account_pk
                 && row.claimed_by_mls_group_id.is_none()
                 && row.consumed_at.is_none()
         }) {

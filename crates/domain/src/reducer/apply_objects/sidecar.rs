@@ -50,7 +50,7 @@ impl ProjectionState {
         }
         if let Some(existing) = self.sidecars.values().find(|existing| {
             existing.realm_id == operation.realm_id.as_str()
-                && existing.controller_id == controller_id.as_str()
+                && existing.controller_id == controller_id.to_string()
                 && existing.state != AgentSidecarState::Tombstoned
         }) {
             return if existing.sidecar_id == sidecar_id {
@@ -107,7 +107,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.context.sender.as_str() != sidecar.controller_id.as_str()
+            || operation.context.sender.to_string() != sidecar.controller_id
         {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
@@ -190,7 +190,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.context.sender.as_str() != sidecar.controller_id.as_str()
+            || operation.context.sender.to_string() != sidecar.controller_id
             || payload.encrypted_payload.validate().is_err()
             || !self.sidecar_contexts.contains_key(&(
                 payload.sidecar_id.to_string(),

@@ -180,7 +180,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_id: account.account_id.clone(),
+        controller_account_pk: account.account_id.clone(),
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -248,7 +248,7 @@ pub(super) async fn submit_agent_runtime_key_request(
                             ))
                         },
                     )?,
-                    controller_account_id: account.account_id.clone(),
+                    controller_account_pk: account.account_id.clone(),
                     recipient_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
                         .map_err(|error| {
                             AppError::internal(format!(
@@ -1072,7 +1072,7 @@ async fn validate_agent_signing_key_binding_parts(
             "controller verification method device fragment is invalid: {error}"
         ))
     })?;
-    let authority = arkret_wire::PrincipalAuthorityKey::new(
+    let authority = arkret_wire::AccountId::new(
         binding.controller_id.clone(),
         arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!("configured service_id invalid: {error}"))
@@ -1256,7 +1256,7 @@ fn ensure_current_runtime_key_request_matches(
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
     recipient_actor_id: arkret_wire::DidCoreId,
-    controller_account_id: arkret_wire::ServiceAccountId,
+    controller_account_pk: arkret_wire::ServiceAccountId,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
 }
@@ -1272,7 +1272,7 @@ pub(super) fn account_notification_context(
         .ok()?,
         recipient_actor_id: arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
             .ok()?,
-        controller_account_id: agent_record.controller_account_id.clone()?,
+        controller_account_pk: agent_record.controller_account_pk.clone()?,
         recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
             .ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
@@ -1306,7 +1306,7 @@ pub(super) async fn persist_terminal_account_notification(
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
                     recipient_actor_id: context.recipient_actor_id,
-                    controller_account_id: context.controller_account_id.clone(),
+                    controller_account_pk: context.controller_account_pk.clone(),
                     recipient_id: context.recipient_id.clone(),
                     source_account_artifact_id: context.approval_request_id.to_string(),
                 },
@@ -1319,7 +1319,7 @@ pub(super) async fn persist_terminal_account_notification(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        context.controller_account_id.to_string(),
+        context.controller_account_pk.to_string(),
         context.recipient_id.to_string(),
     ));
     Ok(())
@@ -2032,7 +2032,7 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8528")
                 .expect("valid notification uuid"),
         );
-        record.controller_account_id =
+        record.controller_account_pk =
             Some(arkret_wire::ServiceAccountId::new("account-test-controller".to_owned()).unwrap());
         record.recipient_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
@@ -2045,7 +2045,7 @@ mod requested_scope_tests {
             "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
         );
         assert_eq!(
-            context.controller_account_id.as_str(),
+            context.controller_account_pk.as_str(),
             "account-test-controller"
         );
     }

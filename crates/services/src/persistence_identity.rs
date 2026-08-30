@@ -29,26 +29,27 @@ struct PersistenceDidDocuments(Arc<dyn PersistenceStore>);
 impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn find_account_by_actor(
         &self,
-        actor_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<crate::identity::AccountIdentity>> {
-        Ok(self
-            .0
-            .accounts()
-            .get(actor_id)
-            .await?
-            .map(|account| crate::identity::AccountIdentity {
-                account_id: account.id,
-            }))
+        Ok(self.0.accounts().get(account_id).await?.map(|account| {
+            crate::identity::AccountIdentity {
+                account_pk: account.pk,
+                account_id: arkret_wire::AccountId::new(
+                    account.principal_id,
+                    account.principal_server_id,
+                ),
+            }
+        }))
     }
 
     async fn account_by_id(
         &self,
-        account_id: &str,
+        account_pk: AccountPk,
     ) -> crate::ServiceResult<Option<crate::identity::AccountProfileState>> {
         Ok(self
             .0
             .accounts()
-            .get_by_id(account_id)
+            .get_by_pk(account_pk)
             .await?
             .map(application_account_profile))
     }
@@ -56,32 +57,32 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn register_account(
         &self,
         command: crate::identity::RegisterAccountCommand,
-    ) -> crate::ServiceResult<()> {
+    ) -> crate::ServiceResult<crate::identity::AccountIdentity> {
         let account = soland_storage::AccountRecord {
-            id: command.account_id,
-            principal_id: command.principal_id.clone(),
+            pk: AccountPk(0),
+            principal_id: command.account_id.principal_id.clone(),
+            principal_server_id: command.account_id.principal_server_id.clone(),
             localpart: command.localpart.clone(),
             display_name: command.display_name,
             bio: None,
             avatar_blob_ref: None,
             created_at: command.created_at,
         };
-        self.0.accounts().put(&account).await?;
-        self.0
-            .account_localparts()
-            .add(command.principal_id.as_str(), &command.localpart, true)
-            .await?;
-        Ok(())
+        let account_pk = self.0.accounts().put(&account).await?;
+        Ok(crate::identity::AccountIdentity {
+            account_pk,
+            account_id: command.account_id,
+        })
     }
 
     async fn account(
         &self,
-        actor_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<crate::identity::AccountProfileState>> {
         Ok(self
             .0
             .accounts()
-            .get(actor_id)
+            .get(account_id)
             .await?
             .map(application_account_profile))
     }
@@ -108,19 +109,22 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(())
     }
 
-    async fn delete_account(&self, actor_id: &str) -> crate::ServiceResult<()> {
-        self.0.accounts().delete(actor_id).await?;
+    async fn delete_account(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> crate::ServiceResult<()> {
+        self.0.accounts().delete(account_id).await?;
         Ok(())
     }
 
     async fn account_localparts(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
     ) -> crate::ServiceResult<Vec<crate::identity::AccountLocalpartState>> {
         Ok(self
             .0
             .account_localparts()
-            .list_for_account(actor_id)
+            .list_for_account(account_pk)
             .await?
             .into_iter()
             .map(application_account_localpart)
@@ -141,43 +145,47 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
 
     async fn add_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
         primary: bool,
     ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
         Ok(application_account_localpart(
             self.0
                 .account_localparts()
-                .add(actor_id, localpart, primary)
+                .add(account_pk, localpart, primary)
                 .await?,
         ))
     }
 
     async fn set_primary_localpart(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
     ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
         Ok(application_account_localpart(
             self.0
                 .account_localparts()
-                .set_primary(actor_id, localpart)
+                .set_primary(account_pk, localpart)
                 .await?,
         ))
     }
 
-    async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> crate::ServiceResult<()> {
+    async fn remove_localpart(
+        &self,
+        account_pk: AccountPk,
+        localpart: &str,
+    ) -> crate::ServiceResult<()> {
         self.0
             .account_localparts()
-            .remove(actor_id, localpart)
+            .remove(account_pk, localpart)
             .await?;
         Ok(())
     }
 
-    async fn clear_localparts(&self, actor_id: &str) -> crate::ServiceResult<()> {
+    async fn clear_localparts(&self, account_pk: AccountPk) -> crate::ServiceResult<()> {
         self.0
             .account_localparts()
-            .clear_for_account(actor_id)
+            .clear_for_account(account_pk)
             .await?;
         Ok(())
     }
@@ -244,7 +252,11 @@ fn application_account_profile(
     account: soland_storage::AccountRecord,
 ) -> crate::identity::AccountProfileState {
     crate::identity::AccountProfileState {
-        id: account.id,
+        pk: account.pk,
+        account_id: arkret_wire::AccountId::new(
+            account.principal_id.clone(),
+            account.principal_server_id.clone(),
+        ),
         principal_id: account.principal_id,
         localpart: account.localpart,
         display_name: account.display_name,
@@ -258,8 +270,9 @@ fn persistence_account_profile(
     account: crate::identity::AccountProfileState,
 ) -> soland_storage::AccountRecord {
     soland_storage::AccountRecord {
-        id: account.id,
+        pk: account.pk,
         principal_id: account.principal_id,
+        principal_server_id: account.account_id.principal_server_id,
         localpart: account.localpart,
         display_name: account.display_name,
         bio: account.bio,
@@ -273,7 +286,7 @@ fn application_account_localpart(
 ) -> crate::identity::AccountLocalpartState {
     crate::identity::AccountLocalpartState {
         id: record.id,
-        account_principal_id: record.account_principal_id,
+        account_pk: record.account_pk,
         localpart: record.localpart,
         is_primary: record.is_primary,
         created_at: record.created_at,
@@ -439,8 +452,8 @@ fn application_mimi_consent_correlation(
 impl crate::identity::ContactPort for PersistenceContacts {
     async fn contact_any(
         &self,
-        requester_id: &arkret_wire::DidCoreId,
-        target_id: &arkret_wire::DidCoreId,
+        requester_id: &arkret_wire::ActorId,
+        target_id: &arkret_wire::ActorId,
     ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
         Ok(self
             .0
@@ -452,7 +465,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
 
     async fn contacts_for_actor(
         &self,
-        actor_id: &arkret_wire::DidCoreId,
+        actor_id: &arkret_wire::ActorId,
     ) -> crate::ServiceResult<Vec<crate::identity::ContactRecord>> {
         Ok(self
             .0
@@ -856,7 +869,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             approval_request_id: command.approval_request_id.clone(),
             approval_notification_id: command.approval_notification_id.clone(),
             approval_requested_at: command.approval_requested_at,
-            controller_account_id: command.controller_account_id.clone(),
+            controller_account_pk: command.controller_account_pk,
             recipient_id: command.recipient_id.clone(),
             runtime_key_binding_digest: command.runtime_key_binding_digest.clone(),
             runtime_public_key_digest: command.runtime_public_key_digest.clone(),
@@ -1043,7 +1056,7 @@ fn application_agent_pairing(
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
-        controller_account_id: record.controller_account_id,
+        controller_account_pk: record.controller_account_pk,
         recipient_id: record.recipient_id,
         runtime_key_binding_digest: record.runtime_key_binding_digest,
         runtime_public_key_digest: record.runtime_public_key_digest,
@@ -1089,7 +1102,7 @@ fn persistence_agent_pairing(
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
-        controller_account_id: record.controller_account_id,
+        controller_account_pk: record.controller_account_pk,
         recipient_id: record.recipient_id,
         runtime_key_binding_digest: record.runtime_key_binding_digest,
         runtime_public_key_digest: record.runtime_public_key_digest,
@@ -1442,7 +1455,7 @@ fn application_session_identity(
 ) -> crate::identity::SessionIdentityState {
     crate::identity::SessionIdentityState {
         token_hash: session.token_hash,
-        service_account_id: Some(session.service_account_id),
+        account_pk: Some(session.account_pk),
         actor: session.actor,
         device_id: session.device_id,
         audience: session.audience,
@@ -1470,8 +1483,8 @@ fn persistence_session_identity(
     );
     soland_storage::SessionRecord {
         token_hash: session.token_hash,
-        service_account_id: session
-            .service_account_id
+        account_pk: session
+            .account_pk
             .expect("only account-bound sessions may be persisted"),
         actor: session.actor,
         device_id: session.device_id,

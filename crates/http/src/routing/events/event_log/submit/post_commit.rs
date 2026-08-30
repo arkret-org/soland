@@ -44,9 +44,9 @@ pub(super) async fn persist_principal_resolution_projection(
     } else {
         None
     };
-    let (authority_key, pcr_realm_id, genesis_event) = if let Some(existing) = existing.as_ref() {
+    let (account_id, pcr_realm_id, genesis_event) = if let Some(existing) = existing.as_ref() {
         (
-            existing.authority_key.clone(),
+            existing.account_id.clone(),
             existing.pcr_realm_id.clone(),
             existing.genesis_event.clone(),
         )
@@ -54,14 +54,14 @@ pub(super) async fn persist_principal_resolution_projection(
         if kind != arkret_wire::EventKind::RealmCreate.as_str() {
             return Err("principal resolution update has no account-local PCR lineage".to_owned());
         }
-        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-            event.actor_id.clone(),
-            event.principal_server_id.clone(),
-        );
-        (authority_key, event.realm_id.clone(), event.clone())
+        let account_id =
+            event.actor_id.as_account_id().cloned().ok_or_else(|| {
+                "principal resolution genesis actor is not an AccountId".to_owned()
+            })?;
+        (account_id, event.realm_id.clone(), event.clone())
     };
     let record = soland_storage::PrincipalResolutionRecord {
-        authority_key,
+        account_id,
         pcr_realm_id,
         genesis_event,
         current_event: event.clone(),

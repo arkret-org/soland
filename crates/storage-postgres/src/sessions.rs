@@ -1,5 +1,7 @@
+use soland_storage::AccountPk;
+
 use super::{
-    Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
+    BigInt, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
     QueryableByName, RunQueryDsl, SessionRecord, SessionStore, Text, Timestamptz, Value,
     async_trait, decode_session_agent_payload, encode_session_payload, pg_conn, sql_query,
 };
@@ -13,7 +15,7 @@ impl SessionStore for PgSessionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS token_hash, service_account_id, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, account_pk, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
              FROM sessions WHERE id = $1",
         )
         .bind::<Text, _>(token)
@@ -31,14 +33,14 @@ impl SessionStore for PgSessionStore {
             .map_err(PersistenceError::database)?;
         let payload = encode_session_payload(record);
         sql_query(
-            "INSERT INTO sessions (id, service_account_id, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
+            "INSERT INTO sessions (id, account_pk, actor_id, device_id, audience, session_public_key, payload, expires_at, revoked_at, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET service_account_id = EXCLUDED.service_account_id, actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
+             ON CONFLICT (id) DO UPDATE SET account_pk = EXCLUDED.account_pk, actor_id = EXCLUDED.actor_id, device_id = EXCLUDED.device_id, \
              audience = EXCLUDED.audience, session_public_key = EXCLUDED.session_public_key, \
              payload = EXCLUDED.payload, expires_at = EXCLUDED.expires_at, revoked_at = EXCLUDED.revoked_at, updated_at = NOW()",
         )
         .bind::<Text, _>(&record.token_hash)
-        .bind::<Text, _>(record.service_account_id.as_str())
+        .bind::<BigInt, _>(record.account_pk.get())
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.device_id)
         .bind::<Text, _>(&record.audience)
@@ -79,7 +81,7 @@ impl SessionStore for PgSessionStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS token_hash, service_account_id, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
+            "SELECT id AS token_hash, account_pk, actor_id AS actor, device_id, audience, session_public_key, payload, expires_at, created_at, revoked_at \
              FROM sessions",
         )
         .load::<SessionRow>(&mut *conn)
@@ -94,8 +96,8 @@ impl SessionStore for PgSessionStore {
 struct SessionRow {
     #[diesel(sql_type = Text)]
     token_hash: String,
-    #[diesel(sql_type = Text)]
-    service_account_id: String,
+    #[diesel(sql_type = BigInt)]
+    account_pk: i64,
     #[diesel(sql_type = Text)]
     actor: String,
     #[diesel(sql_type = Text)]
@@ -119,10 +121,7 @@ impl TryFrom<SessionRow> for SessionRecord {
     fn try_from(row: SessionRow) -> Result<Self, Self::Error> {
         Ok(Self {
             token_hash: row.token_hash,
-            service_account_id: arkret_identifiers::ServiceAccountId::new(row.service_account_id)
-                .map_err(|error| {
-                PersistenceError::SchemaViolation(error.to_string())
-            })?,
+            account_pk: AccountPk(row.account_pk),
             actor: row.actor,
             device_id: row.device_id,
             audience: row.audience,

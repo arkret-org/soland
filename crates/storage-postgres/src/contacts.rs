@@ -1,4 +1,5 @@
 use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
+use arkret_wire::ActorId;
 use diesel::sql_types::{BigInt, Binary};
 
 use super::{
@@ -167,9 +168,9 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
 #[derive(QueryableByName)]
 struct ContactRow {
     #[diesel(sql_type = Text)]
-    requester_id: DidCoreId,
+    requester_id: String,
     #[diesel(sql_type = Text)]
-    target_id: DidCoreId,
+    target_id: String,
     #[diesel(sql_type = Nullable<Text>)]
     contact_round_id: Option<Hash>,
     #[diesel(sql_type = Nullable<BigInt>)]
@@ -227,8 +228,12 @@ fn encode_contact_json<T: serde::Serialize + ?Sized>(
 
 fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> {
     Ok(ContactRecord {
-        requester_id: row.requester_id,
-        target_id: row.target_id,
+        requester_id: serde_json::from_str(&row.requester_id).map_err(|error| {
+            PersistenceError::Internal(format!("invalid contacts.requester_id ActorId: {error}"))
+        })?,
+        target_id: serde_json::from_str(&row.target_id).map_err(|error| {
+            PersistenceError::Internal(format!("invalid contacts.target_id ActorId: {error}"))
+        })?,
         contact_round_id: row.contact_round_id,
         version: row.version.map(u64::try_from).transpose().map_err(|_| {
             PersistenceError::Internal("contacts.version contains a negative value".to_owned())
@@ -277,8 +282,8 @@ const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, versio
 impl ContactStore for PgContactStore {
     async fn get(
         &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
+        requester_id: &ActorId,
+        target_id: &ActorId,
     ) -> PersistenceResult<Option<ContactRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -288,8 +293,8 @@ impl ContactStore for PgContactStore {
              WHERE requester_id = $1 AND target_id = $2 \
              LIMIT 1"
         ))
-        .bind::<Text, _>(requester_id)
-        .bind::<Text, _>(target_id)
+        .bind::<Text, _>(requester_id.to_string())
+        .bind::<Text, _>(target_id.to_string())
         .get_result::<ContactRow>(&mut *conn)
         .await
         .optional()
@@ -338,8 +343,8 @@ impl ContactStore for PgContactStore {
                 updated_at = EXCLUDED.updated_at",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.requester_id)
-        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(record.requester_id.to_string())
+        .bind::<Text, _>(record.target_id.to_string())
         .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(|_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()))?)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
@@ -401,8 +406,8 @@ impl ContactStore for PgContactStore {
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
         )
-        .bind::<Text, _>(&record.requester_id)
-        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(record.requester_id.to_string())
+        .bind::<Text, _>(record.target_id.to_string())
         .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(
             |_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()),
@@ -435,7 +440,7 @@ impl ContactStore for PgContactStore {
         Ok(affected == 1)
     }
 
-    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>> {
+    async fn list_for_actor(&self, actor_id: &ActorId) -> PersistenceResult<Vec<ContactRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -444,24 +449,20 @@ impl ContactStore for PgContactStore {
              WHERE requester_id = $1 OR target_id = $1 \
              ORDER BY created_at ASC, requester_id ASC, target_id ASC"
         ))
-        .bind::<Text, _>(actor_id)
+        .bind::<Text, _>(actor_id.to_string())
         .get_results::<ContactRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
         rows.into_iter().map(contact_record_from_row).collect()
     }
 
-    async fn delete(
-        &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
-    ) -> PersistenceResult<()> {
+    async fn delete(&self, requester_id: &ActorId, target_id: &ActorId) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM contacts WHERE requester_id = $1 AND target_id = $2")
-            .bind::<Text, _>(requester_id)
-            .bind::<Text, _>(target_id)
+            .bind::<Text, _>(requester_id.to_string())
+            .bind::<Text, _>(target_id.to_string())
             .execute(&mut *conn)
             .await
             .map(|_| ())

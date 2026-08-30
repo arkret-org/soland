@@ -40,7 +40,7 @@ fn agent_fanout_submit_error(
 pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
-    authority: &arkret_wire::PrincipalAuthorityKey,
+    authority: &arkret_wire::AccountId,
 ) -> Result<String, AppError> {
     let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
@@ -56,7 +56,7 @@ pub(super) async fn require_controller_principal_control_realm(
     }
     let record = state
         .persistence()
-        .principal_resolution_by_authority_key(authority)
+        .principal_resolution_by_account_id(authority)
         .await
         .map_err(|error| {
             AppError::internal(format!("controller authority lookup failed: {error}"))

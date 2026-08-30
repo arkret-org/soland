@@ -113,6 +113,5 @@ pub(super) fn project_search_users_row(
         avatar_blob_ref: None,
         membership: None,
         verified: actor.get("verified").and_then(Value::as_bool),
-        member_delivery_binding: None,
     })
 }

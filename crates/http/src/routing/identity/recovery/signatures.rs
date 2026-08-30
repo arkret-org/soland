@@ -191,7 +191,7 @@ pub(super) async fn verify_recovery_auth_signature(
                 "recovery authority device fragment is invalid: {error}"
             ))
         })?;
-    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+    let authority_key = arkret_wire::AccountId::new(
         arkret_identifiers::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
             AppError::internal(format!("recovery policy principal id is invalid: {error}"))
         })?,
@@ -201,7 +201,7 @@ pub(super) async fn verify_recovery_auth_signature(
     );
     let authority = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority_key)
+        .principal_resolution_by_account_id(&authority_key)
         .await
         .map_err(|error| AppError::internal(format!("recovery authority lookup failed: {error}")))?
         .ok_or_else(|| {

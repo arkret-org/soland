@@ -424,7 +424,7 @@ async fn principal_verification_source(
 /// authority coordinate and the accepted device authorization in that PCR.
 async fn principal_authorized_device_binding_with_account_authority_async(
     verification_method: &str,
-    authority: &arkret_wire::PrincipalAuthorityKey,
+    authority: &arkret_wire::AccountId,
     expected_device_id: &arkret_identifiers::DeviceId,
     state: &AppState,
 ) -> Result<
@@ -465,7 +465,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
 
     let durable = state
         .persistence()
-        .principal_resolution_by_authority_key(authority)
+        .principal_resolution_by_account_id(authority)
         .await
         .map_err(|error| {
             fail(format!(
@@ -576,7 +576,7 @@ pub async fn verify_principal_authorized_jws_with_account_authority_async(
     canonical_bytes: &[u8],
     jws: &str,
     verification_method: &str,
-    authority: &arkret_wire::PrincipalAuthorityKey,
+    authority: &arkret_wire::AccountId,
     expected_device_id: &arkret_identifiers::DeviceId,
     state: &AppState,
 ) -> Result<(), PrincipalAuthorizedJwsError> {
@@ -609,7 +609,7 @@ pub async fn verify_principal_authorized_ed25519_signature_with_account_authorit
     canonical_bytes: &[u8],
     signature_b64url: &str,
     verification_method: &str,
-    authority: &arkret_wire::PrincipalAuthorityKey,
+    authority: &arkret_wire::AccountId,
     expected_device_id: &arkret_identifiers::DeviceId,
     state: &AppState,
 ) -> Result<VerifiedPrincipalDeviceSignatureBinding, PrincipalAuthorizedJwsError> {
@@ -772,13 +772,11 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 ));
             }
         }
-        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-            expected_principal_id.clone(),
-            principal_server_id,
-        );
+        let authority_key =
+            arkret_wire::AccountId::new(expected_principal_id.clone(), principal_server_id);
         let durable = state
             .persistence()
-            .principal_resolution_by_authority_key(&authority_key)
+            .principal_resolution_by_account_id(&authority_key)
             .await
             .map_err(|error| {
                 fail(format!(

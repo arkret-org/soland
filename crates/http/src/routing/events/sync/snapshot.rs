@@ -555,7 +555,7 @@ async fn account_notification_delta(
         .deliveries()
         .list_account_deltas(
             soland_services::delivery::ListAccountNotificationDeltasQuery {
-                controller_account_id: account.account_id,
+                controller_account_pk: account.account_id,
                 recipient_id: state.service_id().clone(),
                 after_position: is_incremental.then_some(after_cursor.notification_position),
             },

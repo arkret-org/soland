@@ -8,7 +8,7 @@ const AGENT_PROVISION_ALLOCATION_DOMAIN: &str = "org.arkret.soland.agent_provisi
 #[serde(deny_unknown_fields)]
 struct PreparedAgentProvision {
     outcome: AgentProvisionOutcome,
-    controller_authority: arkret_wire::PrincipalAuthorityKey,
+    controller_authority: arkret_wire::AccountId,
     slug: String,
     requested_scope: AgentKeyScope,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -246,10 +246,8 @@ pub(super) async fn provision_agent(
             let controller_id = DidCoreId::new(controller_id.clone()).map_err(|error| {
                 AppError::internal(format!("authenticated controller id is invalid: {error}"))
             })?;
-            let controller_authority = arkret_wire::PrincipalAuthorityKey::new(
-                controller_id.clone(),
-                controller_principal_server_id,
-            );
+            let controller_authority =
+                arkret_wire::AccountId::new(controller_id.clone(), controller_principal_server_id);
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(controller_id.as_str())
@@ -670,7 +668,7 @@ pub(super) async fn provision_agent(
                 .min(12 * 60 * 60 * 1000);
             let expires_at =
                 now_utc + chrono::Duration::milliseconds(effective_pairing_ttl_ms as i64);
-            principal.controller_account_id = Some(controller_account.account_id.clone());
+            principal.controller_account_pk = Some(controller_account.account_id.clone());
             principal.recipient_id = Some(state.service_id().clone());
             principal.provision_event_refs = Some(json!({
                 "provision_event_id": provision_event_id,

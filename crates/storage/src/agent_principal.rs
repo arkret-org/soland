@@ -2,10 +2,12 @@ use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentRuntimeApprovalControllerProjection,
 };
 use arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding;
-use arkret_wire::{DidUrl, OpaqueLocalId, ServiceAccountId};
+use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::AccountPk;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PendingAgentPairingCommitIntent {
@@ -39,7 +41,7 @@ pub struct AgentPrincipalRecord {
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
-    pub controller_account_id: Option<ServiceAccountId>,
+    pub controller_account_pk: Option<AccountPk>,
     pub recipient_id: Option<String>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
@@ -84,7 +86,7 @@ impl AgentPrincipalRecord {
             pairing_code: None,
             pairing_expires_at: None,
             approval_request_id: None,
-            controller_account_id: None,
+            controller_account_pk: None,
             recipient_id: None,
             runtime_key_binding_digest: None,
             runtime_public_key_digest: None,

@@ -600,7 +600,7 @@ fn roster_body(audience: &str) -> SyncRequestBody {
 
 fn roster_session(state: &AppState, actor: &str) -> SessionIdentityState {
     SessionIdentityState {
-        service_account_id: None,
+        account_pk: None,
         token_hash: "token".to_owned(),
         actor: actor.to_owned(),
         device_id: "device-1".to_owned(),

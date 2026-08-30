@@ -162,7 +162,7 @@ fn applet_event_session(state: &AppState, event: &Event) -> SessionRecord {
     let now = chrono::Utc::now();
     SessionRecord {
         token_hash: "applet-transaction-source-signature".to_owned(),
-        service_account_id: None,
+        account_pk: None,
         actor: event.actor_id.to_string(),
         // An applet service is not a device. This session authenticates the
         // source service signature, so it names no device rather than a

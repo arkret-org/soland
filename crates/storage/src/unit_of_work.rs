@@ -144,7 +144,7 @@ pub fn has_self_principal_pcr_device_authorized_shape(
         return false;
     };
     arkret_wire::project_did_to_core_id(&controller).is_ok_and(|controller| {
-        controller == event.actor_id
+        controller == *event.actor_id.signing_principal_id()
             && fragment
                 .strip_prefix("ak:device:")
                 .is_some_and(|device| !device.is_empty())

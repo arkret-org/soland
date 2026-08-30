@@ -227,7 +227,7 @@ pub(crate) async fn active_series_pointer_is_current(
     let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!("local Principal Server id is invalid: {error}"))
     })?;
-    let authority = arkret_wire::PrincipalAuthorityKey::new(controller_core, principal_server_id);
+    let authority = arkret_wire::AccountId::new(controller_core, principal_server_id);
     let verification_method = pointer.auth_data.verification_method.as_str();
     let Some((_, device_fragment)) = verification_method.rsplit_once('#') else {
         return Ok(false);

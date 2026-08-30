@@ -1,16 +1,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_wire::ServiceAccountId;
 use async_trait::async_trait;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
-use soland_storage::SignalRelayRecord;
 pub use soland_storage::{
     AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
 };
+use soland_storage::{AccountPk, SignalRelayRecord};
 
 use crate::ServiceResult;
 
@@ -41,7 +40,7 @@ pub struct StoreAccountNotificationDeltaCommand {
 
 #[derive(Clone, Debug)]
 pub struct ListAccountNotificationDeltasQuery {
-    pub controller_account_id: ServiceAccountId,
+    pub controller_account_pk: AccountPk,
     pub recipient_id: String,
     pub after_position: Option<i64>,
 }
@@ -58,7 +57,7 @@ pub trait NotificationWritePort: Send + Sync {
     -> ServiceResult<()>;
     async fn list_for_account(
         &self,
-        controller_account_id: &ServiceAccountId,
+        controller_account_pk: &AccountPk,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> ServiceResult<Vec<StoredAccountNotificationDelta>>;
@@ -414,7 +413,7 @@ impl DeliveryService {
     ) -> ServiceResult<Vec<StoredAccountNotificationDelta>> {
         self.notifications
             .list_for_account(
-                &query.controller_account_id,
+                &query.controller_account_pk,
                 &query.recipient_id,
                 query.after_position,
             )
@@ -865,7 +864,7 @@ mod tests {
 
         async fn list_for_account(
             &self,
-            _controller_account_id: &ServiceAccountId,
+            _controller_account_pk: &AccountPk,
             _recipient_id: &str,
             _after_position: Option<i64>,
         ) -> ServiceResult<Vec<StoredAccountNotificationDelta>> {

@@ -81,16 +81,11 @@ const LAST_RESORT_KEYPACKAGE_MAX_LIFETIME_SECS: i64 = 30 * 24 * 60 * 60;
 
 async fn ensure_keypackage_owner_account_active(
     state: &AppState,
-    owner_account_id: &str,
+    owner_account_pk: soland_storage::AccountPk,
 ) -> Result<(), AppError> {
-    if owner_account_id.is_empty() || owner_account_id.starts_with("ak:") {
-        return Err(AppError::capability_denied(
-            "session has an invalid service account binding",
-        ));
-    }
     let account = state
         .identities()
-        .account_by_id(owner_account_id)
+        .account_by_id(owner_account_pk)
         .await
         .map_err(|error| AppError::internal(format!("owner account lookup failed: {error}")))?
         .ok_or_else(|| AppError::capability_denied("owner account is unavailable"))?;
@@ -102,13 +97,18 @@ async fn ensure_keypackage_owner_account_active(
     Ok(())
 }
 
-async fn local_keypackage_owner_account_id(
+async fn local_keypackage_owner_account_pk(
     state: &AppState,
     actor_id: &str,
-) -> Result<arkret_identifiers::ServiceAccountId, AppError> {
+) -> Result<soland_storage::AccountPk, AppError> {
+    let principal_id = arkret_wire::DidCoreId::new(actor_id.to_owned())
+        .map_err(|_| AppError::capability_denied("owner principal id is invalid"))?;
+    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        .map_err(|_| AppError::internal("local Principal Server id is invalid"))?;
+    let account_id = arkret_wire::AccountId::new(principal_id, principal_server_id);
     let account = state
         .identities()
-        .account(actor_id)
+        .account(&account_id)
         .await
         .map_err(|error| AppError::internal(format!("owner account lookup failed: {error}")))?
         .ok_or_else(|| AppError::capability_denied("owner account is unavailable"))?;
@@ -122,7 +122,7 @@ async fn local_keypackage_owner_account_id(
     {
         return Err(AppError::capability_denied("owner account is not active"));
     }
-    Ok(account.id)
+    Ok(account.pk)
 }
 
 fn welcome_recipient_device_id(
@@ -287,15 +287,15 @@ async fn upload_keypackage(
 ) -> JsonResult<KeyPackagesUploadOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    session.service_account_id.as_ref().ok_or_else(|| {
+    session.account_pk.as_ref().ok_or_else(|| {
         AppError::capability_denied("KeyPackage upload requires an account-bound session")
     })?;
-    // `service_account_id` belongs to the credential issuer (normally the
+    // `account_pk` belongs to the credential issuer (normally the
     // Auth Server), whereas KeyPackage rows are owned by this Principal
     // Server's local account id. Resolve that local id through the stable
     // principal carried by the authenticated session; never reinterpret one
     // service's local account id in another service's account namespace.
-    let owner_account_id = local_keypackage_owner_account_id(state, &session.actor).await?;
+    let owner_account_pk = local_keypackage_owner_account_pk(state, &session.actor).await?;
 
     let body = body.into_inner();
     body.validate_shape().map_err(AppError::param_invalid)?;
@@ -521,7 +521,7 @@ async fn upload_keypackage(
             keypackage_id: keypackage_id.clone(),
             keypackage_ref: keypackage_ref.clone(),
             keypackage_digest,
-            owner_account_id: owner_account_id.clone(),
+            owner_account_pk: owner_account_pk.get(),
             actor_id: actor_id.clone(),
             device_id: device_id.clone(),
             lifetime: soland_domain::reducer::KeyPackageLifetimeProjection {
@@ -748,7 +748,7 @@ async fn claim_keypackage_at_destination(
         else {
             continue;
         };
-        if ensure_keypackage_owner_account_active(state, predicted.owner_account_id.as_str())
+        if ensure_keypackage_owner_account_active(state, predicted.owner_account_pk)
             .await
             .is_err()
         {
@@ -3573,15 +3573,10 @@ async fn revoke_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let session_owner_account_id = session.service_account_id.as_ref().ok_or_else(|| {
+    let session_owner_account_pk = session.account_pk.ok_or_else(|| {
         AppError::capability_denied("KeyPackage revoke requires an account-bound session")
     })?;
-    if &body.owner_account_id != session_owner_account_id {
-        return Err(AppError::capability_denied(
-            "owner_account_id must match the calling service account",
-        ));
-    }
-    ensure_keypackage_owner_account_active(state, session_owner_account_id.as_str()).await?;
+    ensure_keypackage_owner_account_active(state, session_owner_account_pk).await?;
     let device_id = body.device_id.to_string();
     if device_id != session.device_id {
         return Err(AppError::capability_denied(
@@ -3614,7 +3609,7 @@ async fn revoke_keypackages(
             .await
         {
             Ok(Some(record))
-                if &record.owner_account_id != session_owner_account_id
+                if record.owner_account_pk != session_owner_account_pk
                     || record.actor_id != session.actor =>
             {
                 failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));

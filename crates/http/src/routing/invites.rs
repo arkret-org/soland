@@ -13,9 +13,6 @@ use arkret_models_collaboration::governance::invite_addressing::{
     InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
     PrincipalLocatorProofPurpose, SelfInviteDispatchRequestBody,
 };
-use arkret_models_collaboration::governance::member_delivery_binding_candidate::{
-    CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
-};
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
@@ -279,7 +276,7 @@ async fn peer_invites_submit(
             "peer-invite:{}:{request_hash}",
             trust_headers.source_trust_domain
         ),
-        service_account_id: None,
+        account_pk: None,
         actor: delivery.invite_event.actor_id.as_str().to_owned(),
         device_id: format!("peer-invite:{source_id}"),
         audience: state.service_id().clone(),
@@ -1362,7 +1359,6 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
             let evidence = IntroductionEvidence::HandleClaim {
                 handle,
                 handle_claim: Box::new(handle_claim.clone()),
-                member_delivery_binding_candidate: None,
                 resolved_by,
                 resolved_at: Some(chrono::Utc::now()),
             };
@@ -1462,7 +1458,6 @@ fn evaluate_invite_receive(
         IntroductionEvidence::HandleClaim {
             handle,
             handle_claim,
-            member_delivery_binding_candidate,
             resolved_by,
             ..
         } => {
@@ -1471,7 +1466,6 @@ fn evaluate_invite_receive(
                 constraints,
                 handle,
                 handle_claim,
-                member_delivery_binding_candidate.as_deref(),
                 resolved_by.as_ref(),
                 subject,
                 recipient_id,
@@ -1865,7 +1859,6 @@ fn handle_claim_evidence_valid(
     constraints: Option<&ReceivePolicyConstraints>,
     handle: &Handle,
     handle_claim: &HandleClaim,
-    candidate: Option<&MemberDeliveryBindingCandidate>,
     resolved_by: Option<&DidCoreId>,
     subject: &str,
     recipient_id: &str,
@@ -1892,11 +1885,6 @@ fn handle_claim_evidence_valid(
     if handle_claim.proofs.is_empty() {
         return false;
     }
-    if let Some(binding) = &handle_claim.member_delivery_binding
-        && binding.recipient_id.as_str() != recipient_id
-    {
-        return false;
-    }
     if !handle_domain_allowed(policy, constraints, handle.domain()) {
         return false;
     }
@@ -1904,11 +1892,6 @@ fn handle_claim_evidence_valid(
         return false;
     }
     if !resolved_by_allowed(policy, constraints, resolved_by) {
-        return false;
-    }
-    if let Some(candidate) = candidate
-        && !member_delivery_candidate_valid(candidate, handle, subject, recipient_id, now)
-    {
         return false;
     }
     true
@@ -1985,34 +1968,6 @@ fn resolved_by_allowed(
             !trusted.is_empty()
                 && resolved_by.is_some_and(|did| trusted.iter().any(|candidate| candidate == did))
         })
-}
-
-fn member_delivery_candidate_valid(
-    candidate: &MemberDeliveryBindingCandidate,
-    handle: &Handle,
-    subject: &str,
-    recipient_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    if candidate.intent != CandidateIntent::Invite {
-        return false;
-    }
-    if &candidate.handle != handle {
-        return false;
-    }
-    if candidate.subject_id.as_str() != subject {
-        return false;
-    }
-    if candidate.member_delivery_binding.recipient_id.as_str() != recipient_id {
-        return false;
-    }
-    let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
-        return false;
-    };
-    let context = CandidateValidationContext::new(candidate.audience.clone())
-        .with_now(now)
-        .with_expected_subject(subject_id);
-    candidate.validate(&context).is_ok()
 }
 
 fn validate_invite_delivery_consistency(

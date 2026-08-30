@@ -9,7 +9,7 @@ pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
 pub(crate) use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
-    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
+    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountPk, AccountRecord,
     AccountStatusReplicaStore, AccountStore, AgentPairingCommitIntent, AgentParticipationStore,
     AgentPrincipalRecord, AgentRuntimeActivation, AgentRuntimeApprovalWrite,
     AgentRuntimeEnqueueOutcome, AgentRuntimeMessageRecord, AgentSidecarContextRecord,

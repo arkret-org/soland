@@ -767,9 +767,9 @@ async fn contact_authority_realm(
                 "Contact account authority pair is unavailable",
             )
         })?;
-    if authority.authority_key.principal_id != holder.contact_actor_id()
+    if authority.account_id.principal_id != holder.contact_actor_id()
         || authority.pcr_realm_id != realm_id
-        || authority.authority_key.principal_server_id.as_str() != state.service_id()
+        || authority.account_id.principal_server_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1052,9 +1052,9 @@ async fn local_requester_current_proof(
     else {
         return Ok(None);
     };
-    if resolution.authority_key.principal_id != request_event.actor_id
+    if resolution.account_id.principal_id != *request_event.actor_id.signing_principal_id()
         || resolution.pcr_realm_id != request_event.realm_id
-        || resolution.authority_key.principal_server_id.as_str() != state.service_id()
+        || resolution.account_id.principal_server_id.as_str() != state.service_id()
     {
         return Ok(None);
     }

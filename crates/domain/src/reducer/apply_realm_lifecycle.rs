@@ -77,7 +77,7 @@ fn principal_genesis_resolution_value(
     let did = arkret_wire::Did::new(did.to_owned()).map_err(|_| "identity_resolution_invalid")?;
     let projected =
         arkret_wire::project_did_to_core_id(&did).map_err(|_| "identity_resolution_invalid")?;
-    if projected.as_str() != operation.context.sender.as_str()
+    if &projected != operation.context.sender.signing_principal_id()
         || commitment
             .get("method_history_head")
             .and_then(Value::as_str)
@@ -114,13 +114,11 @@ fn principal_genesis_resolution_value(
 /// controller, epoch, or generation than the signed create payload derives.
 fn genesis_authority_root_value(
     payload_object: Option<&serde_json::Map<String, Value>>,
-    created_by: &str,
+    created_by: &arkret_wire::ActorId,
 ) -> Result<Value, &'static str> {
     let _object = payload_object.ok_or("realm_authority_root_missing")?;
-    let controller = arkret_identifiers::DidCoreId::new(created_by)
-        .map_err(|_| "realm_authority_root_conflict")?;
     serde_json::to_value(
-        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(controller),
+        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(created_by.clone()),
     )
     .map_err(|_| "realm_authority_root_conflict")
 }
@@ -265,7 +263,7 @@ impl ProjectionState {
                     };
                 };
                 if self
-                    .member(&realm_id, payload.patch.controller_id.as_str())
+                    .member(&realm_id, &payload.patch.controller_id.to_string())
                     .is_none_or(|member| member.state != "join")
                     || serde_json::to_value(&payload.successor_acceptance)
                         .ok()
@@ -340,23 +338,25 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(new_state) = operation.payload.get("membership").and_then(Value::as_str) else {
-            return ProjectionEffect::Ignored;
+        let payload = match serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(operation.payload.clone())
+        {
+            Ok(payload) => payload,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
         };
-        if !matches!(new_state, "invite" | "join" | "leave" | "ban" | "knock") {
-            return ProjectionEffect::Ignored;
-        }
-        let member = operation
-            .payload
-            .get("actor_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+        let new_state = match payload.membership {
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join => "join",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Knock => "knock",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Leave => "leave",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Ban => "ban",
+        };
+        let member = payload.member_id.to_string();
         let realm_id = operation.realm_id.to_string();
-
-        if member.is_empty() {
-            return ProjectionEffect::Ignored;
-        }
         let current_state = self
             .member(&realm_id, &member)
             .map(|membership| membership.state.as_str())
@@ -374,82 +374,13 @@ impl ProjectionState {
             };
         }
 
-        // Spec 0a5ab85 (`membership_payload` conditional required) — when
-        // `membership=join`, the payload MUST carry `actor_id` (above) +
-        // `delivery_status`; when `delivery_status=routable`, it MUST carry
-        // `delivery_binding`. Validate here and reject malformed joins.
+        // Delivery is derived from the exact ActorId. Membership carries no
+        // parallel routing binding or server sidecar.
         if new_state == "join" {
             if let Err(reason) = self.check_membership_join_admission(operation) {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),
                 };
-            }
-            let delivery_status = operation
-                .payload
-                .get("delivery_status")
-                .and_then(Value::as_str);
-            match delivery_status {
-                None => {
-                    tracing::warn!(
-                        realm_id = %realm_id,
-                        member = %member,
-                        "rejected join without delivery_status (spec 0a5ab85)"
-                    );
-                    return ProjectionEffect::Ignored;
-                }
-                Some("routable") => {
-                    let Some(binding) = operation
-                        .payload
-                        .get("delivery_binding")
-                        .and_then(Value::as_object)
-                    else {
-                        tracing::warn!(
-                            realm_id = %realm_id,
-                            member = %member,
-                            "rejected routable join without delivery_binding (spec 0a5ab85)"
-                        );
-                        return ProjectionEffect::Ignored;
-                    };
-                    // R1.2 — `ak.realm.delivery_binding_policy` enforcement.
-                    // Without a projected policy cell, fail-closed for
-                    // routable joins per spec join-policy.md §5.1.3 —
-                    // there is no DID Document fallback path. The registered
-                    // Direct Conversation founding unit is the sole exception:
-                    // contact-and-direct-conversation.md §6 fixes that atomic
-                    // sequence as Realm create then peer join, so no policy
-                    // event can precede the peer join.
-                    let policy_value = self
-                        .realm_delivery_binding_policy_cell_value(&realm_id)
-                        .cloned()
-                        .or_else(|| {
-                            self.direct_conversation_bootstrap_delivery_policy(
-                                &realm_id, operation, binding,
-                            )
-                        });
-                    let Some(policy) = policy_value else {
-                        return ProjectionEffect::Rejected {
-                            reason: "delivery_binding_policy_unset".to_owned(),
-                        };
-                    };
-                    if let Err(reason) = enforce_delivery_binding_policy(&policy, binding) {
-                        return ProjectionEffect::Rejected {
-                            reason: reason.to_owned(),
-                        };
-                    }
-                }
-                Some("unroutable") => {
-                    // Member is recorded but Realm-scoped delivery is
-                    // suppressed until a rebind upgrades to routable.
-                }
-                Some(other) => {
-                    tracing::warn!(
-                        realm_id = %realm_id,
-                        member = %member,
-                        delivery_status = %other,
-                        "rejected join with unknown delivery_status"
-                    );
-                    return ProjectionEffect::Ignored;
-                }
             }
         }
 
@@ -482,19 +413,18 @@ impl ProjectionState {
                 reason: "out_of_order_bootstrap".to_owned(),
             };
         }
-        let Some(member) = operation
-            .payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .filter(|member| !member.is_empty())
-        else {
+        let Ok(payload) = serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(operation.payload.clone()) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if operation.context.sender.as_str() != member
-            || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
-            || self.member(operation.realm_id.as_str(), member).is_some()
+        let member = payload.member_id.to_string();
+        if operation.context.sender != payload.member_id
+            || payload.membership
+                != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+            || self.member(operation.realm_id.as_str(), &member).is_some()
         {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
@@ -547,20 +477,18 @@ impl ProjectionState {
                 reason: "out_of_order_bootstrap".to_owned(),
             };
         }
-        let Some(member) = operation
-            .payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .filter(|member| !member.is_empty())
-        else {
+        let Ok(payload) = serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(operation.payload.clone()) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
             };
         };
-        if operation.payload.get("membership").and_then(Value::as_str) != Some("join")
-            || operation.payload.get("reason").and_then(Value::as_str)
-                != Some("direct_conversation_bootstrap")
-            || self.member(operation.realm_id.as_str(), member).is_some()
+        let member = payload.member_id.to_string();
+        if payload.membership
+                != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+            || payload.reason.as_deref() != Some("direct_conversation_bootstrap")
+            || self.member(operation.realm_id.as_str(), &member).is_some()
         {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
@@ -592,65 +520,6 @@ impl ProjectionState {
         self.restore_accepted_membership(operation, operation.created_at)
     }
 
-    fn direct_conversation_bootstrap_delivery_policy(
-        &self,
-        realm_id: &str,
-        operation: &Operation,
-        binding: &serde_json::Map<String, Value>,
-    ) -> Option<Value> {
-        if !self.realm_is_direct_conversation(realm_id)
-            || operation.payload.get("reason").and_then(Value::as_str)
-                != Some("direct_conversation_bootstrap")
-        {
-            return None;
-        }
-
-        // `contact-and-direct-conversation.md` §5.5 fixes the founding unit at
-        // four Events in wire order: `ak.realm.create`, the **other**
-        // participant's `ak.member.state{join}`, the main Strand create, then
-        // the founder's own `ak.member.state{join}`. `ak.realm.create` writes no
-        // member row, so the peer join lands with zero joined members and the
-        // founder's own join lands with exactly one.
-        //
-        // A member count alone cannot separate the founder's join from a third
-        // actor's — both see one joined member — so the founder is read from the
-        // immutable genesis notary instead. Everything outside those two Events
-        // falls through to the ordinary policy requirement.
-        let joined_members = self
-            .members
-            .values()
-            .filter(|member| member.realm_id == realm_id && member.state == "join")
-            .count();
-        let joining_actor = operation.payload.get("actor_id").and_then(Value::as_str);
-        let founder = self
-            .realm_genesis_cell_value(realm_id)
-            .and_then(|genesis| genesis.get("notary"))
-            .and_then(|notary| notary.get("actor_id"))
-            .and_then(Value::as_str);
-        // Both arms require a readable founder: without one the Realm cannot be
-        // shown to be inside its founding unit, and the policy-free path must
-        // not open just because the genesis notary could not be read.
-        let is_founding_unit_join = match (joined_members, joining_actor, founder) {
-            (0, Some(joining), Some(founder)) => joining != founder,
-            (1, Some(joining), Some(founder)) => joining == founder,
-            _ => false,
-        };
-        if !is_founding_unit_join {
-            return None;
-        }
-
-        let recipient_id = binding
-            .get("recipient_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())?;
-        Some(serde_json::json!({
-            "allowed_binding_sources": ["explicit"],
-            "did_document_default_allowed": false,
-            "allowed_recipient_ids": [recipient_id],
-            "required_endorser_ids": [],
-        }))
-    }
-
     /// Restore an already-accepted canonical membership Event into the
     /// reducer's structured cache.
     ///
@@ -662,29 +531,23 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(new_state) = operation
-            .payload
-            .get("membership")
-            .and_then(Value::as_str)
-            .filter(|state| matches!(*state, "invite" | "join" | "leave" | "ban" | "knock"))
-            .map(ToOwned::to_owned)
-        else {
+        let Ok(typed) = serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(operation.payload.clone()) else {
             return ProjectionEffect::Ignored;
         };
-        let Some(member) = operation
-            .payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .filter(|member| !member.is_empty())
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Ignored;
+        let new_state = match typed.membership {
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join => "join",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Knock => "knock",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Leave => "leave",
+            arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Ban => "ban",
         };
+        let member = typed.member_id.to_string();
         self.project_accepted_membership(
             operation,
             &operation.payload,
             now,
-            new_state,
+            new_state.to_owned(),
             member,
             operation.realm_id.to_string(),
         )
@@ -724,54 +587,6 @@ impl ProjectionState {
             _ => now,
         };
         let event_ref = Some(operation.context.event_id.to_string());
-        let delivery_status = if new_state == "join" {
-            payload
-                .get("delivery_status")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        } else {
-            None
-        };
-        let recipient_id = if new_state == "join" && delivery_status.as_deref() == Some("routable")
-        {
-            payload
-                .get("delivery_binding")
-                .and_then(Value::as_object)
-                .and_then(|binding| binding.get("recipient_id"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-        } else {
-            None
-        };
-        let recipient_service_resolution =
-            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                payload
-                    .get("delivery_binding")
-                    .and_then(Value::as_object)
-                    .and_then(|binding| binding.get("service_resolution"))
-                    .cloned()
-            } else {
-                None
-            };
-        let delivery_binding_frontier =
-            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                event_ref.clone()
-            } else {
-                None
-            };
-        let delivery_binding_expires_at =
-            if new_state == "join" && delivery_status.as_deref() == Some("routable") {
-                payload
-                    .get("delivery_binding")
-                    .and_then(Value::as_object)
-                    .and_then(|binding| binding.get("expires_at"))
-                    .and_then(Value::as_str)
-                    .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-                    .map(|value| value.with_timezone(&chrono::Utc))
-            } else {
-                None
-            };
         let remove_membership_frontier = matches!(new_state.as_str(), "leave" | "ban").then(|| {
             vec![
                 event_ref
@@ -781,26 +596,6 @@ impl ProjectionState {
         });
 
         if new_state == "join" {
-            let authority = payload
-                .get("principal_authority")
-                .cloned()
-                .and_then(|value| serde_json::from_value(value).ok())
-                .or_else(|| {
-                    (member == operation.context.sender.as_str()).then(|| {
-                        arkret_wire::PrincipalAuthorityKey {
-                            principal_id: operation.context.sender.clone(),
-                            principal_server_id: operation.context.principal_server_id.clone(),
-                        }
-                    })
-                });
-            match authority {
-                Some(authority) => {
-                    self.membership_authorities.insert(key.clone(), authority);
-                }
-                None => {
-                    self.membership_authorities.remove(&key);
-                }
-            }
             let binding = payload
                 .get("agent_controller_binding")
                 .cloned()
@@ -829,12 +624,7 @@ impl ProjectionState {
                 realm_id: realm_id.clone(),
                 state: new_state.to_owned(),
                 role,
-                delivery_status,
-                recipient_id,
-                recipient_service_resolution,
                 membership_event_ref: event_ref,
-                delivery_binding_frontier,
-                delivery_binding_expires_at,
                 invited_at,
                 joined_at,
                 updated_at: now,
@@ -846,7 +636,7 @@ impl ProjectionState {
             },
         );
         if matches!(new_state.as_str(), "leave" | "ban") {
-            let updated_by = operation.context.sender.as_str();
+            let updated_by = operation.context.sender.to_string();
             self.enqueue_realm_mls_member_removal(
                 &realm_id,
                 &member,
@@ -858,7 +648,7 @@ impl ProjectionState {
                 &realm_id,
                 &member,
                 new_state.as_str(),
-                updated_by,
+                &updated_by,
                 remove_membership_frontier.unwrap_or_default(),
                 now,
             );
@@ -1243,8 +1033,8 @@ impl ProjectionState {
             registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
                 value
                     .get("controller_id")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
             })
         } else {
             None
@@ -1252,7 +1042,7 @@ impl ProjectionState {
         // `realm_create_payload` is `{object}` with `additionalProperties:false`,
         // so `ak.realm.create` cannot carry a top-level `owner`: the owning
         // principal is the genesis authority-root controller.
-        let owner = creator.clone();
+        let owner = creator.as_ref().map(ToString::to_string);
         // `ak.realm.profile` is the one Realm facet payload that carries the
         // human-readable title (`zh/models/realm-and-space.md`); no other kind
         // handled here declares it.
@@ -1372,7 +1162,7 @@ impl ProjectionState {
         // Realm nobody can govern.
         let authority_root = if kind == arkret_wire::EventKind::RealmCreate {
             let projected = registered_authority_root_write(self.projected_cell_writes());
-            let derived = match creator.as_deref() {
+            let derived = match creator.as_ref() {
                 Some(creator) => match genesis_authority_root_value(payload_object, creator) {
                     Ok(value) => value,
                     Err(reason) => {

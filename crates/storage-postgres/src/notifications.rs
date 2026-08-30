@@ -4,9 +4,10 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_models_collaboration::sync_frames::account_sync::{NotificationData, NotificationDelta};
 use arkret_wire::events::EventKind;
-use arkret_wire::{DidCoreId, EventId, NotificationId, RealmId, ServiceAccountId, StrandId};
+use arkret_wire::{ActorId, DidCoreId, EventId, NotificationId, RealmId, StrandId};
 use soland_storage::{
-    AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
+    AccountNotificationDeltaWrite, AccountPk, RecipientNotificationRecord,
+    StoredAccountNotificationDelta,
 };
 
 use super::{
@@ -19,13 +20,13 @@ struct NotificationRow {
     #[diesel(sql_type = sql_types::Uuid)]
     notification_id: Uuid,
     #[diesel(sql_type = Text)]
-    recipient_actor_id: DidCoreId,
+    recipient_actor_id: String,
     #[diesel(sql_type = Nullable<Text>)]
     realm_id: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
     source_event_id: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    controller_account_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    controller_account_pk: Option<i64>,
     #[diesel(sql_type = Nullable<Text>)]
     recipient_id: Option<DidCoreId>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -43,7 +44,7 @@ struct NotificationRow {
     #[diesel(sql_type = Nullable<Text>)]
     event_kind: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    source_actor_id: Option<DidCoreId>,
+    source_actor_id: Option<String>,
     #[diesel(sql_type = Text)]
     priority: String,
     #[diesel(sql_type = Text)]
@@ -123,7 +124,11 @@ impl NotificationRow {
                 PersistenceError::Internal(format!("recipient notification id is invalid: {error}"))
             })?,
             schema: NotificationSchema::V1,
-            actor_id: self.recipient_actor_id,
+            actor_id: serde_json::from_str(&self.recipient_actor_id).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recipient notification actor_id is invalid: {error}"
+                ))
+            })?,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id,
                 realm_id,
@@ -160,7 +165,15 @@ impl NotificationRow {
                     "recipient notification event_kind is invalid".to_owned(),
                 )
             })?;
-        let source_actor_id = self.source_actor_id;
+        let source_actor_id = self
+            .source_actor_id
+            .map(|value| serde_json::from_str::<ActorId>(&value))
+            .transpose()
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recipient notification source_actor_id is invalid: {error}"
+                ))
+            })?;
         Ok(RecipientNotificationRecord {
             notification,
             event_kind,
@@ -203,17 +216,11 @@ impl NotificationRow {
         .map_err(|error| {
             PersistenceError::Internal(format!("account notification delta is invalid: {error}"))
         })?;
-        let controller_account_id = self.controller_account_id.ok_or_else(|| {
+        let controller_account_pk = self.controller_account_pk.ok_or_else(|| {
             PersistenceError::Internal(
-                "account notification is missing controller_account_id".to_owned(),
+                "account notification is missing controller_account_pk".to_owned(),
             )
         })?;
-        let controller_account_id =
-            ServiceAccountId::new(controller_account_id).map_err(|error| {
-                PersistenceError::Internal(format!(
-                    "account notification controller_account_id is invalid: {error}"
-                ))
-            })?;
         let recipient_id = self.recipient_id.ok_or_else(|| {
             PersistenceError::Internal("account notification is missing recipient_id".to_owned())
         })?;
@@ -222,11 +229,17 @@ impl NotificationRow {
                 "account notification is missing source_account_artifact_id".to_owned(),
             )
         })?;
+        let recipient_actor_id = serde_json::from_str::<ActorId>(&self.recipient_actor_id)
+            .map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "account notification recipient_actor_id is invalid: {error}"
+                ))
+            })?;
         Ok(StoredAccountNotificationDelta {
             record: AccountNotificationDeltaWrite {
                 delta,
-                recipient_actor_id: self.recipient_actor_id,
-                controller_account_id,
+                recipient_actor_id,
+                controller_account_pk: AccountPk(controller_account_pk),
                 recipient_id,
                 source_account_artifact_id,
             },
@@ -299,7 +312,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             record.notification.id.as_str(),
         ))
-        .bind::<Text, _>(record.notification.actor_id.as_str())
+        .bind::<Text, _>(record.notification.actor_id.to_string())
         .bind::<Nullable<Text>, _>(realm_id)
         .bind::<Text, _>(source.source_event_id.as_str())
         .bind::<Nullable<Text>, _>(
@@ -312,7 +325,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<Nullable<Text>, _>(source.track_name.as_deref())
         .bind::<Text, _>(&notification_kind)
         .bind::<Nullable<Text>, _>(Some(record.event_kind.as_str()))
-        .bind::<Nullable<Text>, _>(record.source_actor_id.as_ref().map(DidCoreId::as_str))
+        .bind::<Nullable<Text>, _>(record.source_actor_id.as_ref().map(ToString::to_string))
         .bind::<Text, _>(&priority)
         .bind::<Text, _>(&state)
         .bind::<Nullable<Jsonb>, _>(preview.as_ref())
@@ -348,14 +361,14 @@ impl NotificationStore for PgNotificationStore {
             })?;
         sql_query(
             "INSERT INTO notifications \
-             (id, recipient_actor_id, controller_account_id, recipient_id, \
+             (id, recipient_actor_id, controller_account_pk, recipient_id, \
               source_account_artifact_kind, source_account_artifact_id, \
               priority, state, projection_action, projection_data, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, 'agent_runtime_approval', $5, \
               'normal', 'unread', $6, $7, NOW(), NOW()) \
-             ON CONFLICT (controller_account_id, recipient_id, \
+             ON CONFLICT (controller_account_pk, recipient_id, \
               source_account_artifact_kind, source_account_artifact_id) \
-              WHERE controller_account_id IS NOT NULL DO UPDATE SET \
+              WHERE controller_account_pk IS NOT NULL DO UPDATE SET \
               projection_action = EXCLUDED.projection_action, \
               projection_data = EXCLUDED.projection_data, \
               projection_position = CASE \
@@ -369,8 +382,8 @@ impl NotificationStore for PgNotificationStore {
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(
             record.delta.id.as_str(),
         ))
-        .bind::<Text, _>(record.recipient_actor_id.as_str())
-        .bind::<Text, _>(record.controller_account_id.as_str())
+        .bind::<Text, _>(record.recipient_actor_id.to_string())
+        .bind::<BigInt, _>(record.controller_account_pk.get())
         .bind::<Text, _>(record.recipient_id.as_str())
         .bind::<Text, _>(&record.source_account_artifact_id)
         .bind::<Text, _>(&action)
@@ -390,7 +403,7 @@ impl NotificationStore for PgNotificationStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
-             controller_account_id, recipient_id, source_account_artifact_kind, \
+             controller_account_pk, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, \
              strand_id, track_name, notification_kind, event_kind, source_actor_id, priority, \
              state, preview, projection_action, projection_data, projection_position, \
@@ -410,7 +423,7 @@ impl NotificationStore for PgNotificationStore {
 
     async fn list_for_account(
         &self,
-        controller_account_id: &ServiceAccountId,
+        controller_account_pk: &AccountPk,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>> {
@@ -419,16 +432,16 @@ impl NotificationStore for PgNotificationStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT id AS notification_id, recipient_actor_id, realm_id, source_event_id, \
-             controller_account_id, recipient_id, source_account_artifact_kind, \
+             controller_account_pk, recipient_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, strand_id, track_name, notification_kind, \
              event_kind, source_actor_id, priority, state, preview, projection_action, \
              projection_data, projection_position, created_at, updated_at \
              FROM notifications \
-             WHERE controller_account_id = $1 AND recipient_id = $2 \
+             WHERE controller_account_pk = $1 AND recipient_id = $2 \
                AND ($3 IS NULL OR projection_position > $3) \
              ORDER BY projection_position",
         )
-        .bind::<Text, _>(controller_account_id.as_str())
+        .bind::<BigInt, _>(controller_account_pk.get())
         .bind::<Text, _>(recipient_id)
         .bind::<Nullable<BigInt>, _>(after_position)
         .load::<NotificationRow>(&mut *conn)

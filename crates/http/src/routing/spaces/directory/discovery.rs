@@ -87,7 +87,7 @@ mod tests {
             .await
             .unwrap();
         let session = SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "directory-test-token".to_owned(),
             actor: alice.to_owned(),
             device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),

@@ -594,7 +594,7 @@ impl AgentStore for PgAgentStore {
                 Some(write.approval_requested_at),
             )
             .otherwise(agent_principals::approval_requested_at)),
-            agent_principals::controller_account_id.eq(write.controller_account_id.as_str()),
+            agent_principals::controller_account_pk.eq(write.controller_account_pk.get()),
             agent_principals::recipient_id.eq(&write.recipient_id),
             agent_principals::runtime_key_binding_digest.eq(&write.runtime_key_binding_digest),
             agent_principals::runtime_public_key_digest.eq(&write.runtime_public_key_digest),

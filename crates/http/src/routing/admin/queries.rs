@@ -709,7 +709,7 @@ mod tests {
     #[test]
     fn require_admin_principal_is_fail_closed_in_production() {
         let session = |actor: &str| soland_services::identity::SessionIdentityState {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "hash".to_owned(),
             actor: actor.to_owned(),
             device_id: "ak:device:test".to_owned(),

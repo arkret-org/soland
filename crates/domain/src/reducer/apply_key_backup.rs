@@ -23,7 +23,7 @@ impl ProjectionState {
                 }
             };
 
-        let actor_id = record.actor_id.as_str().to_owned();
+        let actor_id = record.actor_id.to_string();
         let backup_kind = backup_class_wire(record.backup_kind).to_owned();
         let pointer_key = (actor_id.clone(), backup_kind.clone());
         let current_head = self
@@ -104,7 +104,7 @@ fn soland_active_series_head(
 ) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead> {
     Some(
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead {
-            actor_id: arkret_identifiers::DidCoreId::new(current.actor_id.clone()).ok()?,
+            actor_id: serde_json::from_str(&current.actor_id).ok()?,
             backup_kind: arkret_models_crypto::BackupKind::try_from(current.backup_kind.as_str())
                 .ok()?,
             active_series_id: arkret_identifiers::BackupSeriesId::new(

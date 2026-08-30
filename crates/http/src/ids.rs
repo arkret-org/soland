@@ -34,15 +34,6 @@ pub fn generate_operation_id() -> String {
     generate("operation")
 }
 
-/// Service-local durable account key. It is deliberately not an `ak:` typed
-/// identifier and is scoped by the Principal Server that minted it.
-/// Distinct from the account's `actor_id` DID: the DID is the protocol
-/// identity, this is the stable internal row handle the PK is built on.
-pub fn generate_account_id() -> arkret_identifiers::ServiceAccountId {
-    arkret_identifiers::ServiceAccountId::new(Uuid::now_v7().to_string())
-        .expect("UUIDv7 is a valid service account id")
-}
-
 pub fn generate_install_id() -> String {
     generate("install")
 }

@@ -170,7 +170,7 @@ pub(crate) async fn persist_mimi_facade_moderation_report_event(
     .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
     let event_id = event.event_id().to_string();
     let session = soland_services::identity::SessionIdentityState {
-        service_account_id: None,
+        account_pk: None,
         token_hash: "moderation-report-service".to_owned(),
         actor: state.service_id().clone(),
         // Service session: this internal admission authenticates a service
@@ -333,7 +333,7 @@ pub(crate) async fn prepare_franking_proof_event(
     .map_err(|error| AppError::internal(format!("franking Event signing failed: {error}")))?;
     let session = soland_services::identity::SessionIdentityState {
         token_hash: "franking-proof-service".to_owned(),
-        service_account_id: None,
+        account_pk: None,
         actor: state.service_id().clone(),
         device_id: String::new(),
         audience: state.service_id().clone(),

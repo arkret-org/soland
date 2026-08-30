@@ -134,12 +134,6 @@ pub enum ProjectionEffect {
     AppletProjectionUpdated {
         applet_id: AppletId,
     },
-    /// R1.2 — `ak.realm.delivery_binding_policy` event was projected
-    /// into the canonical `ak.component.realm.delivery_binding_policy.v1`
-    /// cas-register cell.
-    DeliveryBindingPolicyProjected {
-        realm_id: String,
-    },
     /// `ak.realm.policy_bundle` projected into the canonical
     /// `ak.component.realm.policy_bundle.v1` cas-register cell.
     RealmPolicyBundleProjected {

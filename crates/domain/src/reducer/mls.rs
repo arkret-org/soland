@@ -80,7 +80,8 @@ pub struct MlsKeyPackagePublishProjection {
     pub keypackage_id: String,
     pub keypackage_ref: String,
     pub keypackage_digest: String,
-    pub owner_account_id: arkret_identifiers::ServiceAccountId,
+    /// Local `accounts.pk`; never part of a KeyPackage wire object.
+    pub owner_account_pk: i64,
     pub actor_id: String,
     pub device_id: Option<String>,
     pub lifetime: KeyPackageLifetimeProjection,
@@ -151,7 +152,7 @@ pub fn apply_keypackage_upload_projection(
         id: projection.keypackage_id.clone(),
         keypackage_ref: projection.keypackage_ref.clone(),
         keypackage_digest: projection.keypackage_digest.clone(),
-        owner_account_id: projection.owner_account_id.clone(),
+        owner_account_pk: projection.owner_account_pk,
         actor_id: projection.actor_id.clone(),
         device_id: projection.device_id.clone(),
         endpoint_verification_method,
@@ -184,154 +185,6 @@ pub fn apply_keypackage_upload_projection(
         keypackage_id: projection.keypackage_id.clone(),
         actor_id: projection.actor_id.clone(),
         device_id: projection.device_id.clone(),
-    })
-}
-
-pub fn apply_keypackage_publish(state: &mut ProjectionState, op: &Operation) -> ProjectionEffect {
-    let payload = &op.payload;
-    let Some(id) = payload
-        .get("keypackage_id")
-        .or_else(|| payload.get("keypackage_ref"))
-        .and_then(Value::as_str)
-    else {
-        return reject("mls_keypackage_id_missing");
-    };
-    let Some(actor_id) = payload.get("principal_id").and_then(Value::as_str) else {
-        return reject("mls_keypackage_actor_missing");
-    };
-    let Some(owner_account_id) = payload
-        .get("owner_account_id")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::ServiceAccountId::new(value.to_owned()).ok())
-    else {
-        return reject("mls_keypackage_owner_account_invalid");
-    };
-    let device_id = payload
-        .get("device_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let endpoint_verification_method = payload
-        .get("endpoint_verification_method")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let intended_realm_id = payload
-        .get("intended_realm_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let lifetime = match parse_lifetime(payload.get("lifetime")) {
-        Ok(l) => l,
-        Err(reason) => return reject(reason),
-    };
-    if lifetime.not_after <= lifetime.not_before {
-        return reject("mls_keypackage_lifetime_invalid");
-    }
-    let key_package_bytes = match payload
-        .get("key_package_bytes_b64")
-        .and_then(Value::as_str)
-        .map(decode_base64_loose)
-    {
-        Some(Ok(bytes)) if !bytes.is_empty() => bytes,
-        Some(Ok(_)) => return reject("mls_keypackage_bytes_empty"),
-        Some(Err(_)) => return reject("mls_keypackage_bytes_invalid_b64"),
-        None => return reject("mls_keypackage_bytes_missing"),
-    };
-    let keypackage_ref = payload
-        .get("keypackage_ref")
-        .and_then(Value::as_str)
-        .unwrap_or(id)
-        .to_owned();
-    let computed_keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
-    let keypackage_digest = payload
-        .get("keypackage_digest")
-        .and_then(Value::as_str)
-        .unwrap_or(computed_keypackage_digest.as_str())
-        .to_owned();
-    if keypackage_digest != computed_keypackage_digest {
-        return reject("mls_keypackage_digest_mismatch");
-    }
-    let capabilities = string_array(payload.get("capabilities"));
-    let capabilities_digest = match arkret_canonical::canonical_json_bytes(&capabilities) {
-        Ok(bytes) => arkret_canonical::sha256_digest(bytes),
-        Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
-    };
-    if let Some(published_digest) = payload.get("capabilities_digest").and_then(Value::as_str)
-        && published_digest != capabilities_digest
-    {
-        return reject("mls_keypackage_capabilities_digest_mismatch");
-    }
-    let last_resort = payload
-        .get("last_resort")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let last_resort_realm_id = payload
-        .get("last_resort_realm_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned);
-    let created_at =
-        parse_timestamp(payload.get("created_at")).unwrap_or_else(|| op.created_at.timestamp());
-    let device_authorize_event_id = payload
-        .get("device_authorize_event_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let agent_key_authorize_event_id = payload
-        .get("agent_key_authorize_event_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let valid_endpoint = matches!(
-        (
-            &device_id,
-            &endpoint_verification_method,
-            &intended_realm_id,
-            &device_authorize_event_id,
-            &agent_key_authorize_event_id
-        ),
-        (Some(_), None, None, Some(_), None)
-            | (None, Some(_), None, None, Some(_))
-            | (None, Some(_), Some(_), None, None)
-    );
-    if !valid_endpoint {
-        return reject("claim_generation_mismatch");
-    }
-    if intended_realm_id.is_some()
-        && let Err(reason) = validate_pairwise_keypackage_leaf(
-            actor_id,
-            endpoint_verification_method
-                .as_deref()
-                .expect("pairwise endpoint shape validated above"),
-            &key_package_bytes,
-        )
-    {
-        return reject(reason);
-    }
-    let row = MlsKeyPackageProjection {
-        id: id.to_owned(),
-        keypackage_ref,
-        keypackage_digest,
-        owner_account_id,
-        actor_id: actor_id.to_owned(),
-        device_id: device_id.clone(),
-        endpoint_verification_method,
-        intended_realm_id,
-        lifetime,
-        key_package_bytes,
-        capabilities,
-        capabilities_digest,
-        last_resort,
-        last_resort_realm_id,
-        claimed_by: None,
-        device_authorize_event_id,
-        agent_key_authorize_event_id,
-        claimed_at: None,
-        claim_expires_at_unix_ms: None,
-        consumed_at: None,
-        created_at,
-    };
-    state.mls_key_packages.insert(id.to_owned(), row);
-    ProjectionEffect::Mls(MlsEffect::KeyPackagePublished {
-        keypackage_id: id.to_owned(),
-        actor_id: actor_id.to_owned(),
-        device_id,
     })
 }
 
@@ -683,7 +536,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if epoch != 0 {
         return reject("mls_genesis_epoch_invalid");
     }
-    let creator_actor_id = op.context.sender.as_str();
+    let creator_actor_id = op.context.sender.to_string();
     let Some(creator_device_id) = op.context.producer_device_id.as_ref() else {
         return reject("schema_violation");
     };
@@ -711,7 +564,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             group_id: group_id.to_owned(),
             effective_scope: effective_scope.clone(),
             epoch: 0,
-            leader_actor_id: creator_actor_id.to_owned(),
+            leader_actor_id: creator_actor_id.clone(),
             creator_device_id: creator_device_id.as_str().to_owned(),
             genesis_event_ref,
             committed_at: op.created_at.timestamp(),
@@ -727,7 +580,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         group_id: group_id.to_owned(),
         effective_scope,
         epoch: 0,
-        creator_actor_id: creator_actor_id.to_owned(),
+        creator_actor_id,
         creator_device_id: creator_device_id.as_str().to_owned(),
     })
 }
@@ -771,7 +624,7 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     };
     // The committing member is the signed Event author; the registered commit
     // payload is closed and carries no committer field.
-    let committer_actor_id = op.context.sender.as_str();
+    let committer_actor_id = op.context.sender.to_string();
     // Body bytes are not validated at the reducer level beyond a
     // presence check; the routing layer logs the digest for audit.
     if !payload

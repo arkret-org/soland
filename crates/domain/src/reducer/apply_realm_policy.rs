@@ -174,7 +174,6 @@ impl ProjectionState {
                 arkret_wire::EventKind::RealmAlias
                     | arkret_wire::EventKind::RealmJoinRule
                     | arkret_wire::EventKind::RealmDiscovery
-                    | arkret_wire::EventKind::RealmDeliveryBindingPolicy
                     | arkret_wire::EventKind::RealmPlaintextVisibleServices
             )
         {
@@ -326,25 +325,6 @@ impl ProjectionState {
             realm_id,
             digest_algorithm,
         }
-    }
-
-    /// R1.2 — project a `ak.realm.delivery_binding_policy` event into the
-    /// `ak.component.realm.delivery_binding_policy.v1` cas-register cell.
-    /// The payload is taken whole as the cell value so downstream readers
-    /// (`realm_delivery_binding_policy_cell_value` + the `apply_membership`
-    /// validation path) can inspect each policy field directly.
-    pub(crate) fn apply_delivery_binding_policy(
-        &mut self,
-        operation: &Operation,
-    ) -> ProjectionEffect {
-        let realm_id = operation.realm_id.to_string();
-        let value = operation.payload.clone();
-        self.set_realm_null_subject_cell(
-            &realm_id,
-            arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1,
-            value,
-        );
-        ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
     /// Project `ak.realm.policy_bundle` into the canonical Realm policy

@@ -1,3 +1,5 @@
+use soland_storage::AccountPk;
+
 use super::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
     AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
@@ -10,14 +12,18 @@ pub struct PgAccountStore {
 }
 #[async_trait]
 impl AccountStore for PgAccountStore {
-    async fn get(&self, principal_id: &str) -> PersistenceResult<Option<AccountRecord>> {
+    async fn get(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> PersistenceResult<Option<AccountRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(account_with_primary_localpart_select(
-            "WHERE a.principal_id = $1",
+            "WHERE a.principal_server_id = $1 AND a.principal_id = $2",
         ))
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(account_id.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.principal_id.as_str())
         .get_result::<AccountRow>(&mut *conn)
         .await
         .optional()
@@ -25,16 +31,12 @@ impl AccountStore for PgAccountStore {
         row.map(AccountRecord::try_from).transpose()
     }
 
-    async fn get_by_id(&self, account_id: &str) -> PersistenceResult<Option<AccountRecord>> {
-        let account_id =
-            arkret_identifiers::ServiceAccountId::new(account_id.to_owned()).map_err(|error| {
-                PersistenceError::SchemaViolation(format!("invalid service account id: {error}"))
-            })?;
+    async fn get_by_pk(&self, account_pk: AccountPk) -> PersistenceResult<Option<AccountRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let row = sql_query(account_with_primary_localpart_select("WHERE a.id = $1"))
-            .bind::<Text, _>(account_id.as_str())
+        let row = sql_query(account_with_primary_localpart_select("WHERE a.pk = $1"))
+            .bind::<BigInt, _>(account_pk.get())
             .get_result::<AccountRow>(&mut *conn)
             .await
             .optional()
@@ -42,7 +44,7 @@ impl AccountStore for PgAccountStore {
         row.map(AccountRecord::try_from).transpose()
     }
 
-    async fn put(&self, record: &AccountRecord) -> PersistenceResult<()> {
+    async fn put(&self, record: &AccountRecord) -> PersistenceResult<AccountPk> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -51,14 +53,14 @@ impl AccountStore for PgAccountStore {
             "avatar_blob_ref": record.avatar_blob_ref,
         });
         let row = sql_query(
-            "INSERT INTO accounts (id, principal_id, display_name, payload, created_at, updated_at) \
+            "INSERT INTO accounts (principal_id, principal_server_id, display_name, payload, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $5) \
-             ON CONFLICT (principal_id) DO UPDATE SET \
+             ON CONFLICT (principal_server_id, principal_id) DO UPDATE SET \
              display_name = EXCLUDED.display_name, payload = EXCLUDED.payload, updated_at = NOW() \
-             RETURNING id",
+             RETURNING pk",
         )
-        .bind::<Text, _>(record.id.as_str())
         .bind::<Text, _>(record.principal_id.as_str())
+        .bind::<Text, _>(record.principal_server_id.as_str())
         .bind::<Nullable<Text>, _>(&record.display_name)
         .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(record.created_at)
@@ -67,32 +69,32 @@ impl AccountStore for PgAccountStore {
         .map_err(PersistenceError::database)?;
 
         if record.localpart.trim().is_empty() {
-            sql_query("DELETE FROM account_localparts WHERE account_id = $1")
-                .bind::<Text, _>(&row.id)
+            sql_query("DELETE FROM account_localparts WHERE account_pk = $1")
+                .bind::<BigInt, _>(row.pk)
                 .execute(&mut *conn)
                 .await
                 .map_err(PersistenceError::database)?;
         } else {
             sql_query(
                 "UPDATE account_localparts SET is_primary = false, updated_at = NOW() \
-                 WHERE account_id = $1 AND localpart <> $2",
+                 WHERE account_pk = $1 AND localpart <> $2",
             )
-            .bind::<Text, _>(&row.id)
+            .bind::<BigInt, _>(row.pk)
             .bind::<Text, _>(&record.localpart)
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
             let assigned = sql_query(
                 "INSERT INTO account_localparts \
-                 (id, account_id, localpart, is_primary, created_at, updated_at) \
+                 (id, account_pk, localpart, is_primary, created_at, updated_at) \
                  VALUES ($1, $2, $3, true, $4, $4) \
                  ON CONFLICT (localpart) DO UPDATE SET \
-                 account_id = EXCLUDED.account_id, is_primary = true, updated_at = NOW() \
-                 WHERE account_localparts.account_id = EXCLUDED.account_id \
+                 account_pk = EXCLUDED.account_pk, is_primary = true, updated_at = NOW() \
+                 WHERE account_localparts.account_pk = EXCLUDED.account_pk \
                  RETURNING localpart",
             )
             .bind::<sql_types::Uuid, _>(Uuid::now_v7())
-            .bind::<Text, _>(&row.id)
+            .bind::<BigInt, _>(row.pk)
             .bind::<Text, _>(&record.localpart)
             .bind::<Timestamptz, _>(record.created_at)
             .get_result::<LocalpartOnlyRow>(&mut *conn)
@@ -107,7 +109,7 @@ impl AccountStore for PgAccountStore {
                 )));
             }
         }
-        Ok(())
+        Ok(AccountPk(row.pk))
     }
 
     async fn list(&self) -> PersistenceResult<Vec<AccountRecord>> {
@@ -115,7 +117,7 @@ impl AccountStore for PgAccountStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(account_with_primary_localpart_select(
-            "ORDER BY a.principal_id",
+            "ORDER BY a.principal_server_id, a.principal_id",
         ))
         .load::<AccountRow>(&mut *conn)
         .await
@@ -123,12 +125,13 @@ impl AccountStore for PgAccountStore {
         rows.into_iter().map(AccountRecord::try_from).collect()
     }
 
-    async fn delete(&self, principal_id: &str) -> PersistenceResult<()> {
+    async fn delete(&self, account_id: &arkret_wire::AccountId) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM accounts WHERE principal_id = $1")
-            .bind::<Text, _>(principal_id)
+        sql_query("DELETE FROM accounts WHERE principal_server_id = $1 AND principal_id = $2")
+            .bind::<Text, _>(account_id.principal_server_id.as_str())
+            .bind::<Text, _>(account_id.principal_id.as_str())
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -142,20 +145,17 @@ pub struct PgAccountLocalpartStore {
 impl AccountLocalpartStore for PgAccountLocalpartStore {
     async fn list_for_account(
         &self,
-        account_principal_id: &str,
+        account_pk: AccountPk,
     ) -> PersistenceResult<Vec<AccountLocalpartRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT lp.id, a.principal_id AS account_principal_id, lp.localpart, lp.is_primary, \
-             lp.created_at, lp.updated_at \
-             FROM account_localparts lp \
-             JOIN accounts a ON a.id = lp.account_id \
-             WHERE a.principal_id = $1 \
+            "SELECT lp.id, lp.account_pk, lp.localpart, lp.is_primary, lp.created_at, lp.updated_at \
+             FROM account_localparts lp WHERE lp.account_pk = $1 \
              ORDER BY lp.is_primary DESC, lp.localpart ASC",
         )
-        .bind::<Text, _>(account_principal_id)
+        .bind::<BigInt, _>(account_pk.get())
         .load::<AccountLocalpartRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -166,21 +166,18 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
 
     async fn primary_for_account(
         &self,
-        account_principal_id: &str,
+        account_pk: AccountPk,
     ) -> PersistenceResult<Option<AccountLocalpartRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT lp.id, a.principal_id AS account_principal_id, lp.localpart, lp.is_primary, \
-             lp.created_at, lp.updated_at \
-             FROM account_localparts lp \
-             JOIN accounts a ON a.id = lp.account_id \
-             WHERE a.principal_id = $1 \
+            "SELECT lp.id, lp.account_pk, lp.localpart, lp.is_primary, lp.created_at, lp.updated_at \
+             FROM account_localparts lp WHERE lp.account_pk = $1 \
              ORDER BY lp.is_primary DESC, lp.created_at ASC, lp.localpart ASC \
              LIMIT 1",
         )
-        .bind::<Text, _>(account_principal_id)
+        .bind::<BigInt, _>(account_pk.get())
         .get_result::<AccountLocalpartRow>(&mut *conn)
         .await
         .optional()
@@ -193,11 +190,8 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT lp.id, a.principal_id AS account_principal_id, lp.localpart, lp.is_primary, \
-             lp.created_at, lp.updated_at \
-             FROM account_localparts lp \
-             JOIN accounts a ON a.id = lp.account_id \
-             WHERE lp.localpart = $1",
+            "SELECT lp.id, lp.account_pk, lp.localpart, lp.is_primary, lp.created_at, lp.updated_at \
+             FROM account_localparts lp WHERE lp.localpart = $1",
         )
         .bind::<Text, _>(localpart)
         .get_result::<AccountLocalpartRow>(&mut *conn)
@@ -209,28 +203,21 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
 
     async fn add(
         &self,
-        account_principal_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
         primary: bool,
     ) -> PersistenceResult<AccountLocalpartRecord> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let account = sql_query("SELECT id FROM accounts WHERE principal_id = $1")
-            .bind::<Text, _>(account_principal_id)
-            .get_result::<AccountIdRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| PersistenceError::NotFound("account not found".to_owned()))?;
         let existing_owner =
-            sql_query("SELECT account_id AS id FROM account_localparts WHERE localpart = $1")
+            sql_query("SELECT account_pk AS pk FROM account_localparts WHERE localpart = $1")
                 .bind::<Text, _>(localpart)
                 .get_result::<AccountIdRow>(&mut *conn)
                 .await
                 .optional()
                 .map_err(PersistenceError::database)?;
-        if existing_owner.is_some_and(|owner| owner.id != account.id) {
+        if existing_owner.is_some_and(|owner| owner.pk != account_pk.get()) {
             return Err(PersistenceError::Conflict(format!(
                 "localpart `{localpart}` is already assigned"
             )));
@@ -238,29 +225,28 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
         if primary {
             sql_query(
                 "UPDATE account_localparts SET is_primary = false, updated_at = NOW() \
-                 WHERE account_id = $1",
+                 WHERE account_pk = $1",
             )
-            .bind::<Text, _>(&account.id)
+            .bind::<BigInt, _>(account_pk.get())
             .execute(&mut *conn)
             .await
             .map_err(PersistenceError::database)?;
         }
         let assigned = sql_query(
             "INSERT INTO account_localparts \
-             (id, account_id, localpart, is_primary, created_at, updated_at) \
+             (id, account_pk, localpart, is_primary, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, NOW(), NOW()) \
              ON CONFLICT (localpart) DO UPDATE SET \
-             account_id = EXCLUDED.account_id, \
+             account_pk = EXCLUDED.account_pk, \
              is_primary = CASE WHEN EXCLUDED.is_primary THEN true ELSE account_localparts.is_primary END, \
              updated_at = NOW() \
-             WHERE account_localparts.account_id = EXCLUDED.account_id \
-             RETURNING id, $5::text AS account_principal_id, localpart, is_primary, created_at, updated_at",
+             WHERE account_localparts.account_pk = EXCLUDED.account_pk \
+             RETURNING id, account_pk, localpart, is_primary, created_at, updated_at",
         )
         .bind::<sql_types::Uuid, _>(Uuid::now_v7())
-        .bind::<Text, _>(&account.id)
+        .bind::<BigInt, _>(account_pk.get())
         .bind::<Text, _>(localpart)
         .bind::<Bool, _>(primary)
-        .bind::<Text, _>(account_principal_id)
         .get_result::<AccountLocalpartRow>(&mut *conn)
         .await
         .optional()
@@ -273,37 +259,30 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
 
     async fn set_primary(
         &self,
-        account_principal_id: &str,
+        account_pk: AccountPk,
         localpart: &str,
     ) -> PersistenceResult<AccountLocalpartRecord> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let account = sql_query("SELECT id FROM accounts WHERE principal_id = $1")
-            .bind::<Text, _>(account_principal_id)
-            .get_result::<AccountIdRow>(&mut *conn)
-            .await
-            .optional()
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| PersistenceError::NotFound("account not found".to_owned()))?;
         let owner =
-            sql_query("SELECT account_id AS id FROM account_localparts WHERE localpart = $1")
+            sql_query("SELECT account_pk AS pk FROM account_localparts WHERE localpart = $1")
                 .bind::<Text, _>(localpart)
                 .get_result::<AccountIdRow>(&mut *conn)
                 .await
                 .optional()
                 .map_err(PersistenceError::database)?
                 .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))?;
-        if owner.id != account.id {
+        if owner.pk != account_pk.get() {
             return Err(PersistenceError::Conflict(format!(
                 "localpart `{localpart}` is assigned to another account"
             )));
         }
         sql_query(
             "UPDATE account_localparts SET is_primary = (localpart = $2), updated_at = NOW() \
-             WHERE account_id = $1",
+             WHERE account_pk = $1",
         )
-        .bind::<Text, _>(&account.id)
+        .bind::<BigInt, _>(account_pk.get())
         .bind::<Text, _>(localpart)
         .execute(&mut *conn)
         .await
@@ -314,37 +293,29 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
             .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))
     }
 
-    async fn remove(&self, account_principal_id: &str, localpart: &str) -> PersistenceResult<()> {
+    async fn remove(&self, account_pk: AccountPk, localpart: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "DELETE FROM account_localparts lp \
-             USING accounts a \
-             WHERE lp.account_id = a.id AND a.principal_id = $1 AND lp.localpart = $2",
-        )
-        .bind::<Text, _>(account_principal_id)
-        .bind::<Text, _>(localpart)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        sql_query("DELETE FROM account_localparts WHERE account_pk = $1 AND localpart = $2")
+            .bind::<BigInt, _>(account_pk.get())
+            .bind::<Text, _>(localpart)
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::database)
     }
 
-    async fn clear_for_account(&self, account_principal_id: &str) -> PersistenceResult<()> {
+    async fn clear_for_account(&self, account_pk: AccountPk) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "DELETE FROM account_localparts lp \
-             USING accounts a \
-             WHERE lp.account_id = a.id AND a.principal_id = $1",
-        )
-        .bind::<Text, _>(account_principal_id)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        sql_query("DELETE FROM account_localparts WHERE account_pk = $1")
+            .bind::<BigInt, _>(account_pk.get())
+            .execute(&mut *conn)
+            .await
+            .map(|_| ())
+            .map_err(PersistenceError::database)
     }
 }
 pub struct PgAccountLifecycleStore {
@@ -520,10 +491,12 @@ impl AccountDataStore for PgAccountDataStore {
 }
 #[derive(QueryableByName)]
 struct AccountRow {
-    #[diesel(sql_type = Text)]
-    id: String,
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
     #[diesel(sql_type = Text)]
     principal_id: arkret_wire::DidCoreId,
+    #[diesel(sql_type = Text)]
+    principal_server_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     localpart: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -535,15 +508,15 @@ struct AccountRow {
 }
 #[derive(QueryableByName)]
 struct AccountIdRow {
-    #[diesel(sql_type = Text)]
-    id: String,
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
 }
 #[derive(QueryableByName)]
 struct AccountLocalpartRow {
     #[diesel(sql_type = sql_types::Uuid)]
     id: Uuid,
-    #[diesel(sql_type = Text)]
-    account_principal_id: arkret_wire::DidCoreId,
+    #[diesel(sql_type = BigInt)]
+    account_pk: i64,
     #[diesel(sql_type = Text)]
     localpart: String,
     #[diesel(sql_type = Bool)]
@@ -577,7 +550,7 @@ impl TryFrom<AccountLocalpartRow> for AccountLocalpartRecord {
     fn try_from(row: AccountLocalpartRow) -> Result<Self, Self::Error> {
         Ok(Self {
             id: ids::format_typed_uuid("account_localpart", &row.id),
-            account_principal_id: row.account_principal_id,
+            account_pk: AccountPk(row.account_pk),
             localpart: row.localpart,
             is_primary: row.is_primary,
             created_at: row.created_at,
@@ -590,9 +563,9 @@ impl TryFrom<AccountRow> for AccountRecord {
 
     fn try_from(row: AccountRow) -> Result<Self, Self::Error> {
         Ok(Self {
-            id: arkret_identifiers::ServiceAccountId::new(row.id)
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            pk: AccountPk(row.pk),
             principal_id: row.principal_id,
+            principal_server_id: row.principal_server_id,
             localpart: row.localpart,
             display_name: row.display_name,
             bio: row

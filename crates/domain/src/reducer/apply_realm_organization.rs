@@ -298,7 +298,6 @@ pub(crate) fn control_scope_str(scope: RealmOrganizationControlScope) -> &'stati
         S::OfficialBadge => "official_badge",
         S::RealmAdmin => "realm_admin",
         S::NotaryControl => "notary_control",
-        S::DeliveryBindingPolicy => "delivery_binding_policy",
         S::DurabilityPolicy => "durability_policy",
         S::ModerationPolicy => "moderation_policy",
         S::RetentionPolicy => "retention_policy",

@@ -45,7 +45,7 @@ pub(super) fn validate_initial_publication_session_context(
         .as_ref()
         .unwrap_or(&submission.event.actor_id)
         .clone();
-    let request_authority = arkret_wire::PrincipalAuthorityKey::new(
+    let request_authority = arkret_wire::AccountId::new(
         request_principal,
         submission.event.principal_server_id.clone(),
     );
@@ -65,7 +65,7 @@ pub(super) fn validate_initial_publication_session_context(
                 format!("authenticated session audience is invalid: {error}"),
             )
         })?;
-    let expected = arkret_wire::PrincipalAuthorityKey::new(session_principal, session_server);
+    let expected = arkret_wire::AccountId::new(session_principal, session_server);
     if request_authority != expected {
         return Err(SubmitOneError::new(
             StatusCode::FORBIDDEN,
@@ -1853,7 +1853,7 @@ pub(in crate::routing) async fn submit_peer_pcr_genesis(
     let now = Utc::now();
     let session = SessionRecord {
         token_hash: format!("principal-genesis:{}", request.idempotency_key),
-        service_account_id: None,
+        account_pk: None,
         actor: request.principal_id.to_string(),
         device_id: accepted_device_id.to_string(),
         audience: state.service_id().clone(),
@@ -2844,7 +2844,7 @@ pub(crate) async fn submit_federation_events(
             .unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
-            service_account_id: None,
+            account_pk: None,
             actor: actor.clone(),
             device_id: device_id.clone(),
             audience: state.service_id().clone(),
@@ -3044,7 +3044,7 @@ pub(crate) async fn submit_federation_events(
         let device_id = event_string_field_from_value(&envelope, "device_id").unwrap_or_default();
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{}", request_hash),
-            service_account_id: None,
+            account_pk: None,
             actor: actor.clone(),
             device_id: device_id.clone(),
             audience: state.service_id().clone(),
@@ -3565,7 +3565,7 @@ async fn submit_direct_conversation_federation(
     let created_at = now();
     let session = SessionRecord {
         token_hash: format!("federation:direct-conversation:{request_hash}"),
-        service_account_id: None,
+        account_pk: None,
         actor: receipt.founder_id.to_string(),
         device_id: submission.events[0]
             .event

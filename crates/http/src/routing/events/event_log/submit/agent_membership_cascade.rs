@@ -13,7 +13,7 @@ const AGENT_CLEANUP_ALERT_AFTER_HOURS: i64 = 1;
 
 #[derive(Clone)]
 struct FrozenControllerMembership {
-    authority: arkret_wire::PrincipalAuthorityKey,
+    authority: arkret_wire::AccountId,
     generation: arkret_wire::EventId,
     agent_ids: Vec<arkret_wire::DidCoreId>,
 }
@@ -124,7 +124,7 @@ fn frozen_controller_membership(
                 "controller membership generation is unavailable",
             )
         })?;
-    let authority = arkret_wire::PrincipalAuthorityKey {
+    let authority = arkret_wire::AccountId {
         principal_id: controller.actor_id.clone(),
         principal_server_id: controller.principal_server_id.clone(),
     };
@@ -662,7 +662,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                 realm_id: controller_event.realm_id.clone(),
                 controller_authority: frozen.authority,
                 controller_membership_generation_ref: frozen.generation,
-                initiator_authority: arkret_wire::PrincipalAuthorityKey {
+                initiator_authority: arkret_wire::AccountId {
                     principal_id: initiator,
                     principal_server_id: local_service_id(state)?,
                 },
@@ -981,7 +981,7 @@ fn federation_session(
 ) -> Result<SessionRecord, SubmitOneError> {
     Ok(SessionRecord {
         token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
-        service_account_id: None,
+        account_pk: None,
         actor: event
             .executed_by
             .as_ref()
@@ -1139,7 +1139,7 @@ async fn submit_federated_cascade_after_transport_validation(
                 realm_id: controller_event.realm_id.clone(),
                 controller_authority: frozen.authority,
                 controller_membership_generation_ref: frozen.generation,
-                initiator_authority: arkret_wire::PrincipalAuthorityKey {
+                initiator_authority: arkret_wire::AccountId {
                     principal_id: initiator,
                     principal_server_id: source_id.clone(),
                 },
@@ -1283,7 +1283,7 @@ async fn submit_federated_cascade_after_transport_validation(
     }
     let audit_session = SessionRecord {
         token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
-        service_account_id: None,
+        account_pk: None,
         actor: submission
             .controller_transition
             .event

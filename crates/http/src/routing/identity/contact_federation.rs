@@ -36,9 +36,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
-use arkret_wire::{
-    Base64UrlString, DidUrl, Event, IdempotencyKey, PrincipalAuthorityKey, ProtocolSignature,
-};
+use arkret_wire::{AccountId, Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolSignature};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -889,7 +887,7 @@ fn participant_authority_pair(
     state: &AppState,
     record: &ContactRecord,
     local_principal_id: &str,
-) -> Result<[PrincipalAuthorityKey; 2], AppError> {
+) -> Result<[AccountId; 2], AppError> {
     let local_principal_id = arkret_wire::DidCoreId::new(local_principal_id.to_owned())
         .map_err(|error| AppError::internal(format!("local Contact principal invalid: {error}")))?;
     let peer_principal_id = if record.requester_id == local_principal_id {
@@ -907,14 +905,14 @@ fn participant_authority_pair(
         .map(arkret_wire::DidCoreId::as_str)
         .unwrap_or_else(|| state.service_id());
     let mut pair = [
-        PrincipalAuthorityKey {
+        AccountId {
             principal_id: local_principal_id,
             principal_server_id: arkret_wire::DidCoreId::new(state.service_id().to_owned())
                 .map_err(|error| {
                     AppError::internal(format!("local Contact service invalid: {error}"))
                 })?,
         },
-        PrincipalAuthorityKey {
+        AccountId {
             principal_id: peer_principal_id.clone(),
             principal_server_id: arkret_wire::DidCoreId::new(peer_id.to_owned()).map_err(
                 |error| AppError::internal(format!("peer Contact service invalid: {error}")),
@@ -1306,7 +1304,7 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
 
 fn sign_checkpoint_participant(
     state: &AppState,
-    signer: PrincipalAuthorityKey,
+    signer: AccountId,
     signing_bytes: &[u8],
 ) -> Result<BilateralContinuityCheckpointSignature, AppError> {
     Ok(BilateralContinuityCheckpointSignature {

@@ -50,7 +50,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .map_err(PersistenceError::database)?;
         let inserted = sql_query(
             "INSERT INTO mls_key_packages \
-             (id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, key_package_bytes, \
+             (id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, key_package_bytes, \
               capabilities, capabilities_digest, last_resort, \
               last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
               claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -61,7 +61,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(&record.id)
         .bind::<Text, _>(&record.keypackage_ref)
         .bind::<Text, _>(&record.keypackage_digest)
-        .bind::<Text, _>(record.owner_account_id.as_str())
+        .bind::<BigInt, _>(record.owner_account_pk.get())
         .bind::<Text, _>(&record.actor_id)
         .bind::<Nullable<Text>, _>(&record.device_id)
         .bind::<Nullable<Text>, _>(&record.endpoint_verification_method)
@@ -94,7 +94,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-             "SELECT id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -118,7 +118,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-             "SELECT id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -188,7 +188,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $6 \
                     AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
-             RETURNING id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             RETURNING id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -231,7 +231,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                AND claimed_by_mls_group_id = $2 \
                AND consumed_at IS NULL \
                AND claim_expires_at_unix_ms > $3 \
-             RETURNING id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             RETURNING id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -381,7 +381,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                         return Ok(PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable);
                     }
                     let claimed = sql_query(
-                        "SELECT id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+                        "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
                          key_package_bytes, capabilities, capabilities_digest, \
                          last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                          claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -431,7 +431,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                    AND ($4 IS NULL OR agent_key_authorize_event_id = $4) \
                    AND lifetime_not_after * 1000 > $5 \
                    AND $6 > $5 AND $6 <= lifetime_not_after * 1000 \
-             RETURNING id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             RETURNING id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
                  last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
                  claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -707,7 +707,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-             "SELECT id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -733,7 +733,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-             "SELECT id, keypackage_ref, keypackage_digest, owner_account_id, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+             "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
              key_package_bytes, capabilities, capabilities_digest, \
              last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
              claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
@@ -1045,8 +1045,8 @@ struct MlsKeyPackagePgRow {
     keypackage_ref: String,
     #[diesel(sql_type = Text)]
     keypackage_digest: String,
-    #[diesel(sql_type = Text)]
-    owner_account_id: String,
+    #[diesel(sql_type = BigInt)]
+    owner_account_pk: i64,
     #[diesel(sql_type = Text)]
     actor_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Nullable<Text>)]
@@ -1137,8 +1137,7 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             id: row.id,
             keypackage_ref: row.keypackage_ref,
             keypackage_digest: row.keypackage_digest,
-            owner_account_id: arkret_identifiers::ServiceAccountId::new(row.owner_account_id)
-                .expect("validated_keypackage_row parses owner account before conversion"),
+            owner_account_pk: soland_storage::AccountPk(row.owner_account_pk),
             actor_id: row.actor_id.to_string(),
             device_id: row.device_id,
             endpoint_verification_method: row.endpoint_verification_method,
@@ -1168,11 +1167,6 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
 }
 
 fn validated_keypackage_row(row: MlsKeyPackagePgRow) -> PersistenceResult<MlsKeyPackageRow> {
-    arkret_identifiers::ServiceAccountId::new(row.owner_account_id.clone()).map_err(|error| {
-        PersistenceError::SchemaViolation(format!(
-            "stored MLS KeyPackage owner account id is invalid: {error}"
-        ))
-    })?;
     let row = MlsKeyPackageRow::from(row);
     row.lifecycle().map_err(|error| {
         PersistenceError::SchemaViolation(format!(

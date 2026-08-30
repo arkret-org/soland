@@ -36,9 +36,6 @@ impl ProjectionState {
         };
         let realm_id = operation.realm_id.to_string();
         let inviter_id = operation.context.sender.to_string();
-        if arkret_identifiers::DidCoreId::new(inviter_id.clone()).is_err() {
-            return rejected("inviter_invalid");
-        }
         let Some(raw_third_party_invite) = payload.get("third_party_invite") else {
             return rejected("third_party_invite_required");
         };
@@ -119,36 +116,22 @@ impl ProjectionState {
         {
             return ProjectionEffect::Ignored;
         }
-        let Some(payload) = operation.payload.as_object() else {
-            return rejected("invite_claim_payload_not_object");
+        let typed = match serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::InviteClaimPayload,
+        >(operation.payload.clone())
+        {
+            Ok(payload) if payload.validate().is_ok() => payload,
+            _ => return rejected("invite_claim_payload_invalid"),
         };
-        let Some(invite_id) = string_field(payload, "invite_id") else {
-            return rejected("invite_id_required");
-        };
-        if arkret_identifiers::InviteId::new(invite_id.clone()).is_err() {
-            return rejected("invite_id_invalid");
-        }
-        let Some(subject_id) = string_field(payload, "subject_id") else {
-            return rejected("subject_id_required");
-        };
-        if arkret_identifiers::DidCoreId::new(subject_id.clone()).is_err() {
-            return rejected("subject_id_invalid");
-        }
-        let Some(token_commitment) = string_field(payload, "token_commitment") else {
-            return rejected("token_commitment_required");
-        };
-        if !valid_hash(&token_commitment) {
-            return rejected("token_commitment_invalid");
-        }
-        let Some(claim_nonce) = string_field(payload, "claim_nonce") else {
-            return rejected("claim_nonce_required");
-        };
-        let Some(binding_proof) = payload.get("binding_proof") else {
-            return rejected("binding_proof_required");
-        };
-        let Some(subject_proof) = payload.get("subject_proof") else {
-            return rejected("subject_proof_required");
-        };
+        let invite_id = typed.invite_id.to_string();
+        let subject_account_id = typed.subject_account_id.clone();
+        let subject_id = arkret_wire::ActorId::account(subject_account_id.clone()).to_string();
+        let token_commitment = typed.token_commitment.to_string();
+        let claim_nonce = typed.claim_nonce.clone();
+        let binding_proof = serde_json::to_value(&typed.binding_proof)
+            .expect("validated binding proof remains serializable");
+        let subject_proof = serde_json::to_value(&typed.subject_proof)
+            .expect("validated subject proof remains serializable");
         let realm_policy_bundle = self
             .realm_policy_bundle_cell_value(operation.realm_id.as_str())
             .cloned();
@@ -206,10 +189,10 @@ impl ProjectionState {
             return rejected(reason);
         }
         if let Err(reason) = validate_binding_proof(
-            binding_proof,
+            &binding_proof,
             third_party_invite,
             &invite.realm_id,
-            &subject_id,
+            &subject_account_id,
             &claim_nonce,
             admission_time,
             invite.expires_at,
@@ -218,11 +201,11 @@ impl ProjectionState {
             return rejected(reason);
         }
         if let Err(reason) = validate_subject_proof(
-            subject_proof,
-            binding_proof,
+            &subject_proof,
+            &binding_proof,
             &invite_id,
             &invite.realm_id,
-            &subject_id,
+            &subject_account_id,
             &token_commitment,
             &claim_nonce,
             third_party_invite,
@@ -244,12 +227,7 @@ impl ProjectionState {
                 realm_id: invite.realm_id.clone(),
                 state: "invite".to_owned(),
                 role: INVITE_MEMBER_ROLE.to_owned(),
-                delivery_status: None,
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: None,
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
                 invited_at: Some(admission_time),
                 joined_at: admission_time,
                 updated_at: admission_time,
@@ -270,15 +248,6 @@ fn rejected(reason: &str) -> ProjectionEffect {
     ProjectionEffect::Rejected {
         reason: reason.to_owned(),
     }
-}
-
-fn string_field(payload: &serde_json::Map<String, Value>, field: &str) -> Option<String> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
 }
 
 fn parse_timestamp(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -365,7 +334,7 @@ fn validate_binding_proof(
     binding_proof: &Value,
     third_party_invite: &ThirdPartyInvite,
     invite_realm_id: &str,
-    subject_id: &str,
+    subject_account_id: &arkret_wire::AccountId,
     claim_nonce: &str,
     now: chrono::DateTime<chrono::Utc>,
     invite_expires_at: chrono::DateTime<chrono::Utc>,
@@ -384,7 +353,7 @@ fn validate_binding_proof(
     if !realm_policy_bundle.is_some_and(|value| value_allowlists_service(value, service_id)) {
         return Err("verification_service_not_authorized");
     }
-    if binding_proof.subject_id.as_str() != subject_id {
+    if &binding_proof.subject_account_id != subject_account_id {
         return Err("binding_proof_subject_mismatch");
     }
     if binding_proof.realm_id.as_str() != invite_realm_id {
@@ -416,7 +385,7 @@ fn validate_subject_proof(
     binding_proof: &Value,
     invite_id: &str,
     realm_id: &str,
-    subject_id: &str,
+    subject_account_id: &arkret_wire::AccountId,
     token_commitment: &str,
     claim_nonce: &str,
     third_party_invite: &ThirdPartyInvite,
@@ -446,7 +415,7 @@ fn validate_subject_proof(
         .canonical_digest()
         .map_err(|_| "binding_proof_digest_invalid")?;
     let expected_digest = arkret_models_collaboration::governance::membership_invite::invite_subject_proof_transcript_digest(
-        subject_id,
+        subject_account_id,
         invite_id,
         realm_id,
         token_commitment,

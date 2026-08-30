@@ -208,7 +208,7 @@ pub(crate) async fn contact_continuity_checkpoint(
         let contact_address =
             arkret_models_collaboration::governance::peer_contact::PeerContactAddress::principal_server(
                 peer.clone(),
-                arkret_wire::PrincipalAuthorityKey {
+                arkret_wire::AccountId {
                     principal_id: peer.clone(),
                     principal_server_id: peer_id.clone(),
                 },

@@ -89,24 +89,11 @@ use crate::artifacts;
 // `ak.attestation.range_completeness` (audit / non-reducer): range-bound
 //   completeness attestation; backs cross-issuer fork detection.
 //   zh/sync/operations-sync.md §4.2.
-// Round C46 (2026-05-19; spec 0a5ab85) — Realm-scoped delivery binding
-// governance + per-device push route binding.
-//
-// `ak.realm.delivery_binding_policy` (realm / reducer_input): Realm
-//   policy constraining which `binding_source` values are admissible,
-//   which recipient services are allowed, which endorsers are required,
-//   whether DID Document fallback / unroutable membership are permitted,
-//   and who may sign rebind. cell_family
-//   `ak.component.realm.delivery_binding_policy.v1`, cas-register.
-//   Governs reducer acceptance of `ak.member.state{join}`
-//   delivery_binding. The reducer projects the policy cell + applies
-//   binding-source / recipient-service / service-acceptance / policy-
-//   frontier checks against routable joins.
+// Round C46 (2026-05-19; later simplified) — per-device push route binding.
 //
 // `ak.device.push_route` (device / actor_private_event / reducer_input):
-//   per-device push route binding for the composite tuple
-//   `(recipient_id, principal, device, push_route)`. MUST NOT be
-//   replicated outside the binding's recipient_id context. Stored
+//   per-device push route binding for `(account_id, device_id, push_route)`.
+//   MUST NOT be replicated outside the AccountId context. Stored
 //   as actor-private state on the recipient Principal Server only.
 // `ak.realm.inheritance_policy` (realm / reducer_input): declares which
 // realm-scoped policies a child Realm inherits from its parent boundary.

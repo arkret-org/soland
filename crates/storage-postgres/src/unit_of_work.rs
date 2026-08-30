@@ -259,10 +259,13 @@ async fn stage_agent_membership_cascade(
                         ))
                     })?;
             let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
-            if terminal.event.actor_id != record.controller_authority.principal_id.as_str()
+            let controller = arkret_wire::ActorId::account(record.controller_authority.clone());
+            let expected_initiator =
+                arkret_wire::ActorId::account(record.initiator_authority.clone());
+            if terminal.event.actor_id != controller.to_string()
                 || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
-                || typed.principal_server_id != record.controller_authority.principal_server_id
-                || initiator != &record.initiator_authority.principal_id
+                || typed.actor_id != controller
+                || initiator != &expected_initiator
             {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: emergency terminal Event does not bind cleanup intent"
@@ -552,8 +555,8 @@ async fn commit_contact_projection(
              WHERE ((requester_id = $1 AND target_id = $2) OR \
                     (requester_id = $2 AND target_id = $1)) AND updated_at = $19",
         )
-        .bind::<Text, _>(&record.requester_id)
-        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(record.requester_id.to_string())
+        .bind::<Text, _>(record.target_id.to_string())
         .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
@@ -582,8 +585,8 @@ async fn commit_contact_projection(
              ON CONFLICT (requester_id, target_id) DO NOTHING",
         )
         .bind::<Uuid, _>(uuid::Uuid::now_v7())
-        .bind::<Text, _>(&record.requester_id)
-        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(record.requester_id.to_string())
+        .bind::<Text, _>(record.target_id.to_string())
         .bind::<Nullable<Text>, _>(record.contact_round_id.as_ref())
         .bind::<Nullable<BigInt>, _>(version)
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)

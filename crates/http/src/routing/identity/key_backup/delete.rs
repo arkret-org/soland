@@ -401,13 +401,11 @@ async fn verify_principal_signing_delete(
         .map_err(|error| {
             AppError::internal(format!("local Principal Server id is invalid: {error}"))
         })?;
-    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-        challenge.principal_id.clone(),
-        principal_server_id,
-    );
+    let authority_key =
+        arkret_wire::AccountId::new(challenge.principal_id.clone(), principal_server_id);
     let authority = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority_key)
+        .principal_resolution_by_account_id(&authority_key)
         .await
         .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
         .ok_or_else(|| {

@@ -774,8 +774,8 @@ impl ProjectionState {
         let actor_id = operation
             .payload
             .get("actor_id")
-            .and_then(|v| v.as_str())
-            .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok());
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
         let device_id = operation
             .payload
             .get("device_id")

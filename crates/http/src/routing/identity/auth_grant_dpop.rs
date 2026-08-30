@@ -555,7 +555,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
     Ok(SessionRecord {
         token_hash,
-        service_account_id: Some(grant.service_account_id.clone()),
+        account_pk: None,
         actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
@@ -705,7 +705,7 @@ pub(crate) fn session_from_verified_grant(
             grant_jwt,
             state.service_id(),
         ),
-        service_account_id: Some(grant.service_account_id.clone()),
+        account_pk: None,
         actor: grant.subject_id.to_string(),
         device_id,
         audience: state.service_id().clone(),
@@ -842,7 +842,7 @@ mod tests {
             .unwrap(),
             issuer_id: DidCoreId::new("ak:did_core:web:coauth.local").unwrap(),
             subject_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            service_account_id: arkret_wire::ServiceAccountId::new("alice").unwrap(),
+            account_pk: arkret_wire::ServiceAccountId::new("alice").unwrap(),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),

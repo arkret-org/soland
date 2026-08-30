@@ -5,7 +5,7 @@ use arkret_models_identity::{
     ResolutionDidBindingMethodProofKind, ResolutionMethodEvidenceBoundary,
     ResolutionMethodHistoryEvidence,
 };
-use arkret_wire::{Did, DidCoreId, Hash, PrincipalAuthorityKey};
+use arkret_wire::{AccountId, Did, DidCoreId, Hash};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use soland_http::error::{AppError, ErrorCode};
@@ -37,22 +37,22 @@ async fn open_principal_resolution(
         .map_err(|_| AppError::not_found("principal resolution not found"))?;
     let principal_server_id = DidCoreId::new(principal_server_id.into_inner())
         .map_err(|_| AppError::param_invalid("invalid principal_server_id"))?;
-    let authority = PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let authority = AccountId::new(principal_id.clone(), principal_server_id);
     let (evidence, _) = current_public_principal_resolution(state, &authority).await?;
     json_ok(evidence)
 }
 
 pub(crate) async fn current_public_principal_resolution(
     state: &AppState,
-    authority: &PrincipalAuthorityKey,
+    authority: &AccountId,
 ) -> Result<(PublicPrincipalResolution, DidDocument), AppError> {
     let record = state
         .persistence()
-        .principal_resolution_by_authority_key(authority)
+        .principal_resolution_by_account_id(authority)
         .await
         .map_err(|error| AppError::internal(format!("principal resolution store failed: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution not found"))?;
-    if &record.authority_key != authority {
+    if &record.account_id != authority {
         return Err(AppError::not_found("principal resolution not found"));
     }
 

@@ -468,14 +468,14 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn principal_resolution_by_authority_key(
+    pub async fn principal_resolution_by_account_id(
         &self,
-        authority_key: &arkret_wire::PrincipalAuthorityKey,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<soland_storage::PrincipalResolutionRecord>> {
         Ok(self
             .persistence
             .principal_resolutions()
-            .by_authority_key(authority_key)
+            .by_account_id(account_id)
             .await?)
     }
 
@@ -504,14 +504,14 @@ impl PersistenceHandle {
 
     pub async fn principal_resolution_history(
         &self,
-        authority_key: &arkret_wire::PrincipalAuthorityKey,
+        account_id: &arkret_wire::AccountId,
         after_event_ref: Option<&str>,
         limit: usize,
     ) -> crate::ServiceResult<Vec<arkret_wire::Event>> {
         Ok(self
             .persistence
             .principal_resolutions()
-            .history_newest_first(authority_key, after_event_ref, limit)
+            .history_newest_first(account_id, after_event_ref, limit)
             .await?)
     }
 
@@ -592,10 +592,13 @@ impl PersistenceHandle {
     pub async fn seed_demo_identity(&self) -> crate::ServiceResult<()> {
         let now = chrono::Utc::now();
         let account = soland_storage::AccountRecord {
-            id: arkret_identifiers::ServiceAccountId::new("0196419b-0000-7000-8000-000000000001")
-                .unwrap(),
+            pk: soland_storage::AccountPk(0),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .expect("demo principal id is canonical"),
+            principal_server_id: arkret_wire::DidCoreId::new(
+                "ak:did_core:web:server.example".to_owned(),
+            )
+            .expect("demo principal server id is canonical"),
             localpart: "alice".to_owned(),
             display_name: Some("Alice Example".to_owned()),
             bio: None,
@@ -603,10 +606,6 @@ impl PersistenceHandle {
             created_at: now,
         };
         self.persistence.accounts().put(&account).await?;
-        self.persistence
-            .account_localparts()
-            .add(account.principal_id.as_str(), &account.localpart, true)
-            .await?;
         self.persistence
             .realm_meta()
             .put(

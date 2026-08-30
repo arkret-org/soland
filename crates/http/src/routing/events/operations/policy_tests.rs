@@ -1106,7 +1106,7 @@ async fn register_native_agent_membership_context(
         )
         .await
         .expect("realm meta");
-    let controller_authority = arkret_wire::PrincipalAuthorityKey {
+    let controller_authority = arkret_wire::AccountId {
         principal_id: arkret_identifiers::DidCoreId::new(controller.to_owned()).unwrap(),
         principal_server_id: crate::test_event::principal_server_id(),
     };
@@ -1233,7 +1233,7 @@ async fn register_native_agent_membership_context(
 fn native_agent_controller_binding() -> serde_json::Value {
     serde_json::to_value(
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
-            controller_authority: arkret_wire::PrincipalAuthorityKey {
+            controller_authority: arkret_wire::AccountId {
                 principal_id: arkret_identifiers::DidCoreId::new(ALICE_CORE_ID.to_owned()).unwrap(),
                 principal_server_id: crate::test_event::principal_server_id(),
             },

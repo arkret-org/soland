@@ -1,8 +1,8 @@
-use arkret_identifiers::ServiceAccountId;
 use arkret_wire::{MlsGroupId, RealmId};
 
 use super::{
-    DeviceRevocationGateSelector, PersistenceError, PersistenceResult, Uuid, Value, async_trait,
+    AccountPk, DeviceRevocationGateSelector, PersistenceError, PersistenceResult, Uuid, Value,
+    async_trait,
 };
 /// G3.S1 — durable KeyPackage row.
 ///
@@ -17,7 +17,7 @@ pub struct MlsKeyPackageRow {
     pub keypackage_digest: String,
     /// Service-local account that owns this KeyPackage. This is deliberately
     /// separate from `actor_id`: one principal may have more than one account.
-    pub owner_account_id: ServiceAccountId,
+    pub owner_account_pk: AccountPk,
     pub actor_id: String,
     pub device_id: Option<String>,
     pub endpoint_verification_method: Option<String>,

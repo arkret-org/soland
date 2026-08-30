@@ -40,7 +40,7 @@ mod applet_formal_admission_tests {
     fn session(actor_id: &str) -> SessionRecord {
         let now = Utc::now();
         SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "fixture".to_owned(),
             actor: actor_id.to_owned(),
             device_id: String::new(),
@@ -504,7 +504,7 @@ mod internal_event_admission_tests {
     fn internal_session(actor: &str, device_id: &str) -> SessionRecord {
         let now = Utc::now();
         SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "internal-session".to_owned(),
             actor: actor.to_owned(),
             device_id: device_id.to_owned(),

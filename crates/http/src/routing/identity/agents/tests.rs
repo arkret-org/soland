@@ -14,7 +14,7 @@ fn web_did(core_id: &str) -> String {
 
 fn test_session(actor: &str) -> SessionRecord {
     SessionRecord {
-        service_account_id: None,
+        account_pk: None,
         token_hash: format!("test-session:{actor}"),
         actor: actor.to_owned(),
         device_id: "test-device".to_owned(),

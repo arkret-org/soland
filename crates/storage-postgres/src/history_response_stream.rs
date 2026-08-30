@@ -767,7 +767,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
             .bind::<Text, _>(&scope_kind)
             .bind::<Text, _>(&realm_id)
             .bind::<Nullable<Text>, _>(circle_id.as_deref())
-            .bind::<Text, _>(write.request.requester_actor_id.as_str())
+            .bind::<Text, _>(write.request.requester_actor_id.to_string())
             .bind::<Text, _>(&write.request.requester_sender_domain)
             .bind::<Text, _>(write.request_receipt.release_id.as_str())
             .bind::<Nullable<Text>, _>(write.local_traversal.as_ref().map(|_| write.traversal_retention_digest().as_str()))
@@ -1103,7 +1103,7 @@ impl HistoryResponseStreamStore for PgHistoryResponseStreamStore {
                 return Err(PersistenceError::Conflict("duplicate_conflict: completion differs from reservation".to_owned()).into());
             }
             let requester_total=sql_query("SELECT SUM(s.compact_receipt_bytes)::bigint AS total FROM history_key_response_streams s JOIN history_key_requests r USING (request_id) WHERE r.release_id=$1 AND r.requester_actor_id=$2")
-                .bind::<Text,_>(&authority.release_id).bind::<Text,_>(authority.requester_actor_id.as_str())
+                .bind::<Text,_>(&authority.release_id).bind::<Text,_>(authority.requester_actor_id.to_string())
                 .get_result::<SumRow>(&mut *conn).await?.total.unwrap_or(0);
             let requester_limit=as_i64(HISTORY_COMPACT_RECEIPTS_PER_REQUESTER_LIMIT,"requester_id compact receipt quota")?;
             if requester_total.checked_add(compact_receipt_bytes).is_none_or(|total| total>requester_limit) {

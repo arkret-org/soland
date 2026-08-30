@@ -107,7 +107,7 @@ struct RecoveryTranscriptContext {
     request_id: RequestId,
     session_grant_id: SessionGrantId,
     session_grant_cnf_jkt: String,
-    principal_authority: PrincipalAuthorityKey,
+    principal_authority: AccountId,
     requesting_device_id: DeviceId,
     trust_domain: TrustDomainId,
     policy_id: PolicyId,
@@ -130,7 +130,7 @@ fn typed_recovery_transcript_context(
         session_grant_id: SessionGrantId::new(record.session_grant_id.clone())
             .map_err(|error| stored_recovery_type_error("session_grant_id", error))?,
         session_grant_cnf_jkt: record.session_grant_cnf_jkt.clone(),
-        principal_authority: PrincipalAuthorityKey::new(
+        principal_authority: AccountId::new(
             record.principal_id.clone(),
             record.principal_server_id.clone(),
         ),
@@ -526,7 +526,7 @@ pub(super) async fn recovery_session_create(
     }
     let authority_record = state
         .persistence()
-        .principal_resolution_by_authority_key(&principal_authority)
+        .principal_resolution_by_account_id(&principal_authority)
         .await
         .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
         .ok_or_else(|| {
@@ -966,13 +966,13 @@ pub(super) async fn verify_did_root_proof(
         arkret_identifiers::DeviceId::new(device_fragment.to_owned()).map_err(|error| {
             recovery_signature_error(format!("did-root device fragment is invalid: {error}"))
         })?;
-    let authority_key = arkret_wire::PrincipalAuthorityKey::new(
+    let authority_key = arkret_wire::AccountId::new(
         record.principal_id.clone(),
         record.principal_server_id.clone(),
     );
     let authority = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority_key)
+        .principal_resolution_by_account_id(&authority_key)
         .await
         .map_err(|error| {
             AppError::internal(format!(

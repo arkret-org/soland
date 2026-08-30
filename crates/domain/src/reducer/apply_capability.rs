@@ -166,25 +166,12 @@ pub fn engine_grant_from_cell_body(
         .to_owned();
     let issuer = body
         .get("issuer_id")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())?;
-    let issuer_principal_server_id = body
-        .get("issuer_principal_server_id")
-        .and_then(Value::as_str)?
-        .to_owned();
-    let issuer_principal_server_id =
-        arkret_identifiers::DidCoreId::new(issuer_principal_server_id).ok()?;
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())?;
     let subject = body
         .get("subject")
-        .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::DidCoreId::new(value.to_owned()).ok())?;
-    let subject_principal_server_id = body
-        .get("subject_principal_server_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .map(arkret_identifiers::DidCoreId::new)
-        .transpose()
-        .ok()?;
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())?;
     let actions: Vec<String> = string_set_field(body, "actions").into_iter().collect();
     if actions.is_empty() {
         return None;
@@ -208,9 +195,7 @@ pub fn engine_grant_from_cell_body(
         grant_id: grant_id.to_owned(),
         realm_id,
         issuer_id: issuer,
-        issuer_principal_server_id,
         subject_id: subject,
-        subject_principal_server_id,
         resource,
         actions,
         constraints,
@@ -469,13 +454,13 @@ fn genesis_grant_id(operation: &Operation) -> String {
     arkret_identifiers::GrantId::from_event_id(&operation.context.event_id).to_string()
 }
 
-/// Extract the issuer DID from a capability grant payload (top-level or
+/// Extract the exact issuer ActorId from a capability grant payload (top-level or
 /// inside the embedded `grant` body).
-fn grant_issuer(payload: &Value) -> Option<String> {
+fn grant_issuer(payload: &Value) -> Option<arkret_wire::ActorId> {
     grant_body(payload)
         .get("issuer_id")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
 }
 
 /// The grant ids a grant names in `issuer_authority_refs[]`.
@@ -647,10 +632,6 @@ fn grant_item_value(
         map.insert("id".to_owned(), Value::String(grant_id.to_owned()));
         map.entry("realm_id".to_owned())
             .or_insert_with(|| Value::String(operation.realm_id.to_string()));
-        map.insert(
-            "issuer_principal_server_id".to_owned(),
-            Value::String(operation.context.principal_server_id.to_string()),
-        );
         if revoked {
             map.insert("revoked".to_owned(), Value::Bool(true));
             map.entry("revoked_at".to_owned()).or_insert_with(|| {
@@ -699,8 +680,7 @@ impl ProjectionState {
     /// action". Governance and owner checks want the second one.
     pub fn issuer_holds_literal_capability(
         &self,
-        issuer: &str,
-        issuer_principal_server_id: &str,
+        issuer: &arkret_wire::ActorId,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -708,12 +688,7 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject_id.as_str() == issuer
-                && grant
-                    .subject_principal_server_id
-                    .as_ref()
-                    .map(arkret_identifiers::DidCoreId::as_str)
-                    == Some(issuer_principal_server_id)
+            &grant.subject_id == issuer
                 && projected_grant_is_active_for(
                     &grant,
                     realm_id,
@@ -743,8 +718,7 @@ impl ProjectionState {
     /// projection never reads the wall clock on its own.
     pub fn issuer_has_projected_capability(
         &self,
-        issuer: &str,
-        issuer_principal_server_id: &str,
+        issuer: &arkret_wire::ActorId,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -752,12 +726,7 @@ impl ProjectionState {
     ) -> bool {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
-            grant.subject_id.as_str() == issuer
-                && grant
-                    .subject_principal_server_id
-                    .as_ref()
-                    .map(arkret_identifiers::DidCoreId::as_str)
-                    == Some(issuer_principal_server_id)
+            &grant.subject_id == issuer
                 && projected_grant_covers_action(
                     &grant,
                     realm_id,
@@ -780,8 +749,7 @@ impl ProjectionState {
     pub fn projected_capability_grant_matches(
         &self,
         grant_id: &str,
-        subject: &str,
-        subject_principal_server_id: &str,
+        subject: &arkret_wire::ActorId,
         realm_id: &str,
         action: &str,
         resource: &str,
@@ -791,12 +759,7 @@ impl ProjectionState {
             return false;
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
-        grant.subject_id.as_str() == subject
-            && grant
-                .subject_principal_server_id
-                .as_ref()
-                .map(arkret_identifiers::DidCoreId::as_str)
-                == Some(subject_principal_server_id)
+        &grant.subject_id == subject
             && projected_grant_covers_action(
                 &grant,
                 realm_id,
@@ -851,19 +814,17 @@ impl ProjectionState {
     pub fn actor_holds_effective_realm_owner(
         &self,
         realm_id: &str,
-        actor: &str,
-        actor_principal_server_id: &str,
+        actor: &arkret_wire::ActorId,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         if self
             .realm_authority_root(realm_id)
-            .is_some_and(|root| root.controller_id.as_str() == actor)
+            .is_some_and(|root| &root.controller_id == actor)
         {
             return true;
         }
         self.issuer_holds_literal_capability(
             actor,
-            actor_principal_server_id,
             realm_id,
             CapabilityActionId::REALM_OWNER,
             realm_id,
@@ -882,17 +843,12 @@ impl ProjectionState {
     pub fn realm_owner_operationally_covers_action(
         &self,
         realm_id: &str,
-        actor: &str,
-        actor_principal_server_id: &str,
+        actor: &arkret_wire::ActorId,
         action: &str,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        self.actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            actor_principal_server_id,
-            evaluation_basis,
-        ) && arkret_policy::owner_may_author_action(action).unwrap_or(false)
+        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
+            && arkret_policy::owner_may_author_action(action).unwrap_or(false)
     }
 
     /// The shared Realm-governance predicate over projected capability state.
@@ -906,26 +862,20 @@ impl ProjectionState {
     pub fn actor_governs_realm(
         &self,
         realm_id: &str,
-        actor: &str,
-        actor_principal_server_id: &str,
+        actor: &arkret_wire::ActorId,
         actions: &[&str],
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        self.actor_holds_effective_realm_owner(
-            realm_id,
-            actor,
-            actor_principal_server_id,
-            evaluation_basis,
-        ) || actions.iter().any(|action| {
-            self.issuer_holds_literal_capability(
-                actor,
-                actor_principal_server_id,
-                realm_id,
-                action,
-                realm_id,
-                evaluation_basis,
-            )
-        })
+        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
+            || actions.iter().any(|action| {
+                self.issuer_holds_literal_capability(
+                    actor,
+                    realm_id,
+                    action,
+                    realm_id,
+                    evaluation_basis,
+                )
+            })
     }
 
     /// Owner-aggregate leg of the section 3.2 issuer upper bound.
@@ -938,18 +888,12 @@ impl ProjectionState {
     /// cannot widen this ceiling. Event-kind coverage is never substituted.
     fn owner_may_issue_grant_for(
         &self,
-        issuer: &str,
-        issuer_principal_server_id: &str,
+        issuer: &arkret_wire::ActorId,
         realm_id: &str,
         action: &str,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        if !self.actor_holds_effective_realm_owner(
-            realm_id,
-            issuer,
-            issuer_principal_server_id,
-            evaluation_basis,
-        ) {
+        if !self.actor_holds_effective_realm_owner(realm_id, issuer, evaluation_basis) {
             return false;
         }
         arkret_policy::owner_may_grant(action).unwrap_or(false)
@@ -958,15 +902,18 @@ impl ProjectionState {
     #[allow(clippy::too_many_arguments)]
     fn applet_non_event_grant_authority_matches(
         &self,
-        issuer: &str,
-        issuer_principal_server_id: &str,
+        issuer: &arkret_wire::ActorId,
         realm_id: &str,
         action: &str,
         resource: &str,
         body: &Value,
         evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        let Some(subject) = body.get("subject").and_then(Value::as_str) else {
+        let Some(subject) = body
+            .get("subject")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        else {
             return false;
         };
         let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
@@ -1011,7 +958,7 @@ impl ProjectionState {
                 || rule.scope_binding != "grant.resource_exact_registration_scope"
                 || rule.epoch_binding != "constraint.registration_epoch_exact_registration"
                 || rule.requested_action_binding != "grant.action_in_registration.requested_scopes"
-                || registration.service_id.as_str() != subject
+                || arkret_wire::ActorId::service(registration.service_id.clone()) != subject
                 || !registration
                     .capabilities
                     .as_ref()
@@ -1028,7 +975,6 @@ impl ProjectionState {
                 // registration, scope, epoch, evidence - is unchanged.
                 || !(self.issuer_holds_literal_capability(
                     issuer,
-                    issuer_principal_server_id,
                     realm_id,
                     rule.issuer_action,
                     resource,
@@ -1036,7 +982,6 @@ impl ProjectionState {
                 ) || self.actor_holds_effective_realm_owner(
                     realm_id,
                     issuer,
-                    issuer_principal_server_id,
                     evaluation_basis,
                 ))
             {
@@ -1125,7 +1070,7 @@ impl ProjectionState {
                     root_realm_id == realm_id
                         && cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
                         && self.realm_authority_root(realm_id).is_some_and(|root| {
-                            root.controller_id.as_str() == issuer
+                            root.controller_id == issuer
                                 && root.controller_epoch == *controller_epoch_at_issuance
                                 && root.authority_generation == *authority_generation
                         })
@@ -1138,18 +1083,12 @@ impl ProjectionState {
         for action in &actions {
             // The owner aggregate is Realm-wide, so it is resolved once per
             // action rather than per resource selector.
-            let owner_authorized = self.owner_may_issue_grant_for(
-                &issuer,
-                operation.context.principal_server_id.as_str(),
-                realm_id,
-                action,
-                operation.created_at,
-            );
+            let owner_authorized =
+                self.owner_may_issue_grant_for(&issuer, realm_id, action, operation.created_at);
             for resource in &resources {
                 if !owner_authorized
                     && !self.issuer_has_projected_capability(
                         &issuer,
-                        operation.context.principal_server_id.as_str(),
                         realm_id,
                         action,
                         resource,
@@ -1157,7 +1096,6 @@ impl ProjectionState {
                     )
                     && !self.applet_non_event_grant_authority_matches(
                         &issuer,
-                        operation.context.principal_server_id.as_str(),
                         realm_id,
                         action,
                         resource,
@@ -1176,20 +1114,14 @@ impl ProjectionState {
         &self,
         operation: &Operation,
         body: &Value,
-        issuer: &str,
+        issuer: &arkret_wire::ActorId,
         realm_id: &str,
         parent: &crate::capability::Grant,
     ) -> Result<(), &'static str> {
         if parent.revoked || crate::capability::is_grant_expired(parent, operation.created_at) {
             return Err("grant_revoked_upstream");
         }
-        if issuer != parent.subject_id.as_str()
-            || parent
-                .subject_principal_server_id
-                .as_ref()
-                .map(arkret_identifiers::DidCoreId::as_str)
-                != Some(operation.context.principal_server_id.as_str())
-        {
+        if issuer != &parent.subject_id {
             return Err("grant_exceeds_issuer_authority");
         }
         if realm_id != parent.realm_id {
@@ -1342,11 +1274,6 @@ impl ProjectionState {
                         return false;
                     };
                     parent.subject_id == grant.issuer_id
-                        && parent
-                            .subject_principal_server_id
-                            .as_ref()
-                            .map(arkret_identifiers::DidCoreId::as_str)
-                            == Some(grant.issuer_principal_server_id.as_str())
                         && !parent.revoked
                         && !crate::capability::is_grant_expired(&parent, evaluation_basis)
                         && parent.actions.iter().any(|holder_action| {
@@ -1506,10 +1433,10 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        let actor_is_target_issuer = operation.context.sender.as_str() == target.issuer_id.as_str();
+        let actor_is_target_issuer = operation.context.sender == target.issuer_id;
         let actor_is_target_realm_controller = self
             .realm_authority_root(&target.realm_id)
-            .is_some_and(|root| root.controller_id.as_str() == operation.context.sender.as_str());
+            .is_some_and(|root| root.controller_id == operation.context.sender);
         if !actor_is_target_issuer && !actor_is_target_realm_controller {
             return ProjectionEffect::Rejected {
                 reason: "grant_revoke_not_authorized".to_owned(),
@@ -1539,7 +1466,7 @@ impl ProjectionState {
         let Some(target) = self.effective_engine_grant(&grant_id) else {
             return self.queue_pending_replay(grant_id, operation, "capability_target_unresolved");
         };
-        if operation.context.sender.as_str() != target.subject_id.as_str() {
+        if operation.context.sender != target.subject_id {
             return ProjectionEffect::Rejected {
                 reason: "grant_relinquish_not_subject".to_owned(),
             };
@@ -1840,13 +1767,12 @@ impl ProjectionState {
         ProjectionEffect::AgentKeyRevokeProjected { agent_id, key_id }
     }
 
-    /// Every persisted capability grant for `subject_did`, paired with the
+    /// Every persisted capability grant for the exact `subject_id`, paired with the
     /// Realm that governs its grant cell. Revocation must be submitted in
     /// this Realm; a controller PCR is not a cross-Realm revocation surface.
     pub fn grant_locations_for_subject(
         &self,
-        subject_did: &str,
-        subject_principal_server_id: &str,
+        subject_id: &arkret_wire::ActorId,
     ) -> Vec<(String, String)> {
         let cell_prefix = "ak:cell:ak.component.capability.grant.v1:";
         let mut locations = std::collections::BTreeSet::new();
@@ -1861,13 +1787,10 @@ impl ProjectionState {
                 let body = item.get("value").unwrap_or(item);
                 let subject_matches = body
                     .get("subject")
-                    .and_then(Value::as_str)
-                    .map(|subject| subject == subject_did)
-                    .unwrap_or(false)
-                    && body
-                        .get("subject_principal_server_id")
-                        .and_then(Value::as_str)
-                        == Some(subject_principal_server_id);
+                    .cloned()
+                    .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+                    .as_ref()
+                    == Some(subject_id);
                 if subject_matches
                     && let Some(grant_id) = body
                         .get("grant_id")
@@ -1882,14 +1805,13 @@ impl ProjectionState {
         locations.into_iter().collect()
     }
 
-    /// Non-terminal grants for `subject_did`, including pending Agent grants
+    /// Non-terminal grants for `subject_id`, including pending Agent grants
     /// that are durable but not yet in the effective authz index.
     pub fn unrevoked_grant_locations_for_subject(
         &self,
-        subject_did: &str,
-        subject_principal_server_id: &str,
+        subject_id: &arkret_wire::ActorId,
     ) -> Vec<(String, String)> {
-        self.grant_locations_for_subject(subject_did, subject_principal_server_id)
+        self.grant_locations_for_subject(subject_id)
             .into_iter()
             .filter(|(grant_id, _)| {
                 let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {

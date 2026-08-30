@@ -1355,7 +1355,7 @@ async fn require_current_profile_authority(
                 "account profile Event requires an accepted account-local PCR lineage",
             )
         })?;
-    if resolution.authority_key.principal_id != *principal_id
+    if resolution.account_id.principal_id != *principal_id
         || resolution.pcr_realm_id != *pcr_realm_id
     {
         return Err(profile_projection_precondition(
@@ -1375,11 +1375,10 @@ pub(crate) async fn accepted_account_profile(
     let principal_server_id = DidCoreId::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!("local Principal Server id is invalid: {error}"))
     })?;
-    let authority_key =
-        arkret_wire::PrincipalAuthorityKey::new(principal_id.clone(), principal_server_id);
+    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), principal_server_id);
     let Some(authority) = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority_key)
+        .principal_resolution_by_account_id(&authority_key)
         .await
         .map_err(|error| AppError::internal(format!("load account authority pair: {error}")))?
     else {
@@ -1628,7 +1627,7 @@ async fn read_principal_resolution_audit(
     }
     let record = state
         .persistence()
-        .principal_resolution_by_authority_key(&body.principal_authority)
+        .principal_resolution_by_account_id(&body.principal_authority)
         .await
         .map_err(|error| AppError::internal(format!("load principal resolution audit: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
@@ -1709,8 +1708,8 @@ async fn read_principal_resolution_audit(
         salvo::http::HeaderValue::from_static("no-store, no-transform"),
     );
     let evidence = PrincipalResolutionAuditEvidence {
-        principal_id: record.authority_key.principal_id,
-        principal_server_id: record.authority_key.principal_server_id,
+        principal_id: record.account_id.principal_id,
+        principal_server_id: record.account_id.principal_server_id,
         principal_control_realm_id: record.pcr_realm_id,
         principal_genesis_receipt,
         principal_genesis_event: record.genesis_event,
@@ -2253,10 +2252,10 @@ fn device_revocation_gate_record(
     record: soland_storage::DeviceRevocationTargetRecord,
 ) -> Option<Result<arkret_wire::DeviceRevocationGateRecord, AppError>> {
     use arkret_wire::{
-        DEVICE_REVOCATION_DENIED_ACTIONS, DeviceRevocationDecisionState,
+        AccountId, DEVICE_REVOCATION_DENIED_ACTIONS, DeviceRevocationDecisionState,
         DeviceRevocationFaultReason, DeviceRevocationGateRecord, DeviceRevocationPendingState,
         DeviceRevocationPendingStatus, DeviceRevocationStateSchema, DeviceRevokedState,
-        DeviceRevokedStatus, PrincipalAuthorityKey, SealId,
+        DeviceRevokedStatus, SealId,
     };
 
     let soland_storage::DeviceRevocationTargetRecord {
@@ -2270,7 +2269,7 @@ fn device_revocation_gate_record(
     } = record;
     let common = (|| -> Result<_, AppError> {
         Ok((
-            PrincipalAuthorityKey {
+            AccountId {
                 principal_id: selector.principal_id.clone(),
                 principal_server_id: selector.principal_server_id.clone(),
             },

@@ -258,15 +258,6 @@ impl ProjectionState {
             .get(&(realm_id.to_owned(), actor_id.to_owned()))
     }
 
-    pub fn membership_authority(
-        &self,
-        realm_id: &str,
-        actor_id: &str,
-    ) -> Option<&arkret_wire::PrincipalAuthorityKey> {
-        self.membership_authorities
-            .get(&(realm_id.to_owned(), actor_id.to_owned()))
-    }
-
     pub fn agent_membership_binding(
         &self,
         realm_id: &str,
@@ -295,15 +286,15 @@ impl ProjectionState {
         let Some(binding) = self.agent_membership_binding(realm_id, agent_id) else {
             return false;
         };
-        let controller_id = binding.controller_authority.principal_id.as_str();
-        let Some(controller) = self.member(realm_id, controller_id) else {
+        let controller_id =
+            arkret_wire::ActorId::account(binding.controller_authority.clone()).to_string();
+        let Some(controller) = self.member(realm_id, &controller_id) else {
             return false;
         };
         controller.state == "join"
             && controller.membership_event_ref.as_deref()
                 == Some(binding.controller_membership_generation_ref.as_str())
-            && self.membership_authority(realm_id, controller_id)
-                == Some(&binding.controller_authority)
+            && controller.member == controller_id
     }
 
     /// Read the FSM state of a member directly from the cells map.
@@ -438,16 +429,6 @@ impl ProjectionState {
         }
     }
 
-    /// Read the projected `ak.component.realm.delivery_binding_policy.v1`
-    /// cas-register value, if any. The wire cell id has a literal `null`
-    /// subject, so the enclosing Realm id is part of the cache namespace.
-    pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(
-            realm_id,
-            arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1,
-        )
-    }
-
     pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {
         match self.realm_policy_bundle_cells.get(realm_id)? {
             // The registry projects `field=payload`, so authoritative Seal
@@ -482,13 +463,16 @@ impl ProjectionState {
                 {
                     return Ok(());
                 }
-                (payload.actor_id.map(|actor_id| actor_id.to_string()), false)
+                (Some(payload.member_id.to_string()), false)
             }
             Some(arkret_wire::EventKind::InviteCreate) => {
                 let payload = operation
                     .typed_payload::<arkret_wire::event_spec::InviteCreate>()
                     .map_err(|_| "gate_check_failed")?;
-                (Some(payload.invitee_id.to_string()), true)
+                (
+                    Some(arkret_wire::ActorId::account(payload.invitee_account_id).to_string()),
+                    true,
+                )
             }
             Some(arkret_wire::EventKind::InviteAccept) => {
                 (Some(operation.context.sender.to_string()), true)
@@ -504,14 +488,13 @@ impl ProjectionState {
                 .member(operation.realm_id.as_str(), member)
                 .is_some_and(|membership| membership.state == "join")
         {
-            // `join -> join` refreshes an existing member's delivery binding;
-            // it is not a new Realm entry and therefore does not re-run entry
-            // gates or the Realm join rule.
+            // `join -> join` updates an existing member; it is not a new Realm
+            // entry and therefore does not re-run entry gates or the join rule.
             return Ok(());
         }
         let join_rule =
             (!hard_gates_only).then(|| self.realm_default_join_rule(operation.realm_id.as_str()));
-        let is_self_authored = operation.context.sender.as_str() == member;
+        let is_self_authored = operation.context.sender.to_string() == member;
         if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
             return Err("gate_check_failed");
         }

@@ -1,7 +1,6 @@
 use arkret_models_collaboration::objects::read_receipts::NotificationSource;
-use arkret_wire::ServiceAccountId;
 use soland_storage::{
-    AccountNotificationDeltaWrite, NotificationStore, RecipientNotificationRecord,
+    AccountNotificationDeltaWrite, AccountPk, NotificationStore, RecipientNotificationRecord,
     StoredAccountNotificationDelta,
 };
 
@@ -62,7 +61,7 @@ impl NotificationStore for MemoryNotificationStore {
         };
         let mut data = self.account_notifications.lock();
         if let Some(existing) = data.iter_mut().find(|candidate| {
-            candidate.record.controller_account_id == stored.record.controller_account_id
+            candidate.record.controller_account_pk == stored.record.controller_account_pk
                 && candidate.record.recipient_id == stored.record.recipient_id
                 && candidate.record.source_account_artifact_id
                     == stored.record.source_account_artifact_id
@@ -82,14 +81,14 @@ impl NotificationStore for MemoryNotificationStore {
             .recipient_notifications
             .lock()
             .iter()
-            .filter(|record| record.notification.actor_id.as_str() == recipient_id)
+            .filter(|record| record.notification.actor_id.to_string() == recipient_id)
             .cloned()
             .collect())
     }
 
     async fn list_for_account(
         &self,
-        controller_account_id: &ServiceAccountId,
+        controller_account_pk: &AccountPk,
         recipient_id: &str,
         after_position: Option<i64>,
     ) -> PersistenceResult<Vec<StoredAccountNotificationDelta>> {
@@ -98,7 +97,7 @@ impl NotificationStore for MemoryNotificationStore {
             .lock()
             .iter()
             .filter(|record| {
-                record.record.controller_account_id == *controller_account_id
+                record.record.controller_account_pk == *controller_account_pk
                     && record.record.recipient_id.as_str() == recipient_id
                     && after_position.is_none_or(|after| record.projection_position > after)
             })

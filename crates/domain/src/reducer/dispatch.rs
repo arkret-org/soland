@@ -621,16 +621,6 @@ fn apply_member_identity_update_dispatch(
     }
 }
 
-/// Dispatch for `ak.realm.delivery_binding_policy`; cell family is
-/// `ak.component.realm.delivery_binding_policy.v1`.
-fn apply_delivery_binding_policy_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_delivery_binding_policy(op)
-}
-
 /// Dispatch for `ak.realm.policy_bundle`; cell family is
 /// `ak.component.realm.policy_bundle.v1`.
 fn apply_realm_policy_bundle_dispatch(
@@ -846,7 +836,6 @@ fn apply_mls_keypackage_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     match op.payload.get("action").and_then(Value::as_str) {
-        Some("publish") => mls::apply_keypackage_publish(s, op),
         Some("claim") => mls::apply_keypackage_claim(s, op),
         Some(other) => ProjectionEffect::Rejected {
             reason: format!("mls_keypackage_action_unknown:{other}"),
@@ -1172,12 +1161,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::SelfAgentDeactivate,
         apply_agent_deactivate_dispatch,
-    );
-    // delivery_binding_policy is Realm-scoped with cell_family
-    // `ak.component.realm.delivery_binding_policy.v1`.
-    m.insert(
-        arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-        apply_delivery_binding_policy_dispatch,
     );
     m.insert(
         arkret_wire::EventKind::RealmPolicyBundle,

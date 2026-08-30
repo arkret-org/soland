@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{BlobRef, Hash, ServiceAccountId};
+use arkret_identifiers::{BlobRef, Hash};
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::blob::BlobVisibility;
 use arkret_models_crypto::{
@@ -16,6 +16,20 @@ use serde_json::Value;
 
 use crate::DeviceRevocationGateSelector;
 
+/// Service-local primary key of one row in `accounts`.
+///
+/// This integer never appears on the wire and must not be confused with the
+/// protocol `AccountId` value `(principal_server_id, principal_id)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct AccountPk(pub i64);
+
+impl AccountPk {
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AgentSessionRecord {
     pub granted_scope: Vec<String>,
@@ -27,7 +41,7 @@ pub struct AgentSessionRecord {
 pub struct SessionRecord {
     pub token_hash: String,
     /// Exact service-local account binding for this authenticated session.
-    pub service_account_id: ServiceAccountId,
+    pub account_pk: AccountPk,
     pub actor: String,
     pub device_id: String,
     pub audience: String,
@@ -58,12 +72,14 @@ pub struct AccountRecord {
     /// Service-local opaque account row primary key, minted by
     /// The composition root mints this identifier at account creation. Stable
     /// internal handle decoupled from the protocol principal identifier.
-    pub id: ServiceAccountId,
+    pub pk: AccountPk,
     /// Stable protocol principal identifier (DB column `principal_id`).
     ///
     /// An ordinary account projection does not carry a W3C DID. Registration
     /// and resolution surfaces carry that evidence separately when required.
     pub principal_id: DidCoreId,
+    /// Principal Server component of the protocol AccountId.
+    pub principal_server_id: DidCoreId,
     /// Primary bare handle localpart (`alice` — never `@alice` or
     /// `alice:domain`). This is derived from `account_localparts`, not stored
     /// on the account row. Wire/display surfaces use [`AccountRecord::handle`]
@@ -95,7 +111,7 @@ impl AccountRecord {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AccountLocalpartRecord {
     pub id: String,
-    pub account_principal_id: DidCoreId,
+    pub account_pk: AccountPk,
     pub localpart: String,
     pub is_primary: bool,
     pub created_at: chrono::DateTime<chrono::Utc>,

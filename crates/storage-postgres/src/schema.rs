@@ -23,7 +23,7 @@ diesel::table! {
 diesel::table! {
     account_localparts (id) {
         id -> Uuid,
-        account_id -> Text,
+        account_pk -> Int8,
         localpart -> Text,
         is_primary -> Bool,
         created_at -> Timestamptz,
@@ -32,9 +32,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    accounts (id) {
-        id -> Text,
+    accounts (pk) {
+        pk -> Int8,
         principal_id -> Text,
+        principal_server_id -> Text,
         display_name -> Nullable<Text>,
         payload -> Jsonb,
         disabled_at -> Nullable<Timestamptz>,
@@ -110,7 +111,7 @@ diesel::table! {
         pairing_code -> Nullable<Text>,
         pairing_expires_at -> Nullable<Timestamptz>,
         approval_request_id -> Nullable<Text>,
-        controller_account_id -> Nullable<Text>,
+        controller_account_pk -> Nullable<Int8>,
         recipient_id -> Nullable<Text>,
         runtime_key_binding_digest -> Nullable<Text>,
         runtime_public_key_digest -> Nullable<Text>,
@@ -786,7 +787,7 @@ diesel::table! {
         id -> Text,
         keypackage_ref -> Text,
         keypackage_digest -> Text,
-        owner_account_id -> Text,
+        owner_account_pk -> Int8,
         actor_id -> Text,
         device_id -> Nullable<Text>,
         endpoint_verification_method -> Nullable<Text>,
@@ -873,7 +874,7 @@ diesel::table! {
         recipient_actor_id -> Text,
         realm_id -> Nullable<Text>,
         source_event_id -> Nullable<Text>,
-        controller_account_id -> Nullable<Text>,
+        controller_account_pk -> Nullable<Int8>,
         recipient_id -> Nullable<Text>,
         source_account_artifact_kind -> Nullable<Text>,
         source_account_artifact_id -> Nullable<Text>,
@@ -1424,7 +1425,7 @@ diesel::table! {
 diesel::table! {
     sessions (id) {
         id -> Text,
-        service_account_id -> Text,
+        account_pk -> Int8,
         actor_id -> Text,
         device_id -> Text,
         audience -> Text,
@@ -1810,7 +1811,7 @@ diesel::table! {
     }
 }
 
-diesel::joinable!(account_localparts -> accounts (account_id));
+diesel::joinable!(account_localparts -> accounts (account_pk));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));

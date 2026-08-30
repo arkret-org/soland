@@ -98,7 +98,7 @@ mod tests {
 
     fn session_with_agent_scopes(scopes: &[&str]) -> SessionRecord {
         SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "grant".to_owned(),
             actor: "did:web:agent.example".to_owned(),
             device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
@@ -127,7 +127,7 @@ mod tests {
 
     fn human_session() -> SessionRecord {
         SessionRecord {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "human".to_owned(),
             actor: "did:web:alice.example".to_owned(),
             device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),

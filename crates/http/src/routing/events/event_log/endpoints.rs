@@ -1817,12 +1817,11 @@ async fn events_frontier(
         .map(|access| access.pcr_realm_id.as_str());
     let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().clone())
         .map_err(|_| AppError::internal("local principal server id is invalid"))?;
-    let actor_authority =
-        arkret_wire::PrincipalAuthorityKey::new(actor_id.clone(), principal_server_id);
+    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), principal_server_id);
     let own_actor_pcr = if actor_id == session_core_id {
         state
             .persistence()
-            .principal_resolution_by_authority_key(&actor_authority)
+            .principal_resolution_by_account_id(&actor_authority)
             .await
             .map_err(|error| {
                 AppError::internal(format!("principal resolution lookup failed: {error}"))

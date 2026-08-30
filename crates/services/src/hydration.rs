@@ -587,13 +587,19 @@ async fn hydrate_applet_managed_pcr_identity(
         let expected = existing
             .as_ref()
             .map(|record| record.current_event.event_id.as_str());
-        let authority_key = arkret_wire::PrincipalAuthorityKey::new(
-            genesis_event.actor_id.clone(),
-            genesis_event.principal_server_id.clone(),
-        );
+        let account_id = genesis_event
+            .actor_id
+            .as_account_id()
+            .cloned()
+            .ok_or_else(|| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Applet PCR {} genesis actor is not an AccountId",
+                    pcr_realm_id
+                ))
+            })?;
         let expected_current_event_id = current_event.event_id.clone();
         let next = soland_storage::PrincipalResolutionRecord {
-            authority_key,
+            account_id,
             pcr_realm_id: pcr_realm_id.clone(),
             genesis_event,
             current_event,
@@ -1041,7 +1047,7 @@ pub async fn hydrate_projections_from_persistence(
                     id: row.id,
                     keypackage_ref: row.keypackage_ref,
                     keypackage_digest: row.keypackage_digest,
-                    owner_account_id: row.owner_account_id,
+                    owner_account_pk: row.owner_account_pk.get(),
                     actor_id: row.actor_id,
                     device_id: row.device_id,
                     endpoint_verification_method: row.endpoint_verification_method,

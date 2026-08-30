@@ -312,7 +312,7 @@ pub fn build_realm_basis(
                 value: Some(
                     serde_json::to_value(
                         arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                            issuer.clone(),
+                            arkret_wire::ActorId::service(issuer.clone()),
                         ),
                     )
                     .map_err(|error| error.to_string())?,
@@ -551,7 +551,7 @@ fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
 
 fn issued_op(issuer: &DidCoreId, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
     IssuedOp {
-        issuer_id: issuer.clone(),
+        issuer_id: arkret_wire::ActorId::service(issuer.clone()),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
     }
 }

@@ -41,9 +41,7 @@ use arkret_models_discovery::{
     RealmPreview, ServiceDescribe, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
-use arkret_models_identity::delivery_binding::{DeliveryMode, RecipientServiceKind};
-use arkret_models_identity::handle::{HandleClaimKind, HandleHintBindingSource};
-use arkret_models_identity::handle_claim::DeliveryBindingHint;
+use arkret_models_identity::handle::HandleClaimKind;
 use arkret_models_identity::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
     ServiceResolutionCarrier,

@@ -2268,7 +2268,7 @@ impl ProjectionService {
                 id: row.id,
                 keypackage_ref: row.keypackage_ref,
                 keypackage_digest: row.keypackage_digest,
-                owner_account_id: row.owner_account_id,
+                owner_account_pk: soland_storage::AccountPk(row.owner_account_pk),
                 actor_id: row.actor_id,
                 device_id: row.device_id,
                 endpoint_verification_method: row.endpoint_verification_method,
@@ -2450,9 +2450,9 @@ impl ProjectionService {
         let effect = match kind {
             arkret_wire::EventKind::MlsKeypackage => {
                 match operation.payload.get("action").and_then(Value::as_str) {
-                    Some("publish") => {
-                        soland_domain::reducer::mls::apply_keypackage_publish(&mut state, operation)
-                    }
+                    Some("publish") => ProjectionEffect::Rejected {
+                        reason: "mls_keypackage_publish_is_not_a_protocol_event".to_owned(),
+                    },
                     Some("claim") => {
                         soland_domain::reducer::mls::apply_keypackage_claim(&mut state, operation)
                     }
@@ -2585,7 +2585,7 @@ impl ProjectionService {
         Some(
             arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
                 schema: arkret_wire::SchemaId::KEY_BACKUP_ACTIVE_SERIES_V1.to_owned(),
-                actor_id: arkret_identifiers::DidCoreId::new(row.actor_id.clone()).ok()?,
+                actor_id: serde_json::from_str(&row.actor_id).ok()?,
                 backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
                     .ok()?,
                 active_series_id: arkret_identifiers::BackupSeriesId::new(
@@ -2811,29 +2811,13 @@ impl ProjectionService {
         realm_id: &str,
         member: &str,
         invite_created_at: DateTime<Utc>,
-        recipient_id: Option<String>,
         operation: &Operation,
     ) {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let delivery_status = recipient_id
-            .as_ref()
-            .map(|_| "routable".to_owned())
-            .or_else(|| Some("unroutable".to_owned()));
         let membership_event_ref = Some(projection_event_ref(operation));
         let mut state = self.state.lock();
         let key = (realm_id.to_owned(), member.to_owned());
         let previous = state.members.get(&key).cloned();
-        let delivery_binding_frontier = recipient_id.as_ref().and_then(|_| {
-            previous
-                .as_ref()
-                .and_then(|member| member.delivery_binding_frontier.clone())
-                .or_else(|| membership_event_ref.clone())
-        });
-        let delivery_binding_expires_at = recipient_id.as_ref().and_then(|_| {
-            previous
-                .as_ref()
-                .and_then(|membership| membership.delivery_binding_expires_at)
-        });
         let joined_at = previous
             .as_ref()
             .filter(|membership| membership.state == "join")
@@ -2846,12 +2830,7 @@ impl ProjectionService {
                 realm_id: realm_id.to_owned(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
-                delivery_status,
-                recipient_id,
-                recipient_service_resolution: None,
                 membership_event_ref,
-                delivery_binding_frontier,
-                delivery_binding_expires_at,
                 invited_at: previous
                     .as_ref()
                     .and_then(|membership| membership.invited_at)
@@ -2911,12 +2890,7 @@ impl ProjectionService {
                     .as_ref()
                     .map(|member| member.role.clone())
                     .unwrap_or_else(|| "member".to_owned()),
-                delivery_status: None,
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: Some(event_ref.clone()),
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
                 invited_at: previous
                     .as_ref()
                     .and_then(|member| member.invited_at)
@@ -2955,11 +2929,7 @@ impl ProjectionService {
             key,
             SolandMembershipState {
                 state: "leave".to_owned(),
-                delivery_status: None,
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: Some(projection_event_ref(operation)),
-                delivery_binding_frontier: previous.delivery_binding_frontier,
                 updated_at: operation.created_at,
                 reason,
                 ..previous
@@ -3197,13 +3167,14 @@ impl HistoryAuthorityViewCas for ProjectionService {
 
         let snapshot = self.snapshot();
         let incarnation_is_current =
-            |actor_id: &str, incarnation: &AuthorizationIncarnation| -> bool {
+            |actor_id: &arkret_wire::ActorId, incarnation: &AuthorizationIncarnation| -> bool {
+                let actor_key = actor_id.to_string();
                 let realm_id = match &attestation.effective_scope {
                     HistoryEffectiveScope::Realm { realm_id }
                     | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
                 };
                 let realm_membership_ref = snapshot
-                    .member(realm_id.as_str(), actor_id)
+                    .member(realm_id.as_str(), &actor_key)
                     .filter(|member| member.state == "join")
                     .and_then(|member| member.membership_event_ref.as_deref());
                 match (&attestation.effective_scope, incarnation) {
@@ -3222,11 +3193,11 @@ impl HistoryAuthorityViewCas for ProjectionService {
                     ) => {
                         realm_membership_ref == Some(realm_membership_incarnation_ref.as_str())
                             && snapshot
-                                .circle_membership(circle_id.as_str(), actor_id)
+                                .circle_membership(circle_id.as_str(), &actor_key)
                                 .is_some_and(|membership| membership.state == "active")
                             && snapshot
                                 .circle_member_join_refs
-                                .get(&(circle_id.as_str().to_owned(), actor_id.to_owned()))
+                                .get(&(circle_id.as_str().to_owned(), actor_key.clone()))
                                 .is_some_and(|event_id| {
                                     event_id == circle_membership_incarnation_ref.as_str()
                                 })
@@ -3235,7 +3206,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
                 }
             };
         if !incarnation_is_current(
-            attestation.recipient_actor_id.as_str(),
+            &attestation.recipient_actor_id,
             &attestation.recipient_authorization_incarnation,
         ) || attestation.source_kind
             == arkret_models_collaboration::history_key::SourceKind::Member
@@ -3243,7 +3214,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
                 .source_authorization_incarnation
                 .as_ref()
                 .is_some_and(|incarnation| {
-                    incarnation_is_current(attestation.source_actor_id.as_str(), incarnation)
+                    incarnation_is_current(&attestation.source_actor_id, incarnation)
                 })
         {
             return Err(PersistenceError::Conflict(

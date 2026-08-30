@@ -739,11 +739,9 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
     // correctly, so it fails closed instead of falling back to a synthetic DID.
     let issuer_id = value
         .get("issuer_id")
-        .and_then(Value::as_str)
         .ok_or_else(|| StoreError::Backend("sealed op missing issuer_id".to_owned()))
         .and_then(|actor_id| {
-            arkret_wire::DidCoreId::new(actor_id.to_owned())
-                .map_err(|error| StoreError::Backend(error.to_string()))
+            serde_json::from_value::<arkret_wire::ActorId>(actor_id.clone()).map_err(serde_to_store)
         })?;
     let move_id = value
         .get("move_id")
@@ -773,7 +771,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
 
 fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     Ok(serde_json::json!({
-        "issuer_id": issued.issuer_id.as_str(),
+        "issuer_id": issued.issuer_id,
         "move_id": issued.op.move_id.as_str(),
         "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
         "recovery_reset": issued.op.recovery_reset,

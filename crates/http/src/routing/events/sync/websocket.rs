@@ -2102,7 +2102,7 @@ mod tests {
     #[test]
     fn actor_device_connection_count_is_bounded_and_released() {
         let session = SessionIdentityState {
-            service_account_id: None,
+            account_pk: None,
             token_hash: "lease-test".to_owned(),
             actor: "did:example:websocket-lease-test".to_owned(),
             device_id: "device-websocket-lease-test".to_owned(),

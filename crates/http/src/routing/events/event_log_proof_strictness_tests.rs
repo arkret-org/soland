@@ -32,7 +32,7 @@ fn dev_proof_envelope() -> serde_json::Map<String, Value> {
 
 fn session() -> SessionRecord {
     SessionRecord {
-        service_account_id: None,
+        account_pk: None,
         token_hash: "hash".to_owned(),
         actor: "ak:did_core:web:alice.example".to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),

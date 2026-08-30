@@ -9,7 +9,7 @@ use arkret_models_collaboration::history_key::{
     OrganizationRecoveryArchiveReplica, OrganizationRecoveryArchiveReplicaOutcome,
     PeerHistoryTraversalAccess, SelfHistoryTraversalAccess,
 };
-use arkret_wire::{DidCoreId, Event, Hash, HistoryEffectiveScope, RealmId, Seal};
+use arkret_wire::{ActorId, DidCoreId, Event, Hash, HistoryEffectiveScope, RealmId, Seal};
 use chrono::{DateTime, Utc};
 use soland_storage::{
     ExactWriteOutcome, HistoryRequestPage, HistoryRequestRecord, HistoryRequestWrite,
@@ -25,7 +25,7 @@ const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 enum TraversalCaller<'a> {
-    SelfPrincipal(&'a DidCoreId),
+    SelfPrincipal(&'a ActorId),
     PeerService(&'a DidCoreId),
 }
 
@@ -54,7 +54,7 @@ impl GovernanceHistoryService {
         &self,
         request: SelfGovernanceDependencyResolveRequest,
         ordinary_realm_visible: bool,
-        caller: &DidCoreId,
+        caller: &ActorId,
         now: DateTime<Utc>,
     ) -> ServiceResult<GovernanceDependencyResolveOutcome> {
         request
@@ -200,7 +200,7 @@ impl GovernanceHistoryService {
     pub async fn resolve_self_retained_events_for_access(
         &self,
         access: SelfHistoryTraversalAccess,
-        caller: &DidCoreId,
+        caller: &ActorId,
         now: DateTime<Utc>,
     ) -> ServiceResult<Vec<Event>> {
         let access = HistoryTraversalAccess::SelfAccess(access);
@@ -265,7 +265,7 @@ impl GovernanceHistoryService {
         &self,
         realm_id: &RealmId,
         access: SelfHistoryTraversalAccess,
-        caller: &DidCoreId,
+        caller: &ActorId,
         now: DateTime<Utc>,
     ) -> ServiceResult<Vec<Seal>> {
         self.retained_seals(
@@ -383,7 +383,10 @@ impl GovernanceHistoryService {
                     archive_authorization_tuple,
                     ..
                 },
-            ) => &archive_authorization_tuple.holder_principal_id == caller,
+            ) => {
+                &archive_authorization_tuple.holder_principal_id
+                    == caller.signing_principal_id()
+            }
             (
                 HistoryTraversalAccess::PeerAccess(
                     PeerHistoryTraversalAccess::PendingArchiveReplica { .. },

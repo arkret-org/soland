@@ -1,4 +1,4 @@
-use arkret_wire::{CellRef, DidCoreId};
+use arkret_wire::{ActorId, CellRef, DidCoreId};
 
 use super::{
     Arc, BTreeMap, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactKey, ContactRecord,
@@ -20,8 +20,8 @@ impl MemoryContactStore {
 impl ContactStore for MemoryContactStore {
     async fn get(
         &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
+        requester_id: &ActorId,
+        target_id: &ActorId,
     ) -> PersistenceResult<Option<ContactRecord>> {
         Ok(self
             .data
@@ -65,7 +65,7 @@ impl ContactStore for MemoryContactStore {
         Ok(true)
     }
 
-    async fn list_for_actor(&self, actor_id: &DidCoreId) -> PersistenceResult<Vec<ContactRecord>> {
+    async fn list_for_actor(&self, actor_id: &ActorId) -> PersistenceResult<Vec<ContactRecord>> {
         let data = self.data.lock();
         Ok(data
             .values()
@@ -74,11 +74,7 @@ impl ContactStore for MemoryContactStore {
             .collect())
     }
 
-    async fn delete(
-        &self,
-        requester_id: &DidCoreId,
-        target_id: &DidCoreId,
-    ) -> PersistenceResult<()> {
+    async fn delete(&self, requester_id: &ActorId, target_id: &ActorId) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.retain(|(row_requester, row_target), _| {
             row_requester != requester_id || row_target != target_id

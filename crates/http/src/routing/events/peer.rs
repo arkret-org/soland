@@ -650,13 +650,13 @@ async fn validate_account_status_publication(
         ));
     }
 
-    let authority = arkret_wire::PrincipalAuthorityKey::new(
+    let authority = arkret_wire::AccountId::new(
         record.principal_authority.principal_id.clone(),
         local_server,
     );
     let resolution = state
         .persistence()
-        .principal_resolution_by_authority_key(&authority)
+        .principal_resolution_by_account_id(&authority)
         .await
         .map_err(|error| {
             AppError::internal(format!("account-status PCR binding unavailable: {error}"))

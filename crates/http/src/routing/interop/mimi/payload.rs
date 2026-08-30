@@ -113,7 +113,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let event_id = event.event_id().to_string();
     let now = chrono::Utc::now();
     let session = soland_services::identity::SessionIdentityState {
-        service_account_id: None,
+        account_pk: None,
         token_hash: "mimi-provider-facade".to_owned(),
         actor: state.service_id().clone(),
         // Service session: this internal admission authenticates a service
