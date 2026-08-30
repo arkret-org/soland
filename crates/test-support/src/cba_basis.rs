@@ -454,11 +454,18 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             project_fixture_genesis_event(state, &realm, event).await;
             return;
         }
-        persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", event).await;
+        persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", subject, event)
+            .await;
         return;
     }
     if is_principal_control_realm {
-        project_fixture_genesis_event(state, &realm, principal_control_create.into_event()).await;
+        let event = crate::signed_event::sign_fixture_event(
+            principal_control_create.into_event(),
+            subject,
+            "ak:device:01904100-0000-7000-8000-000000000001",
+            [21_u8; 32],
+        );
+        project_fixture_genesis_event(state, &realm, event).await;
         return;
     }
     if realm == state.development_demo_realm_id() {
@@ -469,7 +476,14 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             state.notary_signing_key().to_bytes(),
         )
         .into_event();
-        persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", event).await;
+        persist_and_project_realm_genesis_event(
+            state,
+            &realm,
+            "Fixture Realm",
+            state.service_did().as_str(),
+            event,
+        )
+        .await;
         return;
     }
     let genesis_event_id = realm.event_id().to_string();
@@ -513,7 +527,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         event.event_id,
         realm
     );
-    persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", event).await;
+    persist_and_project_realm_genesis_event(state, &realm, "Fixture Realm", subject, event).await;
 }
 
 fn fixture_registered_projection(
@@ -617,7 +631,7 @@ pub async fn seed_event_derived_realm_genesis_event(
     )
     .expect("fixture genesis Event");
     let realm = RealmId::from_event_id(&event.event_id);
-    persist_and_project_realm_genesis_event(state, &realm, title, event).await;
+    persist_and_project_realm_genesis_event(state, &realm, title, subject, event).await;
     realm.to_string()
 }
 
@@ -625,6 +639,7 @@ async fn persist_and_project_realm_genesis_event(
     state: &AppState,
     realm: &RealmId,
     profile_title: &str,
+    subject: &str,
     event: arkret_wire::Event,
 ) {
     let realm_id = realm.as_str();
@@ -704,6 +719,14 @@ async fn persist_and_project_realm_genesis_event(
             .expect("fixture bootstrap follow-up identity");
         previous_event_id = followup.event_id.clone();
         bootstrap_events.push(followup);
+    }
+    for event in &mut bootstrap_events {
+        *event = crate::signed_event::sign_fixture_event(
+            event.clone(),
+            subject,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            [21_u8; 32],
+        );
     }
     arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&bootstrap_events)
         .expect("fixture ordinary Realm bootstrap unit");

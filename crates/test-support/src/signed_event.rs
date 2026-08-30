@@ -367,3 +367,34 @@ pub fn fixture_verification_method(actor_id: &str, device_id: &str) -> DidUrl {
     DidUrl::new(format!("{actor_id}#{device_id}"))
         .expect("fixture verification method is a DID URL")
 }
+
+/// Attach the same complete producer proof used by caller-authored fixtures to
+/// an Event whose content and content-derived identity are already frozen.
+#[must_use]
+pub fn sign_fixture_event(
+    event: Event,
+    actor_id: &str,
+    device_id: &str,
+    signing_seed: [u8; 32],
+) -> Event {
+    let verification_method = fixture_verification_method(actor_id, device_id);
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+        signing_seed,
+        arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture signer DID"),
+        verification_method.clone(),
+    );
+    let created_at = event.created_at;
+    let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture Event finalizes");
+    arkret_signatures::sign_event(
+        &mut authored,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .expect("fixture Event signs");
+    authored.into_event()
+}

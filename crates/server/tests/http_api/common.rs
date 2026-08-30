@@ -1749,6 +1749,12 @@ pub(crate) async fn project_test_authorized_device(
     event
         .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .expect("device authorize fixture identity");
+    let event = soland_test_support::signed_event::sign_fixture_event(
+        event,
+        actor,
+        device_id,
+        signing_key.to_bytes(),
+    );
     let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
             "ak:operation:",

@@ -1718,27 +1718,29 @@ async fn events_query_exposes_prev_cursor_and_limited_timeline_pages_body() {
         .take_json()
         .await
         .unwrap();
-    assert!(query_page["next_cursor"].as_str().is_some());
+    assert!(
+        query_page["next_cursor"].as_str().is_some(),
+        "expected newer-edge cursor: {query_page}"
+    );
     assert_eq!(
         query_page["events"].as_array().unwrap().len(),
         1,
         "expected one Event in the first read page: {query_page}"
     );
     assert_eq!(query_page["has_more"], true);
-    assert!(query_page["prev_cursor"].is_null());
-    let next_cursor = query_page["next_cursor"].as_str().unwrap();
-    assert!(next_cursor.starts_with("ak:cursor:"));
+    let prev_cursor = query_page["prev_cursor"].as_str().unwrap();
+    assert!(prev_cursor.starts_with("ak:cursor:"));
 
     let second_page: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"limit": 1, "actor_ids": [actor_core], "after": next_cursor}))
+        .json(&serde_json::json!({"limit": 1, "actor_ids": [actor_core], "before": prev_cursor}))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(second_page["prev_cursor"], next_cursor);
     assert_eq!(second_page["events"].as_array().unwrap().len(), 1);
+    assert_ne!(second_page["events"][0], query_page["events"][0]);
 
     let mut invalid_cursor = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)

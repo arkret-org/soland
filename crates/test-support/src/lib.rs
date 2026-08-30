@@ -900,6 +900,12 @@ pub async fn project_authorized_principal_device(
     authorize
         .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .unwrap();
+    let authorize = signed_event::sign_fixture_event(
+        authorize,
+        principal_did.as_str(),
+        device_id,
+        signing_key.to_bytes(),
+    );
     let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
         arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
             "ak:operation:",
