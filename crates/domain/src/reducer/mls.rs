@@ -188,37 +188,6 @@ pub fn apply_keypackage_upload_projection(
     })
 }
 
-fn validate_pairwise_keypackage_leaf(
-    actor_id: &str,
-    verification_method: &str,
-    key_package_bytes: &[u8],
-) -> Result<(), &'static str> {
-    let actor = actor_id
-        .parse::<arkret_identifiers::DidCoreId>()
-        .map_err(|_| "claim_generation_mismatch")?;
-    let method = arkret_wire::DidUrl::new(verification_method.to_owned())
-        .map_err(|_| "claim_generation_mismatch")?;
-    arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(actor, method)
-        .map_err(|_| "claim_generation_mismatch")?;
-    let multibase = verification_method
-        .split_once('#')
-        .and_then(|(controller, _)| controller.strip_prefix("did:key:"))
-        .ok_or("claim_generation_mismatch")?;
-    let public_key = arkret_canonical::decode_ed25519_multibase(multibase)
-        .map_err(|_| "claim_generation_mismatch")?;
-    let leaf = arkret_mls::author_leaf_from_key_package_bytes(key_package_bytes, 0)
-        .map_err(|_| "mls_keypackage_invalid")?;
-    match leaf.credential {
-        arkret_mls::AuthorLeafCredential::Basic { identity }
-            if identity.as_slice() == actor_id.as_bytes() => {}
-        _ => return Err("claim_generation_mismatch"),
-    }
-    if leaf.signature_key.as_slice() != public_key {
-        return Err("claim_generation_mismatch");
-    }
-    Ok(())
-}
-
 /// G3.S1 — atomic CAS claim of a published KeyPackage.
 ///
 /// Payload shape:
@@ -1263,22 +1232,6 @@ fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {
     }
 }
 
-fn parse_lifetime(v: Option<&Value>) -> Result<KeyPackageLifetimeProjection, &'static str> {
-    let obj = v.ok_or("mls_keypackage_lifetime_missing")?;
-    let not_before = obj
-        .get("not_before")
-        .and_then(Value::as_i64)
-        .ok_or("mls_keypackage_lifetime_not_before_invalid")?;
-    let not_after = obj
-        .get("not_after")
-        .and_then(Value::as_i64)
-        .ok_or("mls_keypackage_lifetime_not_after_invalid")?;
-    Ok(KeyPackageLifetimeProjection {
-        not_before,
-        not_after,
-    })
-}
-
 /// Exactly-one-of trust binding carried by every KeyPackage publication and
 /// claim: device authorization, Agent key authorization, or a minimal-metadata
 /// pairwise actor/method pair.
@@ -1417,16 +1370,6 @@ fn welcome_requester_signature_binding(
     })
 }
 
-fn parse_timestamp(value: Option<&Value>) -> Option<i64> {
-    match value {
-        Some(Value::Number(number)) => number.as_i64(),
-        Some(Value::String(value)) => chrono::DateTime::parse_from_rfc3339(value)
-            .ok()
-            .map(|timestamp| timestamp.timestamp()),
-        _ => None,
-    }
-}
-
 fn string_array(value: Option<&Value>) -> Vec<String> {
     match value {
         Some(Value::Array(values)) => values
@@ -1495,19 +1438,6 @@ fn commit_digest_value(payload: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-/// Best-effort base64url-loose decode. Accepts both `URL_SAFE_NO_PAD`
-/// (canonical) and the padded `URL_SAFE` form so dev fixtures don't
-/// have to be strict about padding.
-fn decode_base64_loose(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
-    use base64::Engine;
-
-    let engine_nopad = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let engine_pad = base64::engine::general_purpose::URL_SAFE;
-    engine_nopad
-        .decode(s.trim_end_matches('='))
-        .or_else(|_| engine_pad.decode(s))
 }
 
 // ──────────────────────────── tests ───────────────────────────────────

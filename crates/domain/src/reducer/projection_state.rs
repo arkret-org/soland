@@ -467,7 +467,7 @@ impl ProjectionState {
             }
         };
         let scope = payload.scope();
-        let recipient_id = scope.account_id.principal_server_id.as_str();
+        let recipient_id = scope.account_id.station_id.as_str();
         if let Some(local_service_id) = self.local_service_id.as_deref()
             && local_service_id != recipient_id
         {

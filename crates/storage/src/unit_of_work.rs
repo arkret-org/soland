@@ -124,7 +124,7 @@ pub fn has_self_principal_pcr_device_authorized_shape(
     let mut admissions = event
         .proofs
         .iter()
-        .filter_map(|proof| proof.as_principal_server_admission());
+        .filter_map(|proof| proof.as_station_admission());
     let Some(_) = admissions.next() else {
         return false;
     };
@@ -132,7 +132,7 @@ pub fn has_self_principal_pcr_device_authorized_shape(
         return false;
     }
     if event
-        .validate_principal_server_admission_binding(digest_suite)
+        .validate_station_admission_binding(digest_suite)
         .is_err()
     {
         return false;
@@ -196,14 +196,15 @@ mod tests {
             proof_purpose: None,
             jws: "producer..signature".to_owned(),
         };
-        let admission = arkret_wire::PrincipalServerAdmissionProof {
-            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+        let admission = arkret_wire::StationAdmissionProof {
+            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new("did:web:soland.example#service-key")
                 .unwrap(),
             event_digest: event_digest.clone(),
-            producer_proof_digest:
-                arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(&producer)
-                    .unwrap(),
+            producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(
+                &producer,
+            )
+            .unwrap(),
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
@@ -255,9 +256,7 @@ mod tests {
         ));
 
         let mut wrong_binding = event;
-        if let arkret_wire::EventProof::PrincipalServerAdmission(admission) =
-            &mut wrong_binding.proofs[1]
-        {
+        if let arkret_wire::EventProof::StationAdmission(admission) = &mut wrong_binding.proofs[1] {
             admission.producer_proof_digest =
                 arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
         }

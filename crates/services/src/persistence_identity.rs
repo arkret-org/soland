@@ -61,7 +61,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         let account = soland_storage::AccountRecord {
             pk: AccountPk(0),
             principal_id: command.account_id.principal_id.clone(),
-            principal_server_id: command.account_id.principal_server_id.clone(),
+            principal_server_id: command.account_id.station_id.clone(),
             localpart: command.localpart.clone(),
             display_name: command.display_name,
             bio: None,
@@ -282,7 +282,7 @@ fn persistence_account_profile(
     soland_storage::AccountRecord {
         pk: account.pk,
         principal_id: account.principal_id,
-        principal_server_id: account.account_id.principal_server_id,
+        principal_server_id: account.account_id.station_id,
         localpart: account.localpart,
         display_name: account.display_name,
         bio: account.bio,
