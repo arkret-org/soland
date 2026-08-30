@@ -447,7 +447,7 @@ pub(crate) async fn validate_effective_agent_realm_membership(
                 "agent_membership_inactive",
             )
         })?;
-    if binding.controller_authority.principal_id != controller_id
+    if binding.controller_account_id.principal_id != controller_id
         || !projection.effective_agent_membership_base(realm_id, &agent_record.id)
     {
         return Err(failed_precondition(

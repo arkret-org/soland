@@ -259,7 +259,7 @@ async fn validate_active_series_authority_before_commit(
                 format!("active-series payload is invalid: {error}"),
             )
         })?;
-    if record.actor_id.signing_principal_id().as_str() != parsed.actor_id.as_str() {
+    if record.actor_id != parsed.actor {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -374,7 +374,7 @@ fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrap
     {
         match (
             event_realm_id_from_value(envelope),
-            event_string_field_from_value(envelope, "actor_id"),
+            event_actor_from_value(envelope).map(|actor| actor.to_string()),
         ) {
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
                 realm_id,
@@ -638,10 +638,10 @@ pub(super) async fn prepare_agent_membership_initial_event(
         .executed_by
         .as_ref()
         .unwrap_or(&event.actor_id)
-        .to_string();
+        .clone();
     let admission = InternalEventAdmission::agent_membership_cascade(
         event.realm_id.to_string(),
-        event.actor_id.to_string(),
+        event.actor_id.clone(),
         initiator_id,
         session.device_id.clone(),
         event.event_id.to_string(),
@@ -723,8 +723,11 @@ pub(in crate::routing) async fn submit_mimi_event_value(
     realm_id: &str,
     binding_ref: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let admission =
-        InternalEventAdmission::mimi_provider(realm_id, state.service_id().as_str(), binding_ref);
+    let admission = InternalEventAdmission::mimi_provider(
+        realm_id,
+        arkret_wire::ActorId::service(state.service_core_id().clone()),
+        binding_ref,
+    );
     submit_event_value_with_context(
         state,
         session,
@@ -754,7 +757,16 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     // check; schema, proof, actor-lock and reducer admission all still run.
     let admission = InternalEventAdmission::account_data(
         realm_id,
-        owner,
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(owner).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "param_invalid",
+                    format!("account owner: {error}"),
+                )
+            })?,
+            state.service_core_id().clone(),
+        )),
         session.device_id.as_str(),
         owner,
         key,
@@ -782,7 +794,7 @@ pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let admission = InternalEventAdmission::mimi_moderation_report(
         realm_id,
-        state.service_id().as_str(),
+        arkret_wire::ActorId::service(state.service_core_id().clone()),
         reporter_id,
         target_ref,
     );
@@ -808,7 +820,7 @@ pub(in crate::routing) async fn prepare_service_franking_proof_event_value(
 ) -> Result<soland_services::events::CommitAcceptedEventCommand, SubmitOneError> {
     let admission = InternalEventAdmission::service_franking_proof(
         realm_id,
-        state.service_id().as_str(),
+        arkret_wire::ActorId::service(state.service_core_id().clone()),
         target_event_id,
     );
     let mut prepared = None;
@@ -1978,7 +1990,7 @@ pub(super) async fn submit_event_value_with_context(
     let managed_bootstrap_contexts = if managed_agent_pcr_genesis {
         match (
             event_realm_id_from_value(&envelope),
-            event_string_field_from_value(&envelope, "actor_id"),
+            event_actor_from_value(&envelope).map(|actor| actor.to_string()),
         ) {
             (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
                 realm_id,
@@ -2028,9 +2040,12 @@ pub(super) async fn submit_event_value_with_context(
         let is_circle_pull = event_string_field_from_value(&envelope, "kind").as_deref()
             == Some(arkret_wire::EventKind::CircleMemberState.as_str())
             && envelope
-                .pointer("/payload/actor_id")
-                .and_then(Value::as_str)
-                .is_some_and(|target| target != session.actor);
+                .pointer("/payload/member_id")
+                .and_then(|value| {
+                    serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                })
+                .zip(event_actor_from_value(&envelope))
+                .is_some_and(|(target, sender)| target != sender);
         if is_circle_pull && error.code == "capability_denied" {
             error.code = "circle_member_manage_capability_required";
             error.message =
@@ -2109,7 +2124,8 @@ pub(super) async fn submit_event_value_with_context(
     } else {
         None
     };
-    let actor_lock = actor_submit_lock(parsed.realm_id.as_str(), parsed.actor_id.as_str());
+    let actor_key = parsed.actor.to_string();
+    let actor_lock = actor_submit_lock(parsed.realm_id.as_str(), &actor_key);
     let _actor_submit_guard = actor_lock.lock().await;
     let _account_data_submit_guard =
         if parsed.kind == arkret_wire::EventKind::AccountDataSet.as_str() {
@@ -2326,7 +2342,7 @@ pub(super) async fn submit_event_value_with_context(
         return Err(realm_already_exists_error());
     }
     let scoped_actor_records = service
-        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), &actor_key)
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -2416,7 +2432,7 @@ pub(super) async fn submit_event_value_with_context(
                 "prev_refs must not reference an Event in another Realm",
             ));
         }
-        if predecessor.actor_id == parsed.actor_id.as_str() {
+        if predecessor.actor_id == actor_key {
             max_actor_predecessor_seq = Some(
                 max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
                     current.max(predecessor.actor_seq)
@@ -3132,10 +3148,12 @@ pub(super) async fn submit_event_value_with_context(
     };
     let local_device_revocation_gate =
         if !session.token_hash.starts_with("federation:") && parsed.device_id.is_some() {
-            let producer_principal_id = envelope
-                .get("executed_by")
-                .and_then(Value::as_str)
-                .unwrap_or(parsed.actor_id.as_str());
+            let producer_principal_id = submitted_event
+                .executed_by
+                .as_ref()
+                .unwrap_or(&submitted_event.actor_id)
+                .signing_principal_id()
+                .as_str();
             let selector =
             crate::routing::identity::device_generation::active_device_revocation_gate_selector(
                 state,
@@ -3201,7 +3219,7 @@ pub(super) async fn submit_event_value_with_context(
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(parsed.actor_id.as_str()),
+            Some(&actor_key),
         )
     });
     // Built before the commit and committed with it. Failing to construct the
@@ -3386,7 +3404,7 @@ pub(super) async fn submit_event_value_with_context(
             .map(crate::routing::identity::consent::ConsentAdmission::commit),
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
-            actor_id: parsed.actor_id.to_string(),
+            actor_id: actor_key.clone(),
             actor_seq: parsed.actor_seq,
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind.clone(),
@@ -3493,7 +3511,7 @@ pub(super) async fn submit_event_value_with_context(
             operation,
             projected_cell_writes,
             projected_event,
-            actor_id: parsed.actor_id.to_string(),
+            actor_id: actor_key.clone(),
             ingress_receipts: accepted_response.outcome.ingress_receipts.clone(),
         });
         return Ok(accepted_response);

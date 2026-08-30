@@ -1234,7 +1234,7 @@ struct MlsCommitEpochRow {
     #[diesel(sql_type = BigInt)]
     epoch: i64,
     #[diesel(sql_type = Text)]
-    leader_actor_id: arkret_wire::DidCoreId,
+    leader_actor_id: String,
     #[diesel(sql_type = Text)]
     creator_device_id: String,
     #[diesel(sql_type = Text)]

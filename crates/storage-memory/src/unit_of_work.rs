@@ -93,13 +93,12 @@ fn stage_agent_membership_cascade(
                         ))
                     })?;
             let initiator = typed.executed_by.as_ref().unwrap_or(&typed.actor_id);
-            let controller = arkret_wire::ActorId::account(record.controller_authority.clone());
-            let expected_initiator =
-                arkret_wire::ActorId::account(record.initiator_authority.clone());
+            let controller = arkret_wire::ActorId::account(record.controller_account_id.clone());
+            let expected_initiator = &record.initiator_actor_id;
             if terminal.event.actor_id != controller.to_string()
                 || terminal.event.realm_id.as_deref() != Some(record.realm_id.as_str())
                 || typed.actor_id != controller
-                || initiator != &expected_initiator
+                || initiator != expected_initiator
             {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: emergency terminal Event does not bind cleanup intent"
@@ -1810,7 +1809,7 @@ mod tests {
         let mut record = AgentCleanupRecord {
             schema: AgentMembershipCascadeSchema::V1,
             realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
-            controller_authority: serde_json::from_str::<arkret_wire::ActorId>(
+            controller_account_id: serde_json::from_str::<arkret_wire::ActorId>(
                 &controller.event.actor_id,
             )
             .unwrap()
@@ -1821,10 +1820,10 @@ mod tests {
                 arkret_canonical::DigestSuite::Sha256,
                 [0x42; 32],
             ),
-            initiator_authority: arkret_wire::AccountId::new(
+            initiator_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-            ),
+            )),
             controller_terminal_event_id: arkret_wire::EventId::new(
                 controller.event.event_id.clone(),
             )

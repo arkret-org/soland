@@ -67,7 +67,7 @@ mod applet_formal_admission_tests {
         let key = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
         let admission = InternalEventAdmission::applet_formal(
             realm_id,
-            actor_id,
+            arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(actor_id).unwrap()),
             arkret_wire::EventKind::ProfileCreate.as_str(),
             "event-exact",
             applet_id.clone(),
@@ -77,7 +77,7 @@ mod applet_formal_admission_tests {
         let mut object = serde_json::json!({
             "event_id": "event-exact",
             "kind": arkret_wire::EventKind::ProfileCreate.as_str(),
-            "actor_id": actor_id,
+            "actor_id": arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(actor_id).unwrap()),
             "realm_id": realm_id,
             "applet_id": applet_id,
         })
@@ -176,7 +176,7 @@ mod applet_formal_admission_tests {
         let genesis_realm_id = arkret_wire::RealmId::from_event_id(&genesis_event_id);
         let genesis_admission = InternalEventAdmission::applet_formal(
             genesis_realm_id.as_str(),
-            actor_id,
+            arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(actor_id).unwrap()),
             arkret_wire::EventKind::RealmCreate.as_str(),
             genesis_event_id.as_str(),
             applet_id,
@@ -528,11 +528,13 @@ mod internal_event_admission_tests {
     fn mimi_provider_admission_reads_provenance_from_canonical_payload() {
         let admission = InternalEventAdmission::mimi_provider(
             "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "ak:did_core:web:mimi.example",
+            arkret_wire::ActorId::service(
+                arkret_wire::DidCoreId::new("ak:did_core:web:mimi.example").unwrap(),
+            ),
             "ak:event:AVF6xfk5EJU6x8wIqKL3WPOsSROVxJPxOu8HiqfxQGD7",
         );
         let object = json!({
-            "actor_id": "ak:did_core:web:mimi.example",
+            "actor_id": arkret_wire::ActorId::service(arkret_wire::DidCoreId::new("ak:did_core:web:mimi.example").unwrap()),
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "kind": "ak.message.create",
             "payload": {

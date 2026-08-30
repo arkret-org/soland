@@ -35,7 +35,8 @@ pub(super) async fn set_read_cursor(
 ) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let actor = local_account_actor(state, &session.actor)?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let submission = body.into_inner().advance_event;
     let cursor = validate_caller_signed_read_cursor(&actor, &session.device_id, &submission.event)?;
     let realm_id = cursor.realm_id.clone();
@@ -156,7 +157,8 @@ pub(super) async fn get_read_cursors(
 ) -> JsonResult<ReadCursorList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let actor = local_account_actor(state, &session.actor)?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = realm_id.into_inner().unwrap_or_default();
     let markers = {
         let proj = state.projections().snapshot();
@@ -169,17 +171,6 @@ pub(super) async fn get_read_cursors(
             .collect::<Vec<ReadMarkerOutcome>>()
     };
     json_ok(ReadCursorList { markers })
-}
-
-fn local_account_actor(
-    state: &AppState,
-    principal: &str,
-) -> Result<arkret_wire::ActorId, AppError> {
-    Ok(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(principal)
-            .map_err(|error| AppError::internal(format!("session principal: {error}")))?,
-        state.service_core_id().clone(),
-    )))
 }
 
 fn validate_read_scope(scope: &ReadCursorScope) -> Result<(), AppError> {

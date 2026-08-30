@@ -26,16 +26,6 @@ fn cascade_error(
     SubmitOneError::new(status, code, message)
 }
 
-fn local_service_id(state: &AppState) -> Result<arkret_wire::DidCoreId, SubmitOneError> {
-    arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-        cascade_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            format!("configured service_id is invalid: {error}"),
-        )
-    })
-}
-
 fn event_producer_device_id(event: &arkret_wire::Event) -> Result<String, SubmitOneError> {
     let producer = event
         .proofs
@@ -140,7 +130,7 @@ fn frozen_controller_membership(
         .iter()
         .filter(|((bound_realm_id, agent_id), binding)| {
             bound_realm_id == realm_id
-                && binding.controller_authority == authority
+                && binding.controller_account_id == authority
                 && binding.controller_membership_generation_ref == generation
                 && projection.effective_agent_membership_base(bound_realm_id, agent_id)
         })
@@ -190,21 +180,24 @@ fn require_exact_agent_set(
 }
 
 fn require_session_initiator(
+    state: &AppState,
     session: &SessionRecord,
     controller: &arkret_wire::Event,
-) -> Result<arkret_wire::DidCoreId, SubmitOneError> {
+) -> Result<(), SubmitOneError> {
     let initiator = controller
         .executed_by
         .as_ref()
         .unwrap_or(&controller.actor_id);
-    if session.actor != initiator.signing_principal_id().as_str() {
+    if session.actor != initiator.signing_principal_id().as_str()
+        || initiator.route_service_id().as_str() != state.service_id()
+    {
         return Err(cascade_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
-            "cascade initiator must equal the authenticated session principal",
+            "cascade initiator must bind the authenticated Station-local session",
         ));
     }
-    Ok(initiator.signing_principal_id().clone())
+    Ok(())
 }
 
 async fn exact_existing_event(
@@ -598,7 +591,13 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
             format!("invalid agent membership cascade: {error}"),
         )
     })?;
-    let initiator = require_session_initiator(session, &submission.controller_transition.event)?;
+    require_session_initiator(state, session, &submission.controller_transition.event)?;
+    let initiator = submission
+        .controller_transition
+        .event
+        .executed_by
+        .as_ref()
+        .unwrap_or(&submission.controller_transition.event.actor_id);
     let _cascade_guard =
         agent_membership_cascade_lock(submission.controller_transition.event.realm_id.as_str())
             .lock_owned()
@@ -664,12 +663,9 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
             let mut record = AgentCleanupRecord {
                 schema: AgentMembershipCascadeSchema::V1,
                 realm_id: controller_event.realm_id.clone(),
-                controller_authority: frozen.authority,
+                controller_account_id: frozen.authority,
                 controller_membership_generation_ref: frozen.generation,
-                initiator_authority: arkret_wire::AccountId {
-                    principal_id: initiator,
-                    station_id: local_service_id(state)?,
-                },
+                initiator_actor_id: initiator.clone(),
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
@@ -732,8 +728,7 @@ pub(in crate::routing) async fn submit_agent_membership_cascade(
                     )
                 })?;
             if record.controller_terminal_event_id != controller_event_id
-                || record.initiator_authority.principal_id != initiator
-                || record.initiator_authority.station_id.as_str() != state.service_id()
+                || record.initiator_actor_id != *initiator
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -990,6 +985,7 @@ fn federation_session(
             .executed_by
             .as_ref()
             .unwrap_or(&event.actor_id)
+            .signing_principal_id()
             .to_string(),
         device_id: event_producer_device_id(event)?,
         audience: state.service_id().clone(),
@@ -1028,13 +1024,13 @@ async fn prepare_federated_transition(
     )?;
     let admission = InternalEventAdmission::peer_agent_membership_cascade(
         submission.event.realm_id.to_string(),
-        submission.event.actor_id.to_string(),
+        submission.event.actor_id.clone(),
         submission
             .event
             .executed_by
             .as_ref()
             .unwrap_or(&submission.event.actor_id)
-            .to_string(),
+            .clone(),
         session.device_id.clone(),
         submission.event.event_id.to_string(),
         verification_method.clone(),
@@ -1141,12 +1137,9 @@ async fn submit_federated_cascade_after_transport_validation(
             let mut record = AgentCleanupRecord {
                 schema: AgentMembershipCascadeSchema::V1,
                 realm_id: controller_event.realm_id.clone(),
-                controller_authority: frozen.authority,
+                controller_account_id: frozen.authority,
                 controller_membership_generation_ref: frozen.generation,
-                initiator_authority: arkret_wire::AccountId {
-                    principal_id: initiator.signing_principal_id().clone(),
-                    station_id: source_id.clone(),
-                },
+                initiator_actor_id: initiator.clone(),
                 controller_terminal_event_id: controller_event_id.clone(),
                 expected_agent_ids: frozen.agent_ids,
                 cleanup_intent_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
@@ -1209,8 +1202,7 @@ async fn submit_federated_cascade_after_transport_validation(
                     )
                 })?;
             if record.controller_terminal_event_id != controller_event_id
-                || record.initiator_authority.principal_id != *initiator.signing_principal_id()
-                || record.initiator_authority.station_id != *source_id
+                || record.initiator_actor_id != *initiator
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,

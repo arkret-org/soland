@@ -89,10 +89,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         }
     }
 
-    let actor_lock = actor_submit_lock(
-        unit.realm_id.as_str(),
-        unit.actor_id.signing_principal_id().as_str(),
-    );
+    let actor_lock = actor_submit_lock(unit.realm_id.as_str(), &unit.actor_id.to_string());
     let _guard = actor_lock.lock().await;
     let context = RealmBootstrapBatchContext {
         realm_id: unit.realm_id.to_string(),

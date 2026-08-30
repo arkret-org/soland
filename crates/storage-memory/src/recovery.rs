@@ -507,7 +507,7 @@ mod tests {
                 .iter()
                 .map(|backup| {
                     json!({
-                        "actor_id": "ak:did_core:web:alice.example",
+                        "actor_id": {"kind":"account","account_id":{"principal_id":"ak:did_core:web:alice.example","station_id":"ak:did_core:web:principal.example"}},
                         "backup_id": backup.backup_id,
                         "backup_kind": backup_kind,
                         "ciphertext_digest": backup.ciphertext_digest,

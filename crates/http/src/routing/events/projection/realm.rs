@@ -233,11 +233,13 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         return;
     }
 
-    let member = operation
+    let Some(member) = operation
         .payload
-        .get("actor_id")
-        .and_then(|value| value.as_str())
-        .unwrap_or(origin);
+        .get("member_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+    else {
+        return;
+    };
 
     tracing::debug!(
         membership = ?membership,
@@ -247,43 +249,22 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         "project_membership_operation"
     );
 
-    let invalidated_agent_ids = if matches!(membership, Some("leave" | "ban")) {
-        state
-            .projections()
-            .snapshot()
-            .agent_membership_bindings
-            .iter()
-            .filter(|((bound_realm_id, _), binding)| {
-                bound_realm_id == operation.realm_id.as_str()
-                    && binding.controller_authority.principal_id.as_str() == member
-            })
-            .map(|((_, agent_id), _)| agent_id.clone())
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-
+    // The directory is a principal-level discovery projection, never the
+    // membership authority. Rebuild it from exact joined actors so removing
+    // one account cannot remove another Station's same-principal member.
+    let members = state
+        .projections()
+        .snapshot()
+        .members
+        .iter()
+        .filter(|((projected_realm, _), membership)| {
+            projected_realm == operation.realm_id.as_str() && membership.state == "join"
+        })
+        .filter_map(|((_, actor), _)| serde_json::from_str::<arkret_wire::ActorId>(actor).ok())
+        .map(|actor| actor.signing_principal_id().clone())
+        .collect();
     let updated = state.realm_directory().update_entry(&realm_id, |entry| {
-        if let Ok(member) = DidCoreId::new(member) {
-            if matches!(membership, Some("leave" | "ban")) {
-                entry.members.remove(&member);
-                for agent_id in &invalidated_agent_ids {
-                    if let Ok(agent_id) = DidCoreId::new(agent_id.clone()) {
-                        entry.members.remove(&agent_id);
-                    }
-                }
-            } else if membership == Some("join") {
-                entry.members.insert(member);
-                // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer
-                // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
-                // roster; clients resolve identity by following the
-                // `ak.member.identity.update` events surfaced via
-                // `MemberRosterEntry.identity_event_ids[]`. The earlier
-                // `member_handle_uris` cache populated from
-                // `payload.handle_uri` is gone with this rename.
-                let _ = operation; // intentionally unused: payload no longer feeds roster identity
-            }
-        }
+        entry.members = members;
     });
     if updated.is_none() {
         return;
@@ -316,8 +297,8 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
         .map(str::to_owned);
     let actor_id = payload
         .get("actor_id")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+        .map(|actor| actor.to_string());
     let segment = payload
         .get("segment")
         .and_then(Value::as_str)
@@ -409,18 +390,19 @@ pub async fn project_member_identity_update(state: &AppState, operation: &Operat
         }
     }
 
-    // MID-5: store the original Event envelope verbatim. soland MUST NOT
-    // rewrite the payload at query time. Here `operation` is the
-    // Operation wrapper inside the durable Event; the inner payload (and
-    // its `actor_id` field) round-trip verbatim through `payload`.
-    let raw_event = json!({
-        "event_id": canonical_event_id,
-        "operation_id": operation.operation_id.to_string(),
-        "event_kind": arkret_wire::EventKind::MemberIdentityUpdate,
-        "realm_id": operation.realm_id.as_str(),
-        "created_at": operation.created_at,
-        "payload": operation.payload.clone(),
-    });
+    // Inline evidence must remain the original accepted signed Event, not an
+    // Operation-shaped reconstruction without its actor and proofs.
+    let raw_event = match state
+        .event_queries()
+        .canonical_event(&canonical_event_id)
+        .await
+    {
+        Ok(Some(record)) => record.envelope,
+        _ => {
+            tracing::warn!(event_id = %canonical_event_id, "member identity projection requires accepted canonical Event");
+            return;
+        }
+    };
     let record = MemberIdentityEventRecord {
         event_id: canonical_event_id,
         subject: MemberIdentitySubjectKey {

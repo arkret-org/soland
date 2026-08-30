@@ -216,8 +216,20 @@ pub(crate) fn verify_call_state_participant_bindings(
         }
         // The participant entry mirrors actor_id / device_id /
         // participant_id; the binding MUST cover the same tuple.
+        let binding_actor = binding
+            .get("actor_id")
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+            .ok_or(
+                "participant_binding_invalid: participant_binding.actor_id must be a full ActorId",
+            )?;
+        let participant_actor = participant
+            .get("actor_id")
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+            .ok_or("participant_binding_invalid: participant.actor_id must be a full ActorId")?;
+        if binding_actor != participant_actor {
+            return Err(field_mismatch_reason("actor_id"));
+        }
         for (field, label) in [
-            ("actor_id", "actor_id"),
             ("device_id", "device_id"),
             ("participant_id", "participant_id"),
         ] {

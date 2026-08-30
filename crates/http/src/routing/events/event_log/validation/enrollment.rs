@@ -45,7 +45,7 @@ pub(crate) async fn validate_device_authorization_binding(
             DeviceOrPrincipalRef::Principal(root),
         ) => {
             let staged = realm_bootstrap_contexts.iter().any(|context| {
-                context.actor_id == actor_id
+                context.actor_id == event.actor_id.to_string()
                     && context.identity_anchor_event_id.is_some()
                     && context
                         .identity_anchor_candidate_device

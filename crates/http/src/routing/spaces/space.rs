@@ -235,27 +235,18 @@ pub async fn realm_lifecycle_response(
 ) -> Result<RealmLifecycleView, AppError> {
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-    // Snapshot the member list off the realms lock before the async meta read
-    // (the guard is not Send and must not cross the `.await`).
-    let local_station_id = DidCoreId::new(state.service_id().to_owned())
-        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
     let members: Vec<arkret_wire::ActorId> = {
-        let realms = state.realm_directory().snapshot();
-        realms
-            .get(&realm_id_value)
-            .map(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .map(|member| {
-                        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                            member.clone(),
-                            local_station_id.clone(),
-                        ))
-                    })
-                    .collect()
+        let projection = state.projections().snapshot();
+        projection
+            .members
+            .values()
+            .filter(|member| member.realm_id == realm_id && member.state == "join")
+            .map(|member| {
+                serde_json::from_str(&member.member).map_err(|error| {
+                    AppError::internal(format!("stored Realm member is invalid: {error}"))
+                })
             })
-            .unwrap_or_default()
+            .collect::<Result<_, _>>()?
     };
     let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
         let projection = state.projections().snapshot();
@@ -390,7 +381,13 @@ pub async fn realm_event_visible_to_session(
     let Some(session) = session else {
         return false;
     };
-    if !realm_active_member_at_read_time(state, realm_or_internal_id, &session.actor).await {
+    let Ok(actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return false;
+    };
+    let actor_key = actor.to_string();
+    if !realm_active_member_at_read_time(state, realm_or_internal_id, &actor_key).await {
         return false;
     }
     match realm_history_access(state, realm_or_internal_id)
@@ -398,7 +395,7 @@ pub async fn realm_event_visible_to_session(
         .as_str()
     {
         "all_history_for_current_members" => true,
-        "since_join" => realm_member_joined_at(state, realm_or_internal_id, &session.actor)
+        "since_join" => realm_member_joined_at(state, realm_or_internal_id, &actor_key)
             .await
             .is_some_and(|joined_at| event_created_at >= joined_at),
         _ => false,
@@ -470,7 +467,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: realm marked deleted");
         return false;
     }
-    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+    let Ok(_realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid realm_id shape");
         return false;
     };
@@ -517,38 +514,9 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     {
         return false;
     }
-    let realms = state.realm_directory().snapshot();
-    match realms.get(&realm_id_typed) {
-        None => {
-            let known: Vec<String> = realms
-                .search_by_text("")
-                .into_iter()
-                .map(|entry| entry.realm_id.as_str().to_owned())
-                .collect();
-            tracing::warn!(
-                %realm_id,
-                %actor,
-                known_realms = ?known,
-                "realm_has_member_by_id: realm not present in in-memory index"
-            );
-            false
-        }
-        Some(realm) => {
-            let is_local_account = actor_typed
-                .as_account_id()
-                .is_some_and(|account| account.station_id.as_str() == state.service_id());
-            if is_local_account && realm.members.contains(actor_typed.signing_principal_id()) {
-                true
-            } else {
-                tracing::trace!(
-                    %realm_id,
-                    %actor,
-                    "realm_has_member_by_id: actor not in realm members"
-                );
-                false
-            }
-        }
-    }
+    // The directory is a principal-only discovery index. It cannot prove
+    // membership of this Account at this Station (nor of a hosted Actor).
+    false
 }
 
 pub async fn realm_visible_to_for_entry(
@@ -562,10 +530,7 @@ pub async fn realm_visible_to_for_entry(
     if realm_discoverability_for_id(state, realm.realm_id.as_str()).await == "public" {
         return true;
     }
-    session.is_some_and(|session| {
-        arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .is_ok_and(|actor| realm.members.contains(&actor))
-    })
+    realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await
 }
 
 pub async fn realm_search_visible_to(
@@ -576,10 +541,7 @@ pub async fn realm_search_visible_to(
     if realm_meta_deleted(state, realm.realm_id.as_str()).await {
         return false;
     }
-    if session.is_some_and(|session| {
-        arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .is_ok_and(|actor| realm.members.contains(&actor))
-    }) {
+    if realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await {
         return true;
     }
     matches!(
@@ -600,10 +562,7 @@ pub async fn realm_resolvable_to(
     if realm_meta_deleted(state, realm.realm_id.as_str()).await {
         return false;
     }
-    if session.is_some_and(|session| {
-        arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .is_ok_and(|actor| realm.members.contains(&actor))
-    }) {
+    if realm_id_accessible_for_id(state, realm.realm_id.as_str(), session).await {
         return true;
     }
     match realm_discoverability_for_id(state, realm.realm_id.as_str())
@@ -750,22 +709,15 @@ pub async fn realm_id_accessible_for_id(
     realm_id: &str,
     session: Option<&SessionRecord>,
 ) -> bool {
-    let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
+    let Some(session) = session else {
         return false;
     };
-    // Snapshot the membership/realm_id off the in-memory index before any
-    // `.await` so we never hold the std::sync Mutex guard across a suspension.
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        let Some(realm) = realms.get(&realm_id_typed) else {
-            return false;
-        };
-        realm.members.clone()
+    let Ok(actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return false;
     };
-    session.is_some_and(|session| {
-        arkret_identifiers::DidCoreId::new(session.actor.clone())
-            .is_ok_and(|actor| members.contains(&actor))
-    })
+    realm_has_member_by_id(state, realm_id, &actor.to_string()).await
 }
 
 /// Look up the current one-way `history_access` ratchet value. Missing or
@@ -847,6 +799,10 @@ pub async fn realm_member_invited_or_joined_at_for_id(
     realm_id: &str,
     actor: &str,
 ) -> Option<DateTime<Utc>> {
+    let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor).ok()?;
+    let account_key = actor_id
+        .as_account_id()
+        .and_then(|account| account.canonical_key().ok());
     {
         let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, actor) {
@@ -873,7 +829,9 @@ pub async fn realm_member_invited_or_joined_at_for_id(
         .flatten()
         .filter(|invite| {
             invite.realm_id == realm_id
-                && invite.invitee_id.as_deref() == Some(actor)
+                && account_key
+                    .as_ref()
+                    .is_some_and(|account| invite.invitee_id.as_ref() == Some(account))
                 && invite.status == "pending"
                 && invite.expires_at.is_none_or(|expires_at| expires_at > now)
         })
@@ -1072,7 +1030,11 @@ mod tests {
     #[tokio::test]
     async fn private_pending_invite_is_pre_join_authoring_evidence() {
         let state = test_state();
-        let invitee_id = "ak:did_core:web:bob.example";
+        let account = arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:bob.example").unwrap(),
+            state.service_core_id().clone(),
+        );
+        let invitee_id = arkret_wire::ActorId::account(account.clone()).to_string();
         let invited_at = "2026-08-14T00:00:00.000Z".parse().unwrap();
         state
             .realm_invites()
@@ -1080,7 +1042,7 @@ mod tests {
                 invite_id: "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg".to_owned(),
                 realm_id: LIFECYCLE_REALM.to_owned(),
                 inviter_id: LIFECYCLE_ACTOR.to_owned(),
-                invitee_id: Some(invitee_id.to_owned()),
+                invitee_id: Some(account.canonical_key().unwrap()),
                 introduction_evidence_digest: None,
                 third_party_invite: None,
                 invite_token: "private-token".to_owned(),
@@ -1094,7 +1056,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, invitee_id).await,
+            realm_member_invited_or_joined_at_for_id(&state, LIFECYCLE_REALM, &invitee_id).await,
             Some(invited_at)
         );
         assert_eq!(
@@ -1106,5 +1068,36 @@ mod tests {
             .await,
             None
         );
+        let other_station_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            account.principal_id,
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert_eq!(
+            realm_member_invited_or_joined_at_for_id(
+                &state,
+                LIFECYCLE_REALM,
+                &other_station_actor.to_string()
+            )
+            .await,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn principal_directory_entry_does_not_authorize_an_account() {
+        let state = test_state();
+        let principal = DidCoreId::new(LIFECYCLE_ACTOR).unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id().clone(),
+        ));
+        let mut entry = soland_services::events::RealmDirectoryEntry::new(
+            RealmId::new(LIFECYCLE_REALM).unwrap(),
+            "discovery only",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
+        entry.members.insert(principal);
+        state.realm_directory().upsert(entry);
+        assert!(!realm_has_member_by_id(&state, LIFECYCLE_REALM, &actor.to_string()).await);
     }
 }

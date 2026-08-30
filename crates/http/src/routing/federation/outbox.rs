@@ -2619,7 +2619,7 @@ mod tests {
                     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
                         .unwrap(),
                 ),
-                actor_id: arkret_wire::ActorId::service(actor_id.clone()),
+                actor_id: event.actor_id.clone(),
                 device_id: arkret_identifiers::DeviceId::new(
                     "ak:device:019f0000-0000-7000-8000-00000000de01",
                 )

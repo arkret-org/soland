@@ -5,7 +5,7 @@ use arkret_identifiers::{DidCoreId, RealmId};
 use arkret_models_collaboration::governance::membership_invite::InviteClaimPayload;
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
-use arkret_wire::PlaintextDataClassKind;
+use arkret_wire::{AccountId, ActorId, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_services::events::RealmInviteState as RealmInviteRecord;
 use soland_services::operation_semantics as kinds;
@@ -27,7 +27,11 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     if kinds::canonical_kind(operation) != arkret_wire::EventKind::InviteAccept {
         return;
     }
-    let accepter = operation.context.sender.to_string();
+    let Some(account) = operation.context.sender.as_account_id() else {
+        return;
+    };
+    let accepter = account.to_string();
+    let member = operation.context.sender.to_string();
     let Some(invite_id) = invite_acceptance_ref_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
@@ -74,7 +78,7 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     }
     if !state
         .projections()
-        .invite_member_can_accept(record.realm_id.as_str(), &accepter)
+        .invite_member_can_accept(record.realm_id.as_str(), &member)
     {
         tracing::warn!(
             invite_id = %invite_id,
@@ -94,15 +98,12 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
     }
     // Cascade membership: activate the invitee_id's join in the target Realm
     // member index so subsequent realm-scoped reads include them.
-    if let (Ok(realm_id_typed), Ok(member_did)) = (
-        RealmId::new(realm_id.clone()),
-        DidCoreId::new(accepter.clone()),
-    ) {
+    if let Ok(realm_id_typed) = RealmId::new(realm_id.clone()) {
         state
             .realm_directory()
-            .add_member(&realm_id_typed, member_did);
+            .add_member(&realm_id_typed, account.principal_id.clone());
     }
-    project_invite_accept_membership(state, &realm_id, &accepter, invite_created_at, operation);
+    project_invite_accept_membership(state, &realm_id, &member, invite_created_at, operation);
     touch_realm(state, &realm_id).await;
     tracing::info!(
         invite_id = %invite_id,
@@ -195,15 +196,17 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     if record.third_party_invite.is_none()
         && let Some(invitee_id) = record.invitee_id
     {
-        let member_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{invitee_id}"
-        ))
-        .map_err(|_| "reducer_projection_failed")?;
+        let account: AccountId =
+            serde_json::from_str(&invitee_id).map_err(|_| "reducer_projection_failed")?;
+        let member_cell = invite_member_cell(&account)?;
         let member_value = projection
             .cell_value(&member_cell)
             .cloned()
             .ok_or("reducer_projection_failed")?;
-        lifecycle.insert("invitee_id".to_owned(), Value::String(invitee_id));
+        lifecycle.insert(
+            "invitee_account_id".to_owned(),
+            serde_json::to_value(account).map_err(|_| "reducer_projection_failed")?,
+        );
         frozen.insert(member_cell, member_value);
     }
     frozen.insert(lifecycle_cell, Value::Object(lifecycle));
@@ -216,7 +219,7 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
 /// Projection-time rejection is too late: once the Event is durable, skipping
 /// the lifecycle/member projection would permanently split the two cells.
 pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
-    origin: &str,
+    _origin: &str,
     operation: &Operation,
     frozen_pre_state: &arkret_schema::FrozenPreState,
 ) -> Result<(), &'static str> {
@@ -238,11 +241,14 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     if lifecycle.get("third_party").and_then(Value::as_bool) == Some(true) {
         return Err("invite_kind_requires_revoke");
     }
-    let invitee_id = lifecycle
-        .get("invitee_id")
-        .and_then(Value::as_str)
-        .ok_or("reducer_projection_failed")?;
-    if operation.payload.get("invitee_id").and_then(Value::as_str) != Some(invitee_id) {
+    let account: AccountId = serde_json::from_value(
+        lifecycle
+            .get("invitee_account_id")
+            .cloned()
+            .ok_or("reducer_projection_failed")?,
+    )
+    .map_err(|_| "reducer_projection_failed")?;
+    if invitee_for_operation(operation).as_ref() != Some(&account) {
         return Err("reducer_projection_failed");
     }
     if !matches!(
@@ -251,16 +257,13 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     ) {
         return Err("reducer_projection_failed");
     }
-    let member_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.member.state.v1:{invitee_id}"
-    ))
-    .map_err(|_| "reducer_projection_failed")?;
+    let member_cell = invite_member_cell(&account)?;
     if frozen_pre_state.get(&member_cell).and_then(Value::as_str) != Some("invite") {
         return Err("reducer_projection_failed");
     }
     let terminal_status = invite_terminal_transition_target(operation, &invite_id)
         .ok_or("reducer_projection_failed")?;
-    let expected_status = if invitee_id == origin.trim() {
+    let expected_status = if operation.context.sender.as_account_id() == Some(&account) {
         "rejected"
     } else {
         "revoked"
@@ -339,11 +342,17 @@ async fn project_invite_terminal_operation(
         );
         return;
     };
-    let expected_cancel_status = if record.invitee_id.as_deref() == Some(origin.trim()) {
-        "rejected"
-    } else {
-        "revoked"
-    };
+    let sender_account = operation
+        .context
+        .sender
+        .as_account_id()
+        .map(ToString::to_string);
+    let expected_cancel_status =
+        if record.invitee_id.is_some() && record.invitee_id == sender_account {
+            "rejected"
+        } else {
+            "revoked"
+        };
     let terminal_status_allowed = match terminal_event {
         InviteTerminalEvent::Cancel => terminal_status == expected_cancel_status,
         InviteTerminalEvent::Revoke => matches!(
@@ -365,7 +374,10 @@ async fn project_invite_terminal_operation(
     }
     let direct_invitee = record.invitee_id.clone();
     if let Some(invitee_id) = direct_invitee.as_deref()
-        && operation.payload.get("invitee_id").and_then(Value::as_str) != Some(invitee_id)
+        && invitee_for_operation(operation)
+            .map(|account| account.to_string())
+            .as_deref()
+            != Some(invitee_id)
     {
         tracing::warn!(
             invite_id = %invite_id,
@@ -373,7 +385,14 @@ async fn project_invite_terminal_operation(
         );
         return;
     };
-    if let Some(invitee_id) = direct_invitee.as_deref()
+    let direct_member = direct_invitee
+        .as_deref()
+        .and_then(|key| serde_json::from_str::<AccountId>(key).ok())
+        .map(|account| ActorId::account(account).to_string());
+    if direct_invitee.is_some() && direct_member.is_none() {
+        return;
+    }
+    if let Some(invitee_id) = direct_member.as_deref()
         && !state
             .projections()
             .invite_member_is_invited(record.realm_id.as_str(), invitee_id)
@@ -395,7 +414,7 @@ async fn project_invite_terminal_operation(
     let realm_id = record.realm_id.clone();
     match invites.put(record).await {
         Ok(()) => {
-            if let Some(invitee_id) = direct_invitee.as_deref()
+            if let Some(invitee_id) = direct_member.as_deref()
                 && !state.projections().project_invite_termination(
                     operation,
                     invitee_id,
@@ -464,7 +483,10 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     };
     let invite_id =
         arkret_identifiers::InviteId::from_event_id(&operation.context.event_id).to_string();
-    let inviter_id = operation.context.sender.to_string();
+    let Some(inviter) = operation.context.sender.as_account_id() else {
+        return;
+    };
+    let inviter_id = inviter.to_string();
     let Some(third_party_invite_value) = payload.get("third_party_invite").cloned() else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.third_party missing third_party_invite");
         return;
@@ -602,14 +624,16 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     if !kinds::operation_is_invite_create(operation) {
         return;
     }
-    let Some(invitee_id) = invitee_for_operation(operation) else {
+    let Some(invitee_account) = invitee_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
             realm_id = %operation.realm_id,
-            "ak.invite.create missing valid invitee_id DID"
+            "ak.invite.create missing valid invitee_account_id"
         );
         return;
     };
+    let invitee_id = invitee_account.to_string();
+    let invitee_actor = ActorId::account(invitee_account).to_string();
     let Some(invite_id) = invite_id_for_operation(operation) else {
         tracing::warn!(
             operation_id = %operation.operation_id,
@@ -621,7 +645,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     if crate::routing::spaces::space::realm_has_member_by_id(
         state,
         operation.realm_id.as_str(),
-        invitee_id.as_str(),
+        &invitee_actor,
     )
     .await
     {
@@ -634,7 +658,10 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         return;
     }
 
-    let inviter_id = operation.context.sender.to_string();
+    let Some(inviter) = operation.context.sender.as_account_id() else {
+        return;
+    };
+    let inviter_id = inviter.to_string();
     let expires_at = operation
         .payload
         .get("expires_at")
@@ -658,9 +685,9 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
             if reconciles_private_delivery {
                 if !state
                     .projections()
-                    .invite_member_is_invited(operation.realm_id.as_str(), invitee_id.as_str())
+                    .invite_member_is_invited(operation.realm_id.as_str(), &invitee_actor)
                 {
-                    project_invite_creation(state, operation, invitee_id.as_str());
+                    project_invite_creation(state, operation, &invitee_actor);
                     touch_realm(state, operation.realm_id.as_str()).await;
                     tracing::info!(
                         invite_id = %invite_id,
@@ -745,7 +772,7 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
             // Invite creation advances only the membership lifecycle
             // `leave -> invite`. The invite's exact AccountId does not grant
             // membership or participate in Realm fanout until an accepted join.
-            project_invite_creation(state, operation, invitee_id.as_str());
+            project_invite_creation(state, operation, &invitee_actor);
             tracing::info!(
                 invite_id = %invite_id,
                 invitee_id = %invitee_id.as_str(),
@@ -855,16 +882,20 @@ fn claim_binding_matches(
             .is_none_or(|invite_expiry| expires_at <= invite_expiry)
 }
 
-fn invitee_for_operation(operation: &Operation) -> Option<DidCoreId> {
+fn invitee_for_operation(operation: &Operation) -> Option<AccountId> {
     operation
         .payload
-        .get("invitee_id")
-        .or_else(|| operation.payload.get("actor_id"))
-        .or_else(|| operation.payload.get("member"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| DidCoreId::new(value.to_owned()).ok())
+        .get("invitee_account_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+}
+
+fn invite_member_cell(account: &AccountId) -> Result<arkret_identifiers::CellRef, &'static str> {
+    let actor = ActorId::account(account.clone());
+    let subject = arkret_wire::composite_subject(&[actor.to_string()])
+        .map_err(|_| "reducer_projection_failed")?;
+    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}"))
+        .map_err(|_| "reducer_projection_failed")
 }
 
 fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<String> {
@@ -976,6 +1007,17 @@ mod tests {
     const CANCEL_INVITER: &str = "did:web:alice.example";
     const CANCEL_INVITEE: &str = "did:web:bob.example";
 
+    fn fixture_account(did: &str) -> AccountId {
+        AccountId::new(
+            crate::test_actor_id_str(did),
+            crate::test_event::station_id(),
+        )
+    }
+
+    fn fixture_actor(did: &str) -> String {
+        ActorId::account(fixture_account(did)).to_string()
+    }
+
     fn invite_test_state() -> AppState {
         AppState::new(
             crate::config::AppConfig {
@@ -992,7 +1034,7 @@ mod tests {
             "target_state": "revoked",
         });
         if let Some(invitee_id) = invitee_id {
-            payload["invitee_id"] = json!(invitee_id);
+            payload["invitee_account_id"] = json!(fixture_account(invitee_id));
         }
         crate::test_event::raw_event(
             arkret_wire::EventKind::InviteCancel.as_str(),
@@ -1029,8 +1071,8 @@ mod tests {
             .put(RealmInviteRecord {
                 invite_id: CANCEL_INVITE.to_owned(),
                 realm_id: CANCEL_REALM.to_owned(),
-                inviter_id: CANCEL_INVITER.to_owned(),
-                invitee_id: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
+                inviter_id: fixture_account(CANCEL_INVITER).to_string(),
+                invitee_id: (!third_party).then(|| fixture_account(CANCEL_INVITEE).to_string()),
                 introduction_evidence_digest: None,
                 third_party_invite: third_party.then(|| ThirdPartyInvite {
                     oob_code_kind:
@@ -1075,12 +1117,12 @@ mod tests {
                 .unwrap(),
                 RealmId::new(CANCEL_REALM).unwrap(),
                 arkret_wire::EventKind::InviteCreate.as_str(),
-                json!({"invite_id": CANCEL_INVITE, "invitee_id": CANCEL_INVITEE}),
+                json!({"invitee_account_id": fixture_account(CANCEL_INVITEE)}),
             );
             create.created_at = created_at;
             state
                 .projections()
-                .project_invite_creation(&create, CANCEL_INVITEE);
+                .project_invite_creation(&create, &fixture_actor(CANCEL_INVITEE));
         }
     }
 
@@ -1101,7 +1143,10 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(record.status, "pending");
-        assert_eq!(record.invitee_id.as_deref(), expected_invitee);
+        assert_eq!(
+            record.invitee_id,
+            expected_invitee.map(|did| fixture_account(did).to_string())
+        );
         assert_eq!(record.invite_token, "private-token");
         assert_eq!(
             state.projections().cell_value(
@@ -1114,18 +1159,15 @@ mod tests {
         );
         if let Some(invitee_id) = expected_invitee {
             assert_eq!(
-                state.projections().cell_value(
-                    &arkret_identifiers::CellRef::new(format!(
-                        "ak:cell:ak.component.member.state.v1:{invitee_id}"
-                    ))
-                    .unwrap()
-                ),
+                state
+                    .projections()
+                    .cell_value(&invite_member_cell(&fixture_account(invitee_id)).unwrap()),
                 Some(json!("invite"))
             );
             assert!(
                 state
                     .projections()
-                    .invite_member_is_invited(CANCEL_REALM, invitee_id)
+                    .invite_member_is_invited(CANCEL_REALM, &fixture_actor(invitee_id))
             );
         }
     }
@@ -1143,7 +1185,7 @@ mod tests {
             .project_cell_writes_with_pre_state(&event, &frozen)
             .unwrap();
 
-        assert_eq!(writes.len(), 2);
+        assert_eq!(writes.len(), 1);
         validate_invite_cancel_pre_admission(
             CANCEL_INVITER,
             &cancel_operation(Some(CANCEL_INVITEE)),
@@ -1170,6 +1212,40 @@ mod tests {
             assert_eq!(error.reason_code(), "reducer_projection_failed");
             assert_cancel_state_unchanged(&state, Some(CANCEL_INVITEE)).await;
         }
+    }
+
+    #[tokio::test]
+    async fn invite_cancel_cannot_retarget_the_same_principal_at_another_station() {
+        let state = invite_test_state();
+        seed_cancel_invite(&state, false).await;
+        let mut event = cancel_event(Some(CANCEL_INVITEE));
+        event.payload.get_mut("invitee_account_id").unwrap()["station_id"] =
+            json!("ak:did_core:web:other-station.example");
+        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .projections()
+                .project_cell_writes_with_pre_state(&event, &frozen)
+                .unwrap_err()
+                .reason_code(),
+            "reducer_projection_failed"
+        );
+        assert_cancel_state_unchanged(&state, Some(CANCEL_INVITEE)).await;
+    }
+
+    #[test]
+    fn directed_invite_requires_the_exact_account_field() {
+        let mut operation = cancel_operation(Some(CANCEL_INVITEE));
+        assert_eq!(
+            invitee_for_operation(&operation),
+            Some(fixture_account(CANCEL_INVITEE))
+        );
+        operation.payload = json!({"invitee_account_id": CANCEL_INVITEE});
+        assert!(invitee_for_operation(&operation).is_none());
+        operation.payload = json!({"invitee_id": fixture_account(CANCEL_INVITEE)});
+        assert!(invitee_for_operation(&operation).is_none());
     }
 
     #[tokio::test]
@@ -1227,14 +1303,12 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:ATgPyXyxa7nHOBDf8wno4jWA7fVMO63Mba64ZIYHssA9").unwrap();
         let invite_id = "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg";
-        let inviter_id = "ak:did_core:web:alice.example";
-        let invitee_id = "ak:did_core:web:bob.example";
+        let inviter_id = fixture_account("did:web:alice.example").to_string();
+        let invitee = fixture_account("did:web:bob.example");
+        let invitee_id = invitee.to_string();
+        let member = ActorId::account(invitee.clone()).to_string();
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         let expires_at = "2026-08-05T10:00:00Z".parse().unwrap();
-        let delivery_target = json!({
-            "recipient_id": "ak:did_core:web:beta.example",
-            "recipient_kind": "station"
-        });
         let evidence_digest = format!("sha256:{}", "a".repeat(64));
         state
             .realm_invites()
@@ -1257,7 +1331,7 @@ mod tests {
         assert!(
             !state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee_id)
+                .invite_member_is_invited(realm_id.as_str(), &member)
         );
 
         let mut event = crate::test_event::raw_event_at(
@@ -1269,7 +1343,7 @@ mod tests {
             0,
             arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             json!({
-                "invitee_id": invitee_id,
+                "invitee_account_id": invitee,
                 "introduction_evidence_digest": evidence_digest,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
@@ -1296,7 +1370,7 @@ mod tests {
         assert!(
             state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee_id)
+                .invite_member_is_invited(realm_id.as_str(), &member)
         );
         let retained = state.realm_invites().get(invite_id).await.unwrap().unwrap();
         assert_eq!(
@@ -1317,14 +1391,16 @@ mod tests {
         let realm_id =
             RealmId::new("ak:realm:Ad-NSApg_uD02vD0do9fZZZJ1Zmt7NwwVBcwb04N9zN6").unwrap();
         let invite_id = "ak:invite:AdC0j3vbvw3GtVXF8ur0n33PvcSmEMMhI4ROVwQk3ypg";
-        let invitee_id = "ak:did_core:web:bob.example";
+        let invitee = fixture_account("did:web:bob.example");
+        let invitee_id = invitee.to_string();
+        let member = ActorId::account(invitee.clone()).to_string();
         let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
         state
             .realm_invites()
             .put(RealmInviteRecord {
                 invite_id: invite_id.to_owned(),
                 realm_id: realm_id.to_string(),
-                inviter_id: "ak:did_core:web:mallory.example".to_owned(),
+                inviter_id: fixture_account("did:web:mallory.example").to_string(),
                 invitee_id: Some(invitee_id.to_owned()),
                 introduction_evidence_digest: None,
                 third_party_invite: None,
@@ -1345,7 +1421,7 @@ mod tests {
             realm_id.clone(),
             arkret_wire::EventKind::InviteCreate.as_str(),
             json!({
-                "invitee_id": invitee_id,
+                "invitee_account_id": invitee,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
         );
@@ -1357,7 +1433,7 @@ mod tests {
         assert!(
             !state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), invitee_id)
+                .invite_member_is_invited(realm_id.as_str(), &member)
         );
     }
 }

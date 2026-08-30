@@ -18,6 +18,23 @@ const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
 const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
     "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
 
+fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
+    let principal = match principal {
+        "ak:did_core:web:alice.example" => ALICE_CORE_ID,
+        "ak:did_core:web:agent.example" => AGENT_CORE_ID,
+        principal => principal,
+    };
+    let principal = arkret_wire::DidCoreId::new(principal).unwrap();
+    if principal.as_str() == AGENT_CORE_ID {
+        arkret_wire::ActorId::hosted_principal(principal, crate::test_event::station_id())
+    } else {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            crate::test_event::station_id(),
+        ))
+    }
+}
+
 fn alice_notary() -> arkret_wire::NotaryValue {
     let verifying_key = SigningKey::from_bytes(&[17; 32]).verifying_key();
     let descriptor = soland_services::identity::ed25519_notary_signer_descriptor(
@@ -149,15 +166,15 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                ALICE_CORE_ID.to_owned(),
-                "ak:did_core:webvh:z6mkbob".to_owned(),
+                fixture_actor(ALICE_CORE_ID).to_string(),
+                fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: now,
         },
         DirectConversationEndorsement {
-            actor_id: ALICE_CORE_ID.to_owned(),
+            actor_id: fixture_actor(ALICE_CORE_ID).to_string(),
             binding_event_ref: "ak:event:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
         },
     );
@@ -263,18 +280,10 @@ fn op(
         payload,
     );
     if let Some(executed_by) = executed_by {
-        operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
+        operation.context.executed_by = Some(fixture_actor(executed_by.as_str().unwrap()));
     }
     if let Some(sender) = sender {
-        let sender = match sender.as_str().unwrap() {
-            "ak:did_core:web:alice.example" => ALICE_CORE_ID,
-            "ak:did_core:web:agent.example" => AGENT_CORE_ID,
-            sender => sender,
-        };
-        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_identifiers::DidCoreId::new(sender.to_owned()).unwrap(),
-            crate::test_event::station_id(),
-        ));
+        operation.context.sender = fixture_actor(sender.as_str().unwrap());
     }
     operation
 }
@@ -445,12 +454,14 @@ fn install_projected_grant(
 ) -> crate::authz::Grant {
     let mut grant = crate::authz::projected_grant_fixture(
         realm_id,
-        issuer,
-        subject,
+        issuer.clone(),
+        subject.clone(),
         resource,
         actions,
         constraints,
     );
+    grant.issuer_id = fixture_actor(&issuer);
+    grant.subject_id = fixture_actor(&subject);
     authorization.upsert_projected_grant(grant.clone());
     grant
 }
@@ -556,9 +567,9 @@ fn insert_joined_realm_member(
 ) {
     let now = chrono::Utc::now();
     state.test_projection().lock().members.insert(
-        (realm_id.to_string(), actor_id.to_owned()),
+        (realm_id.to_string(), fixture_actor(actor_id).to_string()),
         soland_domain::reducer::SolandMembershipState {
-            member: actor_id.to_owned(),
+            member: fixture_actor(actor_id).to_string(),
             realm_id: realm_id.to_string(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -1054,8 +1065,8 @@ async fn register_native_agent_membership_context(
     >(accountability_grant_payload.clone())
     .expect("standard accountability grant payload");
     let accountability_envelope = json!({
-        "actor_id": controller,
-        "executed_by": controller,
+        "actor_id": fixture_actor(controller),
+        "executed_by": fixture_actor(controller),
         "kind": "ak.identity.accountability_grant",
         "payload": accountability_grant_payload
     });
@@ -1066,7 +1077,7 @@ async fn register_native_agent_membership_context(
         .events()
         .put(soland_storage::CanonicalEventRecord {
             event_id: accountability_event_id,
-            actor_id: controller.to_owned(),
+            actor_id: fixture_actor(controller).to_string(),
             actor_seq: 1,
             realm_id: Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
@@ -1106,9 +1117,9 @@ async fn register_native_agent_membership_context(
     {
         let mut projection = state.test_projection().lock();
         projection.members.insert(
-            (realm_id.to_string(), controller.to_owned()),
+            (realm_id.to_string(), fixture_actor(controller).to_string()),
             soland_domain::reducer::SolandMembershipState {
-                member: controller.to_owned(),
+                member: fixture_actor(controller).to_string(),
                 realm_id: realm_id.to_string(),
                 state: "join".to_owned(),
                 role: "owner".to_owned(),
@@ -1217,7 +1228,7 @@ async fn register_native_agent_membership_context(
 fn native_agent_controller_binding() -> serde_json::Value {
     serde_json::to_value(
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
-            controller_authority: arkret_wire::AccountId {
+            controller_account_id: arkret_wire::AccountId {
                 principal_id: arkret_identifiers::DidCoreId::new(ALICE_CORE_ID.to_owned()).unwrap(),
                 station_id: crate::test_event::station_id(),
             },
@@ -1244,10 +1255,9 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
         arkret_wire::EventKind::MemberState,
         json!({
             "sender": ALICE_CORE_ID,
-            "actor_id": AGENT_CORE_ID,
+            "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable",
             "agent_controller_binding": native_agent_controller_binding()
         }),
     );
@@ -1273,10 +1283,9 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
         arkret_wire::EventKind::MemberState,
         json!({
             "sender": ALICE_CORE_ID,
-            "actor_id": AGENT_CORE_ID,
+            "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable",
             "agent_controller_binding": native_agent_controller_binding()
         }),
     );
@@ -1299,10 +1308,9 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
         arkret_wire::EventKind::MemberState,
         json!({
             "sender": ALICE_CORE_ID,
-            "actor_id": AGENT_CORE_ID,
+            "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "delivery_status": "unroutable",
             "agent_controller_binding": native_agent_controller_binding()
         }),
     );
@@ -1449,7 +1457,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         "000000000603",
         arkret_wire::EventKind::MemberState,
         json!({
-            "actor_id": "ak:did_core:web:charlie.example",
+            "member_id": fixture_actor("ak:did_core:web:charlie.example"),
             "membership": "invite",
             "sender": "ak:did_core:web:alice.example"
         }),
@@ -1489,7 +1497,7 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         "000000000605",
         arkret_wire::EventKind::MemberState,
         json!({
-            "actor_id": "ak:did_core:web:charlie.example",
+            "member_id": fixture_actor("ak:did_core:web:charlie.example"),
             "membership": "join",
             "sender": "ak:did_core:web:alice.example"
         }),
@@ -1556,15 +1564,15 @@ async fn both_participants_endorsing_the_same_coordinates_stay_settled() {
         "sha256:0000000000000000000000000000000000000000000000000000000000000601",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                ALICE_CORE_ID.to_owned(),
-                "ak:did_core:webvh:z6mkbob".to_owned(),
+                fixture_actor(ALICE_CORE_ID).to_string(),
+                fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
             ],
             realm_id: realm_id.to_string(),
             main_strand_id: "ak:strand:AZXoIs9BRSgujgrZ-dLgogRh6YCdLWfJAZWdPXg8qD9D".to_owned(),
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
-            actor_id: "ak:did_core:webvh:z6mkbob".to_owned(),
+            actor_id: fixture_actor("ak:did_core:webvh:z6mkbob").to_string(),
             binding_event_ref: "ak:event:AfBl2v9EFciTUTWf3Pyvb2ZNjC04y8l-AW2bp6dJAZn1".to_owned(),
         },
     );
@@ -1607,15 +1615,15 @@ async fn two_distinct_endorsement_digests_freeze_the_pair() {
         "sha256:00000000000000000000000000000000000000000000000000000000000006ff",
         DirectConversationCoordinatesRecord {
             participants_unordered: vec![
-                "ak:did_core:web:alice.example".to_owned(),
-                "did:web:bob.example".to_owned(),
+                fixture_actor("ak:did_core:web:alice.example").to_string(),
+                fixture_actor("ak:did_core:web:bob.example").to_string(),
             ],
             realm_id: "ak:realm:ARM1n3PTeYfi_CEquXWAA_goRY85bAGIYUrIFzp-2oey".to_owned(),
             main_strand_id: "ak:strand:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
             created_at: chrono::Utc::now(),
         },
         DirectConversationEndorsement {
-            actor_id: "ak:did_core:web:bob.example".to_owned(),
+            actor_id: fixture_actor("ak:did_core:web:bob.example").to_string(),
             binding_event_ref: "ak:event:AT6xmJ4IEcjdlEtitHIX86tdmTshioIpLxndx9E3KtoK".to_owned(),
         },
     );
@@ -1792,10 +1800,9 @@ async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
         arkret_wire::EventKind::MemberState,
         json!({
             "sender": "ak:did_core:web:alice.example",
-            "actor_id": agent,
+            "member_id": fixture_actor(agent),
             "membership": "join",
-            "realm_id": "ak:realm:AeMbHcOGMt3VgaQzdMnK0nUaMYOGvt35z9V139HW8NEU",
-            "delivery_status": "unroutable"
+            "realm_id": "ak:realm:AeMbHcOGMt3VgaQzdMnK0nUaMYOGvt35z9V139HW8NEU"
         }),
     );
 
@@ -2315,7 +2322,7 @@ async fn circle_member_manage_rejects_without_grant() {
         json!({
             "sender": "ak:did_core:web:alice.example",
             "circle_id": "ak:circle:AQzkNesVRZE45KCCmROpUPRV8VQzC-oUQQK8ytMOq1yO",
-            "actor_id": BOB_CORE_ID,
+            "member_id": fixture_actor(BOB_CORE_ID),
             "membership": "join"
         }),
     );
@@ -2351,7 +2358,7 @@ async fn circle_member_manage_allows_explicit_circle_scoped_grant() {
         json!({
             "sender": "ak:did_core:web:alice.example",
             "circle_id": circle_id,
-            "actor_id": BOB_CORE_ID,
+            "member_id": fixture_actor(BOB_CORE_ID),
             "membership": "join"
         }),
     );
@@ -2513,7 +2520,7 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
     {
         let mut projection = state.test_projection().lock();
         let mut members = std::collections::BTreeSet::new();
-        members.insert(ALICE_CORE_ID.to_owned());
+        members.insert(fixture_actor(ALICE_CORE_ID).to_string());
         projection.circles.insert(
             circle_id.to_owned(),
             soland_domain::reducer::CircleProjection {
@@ -2548,8 +2555,8 @@ async fn circle_scoped_relation_update_and_delete_require_circle_membership() {
                 realm_id: realm_id.to_string(),
                 relation_kind: "confidential_discussion_of".to_owned(),
                 scope_circle_id: Some(circle_id.to_owned()),
-                from_ref: Some("ak:strand:AYmJuuenMIJ2dTgMqUL3AoeJJOHo5Iap70ImQUPzbJhY".to_owned()),
-                to_ref: Some("ak:strand:AcTTTDFcIiz-Tmjh-sPdibSEwAhireChqYZJzVM0K1MY".to_owned()),
+                from_ref: Some("ak:strand:AYmJuuenMIJ2dTgMqUL3AoeJJOHo5Iap70ImQUPzbJhY".into()),
+                to_ref: Some("ak:strand:AcTTTDFcIiz-Tmjh-sPdibSEwAhireChqYZJzVM0K1MY".into()),
                 fields: Default::default(),
                 state: "active".to_owned(),
                 source_event_id: Some(

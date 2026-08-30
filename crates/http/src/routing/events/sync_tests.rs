@@ -1,5 +1,12 @@
 use super::*;
 
+fn roster_actor(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal).unwrap(),
+        crate::test_event::station_id(),
+    ))
+}
+
 fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
     let mut event = crate::test_event::raw_event(
         arkret_wire::EventKind::MessageCreate.as_str(),
@@ -631,6 +638,8 @@ fn sync_test_operation_at(
         kind.as_ref(),
         payload,
     );
+    operation.context.sender =
+        roster_actor(operation.context.sender.signing_principal_id().as_str());
     operation.created_at = created_at;
     operation
 }
@@ -696,9 +705,9 @@ fn insert_projected_membership_at(
     updated_at: DateTime<Utc>,
 ) {
     state.test_projection().lock().members.insert(
-        (ROSTER_REALM.to_owned(), actor.to_owned()),
+        (ROSTER_REALM.to_owned(), roster_actor(actor).to_string()),
         soland_domain::reducer::SolandMembershipState {
-            member: actor.to_owned(),
+            member: roster_actor(actor).to_string(),
             realm_id: ROSTER_REALM.to_owned(),
             state: membership.to_owned(),
             role: "member".to_owned(),
@@ -909,7 +918,7 @@ fn canonical_event_record_received_at(
         .expect("canonical sync fixture digest payload");
     soland_services::events::AcceptedEvent {
         event_id: event.event_id.to_string(),
-        actor_id: actor_id.to_owned(),
+        actor_id: event.actor_id.to_string(),
         actor_seq,
         realm_id: Some(ROSTER_REALM.to_owned()),
         kind: kind.to_owned(),
@@ -1463,6 +1472,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
+    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", created_at);
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", created_at);
     let updated_at = created_at + chrono::Duration::seconds(1);
     for (actor, device_id) in [
         (
@@ -1581,6 +1592,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .with_timezone(&Utc);
     let second_created_at = first_created_at + chrono::Duration::seconds(1);
     let meta_created_at = first_created_at - chrono::Duration::seconds(1);
+    insert_projected_membership_at(&state, ROSTER_ACTOR, "join", meta_created_at);
+    insert_projected_membership_at(&state, ROSTER_CALLER, "join", meta_created_at);
     state
         .realms()
         .store_realm_metadata(
@@ -1641,7 +1654,10 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .as_array()
         .expect("state events array");
     assert_eq!(initial_events.len(), 1);
-    assert_eq!(initial_events[0]["actor_id"], ROSTER_ACTOR);
+    assert_eq!(
+        initial_events[0]["actor_id"],
+        json!(roster_actor(ROSTER_ACTOR))
+    );
 
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
@@ -1697,7 +1713,10 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         1,
         "state-only updates must keep the Realm in incremental sync"
     );
-    assert_eq!(incremental_events[0]["actor_id"], ROSTER_CALLER);
+    assert_eq!(
+        incremental_events[0]["actor_id"],
+        json!(roster_actor(ROSTER_CALLER))
+    );
     assert_eq!(
         incremental_value["realms"][ROSTER_REALM]["timeline"]["events"]
             .as_array()
@@ -1760,9 +1779,8 @@ async fn membership_only_projection_advances_incremental_roster() {
         arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
-            "actor_id": ROSTER_CALLER,
+            "member_id": roster_actor(ROSTER_CALLER),
             "membership": "join",
-            "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
         created_at + chrono::Duration::seconds(1),
@@ -1825,9 +1843,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
-            "actor_id": ROSTER_CALLER,
+            "member_id": roster_actor(ROSTER_CALLER),
             "membership": "join",
-            "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
         base + chrono::Duration::seconds(1),
@@ -1974,9 +1991,8 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         arkret_wire::EventKind::MemberState,
         json!({
             "realm_id": ROSTER_REALM,
-            "actor_id": ROSTER_CALLER,
+            "member_id": roster_actor(ROSTER_CALLER),
             "membership": "join",
-            "delivery_status": "unroutable",
             "sender": ROSTER_ACTOR
         }),
         base + chrono::Duration::seconds(1),

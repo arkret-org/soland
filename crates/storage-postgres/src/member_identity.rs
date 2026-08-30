@@ -18,7 +18,7 @@ struct MemberIdentityEventRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: String,
     #[diesel(sql_type = Text)]
     segment: String,
     #[diesel(sql_type = Text)]

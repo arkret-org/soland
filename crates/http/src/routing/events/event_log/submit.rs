@@ -429,7 +429,7 @@ pub(in crate::routing::events::event_log) fn staged_realm_digest_algorithm(
 #[derive(Debug, Clone)]
 pub(in crate::routing) struct InternalEventAdmission {
     realm_id: String,
-    actor_id: String,
+    actor_id: arkret_wire::ActorId,
     session_actor_id: String,
     kind: String,
     device_id: String,
@@ -462,7 +462,7 @@ enum InternalEventBinding {
     },
     AgentMembershipCascade {
         event_id: String,
-        initiator_id: String,
+        initiator_id: arkret_wire::ActorId,
     },
     PeerFederatedEvent {
         event_id: String,
@@ -471,7 +471,7 @@ enum InternalEventBinding {
     },
     PeerAgentMembershipCascade {
         event_id: String,
-        initiator_id: String,
+        initiator_id: arkret_wire::ActorId,
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     },
@@ -484,13 +484,12 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn mimi_provider(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         binding_ref: impl Into<String>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::MessageCreate.as_str().to_owned(),
             device_id: String::new(),
@@ -502,15 +501,14 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn account_data(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
         owner: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::AccountDataSet.as_str().to_owned(),
             device_id: device_id.into(),
@@ -523,14 +521,13 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn mimi_moderation_report(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         reporter_id: impl Into<String>,
         target_ref: impl Into<String>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::SelfModerationReport
                 .as_str()
@@ -545,13 +542,12 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn service_franking_proof(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         target_event_id: impl Into<String>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::ModerationFrankingProof
                 .as_str()
@@ -565,16 +561,15 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn applet_formal(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         kind: impl Into<String>,
         event_id: impl Into<String>,
         applet_id: arkret_wire::AppletId,
         staged_producer_authority: Option<(arkret_wire::DidUrl, arkret_wire::DidKey)>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: kind.into(),
             device_id: String::new(),
@@ -588,15 +583,14 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn sidecar_ensure(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
         kind: impl Into<String>,
         event_id: impl Into<String>,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: kind.into(),
             device_id: device_id.into(),
@@ -608,16 +602,15 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn agent_membership_cascade(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        initiator_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
+        initiator_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
         event_id: impl Into<String>,
     ) -> Self {
-        let initiator_id = initiator_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
-            session_actor_id: initiator_id.clone(),
+            actor_id,
+            session_actor_id: initiator_id.signing_principal_id().to_string(),
             kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AgentMembershipCascade {
@@ -629,16 +622,15 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn peer_federated_event(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
         event_id: impl Into<String>,
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     ) -> Self {
-        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.clone(),
+            session_actor_id: actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: String::new(),
             device_id: device_id.into(),
@@ -652,18 +644,16 @@ impl InternalEventAdmission {
 
     pub(in crate::routing) fn peer_agent_membership_cascade(
         realm_id: impl Into<String>,
-        actor_id: impl Into<String>,
-        initiator_id: impl Into<String>,
+        actor_id: arkret_wire::ActorId,
+        initiator_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
         event_id: impl Into<String>,
         producer_verification_method: arkret_wire::DidUrl,
         producer_signing_key: arkret_wire::DidKey,
     ) -> Self {
-        let actor_id = actor_id.into();
-        let initiator_id = initiator_id.into();
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: initiator_id.clone(),
+            session_actor_id: initiator_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::MemberState.as_str().to_owned(),
             device_id: device_id.into(),
@@ -683,7 +673,12 @@ impl InternalEventAdmission {
     ) -> bool {
         session.actor == self.session_actor_id
             && session.device_id == self.device_id
-            && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
+            && object
+                .get("actor_id")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+                .as_ref()
+                == Some(&self.actor_id)
             && self.matches_realm_coordinate(object)
             && (self.kind.is_empty()
                 || object.get("kind").and_then(Value::as_str) == Some(self.kind.as_str()))
@@ -736,9 +731,13 @@ impl InternalEventAdmission {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                         && object
                             .get("executed_by")
-                            .and_then(Value::as_str)
-                            .unwrap_or(self.actor_id.as_str())
-                            == initiator_id
+                            .cloned()
+                            .map(serde_json::from_value::<arkret_wire::ActorId>)
+                            .transpose()
+                            .ok()
+                            .map(|actor| actor.unwrap_or_else(|| self.actor_id.clone()))
+                            .as_ref()
+                            == Some(initiator_id)
                 }
                 InternalEventBinding::PeerFederatedEvent { event_id, .. } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
@@ -751,9 +750,13 @@ impl InternalEventAdmission {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                         && object
                             .get("executed_by")
-                            .and_then(Value::as_str)
-                            .unwrap_or(self.actor_id.as_str())
-                            == initiator_id
+                            .cloned()
+                            .map(serde_json::from_value::<arkret_wire::ActorId>)
+                            .transpose()
+                            .ok()
+                            .map(|actor| actor.unwrap_or_else(|| self.actor_id.clone()))
+                            .as_ref()
+                            == Some(initiator_id)
                 }
             }
     }
@@ -1595,7 +1598,7 @@ async fn submit_event_batch_outcome_with_leases(
         && batch_is_managed_agent_pcr_create(&envelopes)
         && let (Some(realm_id), Some(actor_id)) = (
             event_realm_id_from_value(&envelopes[0]),
-            event_string_field_from_value(&envelopes[0], "actor_id"),
+            event_actor_from_value(&envelopes[0]).map(|actor| actor.to_string()),
         )
     {
         realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -1623,7 +1626,7 @@ async fn submit_event_batch_outcome_with_leases(
             .unwrap_or_else(|| "unknown".to_owned());
         let kind = event_string_field_from_value(&envelope, "kind");
         let realm_id = event_string_field_from_value(&envelope, "realm_id");
-        let actor_id = event_string_field_from_value(&envelope, "actor_id");
+        let actor_id = event_actor_from_value(&envelope).map(|actor| actor.to_string());
         match submit_event_value_with_context(
             state,
             session,
@@ -2740,7 +2743,8 @@ pub(crate) async fn submit_federation_events(
     if batch_begins_realm_create(&events) {
         let Some(actor) = events
             .first()
-            .and_then(|event| event_string_field_from_value(event, "actor_id"))
+            .and_then(|event| event.get("actor_id").cloned())
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
         else {
             render_error(
                 res,
@@ -2768,7 +2772,7 @@ pub(crate) async fn submit_federation_events(
         let session = SessionRecord {
             token_hash: format!("federation:{source_trust_domain}:{request_hash}"),
             account_pk: None,
-            actor: actor.clone(),
+            actor: actor.signing_principal_id().to_string(),
             device_id: device_id.clone(),
             audience: state.service_id().clone(),
             session_public_key: None,
@@ -2787,7 +2791,8 @@ pub(crate) async fn submit_federation_events(
                     .expect("every typed federated Event was admission-verified");
                 InternalEventAdmission::peer_federated_event(
                     event_string_field_from_value(event, "realm_id").unwrap_or_default(),
-                    actor.clone(),
+                    serde_json::from_value(event["actor_id"].clone())
+                        .expect("admitted Event ActorId"),
                     device_id.clone(),
                     event_id,
                     verification_method.clone(),
@@ -2867,7 +2872,11 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         }
-        let Some(actor) = event_string_field_from_value(&envelope, "actor_id") else {
+        let Some(event_actor) = envelope
+            .get("actor_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        else {
             rejected.push(rejected_item(
                 id,
                 ReasonCode::from_wire("param_missing"),
@@ -2875,23 +2884,9 @@ pub(crate) async fn submit_federation_events(
             ));
             continue;
         };
-        if arkret_wire::DidCoreId::new(actor.clone()).is_err() {
-            rejected.push(rejected_item(
-                id,
-                ReasonCode::from_wire("param_invalid"),
-                Some("actor_id must be a DID Core ID".to_owned()),
-            ));
-            continue;
-        }
+        let actor = event_actor.signing_principal_id().to_string();
         let event_kind = event_string_field_from_value(&envelope, "kind");
-        let Some(event_station_id) = event_string_field_from_value(&envelope, "station_id") else {
-            rejected.push(rejected_item(
-                id,
-                ReasonCode::from_wire("missing_param"),
-                Some("station_id is required".to_owned()),
-            ));
-            continue;
-        };
+        let event_station_id = event_actor.route_service_id().to_string();
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
             &actor,
@@ -2981,7 +2976,7 @@ pub(crate) async fn submit_federation_events(
             .expect("every typed federated Event was admission-verified");
         let admission = InternalEventAdmission::peer_federated_event(
             binding_realm.clone(),
-            actor.clone(),
+            serde_json::from_value(envelope["actor_id"].clone()).expect("admitted Event ActorId"),
             device_id,
             id.clone(),
             producer_verification_method.clone(),
@@ -3483,7 +3478,7 @@ async fn submit_direct_conversation_federation(
     let session = SessionRecord {
         token_hash: format!("federation:direct-conversation:{request_hash}"),
         account_pk: None,
-        actor: receipt.founder_id.to_string(),
+        actor: receipt.founder_id.signing_principal_id().to_string(),
         device_id: submission.events[0]
             .event
             .payload
@@ -3509,7 +3504,7 @@ async fn submit_direct_conversation_federation(
                 .expect("every founding Event was admission-verified");
             InternalEventAdmission::peer_federated_event(
                 plan.realm_id.to_string(),
-                receipt.founder_id.to_string(),
+                item.event.actor_id.clone(),
                 session.device_id.clone(),
                 item.event.event_id.to_string(),
                 verification_method.clone(),
@@ -3554,6 +3549,10 @@ fn direct_founding_origin_ids_match(
         && event_station_ids
             .iter()
             .all(|station_id| *station_id == source_id)
+}
+
+pub(super) fn event_actor_from_value(value: &Value) -> Option<arkret_wire::ActorId> {
+    serde_json::from_value(value.get("actor_id")?.clone()).ok()
 }
 
 pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {

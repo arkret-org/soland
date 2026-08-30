@@ -584,7 +584,11 @@ async fn materialize_realm_control_with_transported_seals(
         let invite_accept_from = if requires_invite_membership_validation {
             let member_cell = CellRef::new(format!(
                 "ak:cell:ak.component.member.state.v1:{}",
-                event.actor_id
+                arkret_wire::composite_subject(&[event
+                    .actor_id
+                    .canonical_key()
+                    .map_err(proof_state_error)?])
+                .map_err(proof_state_error)?
             ))
             .map_err(proof_state_error)?;
             match ops_by_cell.get(&member_cell) {
@@ -1743,7 +1747,11 @@ fn canonical_event_sealed_ops(
         })?;
         let member_cell = CellRef::new(format!(
             "ak:cell:ak.component.member.state.v1:{}",
-            event.actor_id
+            arkret_wire::composite_subject(&[event
+                .actor_id
+                .canonical_key()
+                .map_err(proof_state_error)?])
+            .map_err(proof_state_error)?
         ))
         .map_err(proof_state_error)?;
         let member_ops = resolved
@@ -2046,12 +2054,6 @@ mod tests {
             }),
         )
         .unwrap();
-        let member_cell = CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{}",
-            event.actor_id
-        ))
-        .unwrap();
-
         let projected = arkret_schema::project_registered_cell_writes(
             &event,
             arkret_canonical::DigestSuite::Sha256,
@@ -2061,6 +2063,17 @@ mod tests {
         // pending -> accepted, resolvable without any pre-state) and the
         // membership transition, whose `from` is deliberately absent.
         assert_eq!(projected.len(), 2);
+        let member_cell = projected
+            .iter()
+            .find(|write| {
+                write
+                    .cell_id
+                    .as_str()
+                    .starts_with("ak:cell:ak.component.member.state.v1:")
+            })
+            .expect("registered member cell")
+            .cell_id
+            .clone();
         let member_write = projected
             .iter()
             .find(|write| write.cell_id == member_cell)

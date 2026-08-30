@@ -2222,10 +2222,11 @@ mod membership_hydration_tests {
         .expect("membership canonical bytes");
         let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
         let event_id = event.event_id.to_string();
+        let canonical_actor = event.actor_id.to_string();
         let envelope = serde_json::to_value(event).unwrap();
         CanonicalEventRecord {
             event_id,
-            actor_id: actor_id.to_string(),
+            actor_id: canonical_actor,
             actor_seq,
             realm_id: Some(realm_id.to_owned()),
             kind: kind.to_owned(),
@@ -2249,8 +2250,9 @@ mod membership_hydration_tests {
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "membership": membership,
-                "actor_id": member,
-                "delivery_status": "unroutable"
+                "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    DidCoreId::new(member).unwrap(), crate::test_event::station_id(),
+                ))
             }),
             received_at,
         )
@@ -2389,7 +2391,14 @@ mod membership_hydration_tests {
         .expect("hydrate reducer memberships");
 
         let hydrated = projection
-            .member(realm_id, member)
+            .member(
+                realm_id,
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    DidCoreId::new(member).unwrap(),
+                    crate::test_event::station_id(),
+                ))
+                .to_string(),
+            )
             .expect("joined member restored to reducer projection");
         assert_eq!(hydrated.state, "join");
     }
@@ -2577,7 +2586,9 @@ mod membership_hydration_tests {
         let now = chrono::Utc::now();
         let first_payload = serde_json::json!({
             "schema": "ak.schema.key_backup_active_series.v1",
-            "actor_id": actor,
+            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
+            )),
             "backup_kind": "mls_history",
             "active_series_id": series_id,
             "series_pointer_version": 1,
@@ -2634,14 +2645,23 @@ mod membership_hydration_tests {
             .expect("hydrate active-series projection");
 
         let pointer = proj
-            .key_backup_active_series(actor, "mls_history")
+            .key_backup_active_series(
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    DidCoreId::new(actor).unwrap(),
+                    crate::test_event::station_id(),
+                ))
+                .to_string(),
+                "mls_history",
+            )
             .expect("active-series pointer rehydrated");
         assert_eq!(pointer.active_series_id, series_id);
         assert_eq!(pointer.series_pointer_version, 1);
 
         let gap_payload = serde_json::json!({
             "schema": "ak.schema.key_backup_active_series.v1",
-            "actor_id": actor,
+            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
+            )),
             "backup_kind": "mls_history",
             "active_series_id": series_id,
             "series_pointer_version": 3,
@@ -2879,7 +2899,7 @@ mod membership_hydration_tests {
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
         assert!(!proj.issuer_has_projected_capability(
-            &arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(owner).unwrap()),
+            &crate::test_account_actor(&arkret_wire::Did::new(owner).unwrap()),
             realm_id,
             "ak.message.create",
             realm_id,

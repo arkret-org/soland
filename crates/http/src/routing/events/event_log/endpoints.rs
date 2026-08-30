@@ -1602,8 +1602,8 @@ async fn seals_frontier(
 ) -> soland_http::result::JsonResult<SealFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::SealFrontierRequestBody>()
         .await
@@ -1614,7 +1614,7 @@ async fn seals_frontier(
     let own_pcr = state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), session_core_id.as_str());
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string());
     let managed_agent_pcr =
         crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
             state,
@@ -1696,8 +1696,7 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
+    let session_actor = crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await
@@ -1705,6 +1704,8 @@ async fn events_frontier(
             AppError::json_invalid("invalid ak.self.events.read.frontier.v1 request body")
         })?;
     let selected_actor_id = query_body.actor_id.clone();
+    let is_session_actor = selected_actor_id == session_actor;
+    let is_local_hosted_actor = matches!(&selected_actor_id, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id());
     let actor_id = query_body
         .actor_id
         .signing_principal_id()
@@ -1717,13 +1718,12 @@ async fn events_frontier(
 
     // Actor selectors are split deliberately: combined Realm+actor is the
     // only authoring surface; actor-only is a read-only per-Realm aggregate.
-    let actor = actor_id;
-    let actor_id = arkret_wire::DidCoreId::new(actor.clone())
+    let actor = selected_actor_id.to_string();
+    let actor_id = arkret_wire::DidCoreId::new(actor_id)
         .map_err(|_| AppError::param_invalid("actor_id must be a valid core identity"))?;
     if let Some(realm_value) = realm_selector {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::param_invalid("invalid realm_id"))?;
-        let is_session_actor = actor_id == session_core_id;
         let own_actor_pcr = is_session_actor
             && state
                 .projections()
@@ -1731,19 +1731,20 @@ async fn events_frontier(
                 .realm_is_principal_control_for_actor(&realm_value, &actor);
         let managed_agent_pcr = state
             .agent_pairings()
-            .agent(&actor)
+            .agent(actor_id.as_str())
             .await
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
             .is_some_and(|record| {
-                record.controller_id == session.actor
+                is_local_hosted_actor
+                    && record.controller_id == session.actor
                     && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
             });
         let applet_managed_access =
             applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
-        let applet_managed_actor_pcr = applet_managed_access
-            .as_ref()
-            .is_some_and(|access| access.active && access.pcr_realm_id == realm_value);
+        let applet_managed_actor_pcr = applet_managed_access.as_ref().is_some_and(|access| {
+            is_local_hosted_actor && access.active && access.pcr_realm_id == realm_value
+        });
         if applet_managed_access
             .as_ref()
             .is_some_and(|access| access.pcr_realm_id == realm_value && !access.active)
@@ -1767,7 +1768,7 @@ async fn events_frontier(
         let authored_realm_history = if is_session_actor {
             !state
                 .event_queries()
-                .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())
+                .canonical_events_for_realm_actor(realm_id.as_str(), &actor)
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("actor frontier unavailable: {error}"))
@@ -1799,11 +1800,12 @@ async fn events_frontier(
 
     let managed_agent_pcr = state
         .agent_pairings()
-        .agent(&actor)
+        .agent(actor_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
         .filter(|record| {
-            record.controller_id == session.actor
+            is_local_hosted_actor
+                && record.controller_id == session.actor
                 && record.state != AgentLifecycleState::Deactivated
         })
         .map(|record| record.principal_control_realm_id);
@@ -1815,26 +1817,24 @@ async fn events_frontier(
         applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
     let applet_managed_actor_pcr = applet_managed_access
         .as_ref()
-        .filter(|access| access.owned_by_session)
+        .filter(|access| is_local_hosted_actor && access.owned_by_session)
         .map(|access| access.pcr_realm_id.as_str());
-    let station_id = arkret_wire::DidCoreId::new(state.service_id().clone())
-        .map_err(|_| AppError::internal("local Station id is invalid"))?;
-    let actor_authority = arkret_wire::AccountId::new(actor_id.clone(), station_id);
-    let own_actor_pcr = if actor_id == session_core_id {
-        state
-            .persistence()
-            .principal_resolution_by_account_id(&actor_authority)
-            .await
-            .map_err(|error| {
-                AppError::internal(format!("principal resolution lookup failed: {error}"))
-            })?
-            .map(|resolution| resolution.pcr_realm_id.to_string())
-    } else {
-        None
-    };
+    let own_actor_pcr =
+        if is_session_actor && let Some(session_account) = session_actor.as_account_id() {
+            state
+                .persistence()
+                .principal_resolution_by_account_id(session_account)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("principal resolution lookup failed: {error}"))
+                })?
+                .map(|resolution| resolution.pcr_realm_id.to_string())
+        } else {
+            None
+        };
     let records = state
         .event_queries()
-        .canonical_events_for_actor(actor_id.as_str())
+        .canonical_events_for_actor(&actor)
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
     let mut realm_ids = records

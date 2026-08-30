@@ -232,7 +232,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let controller_generation =
         arkret_identifiers::EventId::new("ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim")
             .unwrap();
-    let controller_authority = arkret_wire::AccountId {
+    let controller_account_id = arkret_wire::AccountId {
         principal_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
         station_id: arkret_identifiers::DidCoreId::new(ALICE).unwrap(),
     };
@@ -244,7 +244,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     state.agent_membership_bindings.insert(
         (REALM.to_owned(), account_actor_string(BOB)),
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
-            controller_authority,
+            controller_account_id,
             controller_membership_generation_ref: controller_generation,
             controller_terminal_event_ref: None,
         },

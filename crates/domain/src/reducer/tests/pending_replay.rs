@@ -106,7 +106,10 @@ fn relation_create_waits_for_unknown_endpoint() {
             "relation": {
                 "kind": "references",
                 "from_ref": STRAND,
-                "to_ref": "ak:did_core:web:bob.example"
+                "to_ref": { "kind": "account", "account_id": {
+                    "principal_id": "ak:did_core:web:bob.example",
+                    "station_id": "ak:did_core:web:fixture-station.example"
+                }}
             }
         }),
     );
@@ -141,6 +144,7 @@ fn relation_update_pending_replays_after_create() {
         ProjectionEffect::PendingReplayQueued { ref target_ref, .. } if target_ref == RELATION
     ));
 
+    state.apply(&strand_create(), &hlc);
     let create = make_operation(
         arkret_wire::EventKind::RelationCreate,
         REALM,
@@ -148,8 +152,11 @@ fn relation_update_pending_replays_after_create() {
             "event_id": RELATION_CREATE_EVENT,
             "relation": {
                 "kind": "assigned_to",
-                "from_ref": "ak:did_core:web:alice.example",
-                "to_ref": "ak:did_core:web:bob.example"
+                "from_ref": STRAND,
+                "to_ref": { "kind": "account", "account_id": {
+                    "principal_id": "ak:did_core:web:bob.example",
+                    "station_id": "ak:did_core:web:fixture-station.example"
+                }}
             }
         }),
     );

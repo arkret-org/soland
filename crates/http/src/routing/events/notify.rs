@@ -16,8 +16,8 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::events::EventKind;
 use arkret_wire::{
-    DidCoreId, EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState,
-    RealmId, StrandId,
+    EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState, RealmId,
+    StrandId,
 };
 use serde_json::Value;
 
@@ -131,12 +131,6 @@ fn mention_subjects(payload: &Value) -> Vec<String> {
 
 fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
     let mut members = BTreeSet::new();
-    if let Ok(parsed_realm_id) = arkret_identifiers::RealmId::new(realm_id.to_owned()) {
-        let realms = state.realm_directory().snapshot();
-        if let Some(entry) = realms.get(&parsed_realm_id) {
-            members.extend(entry.members.iter().map(|did| did.as_str().to_owned()));
-        }
-    }
     {
         let projection = state.projections().snapshot();
         members.extend(
@@ -146,10 +140,14 @@ fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
                 .map(|member| member.member.clone()),
         );
         members.retain(|member| {
+            let Ok(actor) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
+                return false;
+            };
+            let principal = actor.signing_principal_id().as_str();
             projection
-                .agent_membership_binding(realm_id, member)
+                .agent_membership_binding(realm_id, principal)
                 .is_none()
-                || projection.effective_agent_membership_base(realm_id, member)
+                || projection.effective_agent_membership_base(realm_id, principal)
         });
     }
     members
@@ -194,11 +192,8 @@ async fn put_notification(
             id: NotificationId::new(crate::ids::generate_notification_id())
                 .map_err(|error| format!("notification id is invalid: {error}"))?,
             schema: NotificationSchema::V1,
-            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_identifiers::DidCoreId::new(recipient_id.to_owned())
-                    .map_err(|error| format!("notification recipient is invalid: {error}"))?,
-                state.service_core_id().clone(),
-            )),
+            actor_id: serde_json::from_str(recipient_id)
+                .map_err(|error| format!("notification recipient ActorId is invalid: {error}"))?,
             source: NotificationSource::Event(NotificationEventSource {
                 source_event_id: EventId::new(source_event_id.to_owned())
                     .map_err(|error| format!("notification source Event is invalid: {error}"))?,
@@ -229,14 +224,7 @@ async fn put_notification(
             .validate()
             .map_err(|error| format!("notification is invalid: {error}"))?;
         let source_actor_id = source_actor_id
-            .map(|value| {
-                DidCoreId::new(value.to_owned()).map(|principal_id| {
-                    arkret_wire::ActorId::hosted_principal(
-                        principal_id,
-                        state.service_core_id().clone(),
-                    )
-                })
-            })
+            .map(serde_json::from_str::<arkret_wire::ActorId>)
             .transpose()
             .map_err(|error| format!("notification source actor is invalid: {error}"))?;
         Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {
@@ -324,9 +312,18 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    let mentioned_subjects = mention_subjects(payload)
+    // Mention subjects name principals, but delivery must retain each actual
+    // member's immutable Station. Never manufacture an account from a DID.
+    let mentioned_principals = mention_subjects(payload)
         .into_iter()
-        .filter(|subject| !subject.trim().is_empty())
+        .collect::<BTreeSet<_>>();
+    let mentioned_subjects = realm_joined_members(state, &realm_id)
+        .into_iter()
+        .filter(|member| {
+            serde_json::from_str::<arkret_wire::ActorId>(member).is_ok_and(|actor| {
+                mentioned_principals.contains(actor.signing_principal_id().as_str())
+            })
+        })
         .collect::<BTreeSet<_>>();
     if let Some(strand_id) = strand_id.as_deref() {
         for recipient in all_watch_recipients(state, strand_id) {
@@ -364,19 +361,22 @@ pub(crate) async fn dispatch_message_notifications(
                 continue;
             }
         }
+        let Ok(subject_actor) = serde_json::from_str::<arkret_wire::ActorId>(&subject) else {
+            continue;
+        };
         // AKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state
             .identities()
             .find_agent_controller(soland_services::identity::FindAgentControllerQuery {
-                agent_id: subject.clone(),
+                agent_id: subject_actor.signing_principal_id().to_string(),
             })
             .await
         {
             let controller = agent_record.controller_id.as_str();
-            if sender != controller
+            if operation.context.sender.signing_principal_id().as_str() != controller
                 && !agent_accepts_third_party_mention(
                     state,
-                    &subject,
+                    subject_actor.signing_principal_id().as_str(),
                     &realm_id,
                     strand_id.as_deref(),
                 )
@@ -415,12 +415,16 @@ pub(crate) async fn dispatch_assignment_notifications(
     else {
         return;
     };
-    let Some(assignee) =
-        relation_field(payload, "to_ref").filter(|value| value.starts_with("ak:did_core:"))
+    let Some(assignee) = payload
+        .pointer("/relation/to_ref")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .map(|actor| actor.to_string())
     else {
         return;
     };
     let source_actor_id = operation_source_actor_id(operation);
+    let assignee = assignee.as_str();
     if source_actor_id.as_deref() == Some(assignee) {
         return;
     }
@@ -529,10 +533,15 @@ fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<S
         .filter(|relation| {
             relation.relation_kind == "assigned_to"
                 && relation.state == "active"
-                && relation.from_ref.as_deref() == Some(strand_id)
+                && relation.from_object_ref() == Some(strand_id)
         })
-        .filter_map(|relation| relation.to_ref.clone())
-        .filter(|actor| actor.starts_with("ak:did_core:"))
+        .filter_map(|relation| {
+            relation
+                .to_ref
+                .as_ref()
+                .and_then(|endpoint| endpoint.as_actor_id())
+        })
+        .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
     recipients.extend(
         projection
@@ -630,12 +639,21 @@ mod tests {
         AppState::new(test_config(), Db { pool: None })
     }
 
+    fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
+        let principal = arkret_wire::DidCoreId::new(principal).unwrap();
+        if principal.as_str() == "ak:did_core:web:agents.example:alice-summary" {
+            arkret_wire::ActorId::hosted_principal(principal.clone(), principal)
+        } else {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), principal))
+        }
+    }
+
     async fn notifications_for(state: &AppState, recipient_id: &str) -> Vec<Value> {
         state
             .deliveries()
             .list_recipient_notifications(
                 soland_services::delivery::ListRecipientNotificationsQuery {
-                    recipient_id: recipient_id.to_owned(),
+                    recipient_id: fixture_actor(recipient_id).to_string(),
                 },
             )
             .await
@@ -657,6 +675,21 @@ mod tests {
         for member in members {
             entry.members.insert(
                 arkret_identifiers::DidCoreId::new((*member).to_owned()).expect("valid member id"),
+            );
+            let actor = fixture_actor(member).to_string();
+            state.test_projection().lock().members.insert(
+                (realm_id.to_owned(), actor.clone()),
+                soland_domain::reducer::SolandMembershipState {
+                    member: actor,
+                    realm_id: realm_id.to_owned(),
+                    state: "join".to_owned(),
+                    role: "member".to_owned(),
+                    membership_event_ref: None,
+                    invited_at: None,
+                    joined_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    reason: None,
+                },
             );
         }
         state.realm_directory().upsert(entry);
@@ -817,6 +850,7 @@ mod tests {
     }
 
     fn seed_strand_watch(state: &AppState, strand_id: &str, actor_id: &str, level: &str) {
+        let actor_id = fixture_actor(actor_id).to_string();
         state.test_projection().lock().strand_watches.insert(
             (strand_id.to_owned(), actor_id.to_owned()),
             soland_domain::reducer::StrandWatchProjection {
@@ -906,7 +940,7 @@ mod tests {
                 "relation": {
                     "relation_kind": "assigned_to",
                     "from_ref": strand_id,
-                    "to_ref": assignee,
+                    "to_ref": fixture_actor(assignee),
                 }
             }),
         )

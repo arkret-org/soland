@@ -206,9 +206,10 @@ async fn admit_member(
     let new_member_core = core_actor_id(new_member_did);
     let payload = json!({
         "realm_id": realm_id,
-        "actor_id": new_member_core,
+        "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(new_member_core).unwrap(), state.service_core_id().clone(),
+        )),
         "membership": "join",
-        "delivery_status": "unroutable",
     });
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {
@@ -300,7 +301,6 @@ async fn accept_invite(
 ) {
     let payload = json!({
         "invite_id": invite_id,
-        "delivery_status": "unroutable",
     });
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {

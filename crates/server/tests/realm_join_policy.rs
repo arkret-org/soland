@@ -17,6 +17,13 @@ const BOB: &str = "ak:did_core:web:bob.example";
 const MALLORY: &str = "ak:did_core:web:mallory.example";
 const CAPTCHA_PROVIDER_DID: &str = "did:webvh:z6mkfixture:captcha.example";
 
+fn member_actor(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal).unwrap(),
+        soland_test_support::fixture_station_id(),
+    ))
+}
+
 fn op(kind: impl AsRef<str>, realm_id: &str, payload: Value) -> Operation {
     arkret_event_draft::test_support::raw_projected_operation(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
@@ -86,9 +93,8 @@ fn join_op(member: &str) -> Operation {
         REALM_A,
         json!({
             "realm_id": REALM_A,
-            "actor_id": member,
-            "membership": "join",
-            "delivery_status": "unroutable"
+            "member_id": member_actor(member),
+            "membership": "join"
         }),
     )
 }
@@ -99,9 +105,8 @@ fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation 
         realm_id,
         json!({
             "realm_id": realm_id,
-            "actor_id": member,
-            "membership": membership,
-            "delivery_status": "unroutable"
+            "member_id": member_actor(member),
+            "membership": membership
         }),
     );
     operation
@@ -161,7 +166,10 @@ fn principal_admission_did_method_fails_closed_without_did_evidence() {
     }
     assert!(
         state
-            .member(REALM_A, "ak:did_core:web:users.acme.example:mallory")
+            .member(
+                REALM_A,
+                &member_actor("ak:did_core:web:users.acme.example:mallory").to_string()
+            )
             .is_none()
     );
 }

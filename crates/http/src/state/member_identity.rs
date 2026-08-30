@@ -76,10 +76,10 @@ pub struct MemberIdentitySnapshot {
     /// identity-event set folded with the currently visible handle-claim
     /// digest set. Equals the SDK `member_display_state_digest` helper.
     pub member_display_state_digest: Option<String>,
-    /// R3.2 ROST-SOL-2 — disclosed principal / holder `subject_id`, read
+    /// Disclosed exact subject account, read
     /// from the effective plaintext `MemberIdentity` carrier when present.
     /// `None` for an encrypted-only effective set.
-    pub subject_id: Option<String>,
+    pub subject_account_id: Option<arkret_wire::AccountId>,
     /// Original Event envelopes for the effective set. Used by
     /// `SYNC-MEM-3` (inline events when the client lacks them).
     pub identity_events: Vec<Value>,
@@ -260,20 +260,22 @@ impl MemberIdentityRegistry {
         let effective_entries: Vec<EffectiveIdentityEntry> =
             effective.iter().map(|(_, entry)| entry.clone()).collect();
 
-        // ROST-SOL-2 (R3.2) — read the disclosed `subject_id` from the
+        // Read the disclosed account from the full subject actor in the
         // first effective plaintext `MemberIdentity` carrier. Encrypted
         // carriers do not expose it; `None` then. Disclosure gating
         // (whether to actually emit it on the wire) is enforced at the
         // sync layer per Realm policy.
-        let subject_id = effective.iter().find_map(|(record, _)| {
+        let subject_account_id = effective.iter().find_map(|(record, _)| {
             record
                 .raw_event
                 .get("payload")
                 .and_then(|payload| payload.get("identity_payload"))
                 .and_then(|carrier| carrier.get("member_identity"))
-                .and_then(|identity| identity.get("subject_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
+                .and_then(|identity| identity.get("subject_actor_id"))
+                .and_then(|actor| {
+                    serde_json::from_value::<arkret_wire::ActorId>(actor.clone()).ok()
+                })
+                .and_then(|actor| actor.as_account_id().cloned())
         });
 
         // ROST-SOL-1 (R3.2) — roster `member_display_state_digest`.
@@ -296,7 +298,7 @@ impl MemberIdentityRegistry {
                 .collect(),
             effective_entries,
             member_display_state_digest,
-            subject_id,
+            subject_account_id,
             identity_events: effective
                 .iter()
                 .map(|(record, _)| record.raw_event.clone())
@@ -311,8 +313,9 @@ impl MemberIdentityRegistry {
 pub(crate) fn handle_claim_record_from_envelope(
     envelope: &Value,
 ) -> Option<HandleClaimEvidenceRecord> {
-    let subject_id =
-        arkret_wire::DidCoreId::new(envelope.get("subject_id")?.as_str()?.to_owned()).ok()?;
+    let subject_account_id: arkret_wire::AccountId =
+        serde_json::from_value(envelope.get("subject_account_id")?.clone()).ok()?;
+    let subject_id = subject_account_id.principal_id;
     let issuer_id =
         arkret_wire::DidCoreId::new(envelope.get("issuer_id")?.as_str()?.to_owned()).ok()?;
     let digest = canonical_digest(envelope, "", subject_id.as_str(), "handle_claim_digest")?;
@@ -462,11 +465,18 @@ mod tests {
 
     use super::*;
 
+    fn account_actor(station: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            arkret_wire::DidCoreId::new(station).unwrap(),
+        ))
+    }
+
     #[test]
     fn corrupt_record_is_skipped_without_hiding_valid_snapshot_entries() {
         let subject = MemberIdentitySubjectKey {
             realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-            actor_id: "ak:did_core:web:alice.example".to_owned(),
+            actor_id: account_actor("ak:did_core:web:station-a.example").to_string(),
             segment: "member_identity".to_owned(),
         };
         let mut registry = MemberIdentityRegistry::new();
@@ -489,7 +499,7 @@ mod tests {
                     "payload": {
                         "identity_payload": {
                             "member_identity": {
-                                "subject_id": "ak:did_core:web:alice.example"
+                                "subject_actor_id": account_actor("ak:did_core:web:station-a.example")
                             }
                         }
                     }
@@ -506,5 +516,48 @@ mod tests {
         );
         assert_eq!(snapshot.effective_entries.len(), 1);
         assert_eq!(snapshot.identity_events.len(), 1);
+        assert_eq!(
+            snapshot.subject_account_id,
+            account_actor("ak:did_core:web:station-a.example")
+                .as_account_id()
+                .cloned()
+        );
+        assert!(snapshot.member_display_state_digest.is_some());
+        assert!(
+            registry
+                .snapshot_for_actor(
+                    &subject.realm_id,
+                    &account_actor("ak:did_core:web:station-b.example").to_string()
+                )
+                .is_none()
+        );
+        assert!(
+            registry
+                .snapshot_for_actor(&subject.realm_id, "ak:did_core:web:alice.example")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn handle_claim_cache_retains_exact_account_evidence_and_rejects_bare_subject() {
+        let account = account_actor("ak:did_core:web:station-a.example")
+            .as_account_id()
+            .unwrap()
+            .clone();
+        let envelope = json!({
+            "subject_account_id": account,
+            "issuer_id": "ak:did_core:web:station-a.example",
+            "binding_state": "verified"
+        });
+        let record = handle_claim_record_from_envelope(&envelope).unwrap();
+        assert_eq!(record.subject_id, account.principal_id);
+        assert_eq!(record.envelope["subject_account_id"], json!(account));
+        assert!(
+            handle_claim_record_from_envelope(&json!({
+                "subject_id": "ak:did_core:web:alice.example",
+                "issuer_id": "ak:did_core:web:station-a.example"
+            }))
+            .is_none()
+        );
     }
 }

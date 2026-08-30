@@ -566,12 +566,7 @@ fn account_subscribe_scope_key(
 }
 
 pub(crate) fn roster_member_actor_id(member: &Value) -> Option<String> {
-    member
-        .get("actor_id")
-        .or_else(|| member.get("actor"))
-        .or_else(|| member.get("did"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|actor| !actor.is_empty())
-        .map(ToOwned::to_owned)
+    serde_json::from_value::<arkret_wire::ActorId>(member.get("actor_id")?.clone())
+        .ok()
+        .map(|actor| actor.to_string())
 }

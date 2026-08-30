@@ -111,7 +111,7 @@ async fn send_device_messages(
     let restricted_fresh_device_verification = state.config().development_mode
         && session.session_grant.is_none()
         && body.messages.iter().all(|(principal_id, targets)| {
-            principal_id.signing_principal_id().as_str() == session.actor
+            principal_id.as_str() == session.actor
                 && targets
                     .values()
                     .all(|target| target.kind.as_str().starts_with("ak.key.verification."))
@@ -170,14 +170,14 @@ async fn send_device_messages(
                 kind: &target.kind,
                 sender_principal_id: &session.actor,
                 sender_device_id: &session.device_id,
-                recipient_principal_id: recipient.signing_principal_id(),
+                recipient_principal_id: &recipient,
                 recipient_device_id: &device_id,
                 expires_at: target.expires_at,
                 content: &target.content,
             })
             .map_err(|error| AppError::internal(error.to_string()))?;
             prepared_targets.push(PreparedDeviceMessageTarget {
-                recipient: recipient.signing_principal_id().to_string(),
+                recipient: recipient.to_string(),
                 device_id: device_id.to_string(),
                 target,
                 message_key,

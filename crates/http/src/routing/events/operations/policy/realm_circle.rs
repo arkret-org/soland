@@ -227,7 +227,7 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
     };
     let Some(target) = operation
         .payload
-        .get("actor_id")
+        .get("member_id")
         .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
     else {
         return false;

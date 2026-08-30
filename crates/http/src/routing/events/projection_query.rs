@@ -41,6 +41,7 @@ use arkret_models_collaboration::http_bodies::{
 use arkret_models_collaboration::objects::query_projection::{
     DocumentMorphProjectionOutcome, ReferenceProjectionState,
 };
+use arkret_models_collaboration::objects::relation::RelationEndpoint;
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -216,11 +217,11 @@ fn strand_position_relation<'a>(
         .values()
         .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "contains")
-        .filter(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .filter(|relation| relation.to_object_ref() == Some(strand_id))
         .filter(|relation| relation_string_field(relation, "board_space_id").is_some())
         .filter(|relation| {
             relation_string_field(relation, "list_space_id")
-                .or(relation.from_ref.as_deref())
+                .or(relation.from_object_ref())
                 .is_some()
         })
         .max_by(|left, right| {
@@ -243,7 +244,7 @@ fn strand_position_fields(
         .map(|value| parse_projection_id::<SpaceId>(value, "board_space_id"))
         .transpose()?;
     let list_space_id = relation_string_field(relation, "list_space_id")
-        .or(relation.from_ref.as_deref())
+        .or(relation.from_object_ref())
         .map(|value| parse_projection_id::<SpaceId>(value, "list_space_id"))
         .transpose()?;
     let rank = relation_string_field(relation, "rank").map(ToOwned::to_owned);
@@ -259,12 +260,13 @@ fn strand_assigned_to_relations(
         .values()
         .filter(|relation| relation.is_active())
         .filter(|relation| relation.relation_kind == "assigned_to")
-        .filter(|relation| relation.from_ref.as_deref() == Some(strand_id))
+        .filter(|relation| relation.from_object_ref() == Some(strand_id))
         .filter_map(|relation| {
             relation
                 .to_ref
-                .as_deref()
-                .map(|actor_id| (actor_id.to_owned(), relation.relation_id.clone()))
+                .as_ref()
+                .and_then(RelationEndpoint::as_actor_id)
+                .map(|actor_id| (actor_id.clone(), relation.relation_id.clone()))
         })
         .collect::<Vec<_>>();
     relation_refs.sort();
@@ -276,7 +278,7 @@ fn strand_assigned_to_relations(
                     &relation_id,
                     "assigned_to_relations.relation_id",
                 )?,
-                actor_id: parse_projection_actor(&actor_id, "assigned_to_relations.actor_id")?,
+                actor_id,
             })
         })
         .collect()
@@ -546,7 +548,7 @@ fn document_relation_snapshot(
     morph_id: &str,
     session: &SessionRecord,
 ) -> DocumentRelationSnapshot {
-    let (target_ref, direction) = if relation.from_ref.as_deref() == Some(morph_id) {
+    let (target_ref, direction) = if relation.from_object_ref() == Some(morph_id) {
         (relation.to_ref.clone(), "outgoing")
     } else {
         (relation.from_ref.clone(), "incoming")
@@ -556,7 +558,13 @@ fn document_relation_snapshot(
         target_projection_visible,
         target_requires_projection,
         target_row_visibility,
-    ) = target_info_for_relation_ref(projection, target_ref.as_deref(), session);
+    ) = target_info_for_relation_ref(
+        projection,
+        target_ref
+            .as_ref()
+            .and_then(RelationEndpoint::as_object_ref),
+        session,
+    );
     DocumentRelationSnapshot {
         relation: relation.clone(),
         anchor_ref: morph_id.to_owned(),
@@ -659,8 +667,8 @@ fn document_relation_row(
         return Ok(json!({
             "relation_id": snapshot.relation.relation_id.clone(),
             "relation_kind": snapshot.relation.relation_kind.clone(),
-            "from": snapshot.relation.from_ref.clone().unwrap_or_default(),
-            "to": snapshot.relation.to_ref.clone().unwrap_or_default(),
+            "from": snapshot.relation.from_ref,
+            "to": snapshot.relation.to_ref,
             "fields": snapshot.relation.fields.clone(),
             "state": snapshot.relation.state.clone(),
             "created_at": snapshot.relation.created_at,
@@ -722,8 +730,8 @@ async fn document_projection_relations(
             .filter(|relation| relation.realm_id == realm_id)
             .filter(|relation| relation.is_active())
             .filter(|relation| {
-                relation.from_ref.as_deref() == Some(morph_id)
-                    || relation.to_ref.as_deref() == Some(morph_id)
+                relation.from_object_ref() == Some(morph_id)
+                    || relation.to_object_ref() == Some(morph_id)
             })
             .filter(|relation| document_relation_visible_to_session(&projection, relation, session))
             .map(|relation| {
@@ -1003,7 +1011,7 @@ async fn list_strand_projections(
             let assigned_to_relations = strand_assigned_to_relations(&proj, &f.strand_id)?;
             let mut assigned_actor_ids = assigned_to_relations
                 .iter()
-                .map(|relation| relation.actor_id.signing_principal_id().clone())
+                .map(|relation| relation.actor_id.clone())
                 .collect::<Vec<_>>();
             assigned_actor_ids.sort();
             assigned_actor_ids.dedup();
@@ -1129,8 +1137,8 @@ struct RelationEdgeView {
     relation_id: String,
     realm_id: String,
     relation_kind: String,
-    from_ref: Option<String>,
-    to_ref: Option<String>,
+    from_ref: Option<RelationEndpoint>,
+    to_ref: Option<RelationEndpoint>,
     fields: BTreeMap<String, Value>,
     state: String,
     scope_circle_id: Option<String>,
@@ -1254,6 +1262,89 @@ async fn get_strand_projection(
     })
 }
 
+/// Parse an endpoint transported in a URL query: object ids are plain text,
+/// while an Actor uses one JSON object (URL encoded). The stored/projection
+/// value remains typed; a JSON string containing Actor JSON is rejected.
+fn parse_relation_endpoint_query(value: &str) -> Result<RelationEndpoint, AppError> {
+    let value = if value.starts_with('{') {
+        serde_json::from_str(value)
+            .map_err(|_| AppError::param_invalid("invalid relation Actor endpoint"))?
+    } else {
+        Value::String(value.to_owned())
+    };
+    serde_json::from_value(value).map_err(|_| AppError::param_invalid("invalid relation endpoint"))
+}
+
+#[cfg(test)]
+mod relation_actor_endpoint_tests {
+    use super::*;
+
+    fn actor(station: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:assignee.example").unwrap(),
+            DidCoreId::new(format!("ak:did_core:web:{station}")).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn assignment_projection_and_query_keep_same_principal_stations_separate() {
+        let first = actor("station-a.example");
+        let second = actor("station-b.example");
+        let strand = "ak:strand:AUifoAUG8AEOHYXp999WnI7WlLt19ByDoqYUsFwbw4A4";
+        let mut projection = ProjectionState::new();
+        for (seed, actor) in [(1_u8, &first), (2_u8, &second)] {
+            let event = arkret_wire::EventId::from_digest(
+                arkret_canonical::DigestSuite::Sha256,
+                [seed; 32],
+            );
+            let relation_id = RelationId::from_event_id(&event).to_string();
+            projection.relations.insert(
+                relation_id.clone(),
+                SolandRelationState {
+                    relation_id,
+                    realm_id: RealmId::from_event_id(&event).to_string(),
+                    relation_kind: "assigned_to".to_owned(),
+                    scope_circle_id: None,
+                    from_ref: Some(strand.into()),
+                    to_ref: Some(actor.clone().into()),
+                    fields: BTreeMap::new(),
+                    state: "active".to_owned(),
+                    source_event_id: Some(event.to_string()),
+                    source_event_digest: None,
+                    created_at: Utc::now(),
+                    history_basis_seals: vec![],
+                    updated_at: Utc::now(),
+                },
+            );
+        }
+        let assignments = strand_assigned_to_relations(&projection, strand).unwrap();
+        assert_eq!(assignments.len(), 2);
+        assert_eq!(
+            assignments
+                .iter()
+                .map(|entry| entry.actor_id.clone())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from([first.clone(), second.clone()])
+        );
+        let endpoint =
+            parse_relation_endpoint_query(&serde_json::to_string(&first).unwrap()).unwrap();
+        assert_eq!(
+            projection
+                .relations
+                .values()
+                .filter(|relation| relation.to_ref.as_ref() == Some(&endpoint))
+                .count(),
+            1
+        );
+        assert!(serde_json::to_value(&endpoint).unwrap().is_object());
+        assert!(parse_relation_endpoint_query("ak:did_core:web:assignee.example").is_err());
+        assert!(
+            parse_relation_endpoint_query(&serde_json::to_string(&first.to_string()).unwrap())
+                .is_err()
+        );
+    }
+}
+
 /// `GET /_soland/self/relations?from_ref=&to_ref=&relation_kind=&state=` —
 /// list relation edges projected from `ak.relation.*` events. Backs the
 /// relation-cardinality invariant checks (e.g. asserting at most one active
@@ -1269,8 +1360,12 @@ async fn list_relation_projections(
 ) -> JsonResult<RelationEdgeList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let from_ref = soland_http::util::query_param(req, "from_ref");
-    let to_ref = soland_http::util::query_param(req, "to_ref");
+    let from_ref = soland_http::util::query_param(req, "from_ref")
+        .map(|value| parse_relation_endpoint_query(&value))
+        .transpose()?;
+    let to_ref = soland_http::util::query_param(req, "to_ref")
+        .map(|value| parse_relation_endpoint_query(&value))
+        .transpose()?;
     let relation_kind = soland_http::util::query_param(req, "relation_kind");
     let state_filter =
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
@@ -1285,13 +1380,13 @@ async fn list_relation_projections(
             })
             .filter(|relation| {
                 from_ref
-                    .as_deref()
-                    .is_none_or(|value| relation.from_ref.as_deref() == Some(value))
+                    .as_ref()
+                    .is_none_or(|value| relation.from_ref.as_ref() == Some(value))
             })
             .filter(|relation| {
                 to_ref
-                    .as_deref()
-                    .is_none_or(|value| relation.to_ref.as_deref() == Some(value))
+                    .as_ref()
+                    .is_none_or(|value| relation.to_ref.as_ref() == Some(value))
             })
             .filter(|relation| {
                 relation_kind

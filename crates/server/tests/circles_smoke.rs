@@ -87,12 +87,20 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
             .entry("sender")
             .or_insert(sender);
     }
-    arkret_event_draft::test_support::raw_projected_operation(
+    let sender = payload
+        .as_object_mut()
+        .unwrap()
+        .remove("sender")
+        .map(|value| serde_json::from_value::<arkret_wire::ActorId>(value).unwrap())
+        .unwrap_or_else(|| member_actor(ALICE));
+    let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
         kind,
         payload,
-    )
+    );
+    operation.context.sender = sender;
+    operation
 }
 
 fn seed_realm(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, owner: &str) {

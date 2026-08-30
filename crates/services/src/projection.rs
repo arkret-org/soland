@@ -47,6 +47,12 @@ fn projection_event_ref(operation: &Operation) -> String {
     operation.context.event_id.to_string()
 }
 
+fn invite_member_cell(member: &str) -> Option<CellRef> {
+    let actor: arkret_wire::ActorId = serde_json::from_str(member).ok()?;
+    let subject = arkret_wire::composite_subject(&[actor.to_string()]).ok()?;
+    CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}")).ok()
+}
+
 pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
     soland_domain::reducer::morph_document_body(fields)
 }
@@ -2840,8 +2846,7 @@ impl ProjectionService {
                 reason: None,
             },
         );
-        if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{member}"))
-        {
+        if let Some(cell_id) = invite_member_cell(member) {
             state
                 .cells
                 .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
@@ -2900,9 +2905,7 @@ impl ProjectionService {
                 reason: None,
             },
         );
-        if let Ok(cell_id) =
-            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee_id}"))
-        {
+        if let Some(cell_id) = invite_member_cell(invitee_id) {
             state.cells.insert(
                 cell_id,
                 CellState::Value(Value::String("invite".to_owned())),
@@ -2935,9 +2938,7 @@ impl ProjectionService {
                 ..previous
             },
         );
-        if let Ok(cell_id) =
-            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee_id}"))
-        {
+        if let Some(cell_id) = invite_member_cell(invitee_id) {
             state
                 .cells
                 .insert(cell_id, CellState::Value(Value::String("leave".to_owned())));

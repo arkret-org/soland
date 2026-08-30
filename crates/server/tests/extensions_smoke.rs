@@ -2592,7 +2592,12 @@ async fn signed_install_events(
     let frontier = existing
         .iter()
         .filter(|event| {
-            event.actor_id == actor_core_id.as_str()
+            event.actor_id
+                == arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    actor_core_id.clone(),
+                    state.service_core_id().clone(),
+                ))
+                .to_string()
                 && event.realm_id.as_deref() == Some(realm_id.as_str())
         })
         .max_by_key(|event| event.actor_seq)

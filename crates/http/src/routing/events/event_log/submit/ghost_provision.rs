@@ -73,7 +73,7 @@ async fn prepare_ghost_event(
         return Err(quarantine_verified_event_collision(state, record).await);
     }
     let scoped_actor_records = service
-        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), &parsed.actor.to_string())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -115,7 +115,7 @@ async fn prepare_ghost_event(
                         "prev_refs must not reference a staged Event in another Realm",
                     ));
                 }
-                if actor_id == parsed.actor_id.as_str() {
+                if actor_id == &parsed.actor.to_string() {
                     max_actor_predecessor_seq = Some(
                         max_actor_predecessor_seq
                             .map_or(*actor_seq, |current: u64| current.max(*actor_seq)),
@@ -136,7 +136,7 @@ async fn prepare_ghost_event(
                 "prev_refs must not reference an Event in another Realm",
             ));
         }
-        if predecessor.actor_id == parsed.actor_id.as_str() {
+        if predecessor.actor_id == parsed.actor.to_string() {
             max_actor_predecessor_seq = Some(
                 max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
                     current.max(predecessor.actor_seq)
@@ -324,7 +324,7 @@ async fn prepare_ghost_event(
     let projected_event = operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
-            Some(parsed.actor_id.as_str()),
+            Some(&parsed.actor.to_string()),
         )
     });
     // Applet-managed authority creation is Station-local. The unit
@@ -344,7 +344,7 @@ async fn prepare_ghost_event(
         consent_projection: None,
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
-            actor_id: parsed.actor_id.to_string(),
+            actor_id: parsed.actor.to_string(),
             actor_seq: parsed.actor_seq,
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,
@@ -381,7 +381,7 @@ async fn prepare_ghost_event(
         operation,
         projected_cell_writes,
         projected_event,
-        actor_id: parsed.actor_id.to_string(),
+        actor_id: parsed.actor.to_string(),
         realm_id: parsed.realm_id.to_string(),
         actor_seq: parsed.actor_seq,
         event_id: parsed.event_id.to_string(),
@@ -445,13 +445,13 @@ async fn submit_applet_record_event_batch(
     };
     let mut prepared = Vec::with_capacity(events.len());
     for event in events {
-        let actor_id = event.actor_id.to_string();
+        let actor_id = event.actor_id.clone();
         let realm_id = event.realm_id.to_string();
         let kind = event.kind.as_str().to_owned();
         let envelope = typed_event_to_canonical_value(event)?;
         let admission = InternalEventAdmission::applet_formal(
             realm_id.as_str(),
-            actor_id.as_str(),
+            actor_id.clone(),
             kind.as_str(),
             event_string_field_from_value(&envelope, "event_id").unwrap_or_default(),
             applet_id.clone(),
@@ -459,7 +459,7 @@ async fn submit_applet_record_event_batch(
         );
         let next = prepare_ghost_event(
             state,
-            &session(actor_id.as_str()),
+            &session(actor_id.signing_principal_id().as_str()),
             envelope,
             &admission,
             &preceding_events,

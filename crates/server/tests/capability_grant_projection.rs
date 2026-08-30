@@ -36,9 +36,10 @@ fn actor(value: &str) -> arkret_wire::ActorId {
 fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     let operation_uuid = uuid::Uuid::now_v7().to_string();
     let object = payload.as_object_mut().expect("test payload object");
-    object
-        .entry("sender".to_owned())
-        .or_insert_with(|| serde_json::to_value(actor(ISSUER)).unwrap());
+    let sender = object
+        .remove("sender")
+        .map(|value| serde_json::from_value::<arkret_wire::ActorId>(value).unwrap())
+        .unwrap_or_else(|| actor(ISSUER));
     // The registered or_set dot is `ak:event:<event_id>:<write_index>`, so a
     // fixture Operation owes the full producer Event token injected by the
     // submit path. An Event-derived grant must be the byte-for-byte retyping of
@@ -52,12 +53,14 @@ fn op(kind: impl AsRef<str>, realm_id: &str, mut payload: Value) -> Operation {
     object
         .entry("event_id".to_owned())
         .or_insert_with(|| Value::String(event_id));
-    arkret_event_draft::test_support::raw_projected_operation(
+    let mut operation = arkret_event_draft::test_support::raw_projected_operation(
         OperationId::new(format!("ak:operation:{operation_uuid}")).unwrap(),
         RealmId::new(realm_id).unwrap(),
         kind.as_ref(),
         payload,
-    )
+    );
+    operation.context.sender = sender;
+    operation
 }
 
 fn grant_op(grant_id: &str) -> Operation {

@@ -1,5 +1,9 @@
 use super::*;
 
+fn session_actor(state: &AppState, session: &SessionIdentityState) -> Option<arkret_wire::ActorId> {
+    crate::routing::identity::session_actor::session_actor_from_credential(state, session).ok()
+}
+
 /// Build one snapshot of the account-aggregate sync response for the next
 /// `ak.self.account.stream.subscribe.v1` delta frame.
 pub(crate) async fn build_sync_snapshot(
@@ -76,8 +80,8 @@ pub(crate) async fn build_sync_snapshot(
             }
         }
     }
-    if let Some(session) = session {
-        visible_actors.insert(session.actor.clone());
+    if let Some(actor) = session.and_then(|session| session_actor(state, session)) {
+        visible_actors.insert(actor.to_string());
     }
     let (device_lists, device_list_positions) = device_lists_for_actors(
         state,
@@ -639,12 +643,12 @@ pub(super) fn roster_members_for_realm(
     membership_states
         .into_iter()
         .map(|(actor_id, membership)| {
-            let actor_id = actor_id.as_str();
+            let actor_key = actor_id.to_string();
             let mut entry = serde_json::Map::new();
             entry.insert("actor_id".to_owned(), json!(actor_id));
             entry.insert("membership".to_owned(), json!(membership));
             if let Some(snapshot) =
-                state.member_identity_snapshot(realm_entry.realm_id.as_str(), actor_id)
+                state.member_identity_snapshot(realm_entry.realm_id.as_str(), &actor_key)
             {
                 if !snapshot.identity_event_ids.is_empty() {
                     entry.insert(
@@ -662,10 +666,10 @@ pub(super) fn roster_members_for_realm(
                 // holder DID. When disclosed, the gated companion fields MAY
                 // be populated; otherwise they MUST all be omitted (the SDK
                 // `MemberRosterEntry::validate` dependentRequired rule).
-                if subject_disclosed_to_caller(&context, actor_id)
-                    && let Some(subject_id) = snapshot.subject_id.as_deref()
+                if subject_disclosed_to_caller(&context, &actor_id)
+                    && let Some(subject_account_id) = snapshot.subject_account_id.as_ref()
                 {
-                    entry.insert("subject_id".to_owned(), json!(subject_id));
+                    entry.insert("subject_account_id".to_owned(), json!(subject_account_id));
                     // SYNC-MEM-3 — inline original Event envelopes (gated on
                     // subject disclosure per ROST-SOL-2). The reducer stores
                     // the events as received; we do NOT rewrite projection
@@ -677,9 +681,11 @@ pub(super) fn roster_members_for_realm(
                         );
                     }
                     let visible_claims: Vec<HandleClaimEvidenceRecord> = state
-                        .cached_handle_claims_for_subject(subject_id)
+                        .cached_handle_claims_for_subject(subject_account_id.principal_id.as_str())
                         .into_iter()
-                        .filter(|claim| handle_claim_visible_to_caller(&context, claim))
+                        .filter(|claim| {
+                            handle_claim_visible_to_caller(&context, subject_account_id, claim)
+                        })
                         .collect();
                     if !visible_claims.is_empty() {
                         let digest_inputs: Vec<HandleClaimDigestInput> = visible_claims
@@ -694,7 +700,7 @@ pub(super) fn roster_members_for_realm(
                             .collect();
                         if let Some(digest) = crate::state::display_state_digest(
                             realm_entry.realm_id.as_str(),
-                            actor_id,
+                            &actor_key,
                             &snapshot.effective_entries,
                             &digest_inputs,
                         ) {
@@ -727,7 +733,7 @@ pub(super) fn roster_members_for_realm(
 fn roster_membership_states_for_realm(
     state: &AppState,
     realm_entry: &crate::state::RealmDirectoryEntry,
-) -> BTreeMap<String, String> {
+) -> BTreeMap<arkret_wire::ActorId, String> {
     let projected_states = {
         let projection = state.projections().snapshot();
         projection
@@ -735,29 +741,21 @@ fn roster_membership_states_for_realm(
             .iter()
             .filter_map(|((realm_id, actor_id), membership)| {
                 if realm_id == realm_entry.realm_id.as_str() {
-                    Some((actor_id.clone(), membership.state.clone()))
+                    Some((
+                        serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?,
+                        membership.state.clone(),
+                    ))
                 } else {
                     None
                 }
             })
             .collect::<BTreeMap<_, _>>()
     };
-    let mut roster_states = projected_states
+    projected_states
         .iter()
         .filter(|(_, membership)| roster_membership_is_visible(membership))
         .map(|(actor_id, membership)| (actor_id.clone(), membership.clone()))
-        .collect::<BTreeMap<_, _>>();
-
-    for did in &realm_entry.members {
-        let actor_id = did.as_str().to_owned();
-        if !projected_states.contains_key(&actor_id) {
-            roster_states
-                .entry(actor_id)
-                .or_insert_with(|| "join".to_owned());
-        }
-    }
-
-    roster_states
+        .collect()
 }
 
 fn roster_membership_is_visible(membership: &str) -> bool {
@@ -767,7 +765,7 @@ fn roster_membership_is_visible(membership: &str) -> bool {
 struct RosterDisclosureContext<'a> {
     service_id: &'a str,
     realm_public: bool,
-    caller: Option<&'a str>,
+    caller: Option<arkret_wire::ActorId>,
     caller_is_realm_member: bool,
     audience: String,
     now: DateTime<Utc>,
@@ -779,18 +777,19 @@ impl<'a> RosterDisclosureContext<'a> {
         realm_entry: &'a RealmDirectoryEntry,
         session: Option<&'a SessionIdentityState>,
         body: &SyncRequestBody,
-        membership_states: &BTreeMap<String, String>,
+        membership_states: &BTreeMap<arkret_wire::ActorId, String>,
     ) -> Self {
-        let caller = session.map(|session| session.actor.as_str());
+        let caller = session.and_then(|session| session_actor(state, session));
+        let caller_is_realm_member = caller.as_ref().is_some_and(|actor_id| {
+            membership_states
+                .get(actor_id)
+                .is_some_and(|membership| membership == "join")
+        });
         Self {
             service_id: state.service_id(),
             realm_public: realm_entry.public,
             caller,
-            caller_is_realm_member: caller.is_some_and(|actor_id| {
-                membership_states
-                    .get(actor_id)
-                    .is_some_and(|membership| membership == "join")
-            }),
+            caller_is_realm_member,
             audience: roster_handle_claim_audience(state, session, body),
             now: now(),
         }
@@ -825,14 +824,28 @@ fn roster_handle_claim_audience(
 /// policy admits the caller. Public Realms can reveal public evidence; private
 /// Realms require the caller to be a member. A caller may always see their own
 /// subject binding.
-fn subject_disclosed_to_caller(context: &RosterDisclosureContext<'_>, actor_id: &str) -> bool {
-    context.caller == Some(actor_id) || context.realm_public || context.caller_is_realm_member()
+fn subject_disclosed_to_caller(
+    context: &RosterDisclosureContext<'_>,
+    actor_id: &arkret_wire::ActorId,
+) -> bool {
+    context.caller.as_ref() == Some(actor_id)
+        || context.realm_public
+        || context.caller_is_realm_member()
 }
 
 fn handle_claim_visible_to_caller(
     context: &RosterDisclosureContext<'_>,
+    subject_account_id: &arkret_wire::AccountId,
     claim: &HandleClaimEvidenceRecord,
 ) -> bool {
+    let claim_account = claim
+        .envelope
+        .get("subject_account_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value.clone()).ok());
+    if claim_account.as_ref() != Some(subject_account_id) {
+        return false;
+    }
+    let subject_actor = arkret_wire::ActorId::account(subject_account_id.clone());
     if !trusted_handle_claim_issuer(context, claim) {
         return false;
     }
@@ -853,9 +866,9 @@ fn handle_claim_visible_to_caller(
         return false;
     }
     match claim.visibility.as_deref().unwrap_or("restricted") {
-        "public" => subject_disclosed_to_caller(context, claim.subject_id.as_str()),
+        "public" => subject_disclosed_to_caller(context, &subject_actor),
         "members" | "restricted" => {
-            context.caller == Some(claim.subject_id.as_str()) || context.caller_is_realm_member()
+            context.caller.as_ref() == Some(&subject_actor) || context.caller_is_realm_member()
         }
         _ => false,
     }
@@ -927,6 +940,7 @@ async fn timeline_events_for_realm(
             continue;
         }
         if !circle_scope_visible_to_session(
+            state,
             projection,
             message_scope_circle_id(&message.content),
             event_received_at,
@@ -994,6 +1008,7 @@ async fn timeline_events_for_realm(
             continue;
         }
         if !circle_scope_visible_to_session(
+            state,
             projection,
             message_scope_circle_id(&message.content),
             event_received_at,
@@ -1079,6 +1094,7 @@ async fn timeline_events_for_realm(
             .and_then(Value::as_str);
         let circle_scope = target_ref.and_then(|target| projection.message_circle_scope(target));
         if !circle_scope_visible_to_session(
+            state,
             projection,
             circle_scope.as_deref(),
             record.received_at,
@@ -1192,7 +1208,10 @@ async fn state_events_for_realm(
     // default-Strand pointer. Other pre-join Strand objects remain hidden.
     let member_may_receive_current_baseline = if include_current_security_baseline {
         match session {
-            Some(session) => realm_has_member(state, realm_id, &session.actor).await,
+            Some(session) => match session_actor(state, session) {
+                Some(actor) => realm_has_member(state, realm_id, &actor.to_string()).await,
+                None => false,
+            },
             None => false,
         }
     } else {
@@ -1304,7 +1323,21 @@ async fn device_lists_for_actors(
     let mut changed = BTreeSet::new();
     let mut left = BTreeSet::new();
     for actor in visible_actors {
-        let records = match state.identities().devices_for_actor(actor).await {
+        let Ok(identity) = serde_json::from_str::<arkret_wire::ActorId>(actor) else {
+            continue;
+        };
+        // This inventory is Station-local. A foreign actor's principal must
+        // never select the local account's devices, even if the DID matches.
+        if matches!(identity, arkret_wire::ActorId::Service { .. })
+            || identity.route_service_id() != &state.service_core_id()
+        {
+            continue;
+        }
+        let records = match state
+            .identities()
+            .devices_for_actor(identity.signing_principal_id().as_str())
+            .await
+        {
             Ok(records) => records,
             Err(error) => {
                 tracing::error!(%error, actor, "failed to load device list for sync snapshot");
@@ -1334,7 +1367,7 @@ async fn device_lists_for_actors(
 
     if is_incremental {
         for actor in after_cursor.device_list_positions.keys() {
-            if !visible_actors.contains(actor) {
+            if !positions.contains_key(actor) {
                 left.insert(actor.clone());
             }
         }
@@ -1394,6 +1427,9 @@ async fn account_data_events(
     let Some(session) = session else {
         return Vec::new();
     };
+    let Some(actor) = session_actor(state, session) else {
+        return Vec::new();
+    };
     let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_wire::Event)>::new();
     for record in state
         .event_queries()
@@ -1408,10 +1444,11 @@ async fn account_data_events(
             continue;
         };
         let holder_id = event.payload.get("holder_id").and_then(Value::as_str);
-        let holder_authored = record.actor_id == session.actor
-            && holder_id.is_none_or(|holder_id| holder_id == session.actor);
-        let local_service_authored =
-            record.actor_id == *state.service_id() && holder_id == Some(session.actor.as_str());
+        let holder_authored =
+            event.actor_id == actor && holder_id.is_none_or(|holder_id| holder_id == session.actor);
+        let local_service_authored = event.actor_id
+            == arkret_wire::ActorId::service(state.service_core_id().clone())
+            && holder_id == Some(session.actor.as_str());
         if !holder_authored && !local_service_authored {
             continue;
         }
@@ -1486,12 +1523,9 @@ async fn notification_account_data_events(
         let Ok(Value::Object(payload)) = serde_json::to_value(row.notification) else {
             continue;
         };
-        event.actor_id = match arkret_wire::DidCoreId::new(session.actor.clone()) {
-            Ok(principal_id) => arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                principal_id,
-                state.service_core_id().clone(),
-            )),
-            Err(_) => continue,
+        event.actor_id = match session_actor(state, session) {
+            Some(actor) => actor,
+            None => continue,
         };
         event.payload = payload.into_iter().collect();
         events.push(event);
@@ -1583,14 +1617,15 @@ pub(crate) async fn projection_record_visible_to_session(
     };
     if let Some(sidecar_id) = sidecar_id {
         return session.is_some_and(|session| {
-            projection
-                .sidecars
-                .get(&sidecar_id)
-                .is_some_and(|sidecar| sidecar.controller_id == session.actor)
+            projection.sidecars.get(&sidecar_id).is_some_and(|sidecar| {
+                session_actor(state, session)
+                    .is_some_and(|actor| sidecar.controller_id == actor.to_string())
+            })
         });
     }
     let scope_circle_id = projection_event_scope_circle_id(&projection, event);
     circle_scope_visible_to_session(
+        state,
         &projection,
         scope_circle_id.as_deref(),
         event.received_at,
@@ -1694,6 +1729,7 @@ fn projection_event_scope_circle_id(
 }
 
 fn circle_scope_visible_to_session(
+    state: &AppState,
     projection: &ProjectionState,
     scope_circle_id: Option<&str>,
     event_created_at: chrono::DateTime<chrono::Utc>,
@@ -1703,13 +1739,14 @@ fn circle_scope_visible_to_session(
     let Some(scope_circle_id) = scope_circle_id else {
         return true;
     };
-    if sender.is_some_and(|sender| session.is_some_and(|session| session.actor == sender)) {
-        return true;
-    }
-    let Some(session) = session else {
+    let Some(actor) = session.and_then(|session| session_actor(state, session)) else {
         return false;
     };
-    projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
+    let actor_key = actor.to_string();
+    if sender == Some(actor_key.as_str()) {
+        return true;
+    }
+    projection.circle_scope_visible_to_actor_at(scope_circle_id, &actor_key, event_created_at)
 }
 
 #[cfg(test)]

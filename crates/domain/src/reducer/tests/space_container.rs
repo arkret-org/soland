@@ -678,7 +678,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),
@@ -704,7 +704,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),
@@ -816,7 +816,7 @@ fn board_archive_cascades_child_lists_and_cards() {
     let relation = state
         .relations
         .values()
-        .find(|relation| relation.to_ref.as_deref() == Some(strand_id))
+        .find(|relation| relation.to_object_ref() == Some(strand_id))
         .expect("strand position relation");
     assert_eq!(
         relation.fields.get("rank").and_then(Value::as_str),

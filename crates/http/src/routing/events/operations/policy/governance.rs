@@ -150,8 +150,8 @@ pub(super) async fn validate_member_state_policy(
                 actor.signing_principal_id().clone(),
                 actor.route_service_id().clone(),
             );
-            if binding.controller_authority != current_authority
-                || binding.controller_authority.principal_id != *actor.signing_principal_id()
+            if binding.controller_account_id != current_authority
+                || binding.controller_account_id.principal_id != *actor.signing_principal_id()
                 || current_controller.membership_event_ref.as_deref()
                     != Some(binding.controller_membership_generation_ref.as_str())
                 || binding.controller_terminal_event_ref.is_some()
@@ -255,7 +255,7 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
         .iter()
         .any(|((realm_id, agent_id), binding)| {
             realm_id == operation.realm_id.as_str()
-                && binding.controller_authority == authority
+                && binding.controller_account_id == authority
                 && binding.controller_membership_generation_ref.as_str() == generation
                 && projection.effective_agent_membership_base(realm_id, agent_id)
         })
@@ -289,12 +289,7 @@ async fn realm_member_is_joined(
     {
         return true;
     }
-    crate::routing::spaces::space::realm_has_member_by_id(
-        state,
-        realm_id,
-        actor_id.signing_principal_id().as_str(),
-    )
-    .await
+    crate::routing::spaces::space::realm_has_member_by_id(state, realm_id, &actor_key).await
 }
 
 async fn has_active_accountability_grant(
@@ -314,9 +309,12 @@ async fn has_active_accountability_grant(
                 && record
                     .envelope
                     .get("executed_by")
-                    .and_then(Value::as_str)
-                    .unwrap_or(record.actor_id.as_str())
-                    == controller_id.signing_principal_id().as_str()
+                    .or_else(|| record.envelope.get("actor_id"))
+                    .and_then(|value| {
+                        serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                    })
+                    .as_ref()
+                    == Some(controller_id)
                 && accountability_grant_value_active_for(
                     record.envelope.get("payload").unwrap_or(&record.envelope),
                     controller_id.signing_principal_id().as_str(),

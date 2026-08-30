@@ -51,7 +51,7 @@ pub async fn authenticated_session(
         // for this request, never persisted as a local bearer. Writes and
         // sensitive reads bypass the introspection cache so revocation is
         // observed before admitting a high-risk operation.
-        let session = super::super::auth_grant_dpop::grant_dpop_session(
+        let mut session = super::super::auth_grant_dpop::grant_dpop_session(
             state,
             req,
             token,
@@ -63,6 +63,7 @@ pub async fn authenticated_session(
         } else {
             enforce_session_device_revocation_gate(state, &session).await?;
         }
+        bind_session_account(state, &mut session).await?;
         return Ok(session);
     }
     if recovery_http_operation_requires_session_grant(req.method().as_str(), req.uri().path()) {
@@ -99,7 +100,7 @@ pub async fn authenticated_session(
             "session store unavailable",
         )
     })?;
-    let Some(session) = session else {
+    let Some(mut session) = session else {
         return Err((
             StatusCode::UNAUTHORIZED,
             "unauthenticated",
@@ -134,7 +135,24 @@ pub async fn authenticated_session(
         return Err((StatusCode::UNAUTHORIZED, "auth_expired", "session expired"));
     }
     enforce_session_device_revocation_gate(state, &session).await?;
+    bind_session_account(state, &mut session).await?;
     Ok(session)
+}
+
+async fn bind_session_account(
+    state: &AppState,
+    session: &mut SessionRecord,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    super::super::session_actor::bind_authenticated_session_account(state, session)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, "authenticated session Account binding rejected");
+            (
+                StatusCode::UNAUTHORIZED,
+                "unauthenticated",
+                "session does not bind an Account at this Station",
+            )
+        })
 }
 
 fn is_recovery_session_grant(session: &SessionRecord) -> bool {

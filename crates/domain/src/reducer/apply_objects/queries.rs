@@ -287,7 +287,7 @@ impl ProjectionState {
             return false;
         };
         let controller_id =
-            arkret_wire::ActorId::account(binding.controller_authority.clone()).to_string();
+            arkret_wire::ActorId::account(binding.controller_account_id.clone()).to_string();
         let Some(controller) = self.member(realm_id, &controller_id) else {
             return false;
         };

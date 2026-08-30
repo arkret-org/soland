@@ -18,7 +18,7 @@ async fn validate_and_prepare(
     let envelope = typed_event_to_canonical_value(event.clone())?;
     let admission = InternalEventAdmission::sidecar_ensure(
         event.realm_id.to_string(),
-        event.actor_id.to_string(),
+        event.actor_id.clone(),
         session.device_id.clone(),
         event.kind.as_str(),
         event.event_id.to_string(),
@@ -61,7 +61,7 @@ async fn validate_and_prepare(
 
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), parsed.actor_id.as_str())
+        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), &parsed.actor.to_string())
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -160,7 +160,7 @@ async fn validate_and_prepare(
         consent_projection: None,
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.to_string(),
-            actor_id: parsed.actor_id.to_string(),
+            actor_id: parsed.actor.to_string(),
             actor_seq: parsed.actor_seq,
             realm_id: Some(parsed.realm_id.to_string()),
             kind: parsed.kind,

@@ -160,7 +160,7 @@ pub(super) async fn submit_identity_anchor_batch(
     } else {
         Some(RealmBootstrapBatchContext {
             realm_id: lock_realm.clone(),
-            actor_id: typed_create.actor_id.signing_principal_id().to_string(),
+            actor_id: typed_create.actor_id.to_string(),
             digest_algorithm: None,
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
@@ -178,7 +178,7 @@ pub(super) async fn submit_identity_anchor_batch(
     let identity_anchor_context =
         identity_anchor_head_context.unwrap_or(RealmBootstrapBatchContext {
             realm_id: first.realm_id.to_string(),
-            actor_id: first.actor_id.to_string(),
+            actor_id: first.actor.to_string(),
             digest_algorithm: None,
             identity_anchor_event_id: Some(first.event_id.to_string()),
             identity_anchor_candidate_device: identity_anchor_candidate_device(&typed_authorize)?,
@@ -187,7 +187,7 @@ pub(super) async fn submit_identity_anchor_batch(
             authority_root: None,
         });
     if identity_anchor_context.realm_id != first.realm_id.as_str()
-        || identity_anchor_context.actor_id != first.actor_id.as_str()
+        || identity_anchor_context.actor_id != first.actor.to_string()
         || identity_anchor_context.identity_anchor_event_id.as_deref()
             != Some(first.event_id.as_str())
     {
@@ -784,7 +784,7 @@ fn validate_identity_anchor_candidate_preconditions(
     authorize_event: &arkret_wire::Event,
     is_bootstrap: bool,
 ) -> Result<(), SubmitOneError> {
-    if authorize_event.actor_id.signing_principal_id().as_str() != first.actor_id.as_str()
+    if authorize_event.actor_id != first.actor
         || authorize_event.realm_id.as_str() != first.realm_id.as_str()
         || authorize_event.actor_seq != first.actor_seq.saturating_add(1)
         || authorize_event.prev_refs.len() != 1
@@ -943,7 +943,7 @@ fn validate_self_principal_pcr_bootstrap_context(
         .ok_or_else(|| unit_error("typed PCR genesis authorize is not registration anchored"))?;
     Ok(RealmBootstrapBatchContext {
         realm_id: create.realm_id.to_string(),
-        actor_id: create.actor_id.signing_principal_id().to_string(),
+        actor_id: create.actor_id.to_string(),
         digest_algorithm: Some(create_payload.object.digest_algorithm.as_str().to_owned()),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         identity_anchor_candidate_device: Some(candidate),
@@ -2189,6 +2189,7 @@ mod tests {
         .unwrap();
         authorize.event_id = arkret_identifiers::EventId::new(event_id("000000000002")).unwrap();
         authorize.created_at = create.created_at;
+        authorize.actor_id = create.actor_id.clone();
         authorize.prev_refs = vec![create.event_id.clone()];
         attach_bootstrap_fixture_proof(&mut authorize, &authorize_verification_method);
 

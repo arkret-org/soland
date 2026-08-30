@@ -162,16 +162,26 @@ async fn validate_event_envelope_with_ingress(
             format!("session actor is invalid: {error}"),
         )
     })?;
-    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        session_actor_id.clone(),
-        arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
-            event_validation_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("Station id is invalid: {error}"),
-            )
-        })?,
-    ));
+    let session_actor = if internal_admission.is_some() || private_invite_delivery {
+        // These closed lanes independently verify the signed full Actor and
+        // exact internal admission context; a remote peer is not a local Account.
+        object
+            .get("actor_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "internal Event requires a full ActorId",
+                )
+            })?
+    } else {
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+            .map_err(|error| {
+                event_validation_error(StatusCode::UNAUTHORIZED, "unauthenticated", error.message)
+            })?
+    };
     validate_event_critical_features(state, object)?;
     // `effective_scope` is reducer output and is intentionally absent from
     // the closed SDK Event DTO. Reject it from the raw envelope before
@@ -554,12 +564,12 @@ async fn validate_event_envelope_with_ingress(
     let is_realm_bootstrap_followup = is_direct_conversation_founding
         || (is_realm_bootstrap_followup_kind(&kind)
             && realm_bootstrap_contexts.iter().any(|context| {
-                context.realm_id == realm_id.as_str() && context.actor_id == actor_id.as_str()
+                context.realm_id == realm_id.as_str() && context.actor_id == actor.to_string()
             }));
     let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id.as_str()
-                && context.actor_id == actor_id.as_str()
+                && context.actor_id == actor.to_string()
                 && context
                     .identity_anchor_event_id
                     .as_deref()
@@ -573,7 +583,7 @@ async fn validate_event_envelope_with_ingress(
     let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DeviceReanchor.as_str()
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id.as_str()
-                && context.actor_id == actor_id.as_str()
+                && context.actor_id == actor.to_string()
                 && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
         });
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
@@ -666,7 +676,7 @@ async fn validate_event_envelope_with_ingress(
         }
         _ => {}
     }
-    capability_grant::validate_capability_grant_body(&kind, actor_id.as_str(), object)?;
+    capability_grant::validate_capability_grant_body(&kind, &actor, object)?;
 
     // The capability gate needs the write set, and v1 carries none on the wire:
     // the receiver projects it from `kind + payload` through the registered
@@ -685,7 +695,7 @@ async fn validate_event_envelope_with_ingress(
     let bootstrap_unit_member = is_realm_bootstrap_unit_member(
         &kind,
         realm_id.as_str(),
-        actor_id.as_str(),
+        &actor.to_string(),
         is_realm_bootstrap_followup,
         is_identity_anchor_authorize,
         is_identity_anchor_reanchor,
@@ -702,7 +712,7 @@ async fn validate_event_envelope_with_ingress(
         object,
         &kind,
         realm_id.as_str(),
-        actor_id.as_str(),
+        &actor,
         bootstrap_unit_member,
         realm_bootstrap_contexts,
     )?;
@@ -800,7 +810,7 @@ async fn validate_event_envelope_with_ingress(
         .collect::<Result<Vec<_>, _>>()?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     event_semantic_refs(object, MAX_EVENT_REFS)?;
-    validate_strand_watch_manage_others_levels(&kind, object, actor_id.as_str())?;
+    validate_strand_watch_manage_others_levels(&kind, object, &actor)?;
     let producer_signing_key = validate_event_proofs(
         object,
         state,

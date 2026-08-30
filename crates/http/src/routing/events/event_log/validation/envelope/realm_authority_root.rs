@@ -23,7 +23,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     object: &serde_json::Map<String, Value>,
     kind: &str,
     realm_id: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     bootstrap_unit_member: bool,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<(), EventValidationError> {
@@ -44,18 +44,28 @@ pub(super) fn validate_realm_authority_root_authorization(
     if authorization_ref.as_deref() != Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL) {
         return Ok(());
     }
-    // The authorizing principal is whoever actually signed for the Realm:
+    // The authorizing Actor is whoever actually signed for the Realm:
     // `executed_by` when the Event is executed on behalf of `actor_id`.
-    let subject =
-        event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
+    let subject = object
+        .get("executed_by")
+        .map(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()))
+        .transpose()
+        .map_err(|_| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "executed_by must be a full ActorId",
+            )
+        })?
+        .unwrap_or_else(|| actor_id.clone());
 
     let root = if bootstrap_unit_member {
-        staged_genesis_root(realm_id, actor_id, realm_bootstrap_contexts)?
+        staged_genesis_root(realm_id, &actor_id.to_string(), realm_bootstrap_contexts)?
     } else {
         accepted_seal_root(state, object, realm_id)?
     };
 
-    if root.controller_id.signing_principal_id().as_str() != subject {
+    if root.controller_id != subject {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "realm_authority_controller_mismatch",

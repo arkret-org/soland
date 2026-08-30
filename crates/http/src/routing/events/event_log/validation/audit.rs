@@ -93,13 +93,13 @@ fn typed_payload<T: serde::de::DeserializeOwned>(
 pub(super) fn validate_strand_watch_manage_others_levels(
     kind: &str,
     object: &serde_json::Map<String, Value>,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
 ) -> Result<(), EventValidationError> {
     if kind != arkret_wire::event_kind_str::STRAND_WATCH_SET {
         return Ok(());
     }
     let payload = strand_watch_set_payload(object)?;
-    if payload.watcher_actor_id.signing_principal_id().as_str() == actor_id {
+    if &payload.watcher_actor_id == actor_id {
         return Ok(());
     }
     // `muted` suppresses mention / moderation routing and `level_public` is a
@@ -168,13 +168,16 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             continue;
         }
         let (Some(actor_id), Some(event_id)) = (
-            object.get("actor_id").and_then(Value::as_str),
+            object
+                .get("actor_id")
+                .cloned()
+                .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok()),
             object.get("event_id").and_then(Value::as_str),
         ) else {
             continue;
         };
         let payload = strand_watch_set_payload(object)?;
-        if payload.watcher_actor_id.signing_principal_id().as_str() == actor_id {
+        if payload.watcher_actor_id == actor_id {
             continue;
         }
         // The cell the audit has to name comes from the SDK payload type, which
@@ -191,7 +194,10 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             .iter()
             .filter(|(audit, audit_payload)| {
                 matches!(audit_payload.access_kind, AuditAccessedKind::WatchSetOthers)
-                    && audit_payload.writer_actor_id.as_str() == actor_id
+                    && &audit_payload.writer_actor_id == actor_id.signing_principal_id()
+                    && audit.get("actor_id").cloned().and_then(|value| {
+                        serde_json::from_value::<arkret_wire::ActorId>(value).ok()
+                    }).as_ref() == Some(&actor_id)
                     && audit_payload.target_actor_id.as_ref()
                         == Some(payload.watcher_actor_id.signing_principal_id())
                     && audit_payload.target_ref == payload.strand_id.as_str()
@@ -325,15 +331,22 @@ mod tests {
     const TARGET: &str = "ak:did_core:web:bob.example";
     const STRAND: &str = "ak:strand:AU6JCWNYlBGUETxX5NBB9hy8YgtevzngI2Yj3vKnYDWb";
 
+    fn actor(principal: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(principal).unwrap(),
+            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ))
+    }
+
     fn others_watch_write() -> Value {
         json!({
             "event_id": WRITE_ID,
             "kind": arkret_wire::EventKind::StrandWatchSet,
-            "actor_id": WRITER,
+            "actor_id": actor(WRITER),
             "realm_id": "ak:realm:AdA2LFMgPUC2EAmzvOPY69_DX8_NLEXKyCwX9zR989nv",
             "payload": {
                 "strand_id": STRAND,
-                "watcher_actor_id": TARGET,
+                "watcher_actor_id": actor(TARGET),
                 "level": "participating"
             }
         })
@@ -352,7 +365,7 @@ mod tests {
         json!({
             "event_id": "ak:event:ARYFDQjhXHE479tnu9g71RR9SxducTw_bWQIMigD_pYL",
             "kind": arkret_wire::EventKind::AuditAccessed,
-            "actor_id": WRITER,
+            "actor_id": actor(WRITER),
             "refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
             "payload": {
                 "access_kind": "watch_set_others",
@@ -399,8 +412,30 @@ mod tests {
     #[test]
     fn self_watch_writes_need_no_audit() {
         let mut own = others_watch_write();
-        own["payload"]["watcher_actor_id"] = json!(WRITER);
+        own["payload"]["watcher_actor_id"] = json!(actor(WRITER));
         check(&[own]).expect("writing your own watch state needs no audit pair");
+    }
+
+    #[test]
+    fn same_principal_at_another_station_is_not_a_self_watch_write() {
+        let mut remote = others_watch_write();
+        remote["payload"]["watcher_actor_id"] =
+            json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(WRITER).unwrap(),
+                DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+            )));
+        check(&[remote.clone()]).expect_err("another Account requires its own audit pair");
+        remote["payload"]["level"] = json!("muted");
+        let error = validate_strand_watch_manage_others_levels(
+            arkret_wire::EventKind::StrandWatchSet.as_str(),
+            remote.as_object().unwrap(),
+            &actor(WRITER),
+        )
+        .expect_err("muting another Account is not a self write");
+        assert_eq!(
+            error.code,
+            arkret_wire::ReasonCode::WATCH_MUTED_MUST_BE_SELF
+        );
     }
 
     #[test]
@@ -439,7 +474,7 @@ mod tests {
         let error = validate_strand_watch_manage_others_levels(
             arkret_wire::EventKind::StrandWatchSet.as_str(),
             old_direction.as_object().unwrap(),
-            WRITER,
+            &actor(WRITER),
         )
         .expect_err("the write must not carry the audit_pair edge");
         assert_eq!(
@@ -450,7 +485,7 @@ mod tests {
         validate_strand_watch_manage_others_levels(
             arkret_wire::EventKind::StrandWatchSet.as_str(),
             others_watch_write().as_object().unwrap(),
-            WRITER,
+            &actor(WRITER),
         )
         .expect("the one-way shape is admissible");
     }
@@ -463,7 +498,7 @@ mod tests {
             validate_strand_watch_manage_others_levels(
                 arkret_wire::EventKind::StrandWatchSet.as_str(),
                 muted.as_object().unwrap(),
-                WRITER,
+                &actor(WRITER),
             )
             .expect_err("muted cannot be written for someone else")
             .code,
@@ -476,7 +511,7 @@ mod tests {
             validate_strand_watch_manage_others_levels(
                 arkret_wire::EventKind::StrandWatchSet.as_str(),
                 public.as_object().unwrap(),
-                WRITER,
+                &actor(WRITER),
             )
             .expect_err("level_public is a personal opt-in")
             .code,
@@ -487,7 +522,7 @@ mod tests {
     #[test]
     fn the_audit_writer_must_be_the_audit_events_own_actor() {
         let mut impersonating = paired_audit();
-        impersonating["actor_id"] = json!(TARGET);
+        impersonating["actor_id"] = json!(actor(TARGET));
         let error = validate_audit_accessed_payload(
             arkret_wire::EventKind::AuditAccessed.as_str(),
             impersonating.as_object().unwrap(),

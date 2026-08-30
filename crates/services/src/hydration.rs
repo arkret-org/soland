@@ -1273,7 +1273,7 @@ pub fn reconcile_hydrated_agent_memberships(
         };
         if !entry
             .members
-            .contains(&binding.controller_authority.principal_id)
+            .contains(&binding.controller_account_id.principal_id)
         {
             entry.members.remove(&agent_id);
         }
@@ -1323,12 +1323,8 @@ pub fn hydrate_realm_member_state_event(
         return;
     }
     let Some(member) = payload
-        .and_then(|payload| payload.get("actor_id"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| Some(record.actor_id.clone()))
-        .filter(|value| !value.trim().is_empty())
+        .and_then(|payload| payload.get("member_id"))
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
     else {
         return;
     };
@@ -1344,9 +1340,9 @@ pub fn hydrate_realm_member_state_event(
     let Ok(realm_id) = RealmId::new(realm_id) else {
         return;
     };
-    let Ok(member) = DidCoreId::new(member) else {
-        return;
-    };
+    // Directory entries are a principal-only discovery index, never the
+    // authority used for membership or delivery admission.
+    let member = member.signing_principal_id().clone();
     let Some(entry) = realms.get_mut(&realm_id) else {
         // No directory entry yet (create event not seen / pruned) — nothing to
         // attach the membership to.
@@ -1390,7 +1386,7 @@ pub async fn hydrate_realm_create_event(
         tracing::warn!(realm_id = %realm_id, "skipping persisted realm.create with invalid realm_id");
         return;
     };
-    let Ok(actor) = DidCoreId::new(record.actor_id.clone()) else {
+    let Ok(actor) = serde_json::from_str::<arkret_wire::ActorId>(&record.actor_id) else {
         tracing::warn!(actor = %record.actor_id, "skipping persisted realm.create with invalid actor");
         return;
     };
@@ -1477,7 +1473,7 @@ pub async fn hydrate_realm_create_event(
         .and_then(Value::as_str)
         == Some("direct_conversation");
     if create_seeds_membership {
-        entry.members.insert(actor);
+        entry.members.insert(actor.signing_principal_id().clone());
     }
     entry.as_of = record.received_at;
     entry.policy_revision = preview_policy_digest
@@ -1611,7 +1607,7 @@ mod agent_membership_reconcile_tests {
         projection.agent_membership_bindings.insert(
             (realm_id.to_string(), agent.to_string()),
             AgentControllerMembershipBinding {
-                controller_authority: AccountId::new(
+                controller_account_id: AccountId::new(
                     controller,
                     DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
                 ),

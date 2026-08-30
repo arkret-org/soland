@@ -30,6 +30,7 @@ mod service_registration;
 // SPEC-CR-001 — RFC 9421 sender-constrained (PoP) verification hoop for the
 // `/_arkret/self/*` surface. pub(in crate::routing) so `routing::mod` can mount
 // `verify_session_pop` on the self routers.
+pub(crate) mod session_actor;
 pub(in crate::routing) mod session_pop;
 pub(crate) mod webvh_validation;
 

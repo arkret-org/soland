@@ -348,7 +348,7 @@ struct CountRow {
 #[derive(QueryableByName)]
 struct CompactReceiptAuthorityRow {
     #[diesel(sql_type = Text)]
-    requester_actor_id: arkret_wire::DidCoreId,
+    requester_actor_id: String,
     #[diesel(sql_type = Text)]
     release_id: arkret_wire::DidCoreId,
 }

@@ -449,8 +449,7 @@ impl ProjectionState {
             .filter(|(_, relation)| relation.relation_kind == "contains")
             .filter(|(_, relation)| {
                 relation
-                    .from_ref
-                    .as_deref()
+                    .from_object_ref()
                     .is_some_and(|from_ref| affected_container_ids.contains(from_ref))
                     || relation
                         .fields
@@ -460,8 +459,7 @@ impl ProjectionState {
             })
             .filter_map(|(relation_id, relation)| {
                 relation
-                    .to_ref
-                    .as_deref()
+                    .to_object_ref()
                     .filter(|strand_id| strand_id.starts_with("ak:strand:"))
                     .map(|strand_id| (relation_id.clone(), strand_id.to_owned()))
             })

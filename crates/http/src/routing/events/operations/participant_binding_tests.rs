@@ -19,6 +19,13 @@ const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
 const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
+fn participant_actor(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal).unwrap(),
+        crate::test_event::station_id(),
+    ))
+}
+
 fn test_config() -> crate::config::AppConfig {
     crate::config::AppConfig {
         object_storage: crate::config::ObjectStorageConfig::local(
@@ -81,7 +88,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
         "realm_id": REALM_ID,
         "call_id": CALL_ID,
         "focus_id": FOCUS_ID,
-        "actor_id": ACTOR_ID,
+        "actor_id": participant_actor(ACTOR_ID),
         "device_id": DEVICE_ID,
         "participant_id": PARTICIPANT_IDENTITY,
         "issued_at": issued_at,
@@ -107,7 +114,7 @@ fn call_state_op(binding: Value) -> Operation {
             "roster_delta": {
                 "op": "join",
                 "participant": {
-                    "actor_id": ACTOR_ID,
+                    "actor_id": participant_actor(ACTOR_ID),
                     "device_id": DEVICE_ID,
                     "participant_id": PARTICIPANT_IDENTITY,
                     "participant_binding": binding,
@@ -126,7 +133,8 @@ fn legal_self_signed_binding_passes_full_crypto_verification() {
     let state = AppState::new(test_config(), Db { pool: None });
     install_media_service(&state, ISSUER_KID);
     let op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
-    assert!(validate_operation_semantics(&state, std::slice::from_ref(&op)).is_ok());
+    validate_operation_semantics(&state, std::slice::from_ref(&op))
+        .expect("valid full-Actor participant binding");
 }
 
 #[test]
@@ -136,16 +144,31 @@ fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
     let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     // Flip the signed actor_id without re-signing → signature no longer
     // covers these bytes.
-    binding["actor_id"] = json!("ak:did_core:webvh:z6mkmallory");
+    binding["actor_id"] = json!(participant_actor("ak:did_core:webvh:z6mkmallory"));
     let mut op = call_state_op(binding);
     // Keep the participant entry consistent with the tampered binding so the
     // mismatch is caught by the signature, not the field cross-check.
-    op.payload["roster_delta"]["participant"]["actor_id"] = json!("ak:did_core:webvh:z6mkmallory");
+    op.payload["roster_delta"]["participant"]["actor_id"] =
+        json!(participant_actor("ak:did_core:webvh:z6mkmallory"));
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("participant_binding_invalid"),
         "expected participant_binding_invalid, got {err}"
     );
+}
+
+#[test]
+fn same_principal_at_another_station_does_not_match_participant_binding() {
+    let state = AppState::new(test_config(), Db { pool: None });
+    install_media_service(&state, ISSUER_KID);
+    let mut op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
+    op.payload["roster_delta"]["participant"]["actor_id"] =
+        json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(ACTOR_ID).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        )));
+    let error = validate_operation_semantics(&state, &[op]).unwrap_err();
+    assert!(error.starts_with("participant_binding_invalid"));
 }
 
 #[test]
@@ -240,8 +263,9 @@ fn signing_input_matches_spec_construction() {
     expected.extend_from_slice(ParticipantBinding::SCHEMA.as_bytes());
     expected.push(0);
     // canonical-json is key-sorted (alphabetical) over the seven fields only.
+    let actor_json = participant_actor(ACTOR_ID).to_string();
     let expected_json = format!(
-        "{{\"actor_id\":\"{ACTOR_ID}\",\"call_id\":\"{CALL_ID}\",\
+        "{{\"actor_id\":{actor_json},\"call_id\":\"{CALL_ID}\",\
          \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00.000Z\",\
          \"focus_id\":\"{FOCUS_ID}\",\"participant_id\":\"{PARTICIPANT_IDENTITY}\",\
          \"realm_id\":\"{REALM_ID}\"}}"

@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use arkret_models_collaboration::objects::relation::{
-    RelationCardinality, RelationConflictPolicy, RelationProfile, RelationScope,
+    RelationCardinality, RelationConflictPolicy, RelationEndpoint, RelationProfile, RelationScope,
 };
 
 use super::*;
@@ -63,15 +63,21 @@ impl ProjectionState {
             .to_owned();
         let from_ref = relation
             .get("from_ref")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
+            .cloned()
+            .and_then(|value| serde_json::from_value::<RelationEndpoint>(value).ok());
         let to_ref = relation
             .get("to_ref")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned);
-        if let Some(target_ref) =
-            self.missing_relation_endpoint(from_ref.as_deref(), to_ref.as_deref())
-        {
+            .cloned()
+            .and_then(|value| serde_json::from_value::<RelationEndpoint>(value).ok());
+        if from_ref.is_none() || to_ref.is_none() {
+            return ProjectionEffect::Rejected {
+                reason: "relation_endpoint_invalid".to_owned(),
+            };
+        }
+        if let Some(target_ref) = self.missing_relation_endpoint(
+            from_ref.as_ref().and_then(RelationEndpoint::as_object_ref),
+            to_ref.as_ref().and_then(RelationEndpoint::as_object_ref),
+        ) {
             return self.queue_pending_replay(target_ref, operation, "relation_endpoint_unknown");
         }
         let fields = relation
@@ -137,13 +143,13 @@ impl ProjectionState {
             candidate.validate_cardinality_consistency()?;
             if !self.relation_profile_matches_endpoint(
                 candidate.from_kind.as_deref(),
-                relation.from_ref.as_deref(),
+                relation.from_ref.as_ref(),
             ) {
                 continue;
             }
             if !self.relation_profile_matches_endpoint(
                 candidate.to_kind.as_deref(),
-                relation.to_ref.as_deref(),
+                relation.to_ref.as_ref(),
             ) {
                 continue;
             }
@@ -180,12 +186,18 @@ impl ProjectionState {
     fn relation_profile_matches_endpoint(
         &self,
         type_constraint: Option<&str>,
-        object_ref: Option<&str>,
+        endpoint: Option<&RelationEndpoint>,
     ) -> bool {
         let Some(type_constraint) = type_constraint else {
             return true;
         };
-        let Some(object_ref) = object_ref else {
+        let Some(endpoint) = endpoint else {
+            return false;
+        };
+        if type_constraint == "actor" {
+            return endpoint.as_actor_id().is_some();
+        }
+        let Some(object_ref) = endpoint.as_object_ref() else {
             return false;
         };
         // A relation profile's type constraint is satisfied only by a
@@ -193,7 +205,6 @@ impl ProjectionState {
         // kind's payload shape, so an `ak:<kind>:` prefix on its own is not
         // the constraint's value space.
         match type_constraint {
-            "did" => arkret_identifiers::Did::new(object_ref).is_ok(),
             "realm" => arkret_identifiers::RealmId::new(object_ref).is_ok(),
             "space" => arkret_identifiers::SpaceId::new(object_ref).is_ok(),
             "space:board" => self
@@ -454,7 +465,7 @@ impl ProjectionState {
     ) -> Result<Option<String>, &'static str> {
         if !matches!(
             relation_kind,
-            "contains" | "belongs_to" | "confidential_discussion_of"
+            "contains" | "belongs_to" | "confidential_discussion_of" | "assigned_to"
         ) {
             return Ok(None);
         }
@@ -567,6 +578,7 @@ impl ProjectionState {
                 relation_kind,
                 relation.get("from_ref").and_then(Value::as_str),
             )?;
+            validate_relation_endpoint_shape(relation, relation_kind)?;
             self.check_relation_cross_realm(operation)?;
             self.check_relation_effective_scope(
                 operation.realm_id.as_str(),
@@ -581,6 +593,22 @@ impl ProjectionState {
             let patch = relation_update_patch(&operation.payload);
             if let Some(patch) = patch {
                 validate_patch_semantic_safety(patch, Some("relation"))?;
+                if patch
+                    .keys()
+                    .any(|path| path.starts_with("from_ref.") || path.starts_with("to_ref."))
+                {
+                    return Err("relation_endpoint_invalid");
+                }
+                for name in ["from_ref", "to_ref"] {
+                    if let Some(value) = patch.get(name) {
+                        match patch_action(value) {
+                            PatchAction::Set(value)
+                                if serde_json::from_value::<RelationEndpoint>(value.clone())
+                                    .is_ok() => {}
+                            _ => return Err("relation_endpoint_invalid"),
+                        }
+                    }
+                }
                 // A patch that names a derived kind is a direct write even when
                 // the target Relation has not been observed locally yet, so
                 // this decision must not wait for the pre-state lookup.
@@ -599,7 +627,7 @@ impl ProjectionState {
             // owns.
             Self::check_relation_direct_write(
                 relation.relation_kind.as_str(),
-                relation.from_ref.as_deref(),
+                relation.from_object_ref(),
             )?;
             if let Some(patch) = patch
                 && let Some(next_scope) = patch_string_value(patch, "scope_circle_id")
@@ -618,9 +646,13 @@ impl ProjectionState {
             }
             Self::check_relation_direct_write(
                 patched.relation_kind.as_str(),
-                patched.from_ref.as_deref(),
+                patched.from_object_ref(),
             )?;
             let relation_kind = patched.relation_kind.clone();
+            validate_relation_endpoint_shape(
+                &relation_scope_check_object(&patched),
+                &relation_kind,
+            )?;
             self.check_relation_effective_scope(
                 operation.realm_id.as_str(),
                 &relation_scope_check_object(&patched),
@@ -641,7 +673,7 @@ impl ProjectionState {
             if let Some(relation) = self.relations.get(relation_id) {
                 Self::check_relation_direct_write(
                     relation.relation_kind.as_str(),
-                    relation.from_ref.as_deref(),
+                    relation.from_object_ref(),
                 )?;
             }
         }
@@ -901,6 +933,42 @@ fn relation_update_patch(payload: &Value) -> Option<&serde_json::Map<String, Val
 }
 
 /// Apply an `ak.schema.patch.v1` patch to a materialized Relation.
+fn patch_relation_endpoint(
+    patch: &serde_json::Map<String, Value>,
+    name: &str,
+) -> Option<Option<RelationEndpoint>> {
+    match patch.get(name).map(patch_action)? {
+        PatchAction::Set(value) => serde_json::from_value(value.clone()).ok().map(Some),
+        PatchAction::Unset => Some(None),
+        PatchAction::Ignore => None,
+    }
+}
+
+fn validate_relation_endpoint_shape(relation: &Value, kind: &str) -> Result<(), &'static str> {
+    let parse = |name: &str| {
+        relation
+            .get(name)
+            .cloned()
+            .ok_or("relation_endpoint_invalid")
+            .and_then(|value| {
+                serde_json::from_value::<RelationEndpoint>(value)
+                    .map_err(|_| "relation_endpoint_invalid")
+            })
+    };
+    let from = parse("from_ref")?;
+    let to = parse("to_ref")?;
+    if kind == "assigned_to"
+        && (to.as_actor_id().is_none()
+            || !from
+                .as_object_ref()
+                .is_some_and(|value| value.starts_with("ak:strand:")))
+    {
+        return Err("relation_endpoint_invalid");
+    }
+    Ok(())
+}
+
+/// Apply an `ak.schema.patch.v1` patch to a materialized Relation.
 ///
 /// Patch paths are `relation.schema.json` field names: `relation_kind`,
 /// `from_ref`, `to_ref`, `scope_circle_id` at the object root, and edge
@@ -913,10 +981,10 @@ fn apply_relation_patch(
     if let Some(Some(relation_kind)) = patch_string_value(patch, "relation_kind") {
         relation.relation_kind = relation_kind;
     }
-    if let Some(from_ref) = patch_string_value(patch, "from_ref") {
+    if let Some(from_ref) = patch_relation_endpoint(patch, "from_ref") {
         relation.from_ref = from_ref;
     }
-    if let Some(to_ref) = patch_string_value(patch, "to_ref") {
+    if let Some(to_ref) = patch_relation_endpoint(patch, "to_ref") {
         relation.to_ref = to_ref;
     }
     if let Some(scope_circle_id) = patch_string_value(patch, "scope_circle_id") {
@@ -931,10 +999,16 @@ fn apply_relation_patch(
 fn relation_scope_check_object(relation: &SolandRelationState) -> Value {
     let mut object = serde_json::Map::new();
     if let Some(from_ref) = &relation.from_ref {
-        object.insert("from_ref".to_owned(), Value::String(from_ref.clone()));
+        object.insert(
+            "from_ref".to_owned(),
+            serde_json::to_value(from_ref).expect("typed Relation endpoint serializes"),
+        );
     }
     if let Some(to_ref) = &relation.to_ref {
-        object.insert("to_ref".to_owned(), Value::String(to_ref.clone()));
+        object.insert(
+            "to_ref".to_owned(),
+            serde_json::to_value(to_ref).expect("typed Relation endpoint serializes"),
+        );
     }
     if let Some(scope_circle_id) = &relation.scope_circle_id {
         object.insert(
@@ -1066,6 +1140,81 @@ mod cross_realm_relation_tests {
             .insert(STRAND_A3.to_owned(), strand_in(REALM_A));
         proj.strands.insert(STRAND_B.to_owned(), strand_in(REALM_B));
         proj
+    }
+
+    #[test]
+    fn same_principal_station_assignments_keep_distinct_edges_and_tombstones() {
+        let actor = |station: &str| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new("ak:did_core:web:assignee.example").unwrap(),
+                arkret_identifiers::DidCoreId::new(format!("ak:did_core:web:{station}")).unwrap(),
+            ))
+        };
+        let first_actor = actor("station-a.example");
+        let second_actor = actor("station-b.example");
+        let mut first = relation_op_with_digest(
+            "000000000a01",
+            "assigned_to",
+            STRAND_A,
+            STRAND_A2,
+            &format!("sha256:{}", "1".repeat(64)),
+        );
+        first.payload["relation"]["to_ref"] = json!(first_actor);
+        let mut second = relation_op_with_digest(
+            "000000000a02",
+            "assigned_to",
+            STRAND_A,
+            STRAND_A2,
+            &format!("sha256:{}", "2".repeat(64)),
+        );
+        second.payload["relation"]["to_ref"] = json!(second_actor);
+        let mut projection = proj();
+        for operation in [&first, &second] {
+            assert!(matches!(
+                projection.apply_relation_create(operation, chrono::Utc::now()),
+                ProjectionEffect::RelationCreated(_)
+            ));
+        }
+        let first_id = relation_id_of(&first);
+        let second_id = relation_id_of(&second);
+        assert!(projection.relations[&first_id].is_active());
+        assert!(projection.relations[&second_id].is_active());
+        assert_eq!(
+            projection.relations[&first_id]
+                .to_ref
+                .as_ref()
+                .and_then(RelationEndpoint::as_actor_id),
+            Some(&first_actor)
+        );
+        assert_eq!(
+            projection.relations[&second_id]
+                .to_ref
+                .as_ref()
+                .and_then(RelationEndpoint::as_actor_id),
+            Some(&second_actor)
+        );
+        assert!(projection.relation_profile_matches_endpoint(
+            Some("actor"),
+            projection.relations[&first_id].to_ref.as_ref()
+        ));
+        let remove = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000a03",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A).unwrap(),
+            arkret_wire::EventKind::RelationTombstone.as_str(),
+            json!({"relation_id":first_id}),
+        );
+        projection.apply_relation_delete(&remove);
+        assert!(!projection.relations[&first_id].is_active());
+        assert!(projection.relations[&second_id].is_active());
+        let mut invalid = first.clone();
+        invalid.payload["relation"]["to_ref"] = json!(first_actor.to_string());
+        assert_eq!(
+            projection.check_relation_invariants(&invalid),
+            Err("relation_endpoint_invalid")
+        );
     }
 
     fn circle() -> CircleProjection {
@@ -1211,8 +1360,8 @@ mod cross_realm_relation_tests {
             proj.relations
                 .values()
                 .filter(|relation| relation.relation_kind == "references")
-                .filter(|relation| relation.from_ref.as_deref() == Some(STRAND_A))
-                .filter(|relation| relation.to_ref.as_deref() == Some(STRAND_A2))
+                .filter(|relation| relation.from_object_ref() == Some(STRAND_A))
+                .filter(|relation| relation.to_object_ref() == Some(STRAND_A2))
                 .count(),
             RELATION_CONFLICT_FANOUT_LIMIT
         );
@@ -1235,8 +1384,18 @@ mod cross_realm_relation_tests {
                 realm_id: REALM_A.to_owned(),
                 relation_kind: "watches".to_owned(),
                 scope_circle_id: None,
-                from_ref: Some("ak:did_core:web:alice.example".to_owned()),
-                to_ref: Some(STRAND_A.to_owned()),
+                from_ref: Some(
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example")
+                            .unwrap(),
+                        arkret_identifiers::DidCoreId::new(
+                            "ak:did_core:web:fixture-station.example",
+                        )
+                        .unwrap(),
+                    ))
+                    .into(),
+                ),
+                to_ref: Some(STRAND_A.into()),
                 fields: Default::default(),
                 state: "active".to_owned(),
                 source_event_id: None,
@@ -1341,7 +1500,7 @@ mod cross_realm_relation_tests {
         ));
         let after = &proj.relations[relation_id.as_str()];
         assert_eq!(after.fields["label"], "patched");
-        assert_eq!(after.to_ref.as_deref(), Some(STRAND_A3));
+        assert_eq!(after.to_object_ref(), Some(STRAND_A3));
     }
 
     /// The scope-immutability and derived-edge rules are now decided from the
@@ -1415,21 +1574,21 @@ mod cross_realm_relation_tests {
     fn assigned_to_allows_multiple_actors_but_dedupes_same_tuple() {
         let mut proj = proj();
         let now = chrono::Utc::now();
-        let alice_old = relation_op_with_digest(
+        let mut alice_old = relation_op_with_digest(
             "000000000f01",
             "assigned_to",
             STRAND_A,
             "ak:did_core:web:alice.example",
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         );
-        let bob = relation_op_with_digest(
+        let mut bob = relation_op_with_digest(
             "000000000f02",
             "assigned_to",
             STRAND_A,
             "ak:did_core:web:bob.example",
             "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         );
-        let alice_new = relation_op_with_digest(
+        let mut alice_new = relation_op_with_digest(
             "000000000f03",
             "assigned_to",
             STRAND_A,
@@ -1437,6 +1596,19 @@ mod cross_realm_relation_tests {
             "sha256:3333333333333333333333333333333333333333333333333333333333333333",
         );
 
+        for (operation, principal) in [
+            (&mut alice_old, "alice.example"),
+            (&mut bob, "bob.example"),
+            (&mut alice_new, "alice.example"),
+        ] {
+            operation.payload["relation"]["to_ref"] =
+                json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_identifiers::DidCoreId::new(format!("ak:did_core:web:{principal}"))
+                        .unwrap(),
+                    arkret_identifiers::DidCoreId::new("ak:did_core:web:fixture-station.example")
+                        .unwrap(),
+                )));
+        }
         proj.apply_relation_create(&alice_old, now);
         proj.apply_relation_create(&bob, now);
         proj.apply_relation_create(&alice_new, now);
@@ -1593,8 +1765,8 @@ mod cross_realm_relation_tests {
                 realm_id: REALM_A.to_owned(),
                 relation_kind: "contains".to_owned(),
                 scope_circle_id: None,
-                from_ref: Some(SPACE_A.to_owned()),
-                to_ref: Some(STRAND_A.to_owned()),
+                from_ref: Some(SPACE_A.into()),
+                to_ref: Some(STRAND_A.into()),
                 fields: Default::default(),
                 state: "active".to_owned(),
                 source_event_id: None,
@@ -1646,8 +1818,8 @@ mod cross_realm_relation_tests {
                 realm_id: REALM_A.to_owned(),
                 relation_kind: "contains".to_owned(),
                 scope_circle_id: None,
-                from_ref: Some(SPACE_A.to_owned()),
-                to_ref: Some(STRAND_A.to_owned()),
+                from_ref: Some(SPACE_A.into()),
+                to_ref: Some(STRAND_A.into()),
                 fields: Default::default(),
                 state: "active".to_owned(),
                 source_event_id: None,
@@ -1685,20 +1857,34 @@ mod relation_endpoint_typing_tests {
     #[test]
     fn type_constraints_reject_a_kind_prefix_without_a_canonical_payload() {
         let projection = ProjectionState::new();
-        assert!(projection.relation_profile_matches_endpoint(Some("event"), Some(EVENT_A)));
-        assert!(!projection.relation_profile_matches_endpoint(Some("event"), Some("ak:event:x")));
-        assert!(projection.relation_profile_matches_endpoint(Some("message"), Some(MESSAGE_A)));
-        assert!(projection.relation_profile_matches_endpoint(Some("message"), Some(EVENT_A)));
+        assert!(projection.relation_profile_matches_endpoint(Some("event"), Some(&EVENT_A.into())));
         assert!(
-            !projection.relation_profile_matches_endpoint(Some("message"), Some("ak:message:1"))
+            !projection
+                .relation_profile_matches_endpoint(Some("event"), Some(&"ak:event:x".into()))
         );
-        assert!(projection.relation_profile_matches_endpoint(Some("strand"), Some(STRAND)));
-        assert!(!projection.relation_profile_matches_endpoint(Some("strand"), Some("ak:strand:a")));
+        assert!(
+            projection.relation_profile_matches_endpoint(Some("message"), Some(&MESSAGE_A.into()))
+        );
+        assert!(
+            projection.relation_profile_matches_endpoint(Some("message"), Some(&EVENT_A.into()))
+        );
+        assert!(
+            !projection
+                .relation_profile_matches_endpoint(Some("message"), Some(&"ak:message:1".into()))
+        );
+        assert!(projection.relation_profile_matches_endpoint(Some("strand"), Some(&STRAND.into())));
+        assert!(
+            !projection
+                .relation_profile_matches_endpoint(Some("strand"), Some(&"ak:strand:a".into()))
+        );
         assert!(projection.relation_profile_matches_endpoint(
             Some("blob"),
-            Some(&format!("ak:blob:sha256:{}", "a".repeat(64)))
+            Some(&format!("ak:blob:sha256:{}", "a".repeat(64)).into())
         ));
-        assert!(!projection.relation_profile_matches_endpoint(Some("blob"), Some("ak:blob:abc")));
+        assert!(
+            !projection
+                .relation_profile_matches_endpoint(Some("blob"), Some(&"ak:blob:abc".into()))
+        );
     }
 
     #[test]

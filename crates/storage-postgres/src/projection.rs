@@ -52,13 +52,13 @@ struct SpaceContainerProjectionRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Text)]
-    created_by: arkret_wire::DidCoreId,
+    created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<arkret_wire::DidCoreId>,
+    updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -261,13 +261,13 @@ struct StrandProjectionRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Text)]
-    created_by: arkret_wire::DidCoreId,
+    created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<arkret_wire::DidCoreId>,
+    updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -442,13 +442,13 @@ struct MorphProjectionRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Text)]
-    created_by: arkret_wire::DidCoreId,
+    created_by: String,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
     #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<arkret_wire::DidCoreId>,
+    updated_by: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -913,9 +913,9 @@ struct CircleProjectionRow {
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Text)]
-    created_by: arkret_wire::DidCoreId,
+    created_by: String,
     #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<arkret_wire::DidCoreId>,
+    updated_by: Option<String>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -961,7 +961,7 @@ struct CircleMemberProjectionRow {
     #[diesel(sql_type = Binary)]
     circle_id: Vec<u8>,
     #[diesel(sql_type = Text)]
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: String,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -1177,7 +1177,7 @@ struct StrandWatchProjectionRow {
     #[diesel(sql_type = Binary)]
     strand_id: Vec<u8>,
     #[diesel(sql_type = Text)]
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: String,
     #[diesel(sql_type = Nullable<Text>)]
     level: Option<String>,
     #[diesel(sql_type = Bool)]

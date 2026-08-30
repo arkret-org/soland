@@ -1408,12 +1408,12 @@ mod consent_proof_tests {
             1,
             Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
             json!({
-                "principal_id": request.actor_id,
+                "principal_id": request.actor_id.signing_principal_id(),
                 "device_id": device_id,
                 "device_public_key_did": device_public_key,
                 "hpke_key": "z6LSTestMimiConsentDeviceHpkeKey",
                 "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-                "authorized_by": request.actor_id,
+                "authorized_by": request.actor_id.signing_principal_id(),
                 "not_before": "2026-05-25T00:00:00.000Z",
                 "authorization_binding_kind": "registration_anchor",
                 "device_signature": "c2ln"
@@ -1468,11 +1468,11 @@ mod consent_proof_tests {
         state
             .identities()
             .save_device(SaveDeviceCommand {
-                actor_id: request.actor_id.to_string(),
+                actor_id: request.actor_id.signing_principal_id().to_string(),
                 device_id: device_id.to_string(),
                 display_name: None,
                 device: DeviceIdentity {
-                    actor_id: request.actor_id.to_string(),
+                    actor_id: request.actor_id.signing_principal_id().to_string(),
                     device_id: device_id.to_string(),
                     display_name: None,
                     verification_state: "verified".to_owned(),
@@ -1537,11 +1537,22 @@ mod consent_proof_tests {
                 request.actor_id.signing_principal_id().clone(),
                 DidCoreId::new("ak:did_core:web:other-station.invalid".to_owned()).unwrap(),
             ));
+        request.actor_id = request.consent_event.event.actor_id.clone();
         request
             .consent_event
             .event
             .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();
+
+        request.signature.payload_digest = request.payload_digest().unwrap();
+        let signing_key = arkret_signatures::development_signing_key(
+            request.signature.verification_method.as_str(),
+        );
+        request.signature.jws = arkret_signatures::jws::sign_jws_ed25519(
+            &request.signature_binding_bytes().unwrap(),
+            &signing_key,
+        )
+        .unwrap();
 
         let error = verify_mimi_consent_actor_proof(&state, &request)
             .await

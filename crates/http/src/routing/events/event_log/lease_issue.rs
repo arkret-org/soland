@@ -341,11 +341,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         })?;
         (
             events[0].realm_id.as_str().to_owned(),
-            events[0]
-                .actor_id
-                .signing_principal_id()
-                .as_str()
-                .to_owned(),
+            events[0].actor_id.to_string(),
             true,
             None,
         )
@@ -359,11 +355,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
     {
         (
             events[0].realm_id.as_str().to_owned(),
-            events[0]
-                .actor_id
-                .signing_principal_id()
-                .as_str()
-                .to_owned(),
+            events[0].actor_id.to_string(),
             false,
             None,
         )
@@ -797,14 +789,27 @@ mod tests {
             7,
             json!({
                 "realm_id": REALM,
-                "actor_id": ACTOR_CORE,
-                "membership": "join",
-                "delivery_status": "unroutable"
+                "member_id": create.actor_id,
+                "membership": "join"
             }),
         );
+        let member_cell = arkret_schema::project_registered_cell_writes(
+            &creator_member,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|write| {
+            write
+                .cell_id
+                .as_str()
+                .starts_with("ak:cell:ak.component.member.state.v1:")
+        })
+        .unwrap()
+        .cell_id;
         creator_member.preconditions = vec![
             serde_json::from_value(json!({
-                "cell_id": format!("ak:cell:ak.component.member.state.v1:{ACTOR_CORE}"),
+                "cell_id": member_cell,
                 "predicate": { "op": "head_eq", "value": null }
             }))
             .expect("creator member head_eq precondition"),
@@ -848,9 +853,7 @@ mod tests {
             .authority_root
             .expect("staged authority root must survive lease pre-admission");
 
-        assert!(root.is_genesis_for(&arkret_wire::ActorId::service(
-            arkret_wire::DidCoreId::new(ACTOR_CORE).unwrap(),
-        )));
+        assert!(root.is_genesis_for(&events[0].actor_id));
     }
 
     #[test]

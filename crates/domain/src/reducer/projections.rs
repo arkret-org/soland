@@ -977,8 +977,8 @@ pub struct SolandRelationState {
     pub realm_id: String,
     pub relation_kind: String,
     pub scope_circle_id: Option<String>,
-    pub from_ref: Option<String>,
-    pub to_ref: Option<String>,
+    pub from_ref: Option<arkret_models_collaboration::objects::relation::RelationEndpoint>,
+    pub to_ref: Option<arkret_models_collaboration::objects::relation::RelationEndpoint>,
     pub fields: BTreeMap<String, Value>,
     pub state: String,
     pub source_event_id: Option<String>,
@@ -989,6 +989,19 @@ pub struct SolandRelationState {
 }
 
 impl SolandRelationState {
+    /// Object-only traversal; an Actor endpoint is not an object id.
+    pub fn from_object_ref(&self) -> Option<&str> {
+        self.from_ref
+            .as_ref()
+            .and_then(|endpoint| endpoint.as_object_ref())
+    }
+
+    pub fn to_object_ref(&self) -> Option<&str> {
+        self.to_ref
+            .as_ref()
+            .and_then(|endpoint| endpoint.as_object_ref())
+    }
+
     pub fn is_active(&self) -> bool {
         self.state == "active"
     }

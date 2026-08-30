@@ -6,7 +6,7 @@ use super::*;
 /// durable issuer signature is the surrounding Event envelope proof.
 pub(super) fn validate_capability_grant_body(
     kind: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
     if kind != arkret_wire::event_kind_str::CAPABILITY_GRANT {
@@ -22,7 +22,7 @@ pub(super) fn validate_capability_grant_body(
                 )
             },
         )?;
-    if payload.grant.issuer_id.signing_principal_id().as_str() != actor_id {
+    if &payload.grant.issuer_id != actor_id {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "invalid_proof",
@@ -38,7 +38,15 @@ mod tests {
 
     use super::*;
 
+    fn fixture_actor(actor: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(actor).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+        ))
+    }
+
     fn event(actor: &str) -> Value {
+        let actor = fixture_actor(actor);
         json!({
             "payload": {
                 "grant": {
@@ -46,7 +54,6 @@ mod tests {
                     "realm_id": "ak:realm:AcnJ4V0xcEtprkV1EojkpKLTdP6Jene1sZpnjB6IqB8I",
                     "issuer_id": actor,
                     "subject": actor,
-                    "subject_station_id": "ak:did_core:web:principal.example",
                     "actions": ["ak.realm.configure"],
                     "resources": [{
                         "kind": "realm",
@@ -72,7 +79,7 @@ mod tests {
         let event = event(actor);
         validate_capability_grant_body(
             arkret_wire::EventKind::CapabilityGrant.as_str(),
-            actor,
+            &fixture_actor(actor),
             event.as_object().unwrap(),
         )
         .expect("the Event proof is the sole durable signature");
@@ -85,7 +92,25 @@ mod tests {
         assert!(
             validate_capability_grant_body(
                 arkret_wire::EventKind::CapabilityGrant.as_str(),
-                "ak:did_core:web:mallory.example",
+                &fixture_actor("ak:did_core:web:mallory.example"),
+                event.as_object().unwrap(),
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_same_principal_at_another_station() {
+        let principal = "ak:did_core:web:alice.example";
+        let event = event(principal);
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert!(
+            validate_capability_grant_body(
+                arkret_wire::EventKind::CapabilityGrant.as_str(),
+                &actor,
                 event.as_object().unwrap(),
             )
             .is_err()

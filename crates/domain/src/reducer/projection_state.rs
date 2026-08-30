@@ -883,8 +883,8 @@ impl ProjectionState {
                 realm_id: realm_id.to_owned(),
                 relation_kind: "contains".to_owned(),
                 scope_circle_id: scope_circle_id.clone(),
-                from_ref: Some(list_space_id.to_owned()),
-                to_ref: Some(strand_id.to_owned()),
+                from_ref: Some(list_space_id.into()),
+                to_ref: Some(strand_id.into()),
                 fields: BTreeMap::new(),
                 state: "active".to_owned(),
                 source_event_id: None,
@@ -896,8 +896,8 @@ impl ProjectionState {
         relation.realm_id = realm_id.to_owned();
         relation.relation_kind = "contains".to_owned();
         relation.scope_circle_id = scope_circle_id;
-        relation.from_ref = Some(list_space_id.to_owned());
-        relation.to_ref = Some(strand_id.to_owned());
+        relation.from_ref = Some(list_space_id.into());
+        relation.to_ref = Some(strand_id.into());
         relation.fields.insert(
             "board_space_id".to_owned(),
             Value::String(board_space_id.to_owned()),

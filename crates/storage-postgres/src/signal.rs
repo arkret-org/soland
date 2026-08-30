@@ -28,7 +28,7 @@ struct SignalRelayRow {
     #[diesel(sql_type = Jsonb)]
     scope_ref: Value,
     #[diesel(sql_type = Text)]
-    sender_actor_id: arkret_wire::DidCoreId,
+    sender_actor_id: String,
     #[diesel(sql_type = Text)]
     sender_device_id: String,
     #[diesel(sql_type = Text)]

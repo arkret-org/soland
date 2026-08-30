@@ -579,11 +579,43 @@ async fn require_dispatchable_invite_event(
             "invite_event has not been accepted by this Station",
         ));
     };
-    let session_actor = DidCoreId::new(session.actor.clone())
+    let session_principal = DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    let accepted_actor = DidCoreId::new(accepted.actor_id.clone())
+    let session_station = DidCoreId::new(session.audience.clone())
+        .map_err(|error| AppError::internal(format!("session audience is invalid: {error}")))?;
+    let session_actor = if session.agent_session.is_some() {
+        arkret_wire::ActorId::hosted_principal(session_principal, session_station)
+    } else {
+        let account_pk = session
+            .account_pk
+            .ok_or_else(|| AppError::unauthenticated("session account binding is missing"))?;
+        let account = state
+            .identities()
+            .account_by_id(account_pk)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::unauthenticated("session account no longer exists"))?;
+        if account.account_id.principal_id != session_principal
+            || account.account_id.station_id != session_station
+        {
+            return Err(AppError::unauthenticated(
+                "session does not bind the stored account",
+            ));
+        }
+        arkret_wire::ActorId::account(account.account_id)
+    };
+    let accepted_actor: arkret_wire::ActorId = serde_json::from_str(&accepted.actor_id)
         .map_err(|error| AppError::internal(format!("stored Event actor is invalid: {error}")))?;
-    if accepted_actor != session_actor {
+    let event: arkret_wire::Event =
+        serde_json::from_value(accepted.envelope.clone()).map_err(|error| {
+            AppError::internal(format!("stored Event envelope is invalid: {error}"))
+        })?;
+    if event.actor_id != accepted_actor {
+        return Err(AppError::internal(
+            "stored Event actor does not match its canonical envelope",
+        ));
+    }
+    if event.executed_by.as_ref().unwrap_or(&accepted_actor) != &session_actor {
         return Err(invite_event_precondition(
             arkret_wire::ReasonCode::INVITE_EVENT_ACTOR_MISMATCH,
             "invite_event was not signed by the authenticated session actor",
@@ -1896,7 +1928,9 @@ fn handle_claim_evidence_valid(
     if &handle_claim.handle != handle {
         return false;
     }
-    if handle_claim.subject_account_id.principal_id.as_str() != subject {
+    if handle_claim.subject_account_id.principal_id.as_str() != subject
+        || handle_claim.subject_account_id.station_id.as_str() != recipient_id
+    {
         return false;
     }
     if handle_claim.binding_state != HandleBindingState::Verified {
@@ -2025,11 +2059,17 @@ fn validate_invite_delivery_event_binding(
         .pointer("/invite_event/payload")
         .and_then(Value::as_object)
         .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
-    if payload.get("invitee_id").and_then(Value::as_str)
-        != Some(delivery.invite_address.subject_id.as_str())
-    {
+    let invitee = payload
+        .get("invitee_account_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok());
+    let expected = arkret_wire::AccountId::new(
+        delivery.invite_address.subject_id.clone(),
+        delivery.invite_address.recipient_id.clone(),
+    );
+    if invitee.as_ref() != Some(&expected) {
         return Err(super::events::peer::schema_violation(
-            "invite_event.payload.invitee_id must equal invite_address.subject_id",
+            "invite_event.payload.invitee_account_id must bind invite_address subject and recipient Station",
         ));
     }
     let evidence_digest =
@@ -2186,14 +2226,16 @@ mod invite_locator_security_tests {
             "kind": arkret_wire::EventKind::InviteCreate.as_str(),
             "realm_id": PRODUCTION_REALM,
             "scope_ref": { "kind": "realm", "realm_id": PRODUCTION_REALM },
-            "actor_id": PRODUCTION_INVITER,
-            "station_id": state.service_id(),
+            "actor_id": {"kind": "account", "account_id": {
+                "principal_id": PRODUCTION_INVITER, "station_id": state.service_id()
+            }},
             "actor_seq": 0,
             "created_at": "2026-08-21T00:00:00.000Z",
             "prev_refs": [],
             "refs": [],
             "payload": {
-                "invitee_id": PRODUCTION_HOLDER,
+                "invitee_account_id": {"principal_id": PRODUCTION_HOLDER, "station_id": state.service_id()},
+                "introduction_evidence_digest": canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress).unwrap(),
                 "expires_at": "2099-01-01T00:00:00.000Z"
             },
             "proofs": []
@@ -2233,6 +2275,21 @@ mod invite_locator_security_tests {
             record.token_digest,
             format!("sha256:{}", sha256_hex(token.as_bytes()))
         );
+    }
+
+    #[tokio::test]
+    async fn invite_delivery_binding_rejects_same_principal_at_another_station() {
+        let state = production_holder_state().await;
+        let delivery = production_invite_delivery(&state);
+        let body = serde_json::to_value(&delivery).unwrap();
+        validate_invite_delivery_event_binding(&body, &delivery).unwrap();
+        let mut wrong_station = body.clone();
+        wrong_station["invite_event"]["payload"]["invitee_account_id"]["station_id"] =
+            json!("ak:did_core:web:another-station.example");
+        assert!(validate_invite_delivery_event_binding(&wrong_station, &delivery).is_err());
+        let mut bare_principal = body;
+        bare_principal["invite_event"]["payload"]["invitee_account_id"] = json!(PRODUCTION_HOLDER);
+        assert!(validate_invite_delivery_event_binding(&bare_principal, &delivery).is_err());
     }
 
     #[test]
@@ -2461,7 +2518,7 @@ mod invite_locator_security_tests {
         assert!(
             !deliver_invite_credential(
                 &state,
-                "did:web:carol.example",
+                "ak:did_core:web:carol.example",
                 "ak:did_core:web:alice.example",
                 &body,
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
@@ -2473,7 +2530,7 @@ mod invite_locator_security_tests {
             state
                 .account_data()
                 .entry(
-                    "did:web:carol.example",
+                    "ak:did_core:web:carol.example",
                     AccountDataKey::ACCOUNT_INVITE_DELIVERY
                 )
                 .await
@@ -2494,7 +2551,7 @@ mod invite_locator_security_tests {
         );
         let realm_id = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
         let invite_id = "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K";
-        let subject = "did:web:bob.example";
+        let subject = "ak:did_core:web:bob.example";
         let body = json!({
             "invite_event": {
                 "created_at": "2026-07-29T10:00:00.000Z",

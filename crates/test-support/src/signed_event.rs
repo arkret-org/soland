@@ -100,8 +100,7 @@ pub fn complete_realm_bootstrap_unit(
             serde_json::json!({
                 "realm_id": realm_id,
                 "member_id": member_id,
-                "membership": "join",
-                "delivery_status": "unroutable"
+                "membership": "join"
             }),
         ),
     ];

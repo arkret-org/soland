@@ -152,7 +152,7 @@ pub(crate) async fn validate_event_proofs(
     let root_anchored_candidate = typed_candidate.as_ref().and_then(|payload| {
         realm_bootstrap_contexts.iter().find_map(|context| {
             let candidate = context.identity_anchor_candidate_device.as_ref()?;
-            (context.actor_id == actor_id
+            (context.actor_id == event_actor.to_string()
                 && candidate.principal_id == payload.principal_id
                 && candidate.device_id == payload.device_id
                 && candidate.device_public_key_did == payload.device_public_key_did
@@ -167,8 +167,20 @@ pub(crate) async fn validate_event_proofs(
                 })
         })
     });
-    let ordinary_proof_root =
-        event_string_field(object, &["executed_by"]).unwrap_or_else(|| actor_id.to_owned());
+    let ordinary_proof_root = object
+        .get("executed_by")
+        .map(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()))
+        .transpose()
+        .map_err(|_| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "executed_by must be a full ActorId",
+            )
+        })?
+        .unwrap_or_else(|| event_actor.clone())
+        .signing_principal_id()
+        .to_string();
     let root_anchor_method = resolve_event_root_anchor_method(state, object, actor_id).await?;
     // §2.10.3 — minimal-metadata content Events authenticate authorship
     // against the active MLS LeafNode at the envelope's `(group_id, epoch,
@@ -1159,13 +1171,12 @@ mod tests {
         let service_did = state.service_resolution_commitment().did.clone();
         let verification_method = state.service_verification_method("notary-key").unwrap();
         let created_at = chrono::Utc::now();
-        let event = arkret_wire::test_support::raw_event_at(
+        let event = arkret_wire::test_support::raw_event_for_actor_at(
             arkret_wire::EventKind::ModerationFrankingProof.as_str(),
             arkret_wire::ScopeRef::Realm {
                 realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             },
-            actor_id.clone(),
-            actor_id.clone(),
+            arkret_wire::ActorId::service(actor_id.clone()),
             0,
             arkret_wire::Hlc::new("019041000000-0000-00000000".to_owned()).unwrap(),
             json!({
@@ -1219,7 +1230,9 @@ mod tests {
 
     fn event_with_verification_method(actor: &str, verification_method: &str) -> Value {
         json!({
-            "actor_id": actor,
+            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(actor).unwrap(), crate::test_event::station_id(),
+            )),
             "proofs": [{
                 "kind": "detached_jws",
                 "verification_method": verification_method,
@@ -1340,7 +1353,7 @@ mod tests {
         let object = object.as_object().unwrap();
         let admission = InternalEventAdmission::service_franking_proof(
             &realm_id,
-            state.service_id().as_str(),
+            event.event().actor_id.clone(),
             &target_event_id,
         );
 
@@ -1375,7 +1388,7 @@ mod tests {
         let object = object.as_object().unwrap();
         let admission = InternalEventAdmission::service_franking_proof(
             &realm_id,
-            state.service_id().as_str(),
+            event.event().actor_id.clone(),
             "ak:event:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
         );
 
