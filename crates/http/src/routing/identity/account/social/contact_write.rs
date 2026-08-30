@@ -790,7 +790,7 @@ async fn contact_authority_realm(
     };
     if authority.account_id != *holder_account_id
         || authority.pcr_realm_id != realm_id
-        || authority.account_id.principal_server_id.as_str() != state.service_id()
+        || authority.account_id.station_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1079,7 +1079,7 @@ async fn local_requester_current_proof(
     };
     if resolution.account_id.principal_id != *request_event.actor_id.signing_principal_id()
         || resolution.pcr_realm_id != request_event.realm_id
-        || resolution.account_id.principal_server_id.as_str() != state.service_id()
+        || resolution.account_id.station_id.as_str() != state.service_id()
     {
         return Ok(None);
     }
@@ -1960,7 +1960,7 @@ async fn contact_request_delivery_address(
     let address = PeerContactAddress::principal_server(
         account_id.principal_id.clone(),
         account_id.clone(),
-        account_id.principal_server_id.clone(),
+        account_id.station_id.clone(),
         service_resolution,
     );
     address

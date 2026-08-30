@@ -22,7 +22,7 @@ impl AccountStore for PgAccountStore {
         let row = sql_query(account_with_primary_localpart_select(
             "WHERE a.principal_server_id = $1 AND a.principal_id = $2",
         ))
-        .bind::<Text, _>(account_id.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .bind::<Text, _>(account_id.principal_id.as_str())
         .get_result::<AccountRow>(&mut *conn)
         .await
@@ -130,7 +130,7 @@ impl AccountStore for PgAccountStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query("DELETE FROM accounts WHERE principal_server_id = $1 AND principal_id = $2")
-            .bind::<Text, _>(account_id.principal_server_id.as_str())
+            .bind::<Text, _>(account_id.station_id.as_str())
             .bind::<Text, _>(account_id.principal_id.as_str())
             .execute(&mut *conn)
             .await

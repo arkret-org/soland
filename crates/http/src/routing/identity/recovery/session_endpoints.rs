@@ -516,7 +516,7 @@ pub(super) async fn recovery_session_create(
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
-    if principal_authority.principal_server_id.as_str() != state.service_id() {
+    if principal_authority.station_id.as_str() != state.service_id() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "principal_authority does not bind this Principal Server",
@@ -681,7 +681,7 @@ pub(super) async fn recovery_session_create(
         session_grant_id,
         session_grant_cnf_jkt,
         principal_id: principal_authority.principal_id.clone(),
-        principal_server_id: principal_authority.principal_server_id.clone(),
+        principal_server_id: principal_authority.station_id.clone(),
         requesting_device_id,
         trust_domain,
         policy_id: active.policy_id.clone(),

@@ -437,7 +437,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     PrincipalAuthorizedJwsError,
 > {
     let fail = |reason: String| PrincipalAuthorizedJwsError::Verification(reason);
-    if authority.principal_server_id.as_str() != state.service_id() {
+    if authority.station_id.as_str() != state.service_id() {
         return Err(fail(
             "principal authorization is addressed to a different Principal Server".to_owned(),
         ));
@@ -533,7 +533,7 @@ async fn principal_authorized_device_binding_with_account_authority_async(
         .get("principal_server_id")
         .and_then(Value::as_str);
     if authorize_event.actor_id != authority.principal_id.as_str()
-        || authorize_principal_server_id != Some(authority.principal_server_id.as_str())
+        || authorize_principal_server_id != Some(authority.station_id.as_str())
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(durable.pcr_realm_id.as_str())
     {

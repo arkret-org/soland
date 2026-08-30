@@ -1571,11 +1571,11 @@ pub(super) async fn accepted_event_envelope(
                 edge_index: 0,
                 item: dependency,
             });
-    let mut admission = arkret_wire::PrincipalServerAdmissionProof {
-        kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    let mut admission = arkret_wire::StationAdmissionProof {
+        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
         verification_method,
         event_digest,
-        producer_proof_digest: arkret_wire::PrincipalServerAdmissionProof::producer_proof_digest(
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(
             &producer,
         )
         .map_err(|error| {
@@ -1617,7 +1617,7 @@ pub(super) async fn accepted_event_envelope(
     })?;
     event.proofs.push(admission.into());
     event
-        .validate_principal_server_admission_binding(parsed.digest_suite)
+        .validate_station_admission_binding(parsed.digest_suite)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1680,7 +1680,7 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> 
         existing.proofs.as_slice(),
         [
             arkret_wire::EventProof::Producer(_),
-            arkret_wire::EventProof::PrincipalServerAdmission(_)
+            arkret_wire::EventProof::StationAdmission(_)
         ]
     ) || !matches!(
         submitted.proofs.as_slice(),
@@ -4032,9 +4032,9 @@ mod local_device_authorization_tests {
 
     fn admission_proof(
         producer: &arkret_wire::ProducerEventProof,
-    ) -> arkret_wire::PrincipalServerAdmissionProof {
-        arkret_wire::PrincipalServerAdmissionProof {
-            kind: arkret_wire::PrincipalServerAdmissionProofKind::PrincipalServerAdmission,
+    ) -> arkret_wire::StationAdmissionProof {
+        arkret_wire::StationAdmissionProof {
+            kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:QmService:local.host:webvh:service#notary-key",
             )
@@ -4069,7 +4069,7 @@ mod local_device_authorization_tests {
         let producer = producer_proof();
         let proofs = vec![
             arkret_wire::EventProof::Producer(producer.clone()),
-            arkret_wire::EventProof::PrincipalServerAdmission(admission_proof(&producer)),
+            arkret_wire::EventProof::StationAdmission(admission_proof(&producer)),
         ];
 
         assert_eq!(

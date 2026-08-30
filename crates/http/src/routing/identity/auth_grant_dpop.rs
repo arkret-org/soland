@@ -461,7 +461,7 @@ fn session_binding_from_introspection(
 ) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
     let authority = grant.principal_authority_key();
     if authority.principal_id != grant.subject_id
-        || authority.principal_server_id != grant.audience_id
+        || authority.station_id != grant.audience_id
     {
         return Err(unauthenticated(
             "session grant authority context does not match its subject/audience",

@@ -1063,7 +1063,7 @@ pub(super) async fn identical_historical_retry(
                     event.proofs.as_slice(),
                     [
                         arkret_wire::EventProof::Producer(_),
-                        arkret_wire::EventProof::PrincipalServerAdmission(_)
+                        arkret_wire::EventProof::StationAdmission(_)
                     ]
                 ) {
                     event.proofs.truncate(1);

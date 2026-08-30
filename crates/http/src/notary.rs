@@ -1875,7 +1875,7 @@ async fn local_service_is_eligible_availability_holder(
             | arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
     ) {
         create
-            .validate_principal_server_admission_binding(arkret_canonical::DigestSuite::Sha256)
+            .validate_station_admission_binding(arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {
                 NotaryError::Construction(format!(
                     "PCR create Principal Server admission binding is invalid: {error}"

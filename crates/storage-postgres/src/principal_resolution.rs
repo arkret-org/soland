@@ -86,7 +86,7 @@ impl PgPrincipalResolutionStore {
              WHERE p.principal_id = $1 AND p.principal_server_id = $2",
         )
         .bind::<Text, _>(account_id.principal_id.as_str())
-        .bind::<Text, _>(account_id.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .get_result::<CurrentRow>(&mut *conn)
         .await
         .optional()
@@ -185,7 +185,7 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                  SELECT EXISTS(SELECT 1 FROM updated) AS applied",
             )
             .bind::<Text, _>(next.account_id.principal_id.as_str())
-            .bind::<Text, _>(next.account_id.principal_server_id.as_str())
+            .bind::<Text, _>(next.account_id.station_id.as_str())
             .bind::<Text, _>(next.pcr_realm_id.as_str())
             .bind::<Text, _>(next.genesis_event.event_id.as_str())
             .bind::<Text, _>(expected)
@@ -221,7 +221,7 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                  SELECT EXISTS(SELECT 1 FROM inserted) AS applied",
             )
             .bind::<Text, _>(next.account_id.principal_id.as_str())
-            .bind::<Text, _>(next.account_id.principal_server_id.as_str())
+            .bind::<Text, _>(next.account_id.station_id.as_str())
             .bind::<Text, _>(next.pcr_realm_id.as_str())
             .bind::<Text, _>(next.genesis_event.event_id.as_str())
             .bind::<Jsonb, _>(&projection)
@@ -258,7 +258,7 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
                   WHERE principal_id = $1 AND principal_server_id = $2 AND event_id = $3) AS applied",
             )
             .bind::<Text, _>(account_id.principal_id.as_str())
-            .bind::<Text, _>(account_id.principal_server_id.as_str())
+            .bind::<Text, _>(account_id.station_id.as_str())
             .bind::<Text, _>(after)
             .get_result::<AppliedRow>(&mut *conn)
             .await
@@ -294,7 +294,7 @@ impl PrincipalResolutionStore for PgPrincipalResolutionStore {
               LIMIT $4",
         )
         .bind::<Text, _>(account_id.principal_id.as_str())
-        .bind::<Text, _>(account_id.principal_server_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .bind::<Nullable<Text>, _>(after_event_ref)
         .bind::<BigInt, _>(i64::try_from(limit).unwrap_or(i64::MAX))
         .load::<EventRow>(&mut *conn)

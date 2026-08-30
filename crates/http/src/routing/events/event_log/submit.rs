@@ -2226,11 +2226,11 @@ async fn verify_federated_event_admission(
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(arkret_wire::DidUrl, arkret_wire::DidKey), String> {
     event
-        .validate_principal_server_admission_binding(digest_suite)
+        .validate_station_admission_binding(digest_suite)
         .map_err(|error| error.to_string())?;
     let [
         arkret_wire::EventProof::Producer(producer),
-        arkret_wire::EventProof::PrincipalServerAdmission(admission),
+        arkret_wire::EventProof::StationAdmission(admission),
     ] = event.proofs.as_slice()
     else {
         return Err("accepted Event proof set is not closed".to_owned());
@@ -3196,7 +3196,7 @@ async fn prepare_agent_event_admission_receipt(
         return Ok(None);
     }
     let Some(admission) = event.proofs.iter().find_map(|proof| match proof {
-        arkret_wire::EventProof::PrincipalServerAdmission(value) => Some(value),
+        arkret_wire::EventProof::StationAdmission(value) => Some(value),
         arkret_wire::EventProof::Producer(_) => None,
     }) else {
         return Err("federated Event omitted its Principal Server admission proof".to_owned());
@@ -3287,7 +3287,7 @@ async fn load_agent_event_admission_receipt(
     event
         .proofs
         .iter()
-        .any(|proof| matches!(proof, arkret_wire::EventProof::PrincipalServerAdmission(_)))
+        .any(|proof| matches!(proof, arkret_wire::EventProof::StationAdmission(_)))
         .then_some(())
         .ok_or_else(|| "federated Event omitted its Principal Server admission proof".to_owned())?;
     let receiver_id = arkret_wire::DidCoreId::new(state.service_id().clone())
