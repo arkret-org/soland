@@ -1530,13 +1530,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             .bind::<Text, _>(&input.archive_replica.archive.mls_group_id)
             .bind::<BigInt, _>(epoch)
             .bind::<Text, _>(&input.archive_replica.archive.recovery_key_id)
-            .bind::<Text, _>(
-                &input
-                    .archive_replica
-                    .archive
-                    .holder_principal_id
-                    .to_string(),
-            )
+            .bind::<Text, _>(input.archive_replica.archive.holder_principal_id.as_str())
             .bind::<Text, _>(&input.archive_replica.archive.holder_id.to_string())
             .bind::<Text, _>(input.archive_replica.container_event_ref.as_str())
             .bind::<Text, _>(archive_tuple_digest.as_str())

@@ -59,7 +59,28 @@ async fn authz_check(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.actor_id.as_str() != session.actor {
+    let session_actor_id = if session.agent_session.is_none() {
+        let account_pk = session
+            .account_pk
+            .ok_or_else(|| AppError::unauthenticated("session has no account binding"))?;
+        let account = state
+            .identities()
+            .account_by_id(account_pk)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(|| AppError::unauthenticated("session account no longer exists"))?;
+        arkret_wire::ActorId::account(account.account_id)
+    } else {
+        arkret_wire::ActorId::hosted_principal(
+            DidCoreId::new(session.actor.clone()).map_err(|error| {
+                AppError::internal(format!("session actor is invalid: {error}"))
+            })?,
+            DidCoreId::new(session.audience.clone()).map_err(|error| {
+                AppError::internal(format!("session audience is invalid: {error}"))
+            })?,
+        )
+    };
+    if body.actor_id != session_actor_id {
         return Err(AppError::capability_denied(
             "authorization checks may only target the authenticated actor",
         ));
@@ -102,8 +123,8 @@ async fn authz_check(
     let result = state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor: body.actor_id.as_str(),
-            actor_principal_server_id: Some(state.service_id()),
+            actor: body.actor_id.signing_principal_id().as_str(),
+            actor_principal_server_id: Some(body.actor_id.route_service_id().as_str()),
             action: &body.action,
             resource: &resource_expr,
             realm_id: &realm_id,
@@ -121,13 +142,7 @@ async fn authz_check(
     let owner_aggregate_allowed = state
         .projections()
         .snapshot()
-        .realm_owner_operationally_covers_action(
-            &realm_id,
-            body.actor_id.as_str(),
-            state.service_id(),
-            &body.action,
-            now(),
-        );
+        .realm_owner_operationally_covers_action(&realm_id, &body.actor_id, &body.action, now());
     let allowed = result.allowed || owner_aggregate_allowed;
     let matched_grants = result
         .grants
@@ -154,7 +169,7 @@ async fn authz_check(
     // Trace/diagnostic data lives in the spec-allowed `policy_results` array
     // rather than a private `decision_trace` field.
     let policy_results = vec![json!({
-        "actor_id": body.actor_id.as_str(),
+        "actor_id": body.actor_id,
         "action": body.action,
         "resource": resource_expr,
         "realm_id": realm_id,
