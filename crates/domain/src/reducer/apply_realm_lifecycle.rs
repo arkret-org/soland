@@ -421,6 +421,15 @@ impl ProjectionState {
             };
         };
         let member = payload.member_id.to_string();
+        let Ok(member_subject) = payload
+            .member_id
+            .canonical_key()
+            .and_then(|key| arkret_wire::composite_subject(&[key]))
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
         if operation.context.sender != payload.member_id
             || payload.membership
                 != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
@@ -441,7 +450,7 @@ impl ProjectionState {
             };
         };
         if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            || cell_id.subject() != member
+            || cell_id.subject() != member_subject
             || !matches!(
                 &write.op,
                 arkret_wire::cba::ProjectedOp::TransitionTo { to }
@@ -485,6 +494,15 @@ impl ProjectionState {
             };
         };
         let member = payload.member_id.to_string();
+        let Ok(member_subject) = payload
+            .member_id
+            .canonical_key()
+            .and_then(|key| arkret_wire::composite_subject(&[key]))
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
+            };
+        };
         if payload.membership
                 != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
             || payload.reason.as_deref() != Some("direct_conversation_bootstrap")
@@ -505,7 +523,7 @@ impl ProjectionState {
             };
         };
         if cell_id.component() != arkret_wire::CellFamilyId::MEMBER_STATE_V1
-            || cell_id.subject() != member
+            || cell_id.subject() != member_subject
             || !matches!(
                 &write.op,
                 arkret_wire::cba::ProjectedOp::TransitionTo { to }
@@ -654,13 +672,17 @@ impl ProjectionState {
             );
         }
 
-        // Synthesize the FSM cell state. Cell ref shape per spec
-        // `ak:cell:ak.component.member.state.v1:<actor_id>` — note the
-        // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
-        // composite. The Realm scoping is implicit in the CellStore key.
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{member}"
-        )) {
+        // Mirror the registry's composite ActorId subject. Realm scoping is
+        // implicit in the CellStore key, while the subject preserves the
+        // complete tagged actor (including its Station binding).
+        if let Ok(actor) = serde_json::from_value::<arkret_wire::ActorId>(
+            payload.get("member_id").cloned().unwrap_or(Value::Null),
+        ) && let Ok(actor_key) = actor.canonical_key()
+            && let Ok(subject) = arkret_wire::composite_subject(&[actor_key])
+            && let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+                "ak:cell:ak.component.member.state.v1:{subject}"
+            ))
+        {
             self.cells.insert(
                 cell_id,
                 CellState::Value(Value::String(new_state.to_owned())),
@@ -968,9 +990,25 @@ impl ProjectionState {
                 .and_then(Value::as_str)
                 == Some("managed_agent_control")
         {
-            let agent_id = operation.context.sender.to_string();
+            let agent_id = operation.context.sender.signing_principal_id().to_string();
+            let actor_key = match operation.context.sender.canonical_key() {
+                Ok(actor_key) => actor_key,
+                Err(_) => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
+            let actor_subject = match arkret_wire::composite_subject(&[actor_key]) {
+                Ok(subject) => subject,
+                Err(_) => {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                }
+            };
             let cell = match arkret_identifiers::CellRef::new(format!(
-                "ak:cell:{}:{agent_id}",
+                "ak:cell:{}:{actor_subject}",
                 arkret_wire::CellFamilyId::AGENT_STATUS_V1
             )) {
                 Ok(cell) => cell,

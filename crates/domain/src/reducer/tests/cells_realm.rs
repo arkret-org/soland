@@ -58,31 +58,33 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
 
     let payload = serde_json::json!({
         "realm_id": realm_id,
-        "actor_id": "ak:did_core:web:alice",
+        "member_id": account_actor("ak:did_core:web:alice"),
         "membership": "join"
     });
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender = arkret_wire::ActorId::service(
-        arkret_wire::project_did_to_core_id(
-            &arkret_identifiers::Did::new("did:web:alice").unwrap(),
-        )
-        .unwrap(),
+    operation.context.sender = account_actor("ak:did_core:web:alice");
+    let effect = state.apply_projected(&operation, &writes, &hlc);
+    assert!(
+        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
+        "effect={effect:?}; writes={writes:?}; payload={:?}",
+        operation.payload
     );
-    state.apply_projected(&operation, &writes, &hlc);
 
     // Structured cache populated with state="join" and the default member
     // role; role assignment is not part of the closed membership payload.
     let m = state
-        .member(realm_id, "ak:did_core:web:alice")
+        .member(realm_id, &account_actor_string("ak:did_core:web:alice"))
         .expect("member entry should exist after join");
     assert_eq!(m.state, "join");
     assert_eq!(m.role, "member");
 
     // FSM cell populated.
     assert_eq!(
-        state.member_fsm_state("ak:did_core:web:alice").as_deref(),
+        state
+            .member_fsm_state(&account_actor_string("ak:did_core:web:alice"))
+            .as_deref(),
         Some("join")
     );
 
@@ -96,14 +98,13 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     let actor = "ak:did_core:web:reducer-test.example";
     let payload = serde_json::json!({
         "realm_id": realm_id,
-        "actor_id": actor,
+        "member_id": account_actor(actor),
         "membership": "join"
     });
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
-    operation.context.sender =
-        arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(actor).unwrap());
+    operation.context.sender = account_actor(actor);
 
     let mut ordinary = ProjectionState::new();
     ordinary
@@ -113,7 +114,8 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
         ordinary.apply_projected(&operation, &writes, &ServerHlc::new("test")),
         ProjectionEffect::Rejected { reason } if reason == "gate_check_failed"
     ));
-    assert!(ordinary.member(realm_id, actor).is_none());
+    let actor = account_actor_string(actor);
+    assert!(ordinary.member(realm_id, &actor).is_none());
 
     let mut bootstrap = ProjectionState::new();
     bootstrap
@@ -122,11 +124,11 @@ fn validated_bootstrap_creator_join_bypasses_only_the_ordinary_join_gate() {
     assert!(matches!(
         bootstrap.apply_validated_realm_bootstrap_membership(&operation, &writes),
         ProjectionEffect::MembershipChanged { ref member, ref action, .. }
-            if member == actor && action == "join"
+            if member == &actor && action == "join"
     ));
     assert_eq!(
         bootstrap
-            .member(realm_id, actor)
+            .member(realm_id, &actor)
             .map(|member| member.state.as_str()),
         Some("join")
     );
@@ -150,13 +152,14 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
     let peer = "ak:did_core:web:peer.example";
     let payload = serde_json::json!({
-        "actor_id": peer,
+        "member_id": account_actor(peer),
         "membership": "join",
         "reason": "direct_conversation_bootstrap"
     });
     let (_, writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
-    let operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
+    let mut operation = make_operation(arkret_wire::EventKind::MemberState, realm_id, payload);
+    operation.context.sender = account_actor("ak:did_core:web:reducer-test.example");
 
     let mut direct = ProjectionState::new();
     direct.realm_null_subject_cells.insert(
@@ -169,7 +172,7 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
     assert!(matches!(
         direct.apply_validated_direct_conversation_bootstrap_membership(&operation, &writes),
         ProjectionEffect::MembershipChanged { ref member, ref action, .. }
-            if member == peer && action == "join"
+            if member == &account_actor_string(peer) && action == "join"
     ));
 
     assert!(matches!(
@@ -195,21 +198,20 @@ fn validated_direct_conversation_peer_join_has_a_distinct_narrow_bootstrap_path(
 }
 
 #[test]
-fn bare_member_state_cannot_transition_ban_to_invite() {
+fn bare_member_state_cannot_transition_ban_to_join() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            realm_id,
-            serde_json::json!({
-                "actor_id": "ak:did_core:web:bob",
-                "membership": "ban",
-                "role": "member"
-            }),
-        ),
+    let ban_payload = serde_json::json!({
+        "member_id": account_actor("ak:did_core:web:bob"),
+        "membership": "ban"
+    });
+    let (_, ban_writes) =
+        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &ban_payload);
+    state.apply_projected(
+        &make_operation(arkret_wire::EventKind::MemberState, realm_id, ban_payload),
+        &ban_writes,
         &hlc,
     );
 
@@ -218,18 +220,29 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
     assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
     assert_eq!(
-        state.member_fsm_state("ak:did_core:web:bob").as_deref(),
+        state
+            .member_fsm_state(&account_actor_string("ak:did_core:web:bob"))
+            .as_deref(),
         Some("ban")
     );
 
-    // Only `ak.invite.create` may project `ban -> invite`; a bare
-    // `ak.member.state` write must be rejected.
-    let effect = state.apply(
+    // A bare member-state write cannot jump directly from `ban` to `join`.
+    let invite_payload = serde_json::json!({
+        "member_id": account_actor("ak:did_core:web:bob"),
+        "membership": "join"
+    });
+    let (_, invite_writes) = projected_cell_writes(
+        arkret_wire::EventKind::MemberState,
+        realm_id,
+        &invite_payload,
+    );
+    let effect = state.apply_projected(
         &make_operation(
             arkret_wire::EventKind::MemberState,
             realm_id,
-            serde_json::json!({"actor_id": "ak:did_core:web:bob", "membership": "invite"}),
+            invite_payload,
         ),
+        &invite_writes,
         &hlc,
     );
     assert!(matches!(
@@ -238,7 +251,9 @@ fn bare_member_state_cannot_transition_ban_to_invite() {
             if reason.starts_with("invalid_membership_transition")
     ));
     assert_eq!(
-        state.member_fsm_state("ak:did_core:web:bob").as_deref(),
+        state
+            .member_fsm_state(&account_actor_string("ak:did_core:web:bob"))
+            .as_deref(),
         Some("ban")
     );
     assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
@@ -257,22 +272,24 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
         .insert(REALM_A.to_owned(), "public".to_owned());
     let payload = serde_json::json!({
         "realm_id": REALM_A,
-        "actor_id": ACTOR,
+        "member_id": account_actor(ACTOR),
         "membership": "join",
     });
     let (_, writes) = projected_cell_writes(arkret_wire::EventKind::MemberState, REALM_A, &payload);
     let mut operation = make_operation(arkret_wire::EventKind::MemberState, REALM_A, payload);
-    operation.context.sender =
-        arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(ACTOR).unwrap());
+    operation.context.sender = account_actor(ACTOR);
     state.apply_projected(&operation, &writes, &hlc);
 
-    let member_cell = format!("ak:cell:ak.component.member.state.v1:{ACTOR}");
+    let member_cell = format!(
+        "ak:cell:ak.component.member.state.v1:{}",
+        actor_cell_subject(&account_actor(ACTOR))
+    );
     let mut invite_in_new_realm = make_operation(
         arkret_wire::EventKind::MemberState,
         REALM_B,
         serde_json::json!({
-            "actor_id": ACTOR,
-            "membership": "invite"
+            "member_id": account_actor(ACTOR),
+            "membership": "join"
         }),
     );
     invite_in_new_realm.context.preconditions = serde_json::from_value(serde_json::json!([{
@@ -286,13 +303,16 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
         arkret_wire::EventKind::MemberState,
         REALM_A,
         serde_json::json!({
-            "actor_id": ACTOR,
-            "membership": "invite"
+            "member_id": account_actor(ACTOR),
+            "membership": "join"
         }),
     );
     duplicate_genesis_in_same_realm.context.preconditions =
         serde_json::from_value(serde_json::json!([{
-            "cell_id": format!("ak:cell:ak.component.member.state.v1:{ACTOR}"),
+            "cell_id": format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                actor_cell_subject(&account_actor(ACTOR))
+            ),
             "predicate": { "op": "head_eq", "value": null }
         }]))
         .unwrap();
@@ -348,7 +368,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
         .expect("realm_states entry should exist after create");
     assert_eq!(
         realm.owner.as_deref(),
-        Some("ak:did_core:web:reducer-test.example")
+        Some(account_actor_string("ak:did_core:web:reducer-test.example").as_str())
     );
     assert_eq!(realm.title.as_deref(), Some("Test Realm"));
     assert!(!realm.deleted);
@@ -892,9 +912,9 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
         .realm_join_rules
         .insert(realm_id.to_owned(), "public".to_owned());
     state.members.insert(
-        (realm_id.to_owned(), member.to_owned()),
+        (realm_id.to_owned(), account_actor_string(member)),
         SolandMembershipState {
-            member: member.to_owned(),
+            member: account_actor_string(member),
             realm_id: realm_id.to_owned(),
             state: "leave".to_owned(),
             role: "member".to_owned(),
@@ -934,7 +954,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
         arkret_wire::EventKind::MemberState,
         realm_id,
         serde_json::json!({
-            "actor_id": member,
+            "member_id": account_actor(member),
             "sender": member,
             "membership": "join",
         }),
@@ -945,7 +965,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
     );
     state
         .members
-        .get_mut(&(realm_id.to_owned(), member.to_owned()))
+        .get_mut(&(realm_id.to_owned(), account_actor_string(member)))
         .unwrap()
         .updated_at = operation.created_at - chrono::Duration::hours(2);
     assert_eq!(state.check_membership_join_admission(&operation), Ok(()));
@@ -963,7 +983,7 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
         arkret_wire::EventKind::MemberState,
         realm_id,
         serde_json::json!({
-            "actor_id": member,
+            "member_id": account_actor(member),
             "sender": member,
             "membership": "join",
         }),
@@ -976,16 +996,16 @@ fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
         arkret_wire::EventKind::MemberState,
         realm_id,
         serde_json::json!({
-            "actor_id": member,
+            "member_id": account_actor(member),
             "sender": "ak:did_core:web:admin.example",
             "membership": "join"
         }),
     );
     assert_eq!(state.check_membership_join_admission(&admin_join), Ok(()));
     state.members.insert(
-        (realm_id.to_owned(), member.to_owned()),
+        (realm_id.to_owned(), account_actor_string(member)),
         SolandMembershipState {
-            member: member.to_owned(),
+            member: account_actor_string(member),
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -1010,9 +1030,9 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
     let realm_id = "ak:realm:AcPah3GE5X4KORy6n5BoQ_izb3czlMLYgWg6E1hVh883";
     let member = "ak:did_core:web:alice.example";
     state.members.insert(
-        (realm_id.to_owned(), member.to_owned()),
+        (realm_id.to_owned(), account_actor_string(member)),
         SolandMembershipState {
-            member: member.to_owned(),
+            member: account_actor_string(member),
             realm_id: realm_id.to_owned(),
             state: "invite".to_owned(),
             role: "member".to_owned(),
@@ -1023,16 +1043,16 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
             reason: None,
         },
     );
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            realm_id,
-            serde_json::json!({
-                "actor_id": member,
-                "sender": "ak:did_core:web:admin.example",
-                "membership": "ban"
-            }),
-        ),
+    let payload = serde_json::json!({
+        "member_id": account_actor(member),
+        "sender": "ak:did_core:web:admin.example",
+        "membership": "ban"
+    });
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
+    let effect = state.apply_projected(
+        &make_operation(arkret_wire::EventKind::MemberState, realm_id, payload),
+        &writes,
         &hlc,
     );
     assert!(matches!(
@@ -1045,12 +1065,16 @@ fn bare_member_state_cannot_leave_a_live_invite_state() {
 fn knock_state_visible_in_members_in_state_query() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    state.apply(
-        &make_operation(
-            arkret_wire::EventKind::MemberState,
-            "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
-            serde_json::json!({"actor_id": "ak:did_core:web:carol", "membership": "knock"}),
-        ),
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let payload = serde_json::json!({
+        "member_id": account_actor("ak:did_core:web:carol"),
+        "membership": "knock"
+    });
+    let (_, writes) =
+        projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &payload);
+    state.apply_projected(
+        &make_operation(arkret_wire::EventKind::MemberState, realm_id, payload),
+        &writes,
         &hlc,
     );
     let knockers = state.members_in_state(
@@ -1058,9 +1082,14 @@ fn knock_state_visible_in_members_in_state_query() {
         "knock",
     );
     assert_eq!(knockers.len(), 1);
-    assert_eq!(knockers[0].member, "ak:did_core:web:carol");
     assert_eq!(
-        state.member_fsm_state("ak:did_core:web:carol").as_deref(),
+        knockers[0].member,
+        account_actor_string("ak:did_core:web:carol")
+    );
+    assert_eq!(
+        state
+            .member_fsm_state(&account_actor_string("ak:did_core:web:carol"))
+            .as_deref(),
         Some("knock")
     );
 }
@@ -1343,10 +1372,14 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
         state.agent_lifecycles.get(agent_id.as_str()),
         Some(&arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
     );
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        agent_id.clone(),
+    ));
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:{}:{}",
         arkret_wire::CellFamilyId::AGENT_STATUS_V1,
-        agent_id.as_str(),
+        actor_cell_subject(&actor),
     ))
     .unwrap();
     assert_eq!(
@@ -1393,7 +1426,8 @@ fn managed_agent_genesis_requires_the_registered_status_projection() {
         .to_value()
         .unwrap();
     let mut operation = make_operation(arkret_wire::EventKind::RealmCreate, realm_id, payload);
-    operation.context.sender = arkret_wire::ActorId::service(agent_id);
+    operation.context.sender =
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(agent_id.clone(), agent_id));
     let mut state = ProjectionState::new();
 
     assert!(matches!(

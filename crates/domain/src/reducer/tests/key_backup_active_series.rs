@@ -10,7 +10,7 @@ const PREVIOUS_SERIES: &str = "ak:backup_series:01964137-1000-7000-8000-00000000
 fn active_series_payload() -> Value {
     json!({
         "schema": "ak.schema.key_backup_active_series.v1",
-        "actor_id": ACTOR,
+        "actor_id": account_actor(ACTOR),
         "backup_kind": "secret_storage",
         "active_series_id": ACTIVE_SERIES,
         "series_pointer_version": 1,
@@ -44,18 +44,19 @@ fn key_backup_active_series_projects_pointer_and_cell() {
         &hlc,
     );
 
+    let actor = account_actor_string(ACTOR);
     assert!(matches!(
         effect,
         ProjectionEffect::KeyBackupActiveSeriesProjected {
             ref actor_id,
             ref backup_kind,
             ref active_series_id,
-        } if actor_id == ACTOR
+        } if actor_id == &actor
             && backup_kind == "secret_storage"
             && active_series_id == ACTIVE_SERIES
     ));
     let projected = state
-        .key_backup_active_series(ACTOR, "secret_storage")
+        .key_backup_active_series(&actor, "secret_storage")
         .expect("active series projection");
     assert_eq!(projected.active_series_id, ACTIVE_SERIES);
     assert_eq!(projected.series_pointer_version, 1);
@@ -65,7 +66,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
         "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
     );
 
-    let subject = arkret_wire::composite_subject(&[ACTOR, "secret_storage"])
+    let subject = arkret_wire::composite_subject(&[actor.as_str(), "secret_storage"])
         .expect("active series composite subject");
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.key_backup.active_series.v1:{subject}"

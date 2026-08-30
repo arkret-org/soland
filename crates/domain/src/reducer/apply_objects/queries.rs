@@ -302,8 +302,11 @@ impl ProjectionState {
     /// state. The cell_subject is the actor_id per spec
     /// `ak.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
+        let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
+        let actor_key = actor.canonical_key().ok()?;
+        let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
         let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{actor_id}"
+            "ak:cell:ak.component.member.state.v1:{subject}"
         ))
         .ok()?;
         self.cell_value(&cell_id)

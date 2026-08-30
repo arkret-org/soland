@@ -30,10 +30,10 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.members.insert(
         (
             REALM_ID.to_owned(),
-            "ak:did_core:web:alice.example".to_owned(),
+            account_actor_string("ak:did_core:web:alice.example"),
         ),
         SolandMembershipState {
-            member: "ak:did_core:web:alice.example".to_owned(),
+            member: account_actor_string("ak:did_core:web:alice.example"),
             realm_id: REALM_ID.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -72,7 +72,7 @@ fn seed_scoped_message(state: &mut ProjectionState, hlc: &ServerHlc) {
             REALM_ID,
             serde_json::json!({
                 "circle_id": CIRCLE_ID,
-                "actor_id": "ak:did_core:web:alice.example",
+                "member_id": account_actor("ak:did_core:web:alice.example"),
                 "membership": "join",
                 "sender": "ak:did_core:web:alice.example"
             }),

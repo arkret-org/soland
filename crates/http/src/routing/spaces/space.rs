@@ -474,8 +474,8 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid realm_id shape");
         return false;
     };
-    let Ok(actor_typed) = DidCoreId::new(actor.to_owned()) else {
-        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor core-id shape");
+    let Ok(actor_typed) = serde_json::from_str::<arkret_wire::ActorId>(actor) else {
+        tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid ActorId shape");
         return false;
     };
     if state
@@ -488,14 +488,24 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
     {
         let projection = state.projections().snapshot();
         if projection
-            .agent_membership_binding(realm_id, actor)
+            .member(realm_id, actor)
+            .is_some_and(|member| member.state == "join")
+        {
+            return true;
+        }
+        let principal_id = actor_typed.signing_principal_id().as_str();
+        if projection
+            .agent_membership_binding(realm_id, principal_id)
             .is_some()
-            && !projection.effective_agent_membership_base(realm_id, actor)
+            && !projection.effective_agent_membership_base(realm_id, principal_id)
         {
             return false;
         }
     }
-    if let Ok(Some(agent)) = state.agent_pairings().agent(actor).await
+    if let Ok(Some(agent)) = state
+        .agent_pairings()
+        .agent(actor_typed.signing_principal_id().as_str())
+        .await
         && crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
             state,
             &agent,
@@ -524,7 +534,10 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
             false
         }
         Some(realm) => {
-            if realm.members.contains(&actor_typed) {
+            let is_local_account = actor_typed
+                .as_account_id()
+                .is_some_and(|account| account.station_id.as_str() == state.service_id());
+            if is_local_account && realm.members.contains(actor_typed.signing_principal_id()) {
                 true
             } else {
                 tracing::trace!(

@@ -640,6 +640,12 @@ async fn persist_and_project_realm_genesis_event(
 ) {
     let realm_id = realm.as_str();
     let actor_id = event.actor_id.clone();
+    let actor_subject = arkret_wire::composite_subject(&[
+        actor_id
+            .canonical_key()
+            .expect("fixture bootstrap actor canonical key"),
+    ])
+    .expect("fixture bootstrap member cell subject");
     let stored_event_ids = state
         .test_persistence()
         .events()
@@ -675,7 +681,7 @@ async fn persist_and_project_realm_genesis_event(
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,
-                "actor_id": actor_id,
+                "member_id": actor_id,
                 "membership": "join"
             }),
         ),
@@ -700,7 +706,7 @@ async fn persist_and_project_realm_genesis_event(
         .expect("fixture bootstrap follow-up Event");
         if kind == arkret_wire::EventKind::MemberState {
             followup.preconditions = vec![crate::signed_event::head_eq_precondition(
-                &format!("ak:cell:ak.component.member.state.v1:{actor_id}"),
+                &format!("ak:cell:ak.component.member.state.v1:{actor_subject}"),
                 serde_json::Value::Null,
             )];
         }

@@ -43,7 +43,7 @@ fn seed_mls_genesis_with_binding(
             group_id: group_id.clone(),
             effective_scope: serde_json::to_value(&scope).unwrap(),
             epoch: 0,
-            leader_actor_id: "ak:did_core:web:alice.example".to_owned(),
+            leader_actor_id: account_actor_string("ak:did_core:web:alice.example"),
             creator_device_id: "ak:device:01904100-0000-7000-8000-00000000c501".to_owned(),
             genesis_event_ref: "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned(),
             committed_at: 0,
@@ -82,10 +82,11 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
     let mut state = ProjectionState::new();
     let now = chrono::Utc::now();
     let join_member = |state: &mut ProjectionState, did: &str| {
+        let actor = account_actor_string(did);
         state.members.insert(
-            (realm.clone(), did.to_owned()),
+            (realm.clone(), actor.clone()),
             SolandMembershipState {
-                member: did.to_owned(),
+                member: actor,
                 realm_id: realm.clone(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
@@ -120,7 +121,7 @@ fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: "ak:did_core:web:alice".to_owned(),
+            created_by: account_actor_string("ak:did_core:web:alice"),
             created_at: now,
             updated_by: None,
             updated_at: None,
@@ -141,7 +142,7 @@ fn circle_manage_pull_realm_member_succeeds() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "ak:did_core:web:bob",
+            "member_id": account_actor("ak:did_core:web:bob"),
             "membership": "join",
             "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
@@ -155,7 +156,7 @@ fn circle_manage_pull_realm_member_succeeds() {
     assert!(
         state.circles[&circle]
             .members
-            .contains("ak:did_core:web:bob"),
+            .contains(&account_actor_string("ak:did_core:web:bob")),
         "bob must be an active Circle member with no accept step"
     );
 }
@@ -170,7 +171,7 @@ fn circle_pull_without_manage_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "ak:did_core:web:bob",
+            "member_id": account_actor("ak:did_core:web:bob"),
             "membership": "join",
             "sender": "ak:did_core:web:alice",
         }),
@@ -186,7 +187,7 @@ fn circle_pull_without_manage_rejected() {
     assert!(
         !state.circles[&circle]
             .members
-            .contains("ak:did_core:web:bob")
+            .contains(&account_actor_string("ak:did_core:web:bob"))
     );
 }
 
@@ -200,7 +201,7 @@ fn circle_pull_non_realm_member_rejected() {
         &realm,
         serde_json::json!({
             "circle_id": circle,
-            "actor_id": "ak:did_core:web:mallory",
+            "member_id": account_actor("ak:did_core:web:mallory"),
             "membership": "join",
             "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
@@ -227,7 +228,7 @@ fn circle_self_join_requires_open_rule() {
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "ak:did_core:web:bob",
+            "circle_id": circle, "member_id": account_actor("ak:did_core:web:bob"),
             "membership": "join", "sender": "ak:did_core:web:bob",
         }),
     );
@@ -242,7 +243,7 @@ fn circle_self_join_requires_open_rule() {
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "ak:did_core:web:alice",
+            "circle_id": circle, "member_id": account_actor("ak:did_core:web:alice"),
             "membership": "join", "sender": "ak:did_core:web:alice",
             "manage_capability_verified": true,
         }),
@@ -257,7 +258,7 @@ fn circle_self_join_requires_open_rule() {
     assert!(
         state.circles[&circle]
             .members
-            .contains("ak:did_core:web:alice")
+            .contains(&account_actor_string("ak:did_core:web:alice"))
     );
     // Flip the Circle to open and retry.
     state.circles.get_mut(&circle).unwrap().join_rule = "public".to_owned();
@@ -265,7 +266,7 @@ fn circle_self_join_requires_open_rule() {
         arkret_wire::EventKind::CircleMemberState,
         &realm,
         serde_json::json!({
-            "circle_id": circle, "actor_id": "ak:did_core:web:bob",
+            "circle_id": circle, "member_id": account_actor("ak:did_core:web:bob"),
             "membership": "join", "sender": "ak:did_core:web:bob",
         }),
     );
@@ -279,7 +280,7 @@ fn circle_self_join_requires_open_rule() {
     assert!(
         state.circles[&circle]
             .members
-            .contains("ak:did_core:web:bob")
+            .contains(&account_actor_string("ak:did_core:web:bob"))
     );
 }
 

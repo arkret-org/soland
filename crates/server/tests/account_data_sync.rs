@@ -41,6 +41,13 @@ fn actor_core_id(actor: &str) -> DidCoreId {
         .expect("fixture actor DID projects to a core id")
 }
 
+fn local_account_actor(state: &AppState, principal_id: DidCoreId) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id,
+        DidCoreId::new(state.service_id().clone()).expect("fixture Station core id"),
+    ))
+}
+
 fn test_config() -> AppConfig {
     AppConfig {
         object_storage: ObjectStorageConfig::local(
@@ -172,8 +179,9 @@ async fn signed_account_data_submission(
         &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor DID projects to a core id");
+    let actor_id = local_account_actor(&state, actor_core.clone());
     let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
+        .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
@@ -387,8 +395,9 @@ async fn submit_actor_private_event(
         &Did::new(actor.to_owned()).expect("fixture actor DID"),
     )
     .expect("fixture actor DID projects to a core id");
+    let actor_id = local_account_actor(&state, actor_core);
     let mut response = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(&serde_json::json!({"actor_id": actor_core, "realm_id": realm_id}))
+        .json(&serde_json::json!({"actor_id": actor_id, "realm_id": realm_id}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header(
             "Arkret-Operation",
@@ -451,7 +460,10 @@ fn read_cursor_payload(
     event_id: &str,
     hlc: &str,
 ) -> Value {
-    let actor_id = actor_core_id(actor);
+    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        actor_core_id(actor),
+        soland_test_support::fixture_station_id(),
+    ));
     json!({
         "id": arkret_identifiers::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ak.schema.read_cursor.v1",

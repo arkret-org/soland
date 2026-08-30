@@ -739,18 +739,27 @@ impl ProjectionState {
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
         const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_METADATA_V1;
-        // CellStore keys are `(realm_id, cell_ref)`. Membership CellRefs use
-        // only the actor DID as their subject, so consulting the flattened
-        // `cells` cache here would alias the same actor across every Realm.
-        // The structured membership projection retains the missing Realm
-        // dimension and is therefore the authoritative CAS head for this
-        // family.
-        if let Some(actor_id) = cell_ref
+        // CellStore keys are `(realm_id, cell_ref)`. The structured membership
+        // projection retains that Realm dimension, while the registered cell
+        // subject is the digest of the complete tagged ActorId key.
+        if let Some(actor_subject) = cell_ref
             .strip_prefix("ak:cell:")
             .and_then(|rest| rest.strip_prefix(MEMBER_STATE_FAMILY))
             .and_then(|rest| rest.strip_prefix(':'))
         {
-            let Some(member) = self.member(realm_id, actor_id) else {
+            let member = self
+                .members
+                .iter()
+                .find_map(|((stored_realm, actor_id), member)| {
+                    if stored_realm != realm_id {
+                        return None;
+                    }
+                    let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
+                    let actor_key = actor.canonical_key().ok()?;
+                    let subject = arkret_wire::composite_subject(&[actor_key]).ok()?;
+                    (subject == actor_subject).then_some(member)
+                });
+            let Some(member) = member else {
                 return expected.is_null();
             };
             let observed = Value::String(member.state.clone());

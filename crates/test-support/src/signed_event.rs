@@ -69,7 +69,13 @@ pub fn complete_realm_bootstrap_unit(
     profile_title: &str,
 ) -> Vec<Event> {
     let realm_id = RealmId::from_event_id(&genesis.event_id).to_string();
-    let actor_core_id = genesis.actor_id.to_string();
+    let member_id = genesis.actor_id.clone();
+    let actor_subject = arkret_wire::composite_subject(&[
+        member_id
+            .canonical_key()
+            .expect("fixture bootstrap actor canonical key"),
+    ])
+    .expect("fixture bootstrap member cell subject");
     let followups = [
         (
             arkret_wire::EventKind::RealmProfile,
@@ -95,7 +101,7 @@ pub fn complete_realm_bootstrap_unit(
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,
-                "actor_id": actor_core_id,
+                "member_id": member_id,
                 "membership": "join",
                 "delivery_status": "unroutable"
             }),
@@ -115,7 +121,7 @@ pub fn complete_realm_bootstrap_unit(
                 .with_basis(CallerSignedBasis::AnchorUnit);
         if kind == arkret_wire::EventKind::MemberState {
             builder = builder.with_preconditions(vec![head_eq_precondition(
-                &format!("ak:cell:ak.component.member.state.v1:{actor_core_id}"),
+                &format!("ak:cell:ak.component.member.state.v1:{actor_subject}"),
                 serde_json::Value::Null,
             )]);
         }

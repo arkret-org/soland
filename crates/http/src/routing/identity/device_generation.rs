@@ -145,7 +145,16 @@ fn accepted_authorization_binds_authority_tuple(
     station_id: &str,
     device_id: &str,
 ) -> bool {
-    event_actor_id == principal_id
+    let expected_actor = arkret_identifiers::DidCoreId::new(principal_id.to_owned())
+        .ok()
+        .zip(arkret_identifiers::DidCoreId::new(station_id.to_owned()).ok())
+        .map(|(principal_id, station_id)| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
+        });
+    serde_json::from_str::<arkret_wire::ActorId>(event_actor_id)
+        .ok()
+        .as_ref()
+        == expected_actor.as_ref()
         && event_kind == arkret_wire::EventKind::DeviceAuthorize.as_str()
         && event_station_id == Some(station_id)
         && event_device_id == Some(device_id)

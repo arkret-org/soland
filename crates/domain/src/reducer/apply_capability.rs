@@ -291,10 +291,13 @@ fn validate_nonhuman_subject_grant_constraints(
 ) -> Result<(), &'static str> {
     use arkret_schema::CapabilityRiskTier;
 
-    let Some(subject) = body.get("subject").and_then(Value::as_str) else {
+    let Some(subject) = body
+        .get("subject")
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+    else {
         return Ok(());
     };
-    if !subject_is_agent_or_service(subject) {
+    if !subject_is_agent_or_service(subject.signing_principal_id().as_str()) {
         return Ok(());
     }
     let Some(actions) = body.get("actions").and_then(Value::as_array) else {

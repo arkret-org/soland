@@ -406,10 +406,16 @@ async fn admit_caller_signed_account_data_set(
         )
     })?;
     let realm_id = event.realm_id.clone();
+    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?,
+        arkret_wire::DidCoreId::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("Station id is invalid: {error}")))?,
+    ));
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &session.actor)
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
     {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,

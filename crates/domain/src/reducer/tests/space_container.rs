@@ -2,11 +2,12 @@ use super::*;
 
 fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) {
     let now = chrono::Utc::now();
+    let member = account_actor_string(member);
     state.realm_states.insert(
         realm_id.to_owned(),
         SolandRealmState {
             realm_id: realm_id.to_owned(),
-            owner: Some(member.to_owned()),
+            owner: Some(member.clone()),
             title: Some("Product".to_owned()),
             deleted: false,
             archived: false,
@@ -21,9 +22,9 @@ fn seed_realm_member(state: &mut ProjectionState, realm_id: &str, member: &str) 
         },
     );
     state.members.insert(
-        (realm_id.to_owned(), member.to_owned()),
+        (realm_id.to_owned(), member.clone()),
         SolandMembershipState {
-            member: member.to_owned(),
+            member,
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -144,7 +145,7 @@ fn space_container_lifecycle_round_trip() {
                     "realm_id": realm_id,
                     "kind": "board",
                     "title": "Roadmap",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -247,7 +248,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
                     "realm_id": realm_id,
                     "kind": "list",
                     "title": "Todo",
-                    "created_by": "ak:did_core:web:alice.example",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
                 }
             }),
         ),
@@ -858,14 +859,14 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
-                "actor_id": "ak:did_core:web:alice.example",
+                "member_id": account_actor("ak:did_core:web:alice.example"),
                 "membership": "join",
                 "sender": "ak:did_core:web:alice.example"
             }),
         ),
         &hlc,
     );
-    state.apply(
+    let list_effect = state.apply(
         &make_operation(
             arkret_wire::EventKind::SpaceCreate,
             realm_id,
@@ -884,6 +885,10 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
             }),
         ),
         &hlc,
+    );
+    assert!(
+        state.space_containers.contains_key(list_id),
+        "private list fixture failed: {list_effect:?}"
     );
 
     let public_create = make_operation(
@@ -909,7 +914,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "profile": "discussion"
                     }
                 },
-                "created_by": "ak:did_core:web:alice.example",
+                "created_by": account_actor("ak:did_core:web:alice.example"),
                 "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
@@ -953,7 +958,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                         "profile": "discussion"
                     }
                 },
-                "created_by": "ak:did_core:web:alice.example",
+                "created_by": account_actor("ak:did_core:web:alice.example"),
                 "created_at": "2026-06-19T00:00:00.000Z"
             }
         }),
@@ -1003,7 +1008,7 @@ fn child_scope_policy_gates_space_parent_edges() {
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
-                "actor_id": "ak:did_core:web:alice.example",
+                "member_id": account_actor("ak:did_core:web:alice.example"),
                 "membership": "join",
                 "sender": "ak:did_core:web:alice.example"
             }),

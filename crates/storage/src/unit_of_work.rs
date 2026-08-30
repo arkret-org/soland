@@ -93,7 +93,7 @@ pub struct EventCommitRequest {
 /// Static persistence-side guard for the one Ack-less Control-Move class.
 ///
 /// The HTTP admission layer additionally proves the PCR profile, current
-/// `single_signer.actor_id == principal` authority and active accepted device generation.
+/// exact `single_signer.actor_id` authority and active accepted device generation.
 /// Persistence cannot resolve those live projections, but it still refuses an
 /// exemption whose immutable Event shape is not a self-principal PCR device
 /// Move. This keeps the explicit commit flag from becoming a generic Ack

@@ -20,12 +20,21 @@ fn root_digest(state: &ProjectionState) -> String {
 
 fn state_with_successor() -> ProjectionState {
     let mut state = ProjectionState::default();
-    install_realm_authority_root(&mut state, REALM, OWNER);
+    let value =
+        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(account_actor(OWNER));
+    state.realm_null_subject_cells.insert(
+        (
+            REALM.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::to_value(value).unwrap()),
+    );
     let now = chrono::Utc::now();
+    let successor = account_actor_string(SUCCESSOR);
     state.members.insert(
-        (REALM.to_owned(), SUCCESSOR.to_owned()),
+        (REALM.to_owned(), successor.clone()),
         SolandMembershipState {
-            member: SUCCESSOR.to_owned(),
+            member: successor,
             realm_id: REALM.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
@@ -50,7 +59,7 @@ fn transfer_changes_only_controller_and_epoch() {
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
                 "patch": {
-                    "controller_id": SUCCESSOR
+                    "controller_id": account_actor(SUCCESSOR)
                 },
                 "successor_acceptance": { "proof": "accepted" },
                 "sender": OWNER
@@ -79,7 +88,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": expected,
                 "patch": {
-                    "controller_id": "ak:did_core:web:outsider.example"
+                    "controller_id": account_actor("ak:did_core:web:outsider.example")
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER
@@ -100,7 +109,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": format!("sha256:{}", "0".repeat(64)),
                 "patch": {
-                    "controller_id": SUCCESSOR
+                    "controller_id": account_actor(SUCCESSOR)
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER

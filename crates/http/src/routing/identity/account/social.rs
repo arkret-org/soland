@@ -561,9 +561,11 @@ async fn contact_list_rows(
         if record.state != AgentLifecycleState::Active {
             continue;
         }
-        if record.controller_id == actor.signing_principal_id().as_str()
-            || record.controller_id != controller_account_id.principal_id.as_str()
-        {
+        if record.controller_id != controller_account_id.principal_id.as_str() {
+            continue;
+        }
+        let controller_actor = arkret_wire::ActorId::account(controller_account_id.clone());
+        if &controller_actor == actor {
             continue;
         }
         let display_name = record
@@ -586,7 +588,7 @@ async fn contact_list_rows(
             .and_then(|value| BlobRef::new(value.to_owned()).ok());
         agent_peers.insert(actor_id.to_string());
         agents_by_controller
-            .entry(controller_account_id.to_string())
+            .entry(controller_actor.to_string())
             .or_default()
             .push(ContactAgentProjection {
                 actor_id: actor_id.clone(),
@@ -602,16 +604,11 @@ async fn contact_list_rows(
         row.contact_agent_projections = agents_by_controller
             .remove(&row.peer.contact_actor_id().to_string())
             .unwrap_or_default();
-        row.contact_agent_projections.sort_by(|left, right| {
-            let left_key = left
+        row.contact_agent_projections.sort_by_key(|projection| {
+            projection
                 .display_name
                 .clone()
-                .unwrap_or_else(|| left.actor_id.to_string());
-            let right_key = right
-                .display_name
-                .clone()
-                .unwrap_or_else(|| right.actor_id.to_string());
-            left_key.cmp(&right_key)
+                .unwrap_or_else(|| projection.actor_id.to_string())
         });
     }
     out.sort_by(|left, right| {

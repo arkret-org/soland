@@ -41,6 +41,22 @@ pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {
     arkret_wire::NotaryValue::single_signer(descriptor)
 }
 
+pub(super) fn account_actor(principal_id: &str) -> arkret_wire::ActorId {
+    let principal_id = arkret_identifiers::DidCoreId::new(principal_id).unwrap();
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        principal_id,
+    ))
+}
+
+pub(super) fn account_actor_string(principal_id: &str) -> String {
+    account_actor(principal_id).to_string()
+}
+
+pub(super) fn actor_cell_subject(actor: &arkret_wire::ActorId) -> String {
+    arkret_wire::composite_subject(&[actor.canonical_key().unwrap()]).unwrap()
+}
+
 /// Materialize the registered genesis authority-root cell for a Realm.
 ///
 /// `realm-and-space.md` section 2.5 makes this cell the sole source of Realm
