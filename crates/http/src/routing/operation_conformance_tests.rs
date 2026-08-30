@@ -431,7 +431,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
                         "did": "did:web:applet.example",
-                        "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
                             "method": "did:web",
                             "unversioned_refetch": true
@@ -491,7 +491,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                     "e2ee_policy": {"enabled": false},
                     "registration_epoch_evidence": {
                         "did": "did:web:applet.example",
-                        "did_document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "document_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
                         "method_version_evidence": {
                             "method": "did:web",
                             "unversioned_refetch": true

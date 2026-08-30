@@ -1918,8 +1918,8 @@ mod tests {
         )
         .unwrap();
         assert_ne!(
-            old_evidence.did_document_digest,
-            rotated_evidence.did_document_digest
+            old_evidence.document_digest,
+            rotated_evidence.document_digest
         );
     }
 

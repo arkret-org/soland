@@ -300,7 +300,7 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         json!({
             "binding_source": "did_document_default",
             "recipient_id": "ak:did_core:web:principal.anywhere.example",
-            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );
     let effect = state.apply(&good, &hlc);
@@ -339,7 +339,7 @@ fn delivery_binding_policy_legacy_recipient_field_does_not_authorize_join() {
         json!({
             "binding_source": "did_document_default",
             "recipient_id": "ak:did_core:web:principal.anywhere.example",
-            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );
     assert!(matches!(
@@ -440,7 +440,7 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         json!({
             "binding_source": "did_document_default",
             "recipient_id": "ak:did_core:web:principal.example",
-            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
@@ -534,7 +534,7 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
         json!({
             "binding_source": "did_document_default",
             "recipient_id": "ak:did_core:web:principal.example",
-            "did_document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "document_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
         }),
     );
     match state.apply(&bad, &hlc) {

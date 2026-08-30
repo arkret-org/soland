@@ -1,6 +1,13 @@
 use super::*;
 
-pub(super) async fn verify_mimi_write_service_proof(
+/// Verify the per-request RFC 9421 provider-source signature.
+///
+/// The profile's applicability is closed by operation id, not by the
+/// `read` / `command` half of that id: `ak.open.mimi.read.identifiers.v1`
+/// carries the anti-enumeration boundary and MUST be signed, while
+/// `ak.open.mimi.read.provider_directory.v1` MUST NOT inherit the profile.
+/// See zh/extensions/mimi-interop.md section 5.
+pub(super) async fn verify_mimi_source_service_signature(
     state: &AppState,
     req: &mut Request,
     room_uri: Option<&str>,
@@ -9,7 +16,7 @@ pub(super) async fn verify_mimi_write_service_proof(
         req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some();
     if !signature_present {
         return Err(mimi_signature_error_required(
-            "MIMI writes require RFC 9421 Signature and Signature-Input headers",
+            "this MIMI operation requires RFC 9421 Signature and Signature-Input headers",
         ));
     }
 
