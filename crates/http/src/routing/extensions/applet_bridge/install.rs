@@ -3,7 +3,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{DidCoreId, EventId, GrantId, Hash, RealmId};
+use arkret_identifiers::{EventId, GrantId, Hash, RealmId};
 use arkret_identity::DidDocument;
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
@@ -1575,7 +1575,7 @@ pub(super) fn ghost_actors_allowed_for_install(
 
 #[cfg(test)]
 mod tests {
-    use arkret_identifiers::{Did, Hash};
+    use arkret_identifiers::{Did, DidCoreId, Hash};
     use arkret_models_integration::{
         AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     };

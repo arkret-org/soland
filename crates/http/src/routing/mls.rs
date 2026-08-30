@@ -1531,35 +1531,25 @@ async fn validate_welcome_peer_claim_ledger(
         arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     >(payload.clone())
     .map_err(|_| "peer_claim_welcome_invalid")?;
+    let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id)
+        .map_err(|_| "peer_claim_welcome_invalid")?;
     let recipient_actor_id = match &welcome.recipient {
-        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
-            recipient_device_id,
-        } => {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device { .. } => {
             let principal = welcome
                 .recipient_principal_id
                 .as_ref()
                 .ok_or("peer_claim_welcome_invalid")?;
-            let arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::DeviceAuthorizeEventId(event_id) =
+            let arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::DeviceAuthorizeEventId(_) =
                 &welcome.claim_ref.trust_binding
             else {
                 return Err("peer_claim_welcome_invalid");
             };
-            if !current_device_authorization_matches(
-                state,
-                principal,
-                recipient_device_id.as_str(),
-                event_id.as_str(),
-            )
-            .await
-            {
-                return Err("peer_claim_welcome_invalid");
-            }
             principal
         }
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
             recipient_agent_id,
-            recipient_agent_verification_method,
             agent_key_authorize_event_id,
+            ..
         } => {
             if welcome.recipient_principal_id.as_ref() != Some(recipient_agent_id)
                 || !matches!(
@@ -1567,13 +1557,6 @@ async fn validate_welcome_peer_claim_ledger(
                     arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(claim_event_id)
                         if claim_event_id.as_str() == agent_key_authorize_event_id.as_str()
                 )
-                || !current_agent_key_authorization_matches_method(
-                    state,
-                    recipient_agent_id,
-                    agent_key_authorize_event_id.as_str(),
-                    recipient_agent_verification_method.as_str(),
-                )
-                .await
             {
                 return Err("peer_claim_welcome_invalid");
             }
@@ -1581,21 +1564,9 @@ async fn validate_welcome_peer_claim_ledger(
         }
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
             recipient_pairwise_actor_id,
-            recipient_pairwise_verification_method,
+            ..
         } => {
-            let realm = RealmId::new(realm_id.to_owned())
-                .map_err(|_| "peer_claim_welcome_invalid")?;
-            if welcome.recipient_principal_id.is_some()
-                || ensure_pairwise_realm_affinity(
-                    state,
-                    recipient_pairwise_actor_id,
-                    recipient_pairwise_verification_method,
-                    &realm,
-                    state.service_id(),
-                )
-                .await
-                .is_err()
-            {
+            if welcome.recipient_principal_id.is_some() {
                 return Err("peer_claim_welcome_invalid");
             }
             recipient_pairwise_actor_id
@@ -1607,18 +1578,18 @@ async fn validate_welcome_peer_claim_ledger(
         || receipt.source_id.as_str() != source_id
         || required_destination_service_id
             .is_some_and(|expected| receipt.destination_id.as_str() != expected)
-        || request.requester_id.as_str() != actor_id
+        || !welcome_requester_matches_receipt(
+            &actor,
+            &welcome.claim_envelope.requester_actor_id,
+            &request.requester_id,
+            &receipt.source_id,
+        )
         || &request.target_principal_id != recipient_actor_id
         || request.intended_realm_id.as_str() != realm_id
         || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
         || request.expires_at != receipt.expires_at
         || receipt.expires_at <= now()
         || welcome.claim_envelope.intended_realm_id != request.intended_realm_id
-        || welcome.claim_envelope.requester_actor_id
-            != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                request.requester_id.clone(),
-                receipt.source_id.clone(),
-            ))
     {
         return Err("peer_claim_welcome_invalid");
     }
@@ -1762,6 +1733,107 @@ async fn validate_welcome_peer_claim_ledger(
             && claim.agent_key_authorize_event_id.is_none()
             && claim.pairwise_verification_method.as_ref()
                 == Some(recipient_pairwise_verification_method) => {}
+        _ => return Err("peer_claim_welcome_invalid"),
+    }
+    // Only the destination Station owns the current endpoint directory. At
+    // the origin, the verified receipt and exact durable ledger above carry
+    // the destination's admission decision; a same-principal local row does not.
+    if receipt.destination_id.as_str() == state.service_id() {
+        validate_local_welcome_recipient_authorization(state, &welcome, realm_id).await?;
+    }
+    Ok(())
+}
+
+fn welcome_requester_matches_receipt(
+    actor: &arkret_wire::ActorId,
+    requester: &arkret_wire::ActorId,
+    requester_principal: &arkret_wire::DidCoreId,
+    source_station: &arkret_wire::DidCoreId,
+) -> bool {
+    actor == requester
+        && actor.signing_principal_id() == requester_principal
+        && actor.route_service_id() == source_station
+}
+
+async fn validate_local_welcome_recipient_authorization(
+    state: &AppState,
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    realm_id: &str,
+) -> Result<(), &'static str> {
+    use arkret_models_collaboration::events_payloads::{MlsClaimTrustBinding, MlsWelcomeRecipient};
+    if welcome.claim_receipt.destination_id.as_str() != state.service_id() {
+        return Err("peer_claim_welcome_invalid");
+    }
+    match (&welcome.recipient, &welcome.claim_ref.trust_binding) {
+        (
+            MlsWelcomeRecipient::Device {
+                recipient_device_id,
+            },
+            MlsClaimTrustBinding::DeviceAuthorizeEventId(event_id),
+        ) => {
+            let principal = welcome
+                .recipient_principal_id
+                .as_ref()
+                .ok_or("peer_claim_welcome_invalid")?;
+            if !current_device_authorization_matches(
+                state,
+                principal,
+                recipient_device_id.as_str(),
+                event_id.as_str(),
+            )
+            .await
+            {
+                return Err("peer_claim_welcome_invalid");
+            }
+        }
+        (
+            MlsWelcomeRecipient::NativeAgent {
+                recipient_agent_id,
+                recipient_agent_verification_method,
+                agent_key_authorize_event_id,
+            },
+            MlsClaimTrustBinding::AgentKeyAuthorizeEventId(_),
+        ) => {
+            let actor = arkret_wire::ActorId::hosted_principal(
+                recipient_agent_id.clone(),
+                welcome.claim_receipt.destination_id.clone(),
+            );
+            if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+                state, &actor,
+            )
+            .await
+            .map_err(|_| "peer_claim_welcome_invalid")?
+            .is_none()
+                || !current_agent_key_authorization_matches_method(
+                    state,
+                    recipient_agent_id,
+                    agent_key_authorize_event_id.as_str(),
+                    recipient_agent_verification_method.as_str(),
+                )
+                .await
+            {
+                return Err("peer_claim_welcome_invalid");
+            }
+        }
+        (
+            MlsWelcomeRecipient::MinimalMetadataPairwise {
+                recipient_pairwise_actor_id,
+                recipient_pairwise_verification_method,
+            },
+            MlsClaimTrustBinding::MinimalMetadataPairwise { .. },
+        ) => {
+            let realm =
+                RealmId::new(realm_id.to_owned()).map_err(|_| "peer_claim_welcome_invalid")?;
+            ensure_pairwise_realm_affinity(
+                state,
+                recipient_pairwise_actor_id,
+                recipient_pairwise_verification_method,
+                &realm,
+                welcome.claim_receipt.destination_id.as_str(),
+            )
+            .await
+            .map_err(|_| "peer_claim_welcome_invalid")?;
+        }
         _ => return Err("peer_claim_welcome_invalid"),
     }
     Ok(())
@@ -4803,6 +4875,30 @@ mod trust_binding_tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn welcome_receipt_requester_preserves_account_station_and_hosted_branch() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:requester.example").unwrap();
+        let source = arkret_wire::DidCoreId::new("ak:did_core:web:source.example").unwrap();
+        let other = arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
+        let account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            source.clone(),
+        ));
+        let hosted = arkret_wire::ActorId::hosted_principal(principal.clone(), source.clone());
+        assert!(welcome_requester_matches_receipt(
+            &account, &account, &principal, &source
+        ));
+        assert!(welcome_requester_matches_receipt(
+            &hosted, &hosted, &principal, &source
+        ));
+        assert!(!welcome_requester_matches_receipt(
+            &account, &account, &principal, &other
+        ));
+        assert!(!welcome_requester_matches_receipt(
+            &account, &hosted, &principal, &source
+        ));
+    }
 
     fn pairwise_endpoint(seed: [u8; 32]) -> (arkret_wire::DidCoreId, arkret_wire::DidUrl) {
         let key = ed25519_dalek::SigningKey::from_bytes(&seed)

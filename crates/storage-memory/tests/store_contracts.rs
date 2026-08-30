@@ -177,13 +177,23 @@ async fn memory_adapter_satisfies_shared_federation_outbox_contract() {
 #[tokio::test]
 async fn memory_adapter_satisfies_mls_keypackage_retirement_contract() {
     let store = SolandMemoryPersistenceStore::new();
-    assert_mls_keypackage_retirement_contract(store.mls_key_packages(), "memory-retirement").await;
+    assert_mls_keypackage_retirement_contract(
+        store.mls_key_packages(),
+        store.accounts(),
+        "memory-retirement",
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn memory_adapter_satisfies_last_resort_claim_ledger_contract() {
     let store = SolandMemoryPersistenceStore::new();
-    assert_last_resort_claim_ledger_contract(store.mls_key_packages(), "memory-last-resort").await;
+    assert_last_resort_claim_ledger_contract(
+        store.mls_key_packages(),
+        store.accounts(),
+        "memory-last-resort",
+    )
+    .await;
 }
 
 fn account_data_record(

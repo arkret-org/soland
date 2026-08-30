@@ -1060,7 +1060,6 @@ async fn prepare_federated_transition(
 async fn submit_federated_cascade_after_transport_validation(
     state: &AppState,
     submission: &arkret_models_collaboration::governance::agent_membership_cascade::AgentMembershipCascadeFederationSubmission,
-    source_id: &arkret_wire::DidCoreId,
     source_trust_domain: &str,
     request_hash: &str,
     admitted_producers: &BTreeMap<String, (arkret_wire::DidUrl, arkret_wire::DidKey)>,
@@ -1646,7 +1645,6 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     match submit_federated_cascade_after_transport_validation(
         state,
         &submission,
-        &source_id,
         &source_trust_domain,
         &request_hash,
         &admitted_producers,

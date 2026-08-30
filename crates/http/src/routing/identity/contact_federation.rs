@@ -66,11 +66,6 @@ fn core_id_matches_actor(
     core_id == actor_id.signing_principal_id()
 }
 
-fn did_str_projects_to_actor(did: &str, actor_id: &arkret_wire::ActorId) -> bool {
-    arkret_wire::DidCoreId::new(did.to_owned())
-        .is_ok_and(|core_id| core_id == *actor_id.signing_principal_id())
-}
-
 use super::now;
 use crate::state::AppState;
 

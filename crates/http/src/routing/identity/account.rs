@@ -331,22 +331,6 @@ fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError
     }
 }
 
-async fn account_exists(
-    state: &AppState,
-    account_principal_id: &DidCoreId,
-) -> Result<(), AppError> {
-    state
-        .identities()
-        .account(&arkret_wire::AccountId::new(
-            account_principal_id.clone(),
-            state.service_core_id().clone(),
-        ))
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .map(|_| ())
-        .ok_or_else(|| AppError::not_found("account not found"))
-}
-
 async fn local_account_pk(
     state: &AppState,
     account_principal_id: &DidCoreId,
