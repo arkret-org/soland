@@ -223,11 +223,11 @@ async fn stage_agent_membership_cascade(
             let submitted_agent_ids = events
                 .iter()
                 .filter(|request| request.event.event_id != controller_transition_event_id.as_str())
-                .map(|request| request.event.actor_id.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
+                .map(|request| soland_storage::admitted_cascade_agent_id(&request.event))
+                .collect::<PersistenceResult<std::collections::BTreeSet<_>>>()?;
             let expected_agent_ids = expected_agent_ids
                 .iter()
-                .map(arkret_wire::DidCoreId::as_str)
+                .cloned()
                 .collect::<std::collections::BTreeSet<_>>();
             if submitted_agent_ids != expected_agent_ids {
                 return Err(PersistenceError::Conflict(
@@ -351,12 +351,12 @@ async fn stage_agent_membership_cascade(
                 .collect::<std::collections::BTreeSet<_>>();
             let actor_ids = events
                 .iter()
-                .map(|request| request.event.actor_id.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
+                .map(|request| soland_storage::admitted_cascade_agent_id(&request.event))
+                .collect::<PersistenceResult<std::collections::BTreeSet<_>>>()?;
             let expected_actor_ids = record
                 .expected_agent_ids
                 .iter()
-                .map(arkret_wire::DidCoreId::as_str)
+                .cloned()
                 .collect::<std::collections::BTreeSet<_>>();
             if record.controller_terminal_event_id != *controller_terminal_event_id
                 || event_ids != submitted_event_ids

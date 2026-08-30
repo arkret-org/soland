@@ -4177,11 +4177,15 @@ pub async fn assert_account_status_replica_decision_table_contract(
     store: &dyn AccountStatusReplicaStore,
     namespace: &str,
 ) {
-    let account_id = format!("account-{namespace}");
-    let genesis = account_status_record(&account_id, 1, None, 2, AccountStatus::Active, 1);
+    let account_label = format!("account-{namespace}");
+    let genesis = account_status_record(&account_label, 1, None, 2, AccountStatus::Active, 1);
+    let account_id = genesis
+        .account_id
+        .canonical_key()
+        .expect("canonical AccountId storage key");
     let authority = genesis.account_authority_id.as_str().to_owned();
     let second = account_status_record(
-        &account_id,
+        &account_label,
         2,
         Some(genesis.account_status_record_id.clone()),
         2,
@@ -4189,7 +4193,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
         2,
     );
     let third = account_status_record(
-        &account_id,
+        &account_label,
         3,
         Some(second.account_status_record_id.clone()),
         2,
@@ -4259,7 +4263,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
     );
 
     // fork_same_sequence: a different record at the head sequence.
-    let rival_genesis = account_status_record(&account_id, 1, None, 2, AccountStatus::Active, 4);
+    let rival_genesis = account_status_record(&account_label, 1, None, 2, AccountStatus::Active, 4);
     assert_eq!(
         store
             .append(&rival_genesis, &account_status_receipt(&rival_genesis, 4))
@@ -4280,7 +4284,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
 
     // fork_predecessor_mismatch: the next sequence that does not name the head.
     let forked_successor = account_status_record(
-        &account_id,
+        &account_label,
         2,
         Some(rival_genesis.account_status_record_id.clone()),
         2,
@@ -4330,7 +4334,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
     // binding_version_rollback is evaluated before the advance row, so a rolled
     // back binding at head + 1 is rejected instead of advancing the chain.
     let rollback_successor = account_status_record(
-        &account_id,
+        &account_label,
         2,
         Some(genesis.account_status_record_id.clone()),
         1,
@@ -4429,7 +4433,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
     // stale also covers a different record below the head: the head decides,
     // never the retained history row.
     let rival_second = account_status_record(
-        &account_id,
+        &account_label,
         2,
         Some(genesis.account_status_record_id.clone()),
         2,
@@ -4448,7 +4452,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
 
     // binding_version_rollback still precedes the sequence rows below the head.
     let rollback_below_head = account_status_record(
-        &account_id,
+        &account_label,
         2,
         Some(genesis.account_status_record_id.clone()),
         1,

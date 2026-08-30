@@ -9,6 +9,38 @@ use crate::{
     PersistenceResult, ProjectionEventRecord,
 };
 
+/// Project an already-admitted Agent cascade Event onto the frozen Agent DID
+/// set. This is not admission authority: the full signed actor (including its
+/// hosting Station) must remain identical in the canonical record and payload.
+/// An adapter must never guess an Agent's Station from its controller.
+pub fn admitted_cascade_agent_id(
+    record: &CanonicalEventRecord,
+) -> PersistenceResult<arkret_wire::DidCoreId> {
+    let event: arkret_wire::Event =
+        serde_json::from_value(record.envelope.clone()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("invalid Agent cascade Event: {error}"))
+        })?;
+    let arkret_wire::ActorId::HostedPrincipal { principal_id, .. } = &event.actor_id else {
+        return Err(PersistenceError::Conflict(
+            "Agent cascade requires a hosted principal actor".to_owned(),
+        ));
+    };
+    if record.actor_id != event.actor_id.to_string()
+        || event.kind != arkret_wire::EventKind::MemberState
+        || event
+            .payload
+            .get("member_id")
+            .and_then(|member| serde_json::from_value::<arkret_wire::ActorId>(member.clone()).ok())
+            .as_ref()
+            != Some(&event.actor_id)
+    {
+        return Err(PersistenceError::Conflict(
+            "Agent cascade canonical actor does not bind the full Event member".to_owned(),
+        ));
+    }
+    Ok(principal_id.clone())
+}
+
 /// One Contact projection mutation committed with its canonical Event and
 /// federation intent. `expected_updated_at=None` is an insert-only slot;
 /// `Some` is a whole-row CAS against the revision read by admission.

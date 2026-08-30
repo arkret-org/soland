@@ -278,8 +278,8 @@ mod tests {
             canonical_event_bytes: br#"{"event_id":"ak:event:request"}"#.to_vec(),
             source_receipt: serde_json::from_value(serde_json::json!({
                 "core": {
-                    "holder": {"kind": "human", "principal_id": "ak:did_core:web:holder.example"},
-                    "peer": {"kind": "human", "principal_id": "ak:did_core:web:peer.example"},
+                    "holder": {"kind": "human", "account_id": {"principal_id": "ak:did_core:web:holder.example", "station_id": "ak:did_core:web:holder-station.example"}},
+                    "peer": {"kind": "human", "account_id": {"principal_id": "ak:did_core:web:peer.example", "station_id": "ak:did_core:web:peer-station.example"}},
                     "slot_version": 1,
                     "request_event_ref": "ak:event:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-",
                     "source_checkpoint": format!("sha256:{}", "b".repeat(64)),
