@@ -668,7 +668,8 @@ pub(super) async fn register_package_install(
     authoring_request_digest: String,
     res: &mut Response,
 ) -> Result<AppletInstallOutcome, AppError> {
-    let owner_actor = crate::routing::identity::session_actor_from_credential(state, session)?;
+    let owner_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let owner_actor_key = owner_actor.to_string();
     let owner_actor_id = owner_actor_key.as_str();
     let validated_events =
@@ -1521,7 +1522,8 @@ pub(super) async fn require_realm_admin(
 ) -> Result<(), AppError> {
     let realm_id = effective_scope_realm_id(scope);
     let (owner, members) = realm_owner_and_members(state, &realm_id).await;
-    let actor = crate::routing::identity::session_actor_from_credential(state, session)?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     if state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {

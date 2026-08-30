@@ -144,7 +144,8 @@ async fn install_preview_endpoint(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
-    let session_actor = crate::routing::identity::session_actor_from_credential(state, &session)?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let basis = &preview.authoring_request_basis;
     if basis.target_station_id.as_str() != state.service_id()
         || basis.install_actor_id != session_actor
@@ -346,7 +347,8 @@ async fn install_endpoint(
         .await
         .map_err(|error| AppError::param_invalid(format!("bundle proof is invalid: {error}")))?;
     }
-    let session_actor = crate::routing::identity::session_actor_from_credential(state, &session)?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let approved_scopes = approved_scopes_from_formal_install_events(
         state,
         &commit,
