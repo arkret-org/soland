@@ -1074,7 +1074,8 @@ async fn run_multiplex(
                     close_code = Some(WebSocketCloseCode::PolicyViolation);
                     break;
                 };
-                if grant.account_id.principal_id.as_str() != session.actor
+                if session.session_grant.as_ref().is_none_or(|original| grant.account_id != original.account_id)
+                    || grant.account_id.principal_id.as_str() != session.actor
                     || device_id != session.device_id
                     || grant.audience_id.as_str() != session.audience
                     || grant.expires_at <= chrono::Utc::now()
@@ -1682,6 +1683,12 @@ async fn run_events_channel(
             )
             .await;
             replayed_event_ids.insert(event.event_id.to_string());
+            if authorize_actor_only_selectors(&state, Some(&session), &actor_filter)
+                .await
+                .is_err()
+            {
+                return WebSocketClosedReason::Unauthorized;
+            }
             if !emit_events_event(
                 &sender,
                 &channel_id,

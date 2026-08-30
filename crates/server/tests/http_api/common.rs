@@ -2815,8 +2815,10 @@ fn typed_relation_create_payload(payload: Value) -> Value {
         scope_circle_id: None,
         effective_scope: None,
         relation_kind: arkret_wire::RelationKind::from_wire(&kind),
-        from_ref,
-        to_ref,
+        from_ref: arkret_models_collaboration::objects::relation::RelationEndpoint::Object(
+            from_ref,
+        ),
+        to_ref: arkret_models_collaboration::objects::relation::RelationEndpoint::Object(to_ref),
         rank: None,
         fields: Default::default(),
         state: None,
