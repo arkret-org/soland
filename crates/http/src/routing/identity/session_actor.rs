@@ -174,4 +174,47 @@ mod tests {
             ActorId::HostedPrincipal { .. }
         ));
     }
+
+    #[tokio::test]
+    async fn account_pk_cannot_substitute_the_same_principal_at_another_station() {
+        let state = state();
+        let mut session = session(&state);
+        let local_account = session_actor_from_credential(&state, &session)
+            .unwrap()
+            .as_account_id()
+            .unwrap()
+            .clone();
+        for (pk, account_id) in [
+            (soland_storage::AccountPk(1), local_account.clone()),
+            (
+                soland_storage::AccountPk(2),
+                AccountId::new(
+                    local_account.principal_id.clone(),
+                    DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+                ),
+            ),
+        ] {
+            state
+                .identities()
+                .save_account(soland_services::identity::AccountProfileState {
+                    pk,
+                    principal_id: account_id.principal_id.clone(),
+                    account_id,
+                    localpart: format!("account-{}", pk.0),
+                    display_name: None,
+                    bio: None,
+                    avatar_blob_ref: None,
+                    created_at: chrono::Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+        session.account_pk = Some(soland_storage::AccountPk(1));
+        assert_eq!(
+            validated_session_actor(&state, &session).await.unwrap(),
+            ActorId::account(local_account)
+        );
+        session.account_pk = Some(soland_storage::AccountPk(2));
+        assert!(validated_session_actor(&state, &session).await.is_err());
+    }
 }

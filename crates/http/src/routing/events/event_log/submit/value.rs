@@ -1167,10 +1167,9 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         return Ok(SelfPrincipalPcrAuthority::Rejected(reason));
     }
     let snapshot = state.projections().snapshot();
-    if !snapshot.realm_is_principal_control_for_actor(
-        event.realm_id.as_str(),
-        event.actor_id.signing_principal_id().as_str(),
-    ) {
+    if !snapshot
+        .realm_is_principal_control_for_actor(event.realm_id.as_str(), &event.actor_id.to_string())
+    {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
             "event Realm is not the actor's accepted PCR",
         ));

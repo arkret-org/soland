@@ -340,7 +340,13 @@ async fn issue_seal_availability_receipts(
     let own_pcr = state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(request.realm_id.as_str(), session_core_id.as_str());
+        .realm_is_principal_control_for_actor(
+            request.realm_id.as_str(),
+            &crate::routing::identity::session_actor::session_actor_from_credential(
+                state, &session,
+            )?
+            .to_string(),
+        );
     let managed_agent = if own_pcr {
         None
     } else {
@@ -667,7 +673,13 @@ async fn submit_event_seal(
     let own_pcr = state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(seal.realm_id.as_str(), session_core_id.as_str());
+        .realm_is_principal_control_for_actor(
+            seal.realm_id.as_str(),
+            &crate::routing::identity::session_actor::session_actor_from_credential(
+                state, &session,
+            )?
+            .to_string(),
+        );
     let managed_agent = if own_pcr {
         None
     } else {
@@ -1368,20 +1380,11 @@ async fn verified_contact_mirror_event(
         })?,
     )
     .map_err(|error| AppError::internal(format!("Contact mirror payload decode: {error}")))?;
-    if payload
-        .peer
-        .contact_actor_id()
-        .signing_principal_id()
-        .as_str()
-        != session.actor.as_str()
-    {
+    let session_actor_id =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    if payload.peer.contact_actor_id() != session_actor_id {
         return Ok(None);
     }
-    let session_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(session.actor.clone())
-            .map_err(|error| AppError::internal(format!("invalid session actor id: {error}")))?,
-        state.service_core_id().clone(),
-    ));
     let Ok(Some(contact)) = state
         .contacts()
         .contact_any(&event.actor_id, &session_actor_id)
@@ -1696,7 +1699,8 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let session_actor = crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await

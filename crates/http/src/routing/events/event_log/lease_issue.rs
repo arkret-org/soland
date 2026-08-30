@@ -212,13 +212,8 @@ async fn issue_intent_leases(
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AuthorizationLease>, AppError> {
-    let actor_id = arkret_identifiers::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::PolicyViolation,
-            format!("session actor DID is invalid: {error}"),
-        )
-        .with_status(StatusCode::FORBIDDEN)
-    })?;
+    let actor_id =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let device_id = arkret_wire::DeviceId::new(session.device_id.clone()).map_err(|error| {
         AppError::new(
             ErrorCode::PolicyViolation,
@@ -248,7 +243,7 @@ async fn issue_intent_leases(
                 .snapshot()
                 .realm_is_principal_control_for_actor(
                     intent.scope_ref.realm_id().as_str(),
-                    actor_id.as_str(),
+                    &actor_id.to_string(),
                 )
         {
             return Err(AppError::new(
@@ -291,10 +286,7 @@ async fn issue_intent_leases(
         )?;
         leases.push(sign_lease_fields(
             state,
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                actor_id.clone(),
-                state.service_core_id().clone(),
-            )),
+            actor_id.clone(),
             device_id.clone(),
             intent.scope_ref.clone(),
             intent.basis_ref.clone(),
