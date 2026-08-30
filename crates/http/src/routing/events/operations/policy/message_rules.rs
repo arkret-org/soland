@@ -258,7 +258,12 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         .and_then(Value::as_str)
         .ok_or("principal_control_event_missing_principal_id")?;
     let snapshot = state.projections().snapshot();
-    if snapshot.realm_is_principal_control_for_actor(operation.realm_id.as_str(), principal) {
+    if principal == operation.context.sender.signing_principal_id().as_str()
+        && snapshot.realm_is_principal_control_for_actor(
+            operation.realm_id.as_str(),
+            &operation.context.sender.to_string(),
+        )
+    {
         Ok(())
     } else {
         Err("principal_control_realm_mismatch")
@@ -287,43 +292,24 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     if !explicit_agent_control && !possible_agent_profile_or_genesis {
         return Ok(());
     }
-    let agent_id = if explicit_agent_control {
-        operation
-            .payload
-            .get("agent_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-    } else if kind == arkret_wire::EventKind::RealmCreate.as_str() {
-        // The canonical Realm genesis object is profile-closed and therefore
-        // carries no duplicated `created_by` field. Its principal is the
-        // accepted Event actor retained by the projection context.
-        Some(operation.context.sender.to_string())
-    } else {
-        operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("actor_id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .or_else(|| Some(operation.context.sender.to_string()))
-    };
-    let Some(agent_id) = agent_id else {
-        return if explicit_agent_control {
-            Err("managed_agent_control_event_missing_agent_id")
-        } else {
-            Ok(())
-        };
-    };
-    let expected = crate::routing::identity::managed_agent_pcr::resolve_agent_pcr_for_principal(
-        state, &agent_id,
+    let agent_actor = managed_agent_control_actor(
+        &operation.context.sender,
+        &operation.payload,
+        explicit_agent_control,
+    )?;
+    let record = crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+        state,
+        &agent_actor,
     )
     .await
     .map_err(|_| "managed_agent_principal_binding_unavailable")?;
-    let expected = match expected {
-        Some(expected) => expected,
+    let record = match record {
+        Some(record) => record,
         None if possible_agent_profile_or_genesis => return Ok(()),
         None => return Err("managed_agent_principal_binding_unavailable"),
     };
+    let agent_id = agent_actor.signing_principal_id().as_str();
+    let expected = &record.principal_control_realm_id;
     if !realm_ids_match(operation.realm_id.as_str(), &expected) {
         return Err("principal_control_realm_mismatch");
     }
@@ -337,12 +323,15 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
             .executed_by
             .as_ref()
             .ok_or("managed_agent_pcr_genesis_controller_missing")?;
-        let record = state
-            .agent_pairings()
-            .agent(&agent_id)
+        let controller_account =
+            crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
+                state, &record,
+            )
             .await
-            .map_err(|_| "managed_agent_principal_binding_unavailable")?
-            .ok_or("managed_agent_principal_binding_unavailable")?;
+            .map_err(|_| "managed_agent_principal_binding_unavailable")?;
+        if controller_id != &arkret_wire::ActorId::account(controller_account) {
+            return Err("managed_agent_principal_binding_unavailable");
+        }
         let initial_resolution = crate::routing::identity::managed_agent_pcr::managed_agent_initial_resolution_for_record(&record)
             .map_err(|_| "managed_agent_initial_resolution_unavailable")?;
         crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
@@ -358,8 +347,81 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     Ok(())
 }
 
+fn managed_agent_control_actor(
+    sender: &arkret_wire::ActorId,
+    payload: &Value,
+    explicit_agent_control: bool,
+) -> Result<arkret_wire::ActorId, &'static str> {
+    if explicit_agent_control {
+        let principal = payload
+            .get("agent_id")
+            .and_then(Value::as_str)
+            .ok_or("managed_agent_control_event_missing_agent_id")?;
+        if sender.signing_principal_id().as_str() != principal {
+            return Err("managed_agent_principal_binding_unavailable");
+        }
+        return Ok(sender.clone());
+    }
+    if let Some(actor) = payload
+        .get("object")
+        .and_then(|object| object.get("actor_id"))
+    {
+        return serde_json::from_value(actor.clone())
+            .map_err(|_| "managed_agent_principal_binding_unavailable");
+    }
+    Ok(sender.clone())
+}
+
 pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
     a == b
+}
+
+#[cfg(test)]
+mod managed_agent_actor_tests {
+    use super::*;
+
+    #[test]
+    fn genesis_profile_and_control_selectors_preserve_full_actor() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        let actor = arkret_wire::ActorId::hosted_principal(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        assert_eq!(
+            managed_agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
+            actor
+        );
+        assert_eq!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"object":{"actor_id":actor}}),
+                false
+            )
+            .unwrap(),
+            actor
+        );
+        assert_eq!(
+            managed_agent_control_actor(&actor, &serde_json::json!({"agent_id":principal}), true)
+                .unwrap(),
+            actor
+        );
+        assert!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"object":{"actor_id":principal}}),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"agent_id":"ak:did_core:web:other.example"}),
+                true
+            )
+            .is_err()
+        );
+    }
 }
 
 /// constraint-schema.md §14.2 — enforce the message edit / redact temporal

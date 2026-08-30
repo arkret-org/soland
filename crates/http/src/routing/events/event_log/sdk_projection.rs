@@ -750,8 +750,8 @@ fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
 }
 
-fn session_actor_core_id(session: &SessionRecord) -> Option<arkret_wire::DidCoreId> {
-    arkret_wire::DidCoreId::new(session.actor.clone()).ok()
+fn session_actor_id(state: &AppState, session: &SessionRecord) -> Option<arkret_wire::ActorId> {
+    crate::routing::identity::session_actor::session_actor_from_credential(state, session).ok()
 }
 
 fn is_governance_replay_input(record: &AcceptedEvent) -> bool {
@@ -821,9 +821,10 @@ pub(crate) async fn event_visible_to_session(
     record: &AcceptedEvent,
     session: &SessionRecord,
 ) -> bool {
-    if session_actor_core_id(session)
-        .is_some_and(|session_actor| session_actor.as_str() == record.actor_id)
-    {
+    let Some(session_actor) = session_actor_id(state, session) else {
+        return false;
+    };
+    if session_actor.to_string() == record.actor_id {
         return true;
     }
     match canonical_realm_id_for_record(record) {
@@ -836,7 +837,7 @@ pub(crate) async fn event_visible_to_session(
             let realm_visible = if is_governance_replay_input(record)
                 || is_validated_realm_bootstrap_member(state, record).await
             {
-                crate::routing::realm_has_member(state, &realm_id, &session.actor).await
+                crate::routing::realm_has_member(state, &realm_id, &session_actor.to_string()).await
             } else {
                 realm_event_visible_to_session(
                     state,
@@ -863,10 +864,10 @@ fn circle_event_visible_to_session(
     else {
         return true;
     };
-    let Some(session_actor) = session_actor_core_id(session) else {
+    let Some(session_actor) = session_actor_id(state, session) else {
         return false;
     };
-    if record.actor_id == session_actor.as_str() {
+    if record.actor_id == session_actor.to_string() {
         return true;
     }
     state
@@ -874,7 +875,7 @@ fn circle_event_visible_to_session(
         .snapshot()
         .circle_scope_visible_to_actor_at(
             &scope_circle_id,
-            session_actor.as_str(),
+            &session_actor.to_string(),
             record.received_at,
         )
 }
@@ -947,6 +948,41 @@ mod refs_limit_tests {
     use serde_json::json;
 
     use super::*;
+
+    #[tokio::test]
+    async fn own_event_visibility_never_crosses_station_accounts() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let session = SessionRecord {
+            token_hash: "test".into(),
+            account_pk: None,
+            actor: "ak:did_core:web:alice.example".into(),
+            device_id: "device".into(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            created_at: chrono::Utc::now(),
+            revoked_at: None,
+        };
+        let mut record = visibility_record(
+            arkret_wire::event_kind_str::MESSAGE_CREATE,
+            json!({"scope_ref": {"kind": "circle", "circle_id": "ak:circle:fixture"}}),
+        );
+        record.actor_id = session_actor_id(&state, &session).unwrap().to_string();
+        assert!(event_visible_to_session(&state, &record, &session).await);
+        assert!(circle_event_visible_to_session(&state, &record, &session));
+        record.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(session.actor.clone()).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ))
+        .to_string();
+        assert!(!event_visible_to_session(&state, &record, &session).await);
+        assert!(!circle_event_visible_to_session(&state, &record, &session));
+    }
 
     fn refs_object(refs: serde_json::Value) -> serde_json::Map<String, Value> {
         json!({ "refs": refs }).as_object().unwrap().clone()

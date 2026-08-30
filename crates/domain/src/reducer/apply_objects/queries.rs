@@ -35,16 +35,18 @@ fn is_membership_frontier_component(component: &str) -> bool {
         || component.contains("account.lifecycle")
 }
 
-fn value_mentions_actor(value: &Value, actor_id: &str) -> bool {
+fn value_mentions_actor(value: &Value, actor: &Value) -> bool {
+    if value == actor {
+        return true;
+    }
     match value {
-        Value::String(value) => value == actor_id,
         Value::Array(values) => values
             .iter()
-            .any(|value| value_mentions_actor(value, actor_id)),
+            .any(|value| value_mentions_actor(value, actor)),
         Value::Object(values) => values
             .values()
-            .any(|value| value_mentions_actor(value, actor_id)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+            .any(|value| value_mentions_actor(value, actor)),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
     }
 }
 
@@ -882,6 +884,9 @@ impl ProjectionState {
         realm_id: &str,
         actor_id: &str,
     ) -> Option<arkret_wire::Hash> {
+        let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
+        let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
+        let actor_value = serde_json::to_value(&actor).ok()?;
         if !self
             .members
             .contains_key(&(realm_id.to_owned(), actor_id.to_owned()))
@@ -898,14 +903,14 @@ impl ProjectionState {
                 {
                     return None;
                 }
-                let actor_subject = cell_ref.as_str().ends_with(&format!(":{actor_id}"));
-                let actor_value = match state {
+                let names_actor = cell_id.subject() == actor_subject;
+                let mentions_actor = match state {
                     arkret_state::lattice::CellState::Value(value) => {
-                        value_mentions_actor(value, actor_id)
+                        value_mentions_actor(value, &actor_value)
                     }
                     arkret_state::lattice::CellState::Bottom(_) => false,
                 };
-                (actor_subject || actor_value).then(|| (cell_ref.clone(), state.clone()))
+                (names_actor || mentions_actor).then(|| (cell_ref.clone(), state.clone()))
             })
             .collect::<BTreeMap<_, _>>();
         self.filtered_state_root(realm_id, &cells)
@@ -918,6 +923,9 @@ impl ProjectionState {
         realm_id: &str,
         actor_id: &str,
     ) -> Option<arkret_wire::Hash> {
+        let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id).ok()?;
+        let actor_subject = arkret_wire::composite_subject(&[actor.canonical_key().ok()?]).ok()?;
+        let actor_value = serde_json::to_value(&actor).ok()?;
         let mut cells = self
             .realm_policy_control_cells(realm_id)
             .into_iter()
@@ -934,10 +942,10 @@ impl ProjectionState {
             let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell_ref) else {
                 continue;
             };
-            let actor_subject = cell_ref.as_str().ends_with(&format!(":{actor_id}"));
-            let actor_value = match state {
+            let names_actor = cell_id.subject() == actor_subject;
+            let mentions_actor = match state {
                 arkret_state::lattice::CellState::Value(value) => {
-                    value_mentions_actor(value, actor_id)
+                    value_mentions_actor(value, &actor_value)
                         && (cell_id.component() != arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1
                             || grant_snapshot_from_value(value).realm_id.as_deref()
                                 == Some(realm_id))
@@ -946,7 +954,7 @@ impl ProjectionState {
             };
             if (is_membership_frontier_component(cell_id.component())
                 || cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1)
-                && (actor_subject || actor_value)
+                && (names_actor || mentions_actor)
             {
                 cells.insert(cell_ref.clone(), state.clone());
             }

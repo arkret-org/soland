@@ -1806,11 +1806,7 @@ async fn direct_conversation_resolve(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let peer_descriptor = &body.peer;
-    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        DidCoreId::new(session.actor.clone())
-            .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
-        state.service_core_id().clone(),
-    ));
+    let actor = super::session_actor::validated_session_actor(state, &session).await?;
     if peer_descriptor.contact_actor_id() == actor {
         return Err(AppError::param_invalid("invalid direct conversation peer"));
     }
@@ -1925,10 +1921,10 @@ async fn direct_conversation_resolve(
             });
         }
         if projection
-            .member(&binding.realm_id, &session.actor)
+            .member(&binding.realm_id, &actor.to_string())
             .is_none_or(|member| member.state != "join")
             || projection
-                .member(&binding.realm_id, peer.signing_principal_id().as_str())
+                .member(&binding.realm_id, &peer.to_string())
                 .is_none_or(|member| member.state != "join")
         {
             return json_ok(DirectConversationResolveOutcome::Suspended {

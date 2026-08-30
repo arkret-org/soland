@@ -52,8 +52,10 @@ pub struct ContactProjectionCommit {
     pub verified_mirror: Option<ContactVerifiedMirrorRecord>,
     /// Optional holder-private policy mutation committed in the same unit as
     /// the Contact Event and lineage projection.
-    pub invite_policy:
-        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+    pub invite_policy: Option<(
+        arkret_wire::AccountId,
+        arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    )>,
 }
 
 /// All durable writes produced by accepting one canonical event.

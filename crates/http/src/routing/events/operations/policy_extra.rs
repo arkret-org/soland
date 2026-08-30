@@ -386,10 +386,15 @@ async fn validate_sidecar_mention_subjects(
     if subjects.is_empty() {
         return Ok(());
     }
+    let controller = serde_json::from_str::<arkret_wire::ActorId>(&controller_id)
+        .map_err(|_| "addressed_agent_not_eligible")?;
+    let controller_account = controller
+        .as_account_id()
+        .ok_or("addressed_agent_not_eligible")?;
     let desired = crate::routing::identity::agents::sidecar::derive_sidecar_desired_agent_ids(
         state,
         &realm_id,
-        &controller_id,
+        controller_account,
     )
     .await
     .map_err(|_| "addressed_agent_not_eligible")?;
@@ -409,14 +414,19 @@ pub(crate) async fn realm_owner_and_members(
 ) -> (Option<String>, Vec<String>) {
     let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     let owner = meta.map(|meta| meta.owner);
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        arkret_identifiers::RealmId::new(realm_id.to_owned())
-            .ok()
-            .and_then(|id| realms.get(&id))
-            .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-            .unwrap_or_default()
-    };
+    let projection = state.projections().snapshot();
+    let members = projection
+        .members_of_realm(realm_id)
+        .into_iter()
+        .filter(|member| serde_json::from_str::<arkret_wire::ActorId>(&member.member).is_ok())
+        .filter(|member| {
+            projection
+                .agent_membership_binding(realm_id, &member.member)
+                .is_none()
+                || projection.effective_agent_membership_base(realm_id, &member.member)
+        })
+        .map(|member| member.member.clone())
+        .collect();
     (owner, members)
 }
 
@@ -610,4 +620,53 @@ fn policy_declares_audience_quota(policy: &Value, audience_policy: Option<&Value
                     .and_then(Value::as_str)
                     .is_some_and(|value| !value.trim().is_empty())
         })
+}
+
+#[cfg(test)]
+mod actor_membership_context_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn authorization_context_does_not_promote_directory_principals_into_accounts() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b";
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let mut directory = soland_services::events::RealmDirectoryEntry::new(
+            arkret_wire::RealmId::new(realm_id).unwrap(),
+            "discovery",
+            soland_services::events::DirectoryProvenance::LocalOnly,
+        );
+        directory.members.insert(principal);
+        state.realm_directory().upsert(directory);
+        assert!(realm_owner_and_members(&state, realm_id).await.1.is_empty());
+        let now = chrono::Utc::now();
+        state.test_projection().lock().members.insert(
+            (realm_id.to_owned(), actor.to_string()),
+            soland_domain::reducer::SolandMembershipState {
+                member: actor.to_string(),
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                membership_event_ref: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+        assert_eq!(
+            realm_owner_and_members(&state, realm_id).await.1,
+            vec![actor.to_string()]
+        );
+    }
 }

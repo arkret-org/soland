@@ -2009,6 +2009,69 @@ async fn applet_managed_actor_pcr_access(
 mod applet_managed_actor_pcr_access_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn canonical_frontier_keeps_same_principal_station_sequences_independent() {
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm = RealmId::new("ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI").unwrap();
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        for (station, sequence) in [("station-a", 7_u64), ("station-b", 20_u64)] {
+            let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal.clone(),
+                arkret_wire::DidCoreId::new(format!("ak:did_core:web:{station}.example")).unwrap(),
+            ));
+            let event = arkret_wire::test_support::raw_event_for_actor_at(
+                "ak.member.state",
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                actor.clone(),
+                sequence,
+                arkret_wire::Hlc::new(format!("019041000000-{sequence:04x}-00000001")).unwrap(),
+                serde_json::json!({"member_id": actor, "membership": "join", "realm_id": realm}),
+                chrono::Utc::now(),
+            )
+            .unwrap();
+            let envelope = serde_json::to_value(&event).unwrap();
+            state
+                .event_queries()
+                .store_canonical_event(soland_services::events::AcceptedEvent {
+                    event_id: event.event_id.to_string(),
+                    actor_id: actor.to_string(),
+                    actor_seq: sequence,
+                    realm_id: Some(realm.to_string()),
+                    kind: event.kind.to_string(),
+                    schema_id: "ak.event.v1".to_owned(),
+                    digest_suite: arkret_canonical::DigestSuite::Sha256,
+                    canonical_digest: event
+                        .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                        .unwrap(),
+                    canonical_bytes: crate::routing::events::event_log::event_canonical_bytes(
+                        &envelope,
+                    )
+                    .unwrap(),
+                    envelope,
+                    received_at: chrono::Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+        for (station, expected_sequence) in [("station-a", 8), ("station-b", 21)] {
+            let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal.clone(),
+                arkret_wire::DidCoreId::new(format!("ak:did_core:web:{station}.example")).unwrap(),
+            ));
+            let frontier = load_realm_actor_frontier(&state, realm.clone(), actor.clone())
+                .await
+                .unwrap();
+            assert_eq!(frontier.actor_id, actor);
+            assert_eq!(frontier.next_actor_seq, expected_sequence);
+            assert_eq!(frontier.frontier_event_ids.len(), 1);
+        }
+    }
+
     #[test]
     fn revoked_sibling_does_not_mask_live_scope_but_global_fence_is_terminal() {
         let mut access = None;
@@ -2093,10 +2156,7 @@ pub(crate) async fn load_realm_actor_frontier(
 ) -> Result<RealmActorFrontierView, AppError> {
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(
-            realm_id.as_str(),
-            actor_id.signing_principal_id().as_str(),
-        )
+        .canonical_events_for_realm_actor(realm_id.as_str(), &actor_id.to_string())
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
     let (next_actor_seq, frontier_event_ids) =

@@ -769,12 +769,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             &mut staged_account_data,
             request.consent_projection.as_ref(),
         )?;
-        if let Some(policy) = request
+        if let Some((account_id, policy)) = request
             .contact_projection
             .as_ref()
             .and_then(|commit| commit.invite_policy.as_ref())
         {
-            staged_invite_policies.insert(policy.account_id.clone(), policy.clone());
+            soland_storage::validate_invite_policy_account(account_id, policy)?;
+            staged_invite_policies.insert(account_id.clone(), policy.clone());
         }
         let event_id = request.event.event_id.clone();
         stage_canonical_event(&mut staged_events, request.event)?;
@@ -1037,12 +1038,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 &mut staged_contact_verified_mirrors,
                 event_request.contact_projection.as_ref(),
             )?;
-            if let Some(policy) = event_request
+            if let Some((account_id, policy)) = event_request
                 .contact_projection
                 .as_ref()
                 .and_then(|commit| commit.invite_policy.as_ref())
             {
-                staged_invite_policies.insert(policy.account_id.clone(), policy.clone());
+                soland_storage::validate_invite_policy_account(account_id, policy)?;
+                staged_invite_policies.insert(account_id.clone(), policy.clone());
             }
             stage_canonical_event(&mut staged_events, event_request.event)?;
             event_inserted = true;

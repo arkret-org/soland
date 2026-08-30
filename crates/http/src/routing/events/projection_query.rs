@@ -135,7 +135,7 @@ fn total_count(len: usize) -> Result<u64, AppError> {
 }
 
 fn projection_row_visible_to_session(
-    _state: &AppState,
+    state: &AppState,
     projection: &ProjectionState,
     realm_id: &str,
     session: &SessionRecord,
@@ -145,20 +145,20 @@ fn projection_row_visible_to_session(
     scope_circle_id: Option<&str>,
     history_access: &str,
 ) -> bool {
-    if sender == session.actor {
+    let Ok(actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return false;
+    };
+    let actor_key = actor.to_string();
+    if sender == actor_key {
         return true;
     }
-    if !projection_realm_history_allows(
-        projection,
-        realm_id,
-        &session.actor,
-        history_access,
-        created_at,
-    ) {
+    if !projection_realm_history_allows(projection, realm_id, &actor, history_access, created_at) {
         return false;
     }
     scope_circle_id.is_none_or(|circle_id| {
-        projection.circle_scope_visible_to_actor_at(circle_id, &session.actor, created_at)
+        projection.circle_scope_visible_to_actor_at(circle_id, &actor_key, created_at)
     })
 }
 
@@ -168,23 +168,24 @@ fn projection_row_visible_to_session(
 /// revisions. It must not hide the current Space/Strand row from an active
 /// Realm member merely because the object was created before that member
 /// joined. Circle-scoped rows still require current Circle visibility.
-fn current_projection_scope_visible_to_session(
+fn current_projection_scope_visible_to_actor(
     projection: &ProjectionState,
-    session: &SessionRecord,
+    actor: &arkret_wire::ActorId,
     scope_circle_id: Option<&str>,
 ) -> bool {
-    scope_circle_id
-        .is_none_or(|circle_id| projection.circle_scope_visible_to_actor(circle_id, &session.actor))
+    scope_circle_id.is_none_or(|circle_id| {
+        projection.circle_scope_visible_to_actor(circle_id, &actor.to_string())
+    })
 }
 
 fn projection_realm_history_allows(
     projection: &ProjectionState,
     realm_id: &str,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     history_access: &str,
     created_at: DateTime<Utc>,
 ) -> bool {
-    let Some(member) = projection.member(realm_id, actor) else {
+    let Some(member) = projection.member(realm_id, &actor.to_string()) else {
         return false;
     };
     if member.state != "join" {
@@ -375,13 +376,17 @@ fn document_projection_versions(morph: &MorphProjection) -> Vec<BTreeMap<String,
         .collect()
 }
 
-fn document_relation_visible_to_session(
+fn document_relation_visible_to_actor(
     projection: &ProjectionState,
     relation: &SolandRelationState,
-    session: &SessionRecord,
+    actor: &arkret_wire::ActorId,
 ) -> bool {
     relation.scope_circle_id.as_deref().is_none_or(|circle_id| {
-        projection.circle_scope_visible_to_actor_at(circle_id, &session.actor, relation.created_at)
+        projection.circle_scope_visible_to_actor_at(
+            circle_id,
+            &actor.to_string(),
+            relation.created_at,
+        )
     })
 }
 
@@ -427,7 +432,7 @@ fn message_event_id_from_projection_ref(ref_id: &str) -> String {
 fn target_info_for_relation_ref(
     projection: &ProjectionState,
     target_ref: Option<&str>,
-    session: &SessionRecord,
+    actor: &arkret_wire::ActorId,
 ) -> (
     Option<String>,
     bool,
@@ -447,7 +452,7 @@ fn target_info_for_relation_ref(
                 && space.scope_circle_id.as_deref().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor_at(
                         circle_id,
-                        &session.actor,
+                        &actor.to_string(),
                         space.created_at,
                     )
                 }),
@@ -467,7 +472,7 @@ fn target_info_for_relation_ref(
                 && strand.scope_circle_id.as_deref().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor_at(
                         circle_id,
-                        &session.actor,
+                        &actor.to_string(),
                         strand.created_at,
                     )
                 }),
@@ -487,7 +492,7 @@ fn target_info_for_relation_ref(
                 && morph.scope_circle_id.as_deref().is_none_or(|circle_id| {
                     projection.circle_scope_visible_to_actor_at(
                         circle_id,
-                        &session.actor,
+                        &actor.to_string(),
                         morph.created_at,
                     )
                 }),
@@ -503,8 +508,7 @@ fn target_info_for_relation_ref(
     if let Some(relation) = projection.relations.get(target_ref) {
         return (
             Some(relation.realm_id.clone()),
-            relation.is_active()
-                && document_relation_visible_to_session(projection, relation, session),
+            relation.is_active() && document_relation_visible_to_actor(projection, relation, actor),
             true,
             None,
         );
@@ -524,7 +528,7 @@ fn target_info_for_relation_ref(
                     && message_scope_circle_id(message).is_none_or(|circle_id| {
                         projection.circle_scope_visible_to_actor_at(
                             circle_id,
-                            &session.actor,
+                            &actor.to_string(),
                             message.created_at,
                         )
                     }),
@@ -546,7 +550,7 @@ fn document_relation_snapshot(
     projection: &ProjectionState,
     relation: &SolandRelationState,
     morph_id: &str,
-    session: &SessionRecord,
+    actor: &arkret_wire::ActorId,
 ) -> DocumentRelationSnapshot {
     let (target_ref, direction) = if relation.from_object_ref() == Some(morph_id) {
         (relation.to_ref.clone(), "outgoing")
@@ -563,7 +567,7 @@ fn document_relation_snapshot(
         target_ref
             .as_ref()
             .and_then(RelationEndpoint::as_object_ref),
-        session,
+        actor,
     );
     DocumentRelationSnapshot {
         relation: relation.clone(),
@@ -722,6 +726,8 @@ async fn document_projection_relations(
     realm_id: &str,
     session: &SessionRecord,
 ) -> Result<Vec<BTreeMap<String, Value>>, AppError> {
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let snapshots = {
         let projection = state.projections().snapshot();
         projection
@@ -733,14 +739,14 @@ async fn document_projection_relations(
                 relation.from_object_ref() == Some(morph_id)
                     || relation.to_object_ref() == Some(morph_id)
             })
-            .filter(|relation| document_relation_visible_to_session(&projection, relation, session))
+            .filter(|relation| document_relation_visible_to_actor(&projection, relation, &actor))
             .map(|relation| {
                 parse_projection_id::<RelationId>(&relation.relation_id, "relations.relation_id")?;
                 Ok(document_relation_snapshot(
                     &projection,
                     relation,
                     morph_id,
-                    session,
+                    &actor,
                 ))
             })
             .collect::<Result<Vec<_>, AppError>>()?
@@ -903,6 +909,8 @@ async fn list_space_container_projections(
 ) -> JsonResult<ProjectionSpaceList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
@@ -920,9 +928,9 @@ async fn list_space_container_projections(
         .values()
         .filter(|p| p.realm_id == realm_id)
         .filter(|p| {
-            current_projection_scope_visible_to_session(
+            current_projection_scope_visible_to_actor(
                 &proj,
-                &session,
+                &session_actor,
                 p.scope_circle_id.as_deref(),
             )
         })
@@ -975,6 +983,8 @@ async fn list_strand_projections(
 ) -> JsonResult<ProjectionStrandList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let realm_id = validate_realm_id(realm_id.into_inner())?;
     let response_realm_id = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
@@ -998,9 +1008,9 @@ async fn list_strand_projections(
         .values()
         .filter(|f| f.realm_id == realm_id)
         .filter(|f| {
-            current_projection_scope_visible_to_session(
+            current_projection_scope_visible_to_actor(
                 &proj,
-                &session,
+                &session_actor,
                 f.scope_circle_id.as_deref(),
             )
         })
@@ -1279,6 +1289,145 @@ fn parse_relation_endpoint_query(value: &str) -> Result<RelationEndpoint, AppErr
 mod relation_actor_endpoint_tests {
     use super::*;
 
+    #[test]
+    fn projection_history_and_authorship_do_not_cross_stations() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let local = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        ));
+        let now = Utc::now();
+        let session = SessionRecord {
+            token_hash: "test".into(),
+            account_pk: None,
+            actor: principal.to_string(),
+            device_id: "device".into(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now + chrono::Duration::hours(1),
+            created_at: now,
+            revoked_at: None,
+        };
+        let realm = "test-realm";
+        let mut projection = ProjectionState::new();
+        assert!(projection_row_visible_to_session(
+            &state,
+            &projection,
+            realm,
+            &session,
+            &local.to_string(),
+            now,
+            &[],
+            None,
+            "since_join"
+        ));
+        assert!(!projection_row_visible_to_session(
+            &state,
+            &projection,
+            realm,
+            &session,
+            &foreign.to_string(),
+            now,
+            &[],
+            None,
+            "since_join"
+        ));
+        assert!(!projection_row_visible_to_session(
+            &state,
+            &projection,
+            realm,
+            &session,
+            principal.as_str(),
+            now,
+            &[],
+            None,
+            "since_join"
+        ));
+        projection.members.insert(
+            (realm.into(), local.to_string()),
+            soland_domain::reducer::SolandMembershipState {
+                member: local.to_string(),
+                realm_id: realm.into(),
+                state: "join".into(),
+                role: "member".into(),
+                membership_event_ref: None,
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+                reason: None,
+            },
+        );
+        assert!(projection_realm_history_allows(
+            &projection,
+            realm,
+            &local,
+            "since_join",
+            now
+        ));
+        assert!(!projection_realm_history_allows(
+            &projection,
+            realm,
+            &foreign,
+            "since_join",
+            now
+        ));
+    }
+
+    #[test]
+    fn current_circle_projection_visibility_uses_complete_actor() {
+        let local = actor("station-a.example");
+        let foreign = actor("station-b.example");
+        let now = Utc::now();
+        let mut projection = ProjectionState::new();
+        projection.circles.insert(
+            "circle".into(),
+            soland_domain::reducer::CircleProjection {
+                circle_id: "circle".into(),
+                realm_id: "realm".into(),
+                profile_ref: None,
+                title: "Scoped".into(),
+                summary: None,
+                display: json!({}),
+                directory_visibility: "members".into(),
+                join_rule: "invite".into(),
+                history_access: "since_join".into(),
+                content_encryption_floor: None,
+                metadata_encryption_floor: None,
+                encryption_profile: "none".into(),
+                content_scheme: None,
+                durability_policy: None,
+                mls_group_ref: None,
+                state: soland_domain::reducer::CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: local.to_string(),
+                created_at: now,
+                updated_by: None,
+                updated_at: None,
+                members: std::collections::BTreeSet::from([local.to_string()]),
+            },
+        );
+        assert!(current_projection_scope_visible_to_actor(
+            &projection,
+            &local,
+            Some("circle")
+        ));
+        assert!(!current_projection_scope_visible_to_actor(
+            &projection,
+            &foreign,
+            Some("circle")
+        ));
+    }
+
     fn actor(station: &str) -> arkret_wire::ActorId {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new("ak:did_core:web:assignee.example").unwrap(),
@@ -1360,6 +1509,8 @@ async fn list_relation_projections(
 ) -> JsonResult<RelationEdgeList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let from_ref = soland_http::util::query_param(req, "from_ref")
         .map(|value| parse_relation_endpoint_query(&value))
         .transpose()?;
@@ -1397,7 +1548,7 @@ async fn list_relation_projections(
                 relation.scope_circle_id.as_deref().is_none_or(|circle_id| {
                     proj.circle_scope_visible_to_actor_at(
                         circle_id,
-                        &session.actor,
+                        &session_actor.to_string(),
                         relation.created_at,
                     )
                 })

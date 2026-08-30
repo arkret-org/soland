@@ -918,6 +918,17 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
             return;
         }
     };
+    // This table is the local Station Account device directory, not a remote
+    // principal mirror. Keep foreign accepted Events in the Event/reducer rail
+    // without allowing their devices to overwrite a local same-DID Account.
+    let Some(account_id) = operation.context.sender.as_account_id() else {
+        return;
+    };
+    if account_id.station_id != state.service_core_id()
+        || account_id.principal_id != typed.principal_id
+    {
+        return;
+    }
     let principal_id = typed.principal_id.as_str();
     let device_id = typed.device_id.as_str();
     let device_public_key = typed.device_public_key_did.trim();
@@ -1084,6 +1095,70 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn foreign_device_authorization_cannot_pollute_the_local_account_directory() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let device = "ak:device:01904100-0000-7000-8000-000000000001";
+        let key = "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ";
+        let mut operation = accepted_test_operation(
+            arkret_wire::OperationId::new("ak:operation:0196419b-1000-7000-8000-000000000204")
+                .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p")
+                .unwrap(),
+            principal.as_str(),
+            0,
+            arkret_wire::EventKind::DeviceAuthorize,
+            json!({
+                "principal_id": principal, "device_id": device, "device_public_key_did": key,
+                "hpke_key": "z6LSDeviceHpkeKey", "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
+                "device_key_algorithm": "Ed25519", "authorized_by": principal,
+                "not_before": "2026-08-31T00:00:00.000Z", "authorization_binding_kind": "registration_anchor",
+                "device_signature": "AA"
+            }),
+            chrono::Utc::now(),
+        );
+        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id().clone(),
+        ));
+        project_device_authorize(&state, &operation).await;
+        let query = || soland_services::identity::FindDeviceQuery {
+            actor_id: principal.to_string(),
+            device_id: device.into(),
+        };
+        let local = state
+            .identities()
+            .find_device(query())
+            .await
+            .unwrap()
+            .expect("local device projected");
+        assert_eq!(local.payload["device_public_key"], key);
+        let foreign = arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+        for actor in [
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), foreign)),
+            arkret_wire::ActorId::hosted_principal(
+                principal.clone(),
+                state.service_core_id().clone(),
+            ),
+        ] {
+            operation.context.sender = actor;
+            operation.payload["device_public_key_did"] = json!("did:key:foreign-key");
+            project_device_authorize(&state, &operation).await;
+            let unchanged = state
+                .identities()
+                .find_device(query())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(unchanged.payload, local.payload);
+            assert_eq!(unchanged.updated_at, local.updated_at);
+        }
+    }
 
     fn accepted_test_operation(
         operation_id: arkret_identifiers::OperationId,

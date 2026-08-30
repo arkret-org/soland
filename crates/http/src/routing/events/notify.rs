@@ -140,14 +140,13 @@ fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
                 .map(|member| member.member.clone()),
         );
         members.retain(|member| {
-            let Ok(actor) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
+            let Ok(_) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
                 return false;
             };
-            let principal = actor.signing_principal_id().as_str();
             projection
-                .agent_membership_binding(realm_id, principal)
+                .agent_membership_binding(realm_id, member)
                 .is_none()
-                || projection.effective_agent_membership_base(realm_id, principal)
+                || projection.effective_agent_membership_base(realm_id, member)
         });
     }
     members
@@ -365,15 +364,22 @@ pub(crate) async fn dispatch_message_notifications(
             continue;
         };
         // AKP-0016 §9.4.5 — agent third-party mention gate.
-        if let Ok(Some(agent_record)) = state
-            .identities()
-            .find_agent_controller(soland_services::identity::FindAgentControllerQuery {
-                agent_id: subject_actor.signing_principal_id().to_string(),
-            })
-            .await
+        if matches!(&subject_actor, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id())
+            && let Ok(Some(agent_record)) = state
+                .agent_pairings()
+                .agent(subject_actor.signing_principal_id().as_str())
+                .await
         {
-            let controller = agent_record.controller_id.as_str();
-            if operation.context.sender.signing_principal_id().as_str() != controller
+            let Ok(controller) =
+                crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
+                    state,
+                    &agent_record,
+                )
+                .await
+            else {
+                continue;
+            };
+            if operation.context.sender != arkret_wire::ActorId::account(controller)
                 && !agent_accepts_third_party_mention(
                     state,
                     subject_actor.signing_principal_id().as_str(),
@@ -642,10 +648,30 @@ mod tests {
     fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
         let principal = arkret_wire::DidCoreId::new(principal).unwrap();
         if principal.as_str() == "ak:did_core:web:agents.example:alice-summary" {
-            arkret_wire::ActorId::hosted_principal(principal.clone(), principal)
+            arkret_wire::ActorId::hosted_principal(principal, crate::test_event::station_id())
         } else {
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), principal))
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal,
+                crate::test_event::station_id(),
+            ))
         }
+    }
+
+    fn fixture_operation(
+        operation_id: arkret_identifiers::OperationId,
+        realm_id: RealmId,
+        event_kind: &str,
+        payload: Value,
+    ) -> arkret_event_draft::ProjectedEventOperation {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            operation_id,
+            realm_id,
+            event_kind,
+            payload,
+        );
+        operation.context.sender =
+            fixture_actor(operation.context.sender.signing_principal_id().as_str());
+        operation
     }
 
     async fn notifications_for(state: &AppState, recipient_id: &str) -> Vec<Value> {
@@ -696,6 +722,21 @@ mod tests {
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str, verification_method: &str) {
+        let controller_account = fixture_actor(controller).as_account_id().unwrap().clone();
+        state
+            .identities()
+            .save_account(soland_services::identity::AccountProfileState {
+                pk: soland_storage::AccountPk(101),
+                principal_id: controller_account.principal_id.clone(),
+                account_id: controller_account,
+                localpart: "controller".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
         let mut record = soland_services::identity::AgentPairingState::new(
             agent.to_owned(),
             controller.to_owned(),
@@ -706,6 +747,7 @@ mod tests {
         );
         record.agent_slug = Some("summary".to_owned());
         record.display_name = Some("Summary".to_owned());
+        record.controller_account_pk = Some(soland_storage::AccountPk(101));
         state
             .agent_pairings()
             .save_agent(record)
@@ -838,7 +880,7 @@ mod tests {
                 .expect("message payload object")
                 .insert("strand_id".to_owned(), json!(strand_id));
         }
-        arkret_event_draft::test_support::raw_projected_operation(
+        fixture_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
@@ -923,7 +965,7 @@ mod tests {
         assignee: &str,
     ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::test_support::raw_projected_operation(
+        fixture_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
@@ -953,7 +995,7 @@ mod tests {
         strand_id: &str,
     ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::test_support::raw_projected_operation(
+        fixture_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
@@ -981,7 +1023,7 @@ mod tests {
         strand_id: &str,
     ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
-        arkret_event_draft::test_support::raw_projected_operation(
+        fixture_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
@@ -1038,7 +1080,7 @@ mod tests {
                 .expect("message payload object")
                 .insert("strand_id".to_owned(), json!(strand_id));
         }
-        arkret_event_draft::test_support::raw_projected_operation(
+        fixture_operation(
             arkret_identifiers::OperationId::new(format!(
                 "ak:operation:01904100-0000-7000-8000-{seed}"
             ))
@@ -1214,7 +1256,7 @@ mod tests {
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009932", alice, strand_id, bob);
         state.projections().apply(&assignment, state.hlc());
-        let operation = arkret_event_draft::test_support::raw_projected_operation(
+        let operation = fixture_operation(
             arkret_identifiers::OperationId::new(
                 "ak:operation:01904100-0000-7000-8000-000000009933".to_owned(),
             )
@@ -1269,6 +1311,7 @@ mod tests {
         let controller = "ak:did_core:web:alice.example";
         let third_party = "ak:did_core:web:bob.example";
         let agent = "ak:did_core:web:agents.example:alice-summary";
+        seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
         put_agent(
             &state,
             agent,
@@ -1287,6 +1330,20 @@ mod tests {
         let controller_mention = mention_message(realm_id, "000000009983", controller, agent);
         dispatch_message_notifications(&state, &controller_mention).await;
         assert_eq!(notifications_for(&state, agent).await.len(), 1);
+
+        let mut foreign_controller_mention =
+            mention_message(realm_id, "000000009986", controller, agent);
+        foreign_controller_mention.context.sender =
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(controller).unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+            ));
+        dispatch_message_notifications(&state, &foreign_controller_mention).await;
+        assert_eq!(
+            notifications_for(&state, agent).await.len(),
+            1,
+            "the same principal at another Station does not bypass the third-party mention gate"
+        );
 
         set_realm_selection(&state, realm_id, agent, true, 1).await;
         let after_flip = notifications_for(&state, agent).await;
@@ -1327,6 +1384,7 @@ mod tests {
         let controller = "ak:did_core:web:alice.example";
         let third_party = "ak:did_core:web:bob.example";
         let agent = "ak:did_core:web:agents.example:alice-summary";
+        seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
         put_agent(
             &state,
             agent,

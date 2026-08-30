@@ -1,6 +1,6 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{DidCoreId, RealmId};
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_services::events::RealmMetadata as RealmMetaRecord;
 use soland_services::operation_semantics as kinds;
 

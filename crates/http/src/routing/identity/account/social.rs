@@ -331,7 +331,7 @@ pub(crate) async fn set_invite_receive_policy(
     // (hydrated back into the in-memory map by `AppState::hydrate`).
     state
         .contacts()
-        .save_invite_policy(policy.clone())
+        .save_invite_policy(&account_id, policy.clone())
         .await
         .map_err(|error| {
             tracing::error!(%error, actor = %session.actor, "failed to persist invite_receive_policy");

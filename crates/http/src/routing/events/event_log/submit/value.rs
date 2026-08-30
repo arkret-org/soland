@@ -2535,9 +2535,7 @@ pub(super) async fn submit_event_value_with_context(
         }
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_exchange_control_event(
-                state,
-                parsed.actor_id.as_str(),
-                operation,
+                state, operation,
             )
         {
             return Err(SubmitOneError::new(

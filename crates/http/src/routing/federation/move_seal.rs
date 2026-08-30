@@ -37,6 +37,16 @@ struct DeviceGenerationEventSealContext {
     bootstrap_device_public_key: String,
 }
 
+fn member_cell_for_actor(actor: &ActorId) -> Result<arkret_identifiers::CellRef, AppError> {
+    let key = actor
+        .canonical_key()
+        .map_err(|error| seal_admission_error(format!("member Actor invalid: {error}")))?;
+    let subject = arkret_wire::composite_subject(&[key])
+        .map_err(|error| seal_admission_error(format!("member cell subject invalid: {error}")))?;
+    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}"))
+        .map_err(|error| seal_admission_error(format!("member cell invalid: {error}")))
+}
+
 async fn verified_availability_dependency_writes(
     state: &AppState,
     seal: &Seal,
@@ -1061,11 +1071,7 @@ async fn try_apply_device_generation_event_seal(
         // The membership `from` is the frozen pre-state of the member cell, not
         // a producer-declared value: read it off the ops accumulated for this
         // Seal delta so far.
-        let member_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.member.state.v1:{}",
-            event.actor_id
-        ))
-        .map_err(|error| seal_admission_error(format!("member cell invalid: {error}")))?;
+        let member_cell = member_cell_for_actor(&event.actor_id)?;
         let mut accumulated: BTreeMap<
             arkret_identifiers::CellRef,
             Vec<arkret_state::lattice::ordered_log::IssuedOp>,
@@ -2182,6 +2188,34 @@ mod seal_delta_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn member_cell_subject_encodes_the_full_actor_and_separates_stations() {
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let local = ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            crate::test_event::station_id(),
+        ));
+        let foreign = ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let cell = member_cell_for_actor(&local).unwrap();
+        assert_ne!(cell, member_cell_for_actor(&foreign).unwrap());
+        let event = crate::test_event::raw_event(
+            arkret_wire::EventKind::InviteAccept.as_str(),
+            arkret_wire::ScopeRef::Realm { realm_id: RealmId::new("ak:realm:AUNpwW417vtZcK0hWrtv9UDvU8aC0UKocKAIMZ8xszoU").unwrap() },
+            principal, 0, arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
+            serde_json::json!({"invite_id":"ak:invite:AXqb6Ch5W-jqD8aHcLfUSGkwP47dnrsU4phA2YK03WoF"}),
+        ).unwrap();
+        let writes = arkret_schema::project_registered_cell_writes(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        assert!(writes.iter().any(|write| write.cell_id == cell));
+        assert!(!cell.as_str().contains('{'));
+    }
 
     #[test]
     fn rejected_control_event_entry_serializes() {

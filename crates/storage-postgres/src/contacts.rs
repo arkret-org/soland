@@ -578,9 +578,10 @@ struct InviteReceivePolicyRow {
 impl InviteReceivePolicyRow {
     fn into_policy(
         self,
-    ) -> PersistenceResult<
+    ) -> PersistenceResult<(
+        arkret_wire::AccountId,
         arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    > {
+    )> {
         let policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy =
             serde_json::from_value(self.policy_payload)
             .map_err(|error| {
@@ -588,19 +589,18 @@ impl InviteReceivePolicyRow {
                     "invite_receive_policy payload decode: {error}"
                 ))
             })?;
-        if policy.account_id != arkret_wire::AccountId::new(self.principal_id, self.station_id) {
-            return Err(PersistenceError::Internal(
-                "invite_receive_policy account binding mismatch".to_owned(),
-            ));
-        }
-        Ok(policy)
+        let account_id = arkret_wire::AccountId::new(self.principal_id, self.station_id);
+        soland_storage::validate_invite_policy_account(&account_id, &policy)?;
+        Ok((account_id, policy))
     }
 }
 
 pub(crate) async fn put_invite_receive_policy(
     conn: &mut diesel_async::AsyncPgConnection,
+    account_id: &arkret_wire::AccountId,
     policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
 ) -> PersistenceResult<()> {
+    soland_storage::validate_invite_policy_account(account_id, policy)?;
     let payload = serde_json::to_value(policy).map_err(|error| {
         PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
     })?;
@@ -610,8 +610,8 @@ pub(crate) async fn put_invite_receive_policy(
          ON CONFLICT (account_pk) DO UPDATE SET \
          policy_payload = EXCLUDED.policy_payload, updated_at = NOW()",
     )
-    .bind::<Text, _>(policy.account_id.principal_id.as_str())
-    .bind::<Text, _>(policy.account_id.station_id.as_str())
+    .bind::<Text, _>(account_id.principal_id.as_str())
+    .bind::<Text, _>(account_id.station_id.as_str())
     .bind::<Jsonb, _>(&payload)
     .execute(conn)
     .await
@@ -645,23 +645,29 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        row.map(InviteReceivePolicyRow::into_policy).transpose()
+        row.map(InviteReceivePolicyRow::into_policy)
+            .transpose()
+            .map(|row| row.map(|(_, policy)| policy))
     }
 
     async fn put(
         &self,
+        account_id: &arkret_wire::AccountId,
         policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        put_invite_receive_policy(&mut conn, policy).await
+        put_invite_receive_policy(&mut conn, account_id, policy).await
     }
 
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<
-        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+        Vec<(
+            arkret_wire::AccountId,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
     > {
         let mut conn = pg_conn(&self.pool)
             .await
@@ -687,10 +693,8 @@ mod invite_policy_tests {
         use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
         let principal_id = DidCoreId::new("ak:did_core:web:holder.example".to_owned()).unwrap();
         let station_id = DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap();
-        let policy = InviteReceivePolicy::spec_default(arkret_wire::AccountId::new(
-            principal_id.clone(),
-            station_id.clone(),
-        ));
+        let account_id = arkret_wire::AccountId::new(principal_id.clone(), station_id.clone());
+        let policy = InviteReceivePolicy::spec_default(account_id.clone());
         let payload = serde_json::to_value(&policy).unwrap();
         assert_eq!(
             InviteReceivePolicyRow {
@@ -700,7 +704,7 @@ mod invite_policy_tests {
             }
             .into_policy()
             .unwrap(),
-            policy
+            (account_id, policy)
         );
         assert!(
             InviteReceivePolicyRow {

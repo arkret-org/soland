@@ -509,16 +509,23 @@ impl crate::identity::ContactPort for PersistenceContacts {
 impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolicies {
     async fn save_policy(
         &self,
+        account_id: &arkret_wire::AccountId,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> crate::ServiceResult<()> {
-        self.0.invite_receive_policies().put(&policy).await?;
+        self.0
+            .invite_receive_policies()
+            .put(account_id, &policy)
+            .await?;
         Ok(())
     }
 
     async fn policies(
         &self,
     ) -> crate::ServiceResult<
-        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+        Vec<(
+            arkret_wire::AccountId,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
     > {
         Ok(self.0.invite_receive_policies().snapshot_all().await?)
     }

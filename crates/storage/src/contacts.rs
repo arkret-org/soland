@@ -75,13 +75,33 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     >;
     async fn put(
         &self,
+        account_id: &arkret_wire::AccountId,
         policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> PersistenceResult<()>;
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<
-        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+        Vec<(
+            arkret_wire::AccountId,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
     >;
+}
+
+/// Bind a policy to the complete authenticated storage owner, including its
+/// Station coordinate. A caller cannot write another Account's policy payload.
+pub fn validate_invite_policy_account(
+    account_id: &arkret_wire::AccountId,
+    policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+) -> PersistenceResult<()> {
+    if &policy.account_id != account_id {
+        return Err(super::PersistenceError::SchemaViolation(
+            "invite receive policy does not match its Account owner".to_owned(),
+        ));
+    }
+    account_id
+        .validate()
+        .map_err(|error| super::PersistenceError::SchemaViolation(error.to_string()))
 }
 /// Durable backing for the holder-private consent-cell projection (spec
 /// `consent-model.md` sections 3 to 5), keyed by `(holder, cell_id)` because

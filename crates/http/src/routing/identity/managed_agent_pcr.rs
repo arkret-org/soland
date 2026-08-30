@@ -3,7 +3,7 @@ use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, agent_requested_scope_digest,
 };
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
-use arkret_wire::{DidCoreId, DidUrl, Seal};
+use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Seal};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_http::error::{AppError, ErrorCode};
@@ -208,11 +208,9 @@ pub(crate) async fn managed_agent_binding_is_accepted(
 /// Whether `pointer` carries the controller's current accepted active-series
 /// authority (`identity/key-management.md` §7.6).
 ///
-/// The record only names a Core `actor_id`, so the account instance is
-/// supplied by the evaluating server rather than read out of the record: a
-/// local controller is exactly the `(controller core id, local Principal
-/// Server id)` authority pair, and that pair selects one durably accepted PCR
-/// lineage. Rollback, fork and chain-gap rejection belong to the reducer
+/// The signed record names the complete Account actor. The controller argument
+/// is only its cryptographic principal; the record must also bind this Station.
+/// Rollback, fork and chain-gap rejection belong to the reducer
 /// transition check; what §7.6 leaves to this gate is the record signature,
 /// its accepted signing device, and the current device generation.
 pub(crate) async fn active_series_pointer_is_current(
@@ -221,10 +219,11 @@ pub(crate) async fn active_series_pointer_is_current(
     pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     let controller_core = managed_controller_core_id(controller_id)?;
-    let station_id = DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
-    let authority = arkret_wire::AccountId::new(controller_core, station_id);
-    if pointer.actor_id != arkret_wire::ActorId::account(authority.clone()) {
+    let Some(authority) = pointer.actor_id.as_account_id() else {
+        return Ok(false);
+    };
+    if authority.principal_id != controller_core || authority.station_id != state.service_core_id()
+    {
         return Ok(false);
     }
     let verification_method = pointer.auth_data.verification_method.as_str();
@@ -244,7 +243,7 @@ pub(crate) async fn active_series_pointer_is_current(
             &canonical_bytes,
             pointer.auth_data.signature.as_str(),
             verification_method,
-            &authority,
+            authority,
             &device_id,
             state,
         )
@@ -276,12 +275,11 @@ pub(crate) async fn validate_active_series_operation_authority(
         .snapshot()
         .realm_is_principal_control_for_actor(
             operation.realm_id.as_str(),
-            record.actor_id.signing_principal_id().as_str(),
+            &record.actor_id.to_string(),
         )
     {
         return Err("key_backup_active_series_wrong_control_realm");
     }
-    let backup_kind = record.backup_kind.as_str().to_owned();
     let series_exists = state
         .key_backups()
         .backups_for_actor(&record.actor_id.to_string())
@@ -289,12 +287,12 @@ pub(crate) async fn validate_active_series_operation_authority(
         .map_err(|_| "key_backup_active_series_authority_unavailable")?
         .iter()
         .any(|backup| {
-            backup.get("actor_id").and_then(Value::as_str)
-                == Some(record.actor_id.signing_principal_id().as_str())
-                && backup.get("backup_kind").and_then(Value::as_str) == Some(backup_kind.as_str())
-                && backup.get("series_id").and_then(Value::as_str)
-                    == Some(record.active_series_id.as_str())
-                && backup.get("series_seq").and_then(Value::as_u64) == Some(0)
+            backup_matches_series_genesis(
+                backup,
+                &record.actor_id,
+                record.backup_kind.as_str(),
+                record.active_series_id.as_str(),
+            )
         });
     if !series_exists {
         return Err("key_backup_active_series_target_missing");
@@ -314,16 +312,103 @@ pub(crate) async fn validate_active_series_operation_authority(
     }
 }
 
-pub(crate) async fn resolve_agent_pcr_for_principal(
+fn backup_matches_series_genesis(
+    backup: &Value,
+    actor: &ActorId,
+    backup_kind: &str,
+    series_id: &str,
+) -> bool {
+    backup
+        .get("actor_id")
+        .and_then(|value| serde_json::from_value::<ActorId>(value.clone()).ok())
+        .as_ref()
+        == Some(actor)
+        && backup.get("backup_kind").and_then(Value::as_str) == Some(backup_kind)
+        && backup.get("series_id").and_then(Value::as_str) == Some(series_id)
+        && backup.get("series_seq").and_then(Value::as_u64) == Some(0)
+}
+
+pub(crate) async fn managed_agent_controller_account(
     state: &AppState,
-    principal_id: &str,
-) -> Result<Option<String>, AppError> {
-    Ok(state
+    record: &AgentPrincipalRecord,
+) -> Result<AccountId, AppError> {
+    // The initial provision reservation precedes pairing's account-PK field.
+    // Its accepted controller Account is retained in provision_event_refs.
+    let declared = record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("controller_authority"))
+        .map(|value| serde_json::from_value::<AccountId>(value.clone()))
+        .transpose()
+        .map_err(|_| schema_error("stored Agent controller Account is invalid"))?;
+    let account = if let Some(pk) = record.controller_account_pk {
+        state.identities().account_by_id(pk).await
+    } else if let Some(authority) = declared.as_ref() {
+        state.identities().account(authority).await
+    } else {
+        return Err(failed_precondition(
+            "managed Agent controller Account binding is missing",
+            "managed_agent_controller_binding_missing",
+        ));
+    }
+    .map_err(|error| {
+        AppError::internal(format!("Agent controller Account lookup failed: {error}"))
+    })?
+    .ok_or_else(|| {
+        failed_precondition(
+            "managed Agent controller Account no longer exists",
+            "managed_agent_controller_binding_missing",
+        )
+    })?;
+    if account.account_id.principal_id != managed_controller_core_id(&record.controller_id)?
+        || record
+            .controller_account_pk
+            .is_some_and(|pk| pk != account.pk)
+        || account.principal_id != account.account_id.principal_id
+        || account.account_id.station_id != state.service_core_id()
+        || declared
+            .as_ref()
+            .is_some_and(|authority| authority != &account.account_id)
+    {
+        return Err(failed_precondition(
+            "managed Agent controller Account binding does not match",
+            "managed_agent_controller_binding_mismatch",
+        ));
+    }
+    Ok(account.account_id)
+}
+
+fn managed_agent_actor_for_account(
+    record: &AgentPrincipalRecord,
+    account: &AccountId,
+) -> Result<ActorId, AppError> {
+    Ok(ActorId::hosted_principal(
+        DidCoreId::new(record.id.clone())
+            .map_err(|_| schema_error("stored Agent principal is invalid"))?,
+        account.station_id.clone(),
+    ))
+}
+
+pub(crate) async fn managed_agent_record_for_actor(
+    state: &AppState,
+    actor: &ActorId,
+) -> Result<Option<AgentPrincipalRecord>, AppError> {
+    let Some(record) = state
         .agent_pairings()
-        .agent(principal_id)
+        .agent(actor.signing_principal_id().as_str())
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?
-        .map(|record| record.principal_control_realm_id))
+    else {
+        return Ok(None);
+    };
+    let account = managed_agent_controller_account(state, &record).await?;
+    if actor != &managed_agent_actor_for_account(&record, &account)? {
+        return Err(failed_precondition(
+            "Agent Actor does not match its stored hosting Station",
+            "managed_agent_principal_binding_mismatch",
+        ));
+    }
+    Ok(Some(record))
 }
 
 pub(crate) async fn controller_manages_agent_pcr(
@@ -394,22 +479,41 @@ pub(crate) async fn managed_agent_pcr_genesis_accepted_at(
     agent_id: &str,
     pcr_id: &str,
 ) -> Result<Option<DateTime<Utc>>, AppError> {
+    let record = managed_agent_record(state, agent_id).await?;
+    let account = managed_agent_controller_account(state, &record).await?;
+    let actor = managed_agent_actor_for_account(&record, &account)?;
+    if record.principal_control_realm_id != pcr_id {
+        return Ok(None);
+    }
     let events = state
         .event_queries()
         .accepted_events()
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR genesis lookup failed: {error}")))?;
     Ok(events.iter().find_map(|event| {
-        (event.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && event.actor_id == agent_id
-            && event
-                .envelope
-                .get("realm_id")
-                .and_then(Value::as_str)
-                .or(event.realm_id.as_deref())
-                == Some(pcr_id))
-        .then_some(event.received_at)
+        managed_agent_genesis_matches(event, &actor, pcr_id).then_some(event.received_at)
     }))
+}
+
+fn managed_agent_genesis_matches(
+    event: &soland_services::events::AcceptedEvent,
+    actor: &ActorId,
+    pcr_id: &str,
+) -> bool {
+    event.kind == arkret_wire::EventKind::RealmCreate.as_str()
+        && event.actor_id == actor.to_string()
+        && event
+            .envelope
+            .get("actor_id")
+            .and_then(|value| serde_json::from_value::<ActorId>(value.clone()).ok())
+            .as_ref()
+            == Some(actor)
+        && event
+            .envelope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .or(event.realm_id.as_deref())
+            == Some(pcr_id)
 }
 
 pub(crate) async fn validate_agent_controller_binding(
@@ -437,18 +541,20 @@ pub(crate) async fn validate_effective_agent_realm_membership(
             "agent_membership_inactive",
         ));
     }
-    let controller_id = managed_controller_core_id(&agent_record.controller_id)?;
+    let controller_account = managed_agent_controller_account(state, agent_record).await?;
+    let agent_actor =
+        managed_agent_actor_for_account(agent_record, &controller_account)?.to_string();
     let projection = state.projections().snapshot();
     let binding = projection
-        .agent_membership_binding(realm_id, &agent_record.id)
+        .agent_membership_binding(realm_id, &agent_actor)
         .ok_or_else(|| {
             failed_precondition(
                 "managed Agent membership has no controller-generation binding",
                 "agent_membership_inactive",
             )
         })?;
-    if binding.controller_account_id.principal_id != controller_id
-        || !projection.effective_agent_membership_base(realm_id, &agent_record.id)
+    if binding.controller_account_id != controller_account
+        || !projection.effective_agent_membership_base(realm_id, &agent_actor)
     {
         return Err(failed_precondition(
             "managed Agent membership controller authority or generation is no longer current",
@@ -856,6 +962,140 @@ fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn backup_series_genesis_requires_complete_actor_equality() {
+        let actor = super::ActorId::account(super::AccountId::new(
+            super::DidCoreId::new(CONTROLLER).unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let mut backup = serde_json::json!({"actor_id":actor,"backup_kind":"mls","series_id":"series","series_seq":0});
+        assert!(super::backup_matches_series_genesis(
+            &backup, &actor, "mls", "series"
+        ));
+        backup["actor_id"] = serde_json::json!(super::ActorId::account(super::AccountId::new(
+            actor.signing_principal_id().clone(),
+            super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        )));
+        assert!(!super::backup_matches_series_genesis(
+            &backup, &actor, "mls", "series"
+        ));
+        backup["actor_id"] = serde_json::json!(CONTROLLER);
+        assert!(!super::backup_matches_series_genesis(
+            &backup, &actor, "mls", "series"
+        ));
+    }
+
+    #[test]
+    fn accepted_agent_genesis_matches_full_hosted_actor_and_original_envelope() {
+        let actor = super::ActorId::hosted_principal(
+            super::DidCoreId::new(AGENT).unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        let mut event = soland_services::events::AcceptedEvent {
+            event_id: String::new(),
+            actor_id: actor.to_string(),
+            actor_seq: 0,
+            realm_id: Some(PCR.into()),
+            kind: arkret_wire::EventKind::RealmCreate.to_string(),
+            schema_id: String::new(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: String::new(),
+            canonical_bytes: Vec::new(),
+            envelope: serde_json::json!({"actor_id":actor}),
+            received_at: chrono::Utc::now(),
+        };
+        assert!(super::managed_agent_genesis_matches(&event, &actor, PCR));
+        let foreign = super::ActorId::hosted_principal(
+            actor.signing_principal_id().clone(),
+            super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        assert!(!super::managed_agent_genesis_matches(&event, &foreign, PCR));
+        event.envelope["actor_id"] = serde_json::json!(foreign);
+        assert!(!super::managed_agent_genesis_matches(&event, &actor, PCR));
+        event.envelope["actor_id"] = serde_json::json!(actor);
+        event.actor_id = AGENT.into();
+        assert!(!super::managed_agent_genesis_matches(&event, &actor, PCR));
+    }
+
+    #[tokio::test]
+    async fn managed_agent_account_binding_rejects_same_principal_at_another_station() {
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let local = super::AccountId::new(
+            super::DidCoreId::new(CONTROLLER).unwrap(),
+            state.service_core_id(),
+        );
+        let foreign = super::AccountId::new(
+            local.principal_id.clone(),
+            super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        for (pk, account_id) in [
+            (soland_storage::AccountPk(1), local.clone()),
+            (soland_storage::AccountPk(2), foreign),
+        ] {
+            state
+                .identities()
+                .save_account(soland_services::identity::AccountProfileState {
+                    pk,
+                    principal_id: account_id.principal_id.clone(),
+                    account_id,
+                    localpart: format!("controller-{}", pk.0),
+                    display_name: None,
+                    bio: None,
+                    avatar_blob_ref: None,
+                    created_at: chrono::Utc::now(),
+                })
+                .await
+                .unwrap();
+        }
+        let mut record = super::AgentPrincipalRecord::new(
+            AGENT.into(),
+            CONTROLLER.into(),
+            PCR.into(),
+            super::controller_authorization_ref(&super::Did::new(AGENT_DID).unwrap()).unwrap(),
+            super::AgentLifecycleState::Active,
+            chrono::Utc::now(),
+        );
+        // Pre-genesis reservation has no PK yet, but has its exact accepted Account.
+        record.provision_event_refs = Some(serde_json::json!({"controller_authority":local}));
+        assert_eq!(
+            super::managed_agent_controller_account(&state, &record)
+                .await
+                .unwrap(),
+            local
+        );
+        record.controller_account_pk = Some(soland_storage::AccountPk(1));
+        state
+            .agent_pairings()
+            .save_agent(record.clone())
+            .await
+            .unwrap();
+        let actor = super::managed_agent_actor_for_account(&record, &local).unwrap();
+        assert!(
+            super::managed_agent_record_for_actor(&state, &actor)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let foreign_actor = super::ActorId::hosted_principal(
+            actor.signing_principal_id().clone(),
+            super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        assert!(
+            super::managed_agent_record_for_actor(&state, &foreign_actor)
+                .await
+                .is_err()
+        );
+        record.controller_account_pk = Some(soland_storage::AccountPk(2));
+        assert!(
+            super::managed_agent_controller_account(&state, &record)
+                .await
+                .is_err()
+        );
+    }
+
     use serde_json::json;
 
     use super::*;

@@ -651,8 +651,8 @@ async fn commit_contact_projection(
             ));
         }
     }
-    if let Some(policy) = invite_policy {
-        crate::contacts::put_invite_receive_policy(conn, &policy).await?;
+    if let Some((account_id, policy)) = invite_policy {
+        crate::contacts::put_invite_receive_policy(conn, &account_id, &policy).await?;
     }
     Ok(())
 }
