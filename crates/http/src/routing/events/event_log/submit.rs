@@ -1666,7 +1666,7 @@ async fn submit_event_batch_outcome_with_leases(
         .await
         {
             Ok(response) => {
-                for frontier in response.outcome.realm_actor_frontier_views.iter().cloned() {
+                for frontier in response.outcome.frontiers.iter().cloned() {
                     realm_actor_frontiers.insert(
                         (
                             frontier.realm_id.as_str().to_owned(),
@@ -1728,7 +1728,7 @@ async fn submit_event_batch_outcome_with_leases(
         events_submit_outcome(status, accepted, duplicate, rejected, quarantine, cursor);
     outcome.ingress_receipts = ingress_receipts;
     outcome.pending_delivery_count = pending_delivery_count;
-    outcome.realm_actor_frontier_views = realm_actor_frontiers.into_values().collect();
+    outcome.frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
 }
 

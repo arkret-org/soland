@@ -149,7 +149,7 @@ pub(in crate::routing) async fn event_submit_response(
         Vec::new(),
         Some(super::super::sync::sync_barrier_token_for_event(state, session, &event_id).await),
     );
-    outcome.realm_actor_frontier_views = vec![realm_actor_frontier];
+    outcome.frontiers = vec![realm_actor_frontier];
     SubmittedEventOutcome {
         event_id: event_id.clone(),
         duplicate,

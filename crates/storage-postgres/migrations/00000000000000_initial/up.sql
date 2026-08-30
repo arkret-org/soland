@@ -2266,7 +2266,7 @@ CREATE TABLE public.projection_circles (
     CONSTRAINT projection_circles_content_encryption_floor_check CHECK ((content_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
     CONSTRAINT projection_circles_content_scheme_check CHECK ((content_scheme = ANY (ARRAY['mls_rfc9420'::text, 'mls_exporter_aead_v1'::text]))),
     CONSTRAINT projection_circles_directory_visibility_check CHECK ((directory_visibility = ANY (ARRAY['members'::text, 'realm_members'::text]))),
-    CONSTRAINT projection_circles_join_rule_check CHECK ((join_rule = ANY (ARRAY['invite'::text, 'request'::text, 'open'::text]))),
+    CONSTRAINT projection_circles_join_rule_check CHECK ((join_rule = ANY (ARRAY['invite'::text, 'knock'::text, 'public'::text]))),
     CONSTRAINT projection_circles_metadata_encryption_floor_check CHECK ((metadata_encryption_floor = ANY (ARRAY['allow_plaintext'::text, 'e2ee_required'::text]))),
     CONSTRAINT projection_circles_durability_policy_check CHECK ((durability_policy = ANY (ARRAY['none'::text, 'organization_recovery_key'::text]))),
     CONSTRAINT projection_circles_scheme_binding_check CHECK (((encryption_profile = 'none'::text AND content_scheme IS NULL AND durability_policy IS NULL) OR (encryption_profile = 'mls_rfc9420'::text AND ((content_scheme = 'mls_rfc9420'::text AND durability_policy IS NULL) OR (content_scheme = 'mls_exporter_aead_v1'::text AND durability_policy IS NOT NULL))))),

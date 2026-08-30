@@ -1045,9 +1045,9 @@ async fn events_describe_and_single_event_submit_work_body() {
         frontier.actor_id,
         fixture_actor_core_id("did:web:alice.example")
     );
-    assert_eq!(frontier.realm_actor_frontier_views.len(), 2);
+    assert_eq!(frontier.frontiers.len(), 2);
     let demo_frontier = frontier
-        .realm_actor_frontier_views
+        .frontiers
         .iter()
         .find(|frontier| frontier.realm_id.as_str() == demo_realm_id())
         .expect("actor aggregate includes demo Realm frontier");

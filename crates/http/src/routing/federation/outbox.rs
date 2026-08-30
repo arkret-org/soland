@@ -586,10 +586,10 @@ fn peer_event_partial_retry(
     let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
         serde_json::from_str(response_body).ok()?;
     if outcome.status != arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial
-        || outcome.events_submit_rejected_rows.is_empty()
+        || outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome
-            .events_submit_rejected_rows
+            .rejections
             .iter()
             .any(|item| item.reason_code != arkret_wire::ReasonCode::DependencyMissing)
     {
@@ -597,7 +597,7 @@ fn peer_event_partial_retry(
     }
 
     let pending_ids = outcome
-        .events_submit_rejected_rows
+        .rejections
         .iter()
         .map(|item| item.id.as_str())
         .collect::<std::collections::BTreeSet<_>>();
@@ -2718,7 +2718,7 @@ mod tests {
             "status":"partial",
             "accepted":["{}"],
             "pending_delivery_count":0,
-            "events_submit_rejected_rows":[{{
+            "rejections":[{{
                 "id":"{pending_event_id}",
                 "reason_code":"dependency_missing",
                 "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]

@@ -1085,10 +1085,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        bob_contacts["contact_list_rows"].as_array().unwrap().len(),
-        1
-    );
+    assert_eq!(bob_contacts["contacts"].as_array().unwrap().len(), 1);
 
     let visible_bob: Value = TestClient::post("http://server/_arkret/find/directory/search-users")
         .add_header("authorization", format!("Bearer {alice}"), true)

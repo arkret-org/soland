@@ -37,6 +37,12 @@ fn agent_principal_constraints_use_spec_identifier_kinds() {
 }
 
 #[test]
+fn circle_join_rule_constraint_uses_spec_vocabulary() {
+    assert!(INITIAL_UP.contains("ARRAY['invite'::text, 'knock'::text, 'public'::text]"));
+    assert!(!INITIAL_UP.contains("ARRAY['invite'::text, 'request'::text, 'open'::text]"));
+}
+
+#[test]
 fn applet_identity_winner_is_independent_from_exact_scope_installations() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.applet_managed_identities"));
     assert!(INITIAL_UP.contains("PRIMARY KEY (applet_id, target_principal_server_id)"));

@@ -152,7 +152,7 @@ async fn list_realm_links_impl(
     json_ok(RealmLinkList {
         realm_id,
         direction: direction_enum,
-        realm_link_entries: entries,
+        links: entries,
     })
 }
 

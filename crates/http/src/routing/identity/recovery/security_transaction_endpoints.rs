@@ -391,7 +391,7 @@ async fn submit_rotation_event_unit(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
-    if !outcome.events_submit_rejected_rows.is_empty()
+    if !outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome.accepted.len() != expected_event_ids.len()
         || outcome
@@ -402,7 +402,7 @@ async fn submit_rotation_event_unit(
     {
         return Err(AppError::conflict(format!(
             "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
-            outcome.accepted, outcome.events_submit_rejected_rows, outcome.quarantine
+            outcome.accepted, outcome.rejections, outcome.quarantine
         ))
         .with_wire_code("security_transaction_failed_precondition"));
     }
@@ -1710,7 +1710,7 @@ async fn continue_submit_reanchor_unit(
         binding.reanchor_event_id.as_str(),
         binding.authorize_event_id.as_str(),
     ];
-    if !outcome.events_submit_rejected_rows.is_empty()
+    if !outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
         || outcome.ingress_receipts.len() != 2
         || outcome.accepted.len() != 2

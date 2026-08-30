@@ -345,7 +345,7 @@ pub(crate) async fn list_contacts(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let contacts = contact_list_rows(state, &session.actor, records).await?;
     json_ok(ContactList {
-        contact_list_rows: contacts,
+        contacts,
         has_more: false,
         next_cursor: None,
     })

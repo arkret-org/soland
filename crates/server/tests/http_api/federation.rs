@@ -446,11 +446,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow_body() {
         serde_json::json!([overflow_id]),
         "{outcome:?}"
     );
-    assert!(
-        outcome["events_submit_rejected_rows"]
-            .as_array()
-            .is_none_or(Vec::is_empty)
-    );
+    assert!(outcome["rejections"].as_array().is_none_or(Vec::is_empty));
     assert!(
         state
             .test_persistence()
@@ -703,7 +699,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
         .unwrap();
     assert_eq!(outcome["status"], "partial");
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
-    let rejected = outcome["events_submit_rejected_rows"].as_array().unwrap();
+    let rejected = outcome["rejections"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["reason_code"], "capability_denied");
     assert!(
@@ -893,7 +889,7 @@ async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration
     let outcome = submit_peer_event(state.clone(), &welcome_event).await;
     assert_eq!(outcome["status"], "partial", "{outcome:?}");
     assert!(outcome["accepted"].as_array().unwrap().is_empty());
-    let rejected = outcome["events_submit_rejected_rows"].as_array().unwrap();
+    let rejected = outcome["rejections"].as_array().unwrap();
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0]["id"], authored_event_id(&welcome_event));
     assert_eq!(rejected[0]["reason_code"], "unsupported_profile");

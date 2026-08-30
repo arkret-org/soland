@@ -761,7 +761,7 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .take_json()
         .await
         .unwrap();
-    let row = &contacts["contact_list_rows"][0];
+    let row = &contacts["contacts"][0];
     assert_eq!(row["peer"]["kind"], "human");
     assert_eq!(row["peer"]["principal_id"], core_id(BOB_DID).as_str());
     assert_eq!(row["state"], "accepted");

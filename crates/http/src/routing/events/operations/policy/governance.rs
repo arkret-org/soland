@@ -708,20 +708,20 @@ pub(super) fn moderation_actor<'a>(
         }
         arkret_wire::EventKind::ModerationAppealSubmit => operation
             .payload
-            .get("appellant")
+            .get("appellant_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
         arkret_wire::EventKind::ModerationAppealReview
         | arkret_wire::EventKind::ModerationAppealDecision => operation
             .payload
-            .get("reviewer")
+            .get("reviewer_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
         arkret_wire::EventKind::ModerationAppealClose => operation
             .payload
-            .get("closer")
+            .get("closer_id")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
