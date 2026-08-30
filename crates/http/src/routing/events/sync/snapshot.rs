@@ -1319,9 +1319,36 @@ async fn device_lists_for_actors(
         );
     }
 
+    device_lists_with_loader(
+        &state.service_core_id(),
+        visible_actors,
+        after_cursor,
+        is_incremental,
+        |principal| async move { state.identities().devices_for_actor(&principal).await },
+    )
+    .await
+}
+
+async fn device_lists_with_loader<F, Fut>(
+    station_id: &arkret_wire::DidCoreId,
+    visible_actors: &BTreeSet<String>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+    mut load: F,
+) -> (
+    arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges,
+    BTreeMap<String, i64>,
+)
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<
+            Output = soland_services::ServiceResult<Vec<soland_services::identity::DeviceIdentity>>,
+        >,
+{
     let mut positions = BTreeMap::new();
     let mut changed = BTreeSet::new();
     let mut left = BTreeSet::new();
+    let mut local_visible_actors = BTreeSet::new();
     for actor in visible_actors {
         let Ok(identity) = serde_json::from_str::<arkret_wire::ActorId>(actor) else {
             continue;
@@ -1329,19 +1356,19 @@ async fn device_lists_for_actors(
         // This inventory is Station-local. A foreign actor's principal must
         // never select the local account's devices, even if the DID matches.
         if matches!(identity, arkret_wire::ActorId::Service { .. })
-            || identity.route_service_id() != &state.service_core_id()
+            || identity.route_service_id() != station_id
         {
             continue;
         }
-        let records = match state
-            .identities()
-            .devices_for_actor(identity.signing_principal_id().as_str())
-            .await
-        {
+        local_visible_actors.insert(actor.clone());
+        let records = match load(identity.signing_principal_id().to_string()).await {
             Ok(records) => records,
             Err(error) => {
                 tracing::error!(%error, actor, "failed to load device list for sync snapshot");
                 changed.insert(actor.clone());
+                if let Some(position) = after_cursor.device_list_positions.get(actor) {
+                    positions.insert(actor.clone(), *position);
+                }
                 continue;
             }
         };
@@ -1367,7 +1394,7 @@ async fn device_lists_for_actors(
 
     if is_incremental {
         for actor in after_cursor.device_list_positions.keys() {
-            if !positions.contains_key(actor) {
+            if !local_visible_actors.contains(actor) {
                 left.insert(actor.clone());
             }
         }
@@ -1446,10 +1473,7 @@ async fn account_data_events(
         let holder_id = event.payload.get("holder_id").and_then(Value::as_str);
         let holder_authored =
             event.actor_id == actor && holder_id.is_none_or(|holder_id| holder_id == session.actor);
-        let local_service_authored = event.actor_id
-            == arkret_wire::ActorId::service(state.service_core_id().clone())
-            && holder_id == Some(session.actor.as_str());
-        if !holder_authored && !local_service_authored {
+        if !holder_authored {
             continue;
         }
         let Some(key) = event.payload.get("key").and_then(Value::as_str) else {
@@ -1528,6 +1552,7 @@ async fn notification_account_data_events(
             None => continue,
         };
         event.payload = payload.into_iter().collect();
+        mark_event_as_projection_only(&mut event);
         events.push(event);
     }
     events
@@ -1747,6 +1772,79 @@ fn circle_scope_visible_to_session(
         return true;
     }
     projection.circle_scope_visible_to_actor_at(scope_circle_id, &actor_key, event_created_at)
+}
+
+#[cfg(test)]
+mod device_list_tests {
+    use super::*;
+
+    fn account_actor(principal: &str, station: &arkret_wire::DidCoreId) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+            station.clone(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn inventory_read_error_preserves_visible_actor_and_cursor_position() {
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let visible = account_actor("ak:did_core:web:alice.example", &station);
+        let departed = account_actor("ak:did_core:web:bob.example", &station);
+        let cursor = SyncCursor {
+            device_list_positions: BTreeMap::from([
+                (visible.to_string(), 42),
+                (departed.to_string(), 17),
+            ]),
+            ..Default::default()
+        };
+        let mut reads = Vec::new();
+        let (changes, positions) = device_lists_with_loader(
+            &station,
+            &BTreeSet::from([visible.to_string()]),
+            &cursor,
+            true,
+            |principal| {
+                reads.push(principal);
+                std::future::ready(Err(soland_services::ServiceError::Database(
+                    "injected inventory outage".into(),
+                )))
+            },
+        )
+        .await;
+
+        assert_eq!(reads, vec![visible.signing_principal_id().to_string()]);
+        assert_eq!(changes.changed_ids, vec![visible.clone()]);
+        assert_eq!(changes.left_ids, vec![departed]);
+        assert_eq!(positions, BTreeMap::from([(visible.to_string(), 42)]));
+    }
+
+    #[tokio::test]
+    async fn foreign_station_same_principal_never_reads_local_inventory() {
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let foreign_station =
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+        let local = account_actor("ak:did_core:web:alice.example", &station);
+        let foreign = account_actor("ak:did_core:web:alice.example", &foreign_station);
+        let visible = BTreeSet::from([local.to_string(), foreign.to_string()]);
+        let mut reads = Vec::new();
+        let (changes, positions) = device_lists_with_loader(
+            &station,
+            &visible,
+            &SyncCursor::default(),
+            false,
+            |principal| {
+                reads.push(principal);
+                std::future::ready(Ok(Vec::new()))
+            },
+        )
+        .await;
+
+        assert_eq!(reads, vec![local.signing_principal_id().to_string()]);
+        assert_eq!(changes.changed_ids, vec![local.clone()]);
+        assert!(changes.left_ids.is_empty());
+        assert_eq!(positions, BTreeMap::from([(local.to_string(), 0)]));
+        assert!(!positions.contains_key(&foreign.to_string()));
+    }
 }
 
 #[cfg(test)]

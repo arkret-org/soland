@@ -45,6 +45,17 @@ fn core_actor_id(actor: &str) -> String {
         .to_string()
 }
 
+fn local_account_id(state: &AppState, principal: &str) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(core_actor_id(principal)).expect("fixture principal core id"),
+        state.service_core_id().clone(),
+    )
+}
+
+fn local_actor_id(state: &AppState, principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(local_account_id(state, principal))
+}
+
 fn test_config() -> AppConfig {
     AppConfig {
         development_mode: true,
@@ -116,6 +127,7 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_id = arkret_identifiers::DidCoreId::new(core_actor_id(owner)).unwrap();
     let now = chrono::Utc::now();
+    let owner_actor = local_actor_id(state, owner).to_string();
 
     let mut entry = RealmDirectoryEntry::new(
         typed_realm_id,
@@ -131,6 +143,23 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
         .lock()
         .realm_join_rules
         .insert(realm_id.clone(), "public".to_owned());
+    // The genesis helper persists the bootstrap unit but only materializes
+    // genesis cells. Membership authorization requires the exact Actor index;
+    // the principal-only Realm directory above is discovery data, not authority.
+    state.test_projection().lock().members.insert(
+        (realm_id.clone(), owner_actor.clone()),
+        SolandMembershipState {
+            member: owner_actor.clone(),
+            realm_id: realm_id.clone(),
+            state: "join".to_owned(),
+            role: "owner".to_owned(),
+            membership_event_ref: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
 
     state
         .test_persistence()
@@ -138,7 +167,7 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
         .put(
             &realm_id,
             &RealmMetaRecord {
-                owner: core_actor_id(owner),
+                owner: owner_actor,
                 deleted: false,
                 discoverability: "public".to_owned(),
                 history_access: history_access.to_owned(),
@@ -189,7 +218,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 }
 
 /// Have the owner admit a new member by submitting a
-/// `ak.member.state{membership:"join", actor_id: new_member}` event. The
+/// `ak.member.state{membership:"join", member_id: new_member}` event. The
 /// projection layer records `member.joined_at` (used by sync's
 /// history_access gate) and updates `state.test_realms().members` via
 /// `project_member_state`. The owner is already a member (seeded by
@@ -203,12 +232,9 @@ async fn admit_member(
     new_member_did: &str,
     realm_id: &str,
 ) {
-    let new_member_core = core_actor_id(new_member_did);
     let payload = json!({
         "realm_id": realm_id,
-        "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(new_member_core).unwrap(), state.service_core_id().clone(),
-        )),
+        "member_id": local_actor_id(&state, new_member_did),
         "membership": "join",
     });
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
@@ -250,8 +276,9 @@ async fn seed_pending_invite(
     invitee_id: &str,
 ) -> String {
     let now = chrono::Utc::now();
-    let inviter_core = core_actor_id(inviter_id);
-    let invitee_core = core_actor_id(invitee_id);
+    let inviter_account = local_account_id(state, inviter_id);
+    let invitee_account = local_account_id(state, invitee_id);
+    let invitee_actor = arkret_wire::ActorId::account(invitee_account.clone()).to_string();
     let invite_event_id = EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
         .expect("fixture invite producer Event id");
     let invite_id = InviteId::from_event_id(&invite_event_id).to_string();
@@ -261,8 +288,8 @@ async fn seed_pending_invite(
         .put(RealmInviteRecord {
             invite_id: invite_id.clone(),
             realm_id: realm_id.to_owned(),
-            inviter_id: inviter_core,
-            invitee_id: Some(invitee_core.clone()),
+            inviter_id: inviter_account.to_string(),
+            invitee_id: Some(invitee_account.to_string()),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_invite: None,
             invite_token: new_prefixed_uuid7("ak:invite-token:"),
@@ -275,9 +302,9 @@ async fn seed_pending_invite(
         .await
         .unwrap();
     state.test_projection().lock().members.insert(
-        (realm_id.to_owned(), invitee_core.clone()),
+        (realm_id.to_owned(), invitee_actor.clone()),
         SolandMembershipState {
-            member: invitee_core,
+            member: invitee_actor,
             realm_id: realm_id.to_owned(),
             state: "invite".to_owned(),
             role: "member".to_owned(),
@@ -383,7 +410,7 @@ fn install_projected_circle_scope(
     let now = chrono::Utc::now();
     let members = members
         .iter()
-        .map(|member| core_actor_id(member))
+        .map(|member| local_actor_id(state, member).to_string())
         .collect::<BTreeSet<_>>();
     state.test_projection().lock().circles.insert(
         circle_id.to_owned(),
@@ -405,7 +432,7 @@ fn install_projected_circle_scope(
             mls_group_ref: Some(format!("ak:mls:mls_rfc9420:{circle_id}")),
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: core_actor_id(created_by),
+            created_by: local_actor_id(state, created_by).to_string(),
             created_at: now,
             updated_by: None,
             updated_at: None,
@@ -464,7 +491,7 @@ fn install_projected_strand_scope(
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
-            created_by: core_actor_id(created_by),
+            created_by: local_actor_id(state, created_by).to_string(),
             created_at: now,
             history_basis_seals: Vec::new(),
             updated_by: None,
@@ -708,7 +735,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         scope_ref,
         actor.clone(),
-        soland_test_support::fixture_station_id(),
+        state.service_core_id().clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
@@ -986,12 +1013,12 @@ async fn invite_accept_member_receives_since_join_messages_after_accept_body() {
         &invite_id,
     )
     .await;
-    let bob_core = core_actor_id(bob_did);
+    let bob_actor = local_actor_id(&state, bob_did).to_string();
     assert!(
         state
             .test_projection()
             .lock()
-            .member(&realm_id, &bob_core)
+            .member(&realm_id, &bob_actor)
             .is_some_and(|member| member.state == "join"),
         "ak.invite.accept must project joined membership"
     );
@@ -1271,6 +1298,7 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
     let bob_core = core_actor_id(bob_did);
+    let bob_actor = local_actor_id(&state, bob_did).to_string();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
     let realm_id = seed_realm(
@@ -1389,14 +1417,14 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
         let reactions = projection.reactions_for_event(&root_event_id);
         assert!(
             reactions.iter().any(|reaction| {
-                reaction.actor == core_actor_id(alice_did)
+                reaction.actor == local_actor_id(&state, alice_did).to_string()
                     && reaction.key == "+1"
                     && reaction.active
             }),
             "{reactions:?}"
         );
         assert!(
-            reactions.iter().all(|reaction| reaction.actor != bob_core),
+            reactions.iter().all(|reaction| reaction.actor != bob_actor),
             "{reactions:?}"
         );
     }
@@ -1440,11 +1468,11 @@ async fn poll_content_projection_replaces_votes_body() {
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
-    let bob_core = core_actor_id(bob_did);
+    let bob_actor = local_actor_id(&state, bob_did).to_string();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000022";
     let bob = dev_token(state.clone(), bob_did, "b0b000000022").await;
     let carol_did = CAROL_DID.as_str();
-    let carol_core = core_actor_id(carol_did);
+    let carol_actor = local_actor_id(&state, carol_did).to_string();
     let carol_device_id = "ak:device:01904100-0000-7000-8000-ca2010000022";
     let carol = dev_token(state.clone(), carol_did, "ca2010000022").await;
     let realm_id = seed_realm(
@@ -1642,7 +1670,7 @@ async fn poll_content_projection_replaces_votes_body() {
                 .all(|choices| !choices.selections.contains("now")),
             "{poll_state:?}"
         );
-        let mut expected_backup_voters = vec![bob_core.as_str(), carol_core.as_str()];
+        let mut expected_backup_voters = vec![bob_actor.as_str(), carol_actor.as_str()];
         expected_backup_voters.sort_unstable();
         assert_eq!(
             poll_state
@@ -1690,7 +1718,7 @@ async fn poll_content_projection_replaces_votes_body() {
             .map(String::as_str)
             .collect::<Vec<_>>();
         voters.sort_unstable();
-        let mut expected_voters = vec![bob_core.as_str(), carol_core.as_str()];
+        let mut expected_voters = vec![bob_actor.as_str(), carol_actor.as_str()];
         expected_voters.sort_unstable();
         assert_eq!(voters, expected_voters);
     }

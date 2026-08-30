@@ -1780,7 +1780,15 @@ fn the_policy_frontier_digest_is_a_filtered_state_root() {
 #[test]
 fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
     let realm_id = "ak:realm:AYzSDw0uyDZ0DpWUE57e1TNDnSVg-vp-MLwyB1Cp5Hdf";
-    let actor_id = "ak:did_core:web:alice.example";
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:first.example").unwrap(),
+    ));
+    let actor_key = actor.to_string();
+    let actor_id = actor_key.as_str();
+    let subject = arkret_wire::composite_subject(&[actor_id]).unwrap();
+    let member_cell =
+        CellRef::new(format!("ak:cell:ak.component.member.state.v1:{subject}")).unwrap();
     let mut state = ProjectionState::new();
     state.realm_null_subject_cells.insert(
         (
@@ -1809,7 +1817,7 @@ fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
         },
     );
     state.cells.insert(
-        CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}")).unwrap(),
+        member_cell.clone(),
         CellState::Value(serde_json::json!("join")),
     );
 
@@ -1828,7 +1836,7 @@ fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
         CellRef::new("ak:cell:ak.component.capability.grant.v1:grant-alice".to_owned()).unwrap(),
         CellState::Value(serde_json::json!({
             "realm_id": realm_id,
-            "grantee": actor_id,
+            "subject": actor,
             "actions": ["ak.message.create"]
         })),
     );
@@ -1839,6 +1847,42 @@ fn policy_and_membership_frontiers_are_independent_actor_scoped_commitments() {
     assert_eq!(state.realm_policy_frontier_digest(realm_id), Some(policy));
     assert_eq!(
         state.realm_membership_frontier_digest(realm_id, actor_id),
+        Some(membership.clone())
+    );
+
+    let other_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        actor.signing_principal_id().clone(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:second.example").unwrap(),
+    ));
+    let other_subject = arkret_wire::composite_subject(&[other_actor.to_string()]).unwrap();
+    state.cells.insert(
+        CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{other_subject}"
+        ))
+        .unwrap(),
+        CellState::Value(serde_json::json!("ban")),
+    );
+    state.cells.insert(
+        CellRef::new("ak:cell:ak.component.capability.grant.v1:grant-other-station").unwrap(),
+        CellState::Value(serde_json::json!({"realm_id": realm_id, "subject": other_actor, "actions": ["ak.message.create"]})),
+    );
+    assert_eq!(
+        state.realm_membership_frontier_digest(realm_id, actor_id),
+        Some(membership.clone())
+    );
+    assert_eq!(
+        state.realm_authorization_state_digest(realm_id, actor_id),
+        Some(auth_after.clone())
+    );
+    state
+        .cells
+        .insert(member_cell, CellState::Value(serde_json::json!("leave")));
+    assert_ne!(
+        state.realm_membership_frontier_digest(realm_id, actor_id),
         Some(membership)
+    );
+    assert_ne!(
+        state.realm_authorization_state_digest(realm_id, actor_id),
+        Some(auth_after)
     );
 }

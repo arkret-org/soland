@@ -2,6 +2,30 @@ use soland_http::error::AppError;
 
 use crate::state::AppState;
 
+/// Resolve an endpoint principal only through an unambiguous accepted member
+/// Actor whose routing Station is authenticated by the peer request.
+pub(crate) fn joined_actor_for_principal_route(
+    state: &AppState,
+    realm_id: &str,
+    principal_id: &arkret_wire::DidCoreId,
+    station_id: &arkret_wire::DidCoreId,
+) -> Option<arkret_wire::ActorId> {
+    let projection = state.projections().snapshot();
+    let mut actors = projection
+        .members
+        .iter()
+        .filter_map(|((realm, key), member)| {
+            if realm != realm_id || member.state != "join" {
+                return None;
+            }
+            let actor = serde_json::from_str::<arkret_wire::ActorId>(key).ok()?;
+            (actor.signing_principal_id() == principal_id && actor.route_service_id() == station_id)
+                .then_some(actor)
+        });
+    let actor = actors.next()?;
+    actors.next().is_none().then_some(actor)
+}
+
 pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result<(), AppError> {
     if state.config().development_mode {
         return Ok(());
@@ -16,40 +40,45 @@ pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result
 
 pub(crate) async fn federation_actor_origin_acceptable(
     state: &AppState,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     source_id: &str,
     event_station_id: Option<&str>,
     binding_realm: &str,
     event_kind: Option<&str>,
 ) -> bool {
+    if actor.route_service_id().as_str() != source_id {
+        return false;
+    }
+    let actor_key = actor.to_string();
+    let principal = actor.signing_principal_id().as_str();
     if let Some(station_id) = event_station_id {
         if !event_origin_matches_source(source_id, station_id) {
             return false;
         }
-        if did_deployment_authority(actor).is_some()
-            && did_deployment_authority(actor) == did_deployment_authority(source_id)
+        if did_deployment_authority(principal).is_some()
+            && did_deployment_authority(principal) == did_deployment_authority(source_id)
         {
             return true;
         }
         let projection = state.projections().snapshot();
         return membership_authority_pair_acceptable(
-            projection.member(binding_realm, actor),
+            projection.member(binding_realm, &actor_key),
             station_id,
             event_kind,
         );
     }
-    if did_deployment_authority(actor).is_some()
-        && did_deployment_authority(actor) == did_deployment_authority(source_id)
+    if did_deployment_authority(principal).is_some()
+        && did_deployment_authority(principal) == did_deployment_authority(source_id)
     {
         return true;
     }
-    if crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await {
+    if crate::routing::spaces::space::realm_has_member(state, binding_realm, &actor_key).await {
         return true;
     }
     event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
         && state
             .projections()
-            .invite_member_is_invited(binding_realm, actor)
+            .invite_member_is_invited(binding_realm, &actor_key)
 }
 
 fn event_origin_matches_source(source_id: &str, station_id: &str) -> bool {
@@ -165,5 +194,53 @@ mod tests {
             source,
             Some(arkret_wire::EventKind::MessageCreate.as_str())
         ));
+    }
+
+    #[tokio::test]
+    async fn endpoint_principal_requires_an_exact_unambiguous_joined_station_actor() {
+        let state = crate::state::AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let row = membership("join", "ak:did_core:web:station-a.example");
+        let realm = row.realm_id.clone();
+        let actor: arkret_wire::ActorId = serde_json::from_str(&row.member).unwrap();
+        state
+            .test_projection()
+            .lock()
+            .members
+            .insert((realm.clone(), row.member.clone()), row.clone());
+        let principal = actor.signing_principal_id();
+        let station = actor.route_service_id();
+        assert_eq!(
+            super::joined_actor_for_principal_route(&state, &realm, principal, station),
+            Some(actor.clone())
+        );
+        let foreign = arkret_wire::DidCoreId::new("ak:did_core:web:station-b.example").unwrap();
+        assert!(
+            super::joined_actor_for_principal_route(&state, &realm, principal, &foreign).is_none()
+        );
+        assert!(
+            !super::federation_actor_origin_acceptable(
+                &state,
+                &actor,
+                foreign.as_str(),
+                Some(foreign.as_str()),
+                &realm,
+                None
+            )
+            .await
+        );
+        let hosted = arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone());
+        let mut ambiguous_row = row;
+        ambiguous_row.member = hosted.to_string();
+        state
+            .test_projection()
+            .lock()
+            .members
+            .insert((realm.clone(), hosted.to_string()), ambiguous_row);
+        assert!(
+            super::joined_actor_for_principal_route(&state, &realm, principal, station).is_none()
+        );
     }
 }

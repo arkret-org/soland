@@ -254,9 +254,9 @@ pub(super) async fn recovery_policy_put(
         .map_err(|error| AppError::internal(format!("recovery policy serialize: {error}")))?;
 
     let validated = validate_recovery_policy(&payload)?;
-    if validated.principal_id.as_str() != session.actor
-        || request.event.actor_id.signing_principal_id().as_str() != session.actor
-    {
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    if validated.principal_id.as_str() != session.actor || request.event.actor_id != session_actor {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "Event actor and recovery policy principal must match the authenticated principal",
@@ -268,7 +268,7 @@ pub(super) async fn recovery_policy_put(
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), validated.principal_id.as_str())
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
         || request.event.scope_ref
             != (arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),

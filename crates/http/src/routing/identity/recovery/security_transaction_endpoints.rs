@@ -731,6 +731,8 @@ pub(crate) async fn backup_series_erase_command(
     }
 
     let plan = rotation_plan(&transaction)?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let planned_series_match = plan.backup_rotations.len() == request.series.len()
         && plan
             .backup_rotations
@@ -749,6 +751,7 @@ pub(crate) async fn backup_series_erase_command(
         || !planned_series_match
         || request.authorization_lease.actor_id.signing_principal_id()
             != &transaction.resource.principal_id
+        || request.authorization_lease.actor_id != session_actor
         || request.authorization_lease.device_id.as_str() != session.device_id
         || request.authorization_lease.action
             != arkret_wire::CapabilityActionId::SELF_KEYS_BACKUP_SERIES_COMMAND_ERASE_V1
@@ -767,7 +770,7 @@ pub(crate) async fn backup_series_erase_command(
         .snapshot()
         .realm_is_principal_control_for_actor(
             expected_control_realm.as_str(),
-            transaction.resource.principal_id.as_str(),
+            &session_actor.to_string(),
         )
     {
         return Err(AppError::conflict(

@@ -13,7 +13,7 @@
 //! operator-configurable via `AppConfig::ice`.
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
-use arkret_identifiers::{CallId, CellRef, DeviceId, DidCoreId, RealmId};
+use arkret_identifiers::{CallId, CellRef, DeviceId, RealmId};
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::events_payloads::{
     RealmMediaServicePayload, RealmMediaServiceValue,
@@ -111,13 +111,16 @@ async fn issue_ice_config(
     if call_id.is_empty() {
         return Err(AppError::param_missing("call_id is required"));
     }
-    let actor_id = body.actor_id.signing_principal_id().as_str();
+    let actor_key = body.actor_id.to_string();
+    let actor_id = actor_key.as_str();
     let device_id = body.device_id.as_str();
 
     if !is_valid_webrtc_session_id(call_id) {
         return Err(AppError::param_invalid("invalid call_id"));
     }
-    if DidCoreId::new(actor_id.to_owned()).is_err() || actor_id != session.actor {
+    if body.actor_id
+        != crate::routing::identity::session_actor::session_actor_from_credential(state, session)?
+    {
         return Err(AppError::param_invalid(
             "actor_id must match the authenticated actor",
         ));
@@ -508,7 +511,9 @@ async fn handle_rtc_token(
         return Err(AppError::param_invalid("invalid call_id"));
     }
     let call_id = body.call_id.clone();
-    if body.actor_id.signing_principal_id().as_str() != session.actor {
+    if body.actor_id
+        != crate::routing::identity::session_actor::session_actor_from_credential(state, session)?
+    {
         return Err(AppError::param_invalid(
             "actor_id must match the authenticated actor",
         ));
@@ -533,13 +538,7 @@ async fn handle_rtc_token(
     // an actor-wide ban in the durable call moderation OR-Set.
     //
     // (1) realm member.
-    if !realm_has_member(
-        state,
-        body.realm_id.as_str(),
-        body.actor_id.signing_principal_id().as_str(),
-    )
-    .await
-    {
+    if !realm_has_member(state, body.realm_id.as_str(), &body.actor_id.to_string()).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -550,7 +549,7 @@ async fn handle_rtc_token(
     if !actor_has_call_capability(
         state,
         body.realm_id.as_str(),
-        body.actor_id.signing_principal_id().as_str(),
+        &body.actor_id,
         CapabilityActionId::CALL_JOIN,
     )
     .await
@@ -566,7 +565,7 @@ async fn handle_rtc_token(
     let call_cells = CallMediaCells::load(
         state,
         body.call_id.as_str(),
-        body.actor_id.signing_principal_id().as_str(),
+        &body.actor_id,
         body.device_id.as_str(),
     )
     .await?;
@@ -575,7 +574,7 @@ async fn handle_rtc_token(
     // token for this call's lifetime. The ban set is the durable
     // call moderation effective OR-Set; an absent cell carries
     // no bans (everyone passes).
-    if call_cells.actor_is_banned(body.actor_id.signing_principal_id().as_str()) {
+    if call_cells.actor_is_banned(&body.actor_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "actor was removed from the call (ban) and cannot re-issue a join token",
@@ -657,10 +656,8 @@ async fn handle_rtc_token(
             )
         })
         .unwrap_or((true, true, false));
-    let (audio_muted, video_muted) = call_cells.participant_mute_override(
-        body.actor_id.signing_principal_id().as_str(),
-        body.device_id.as_str(),
-    );
+    let (audio_muted, video_muted) =
+        call_cells.participant_mute_override(&body.actor_id, body.device_id.as_str());
     if audio_muted {
         desired_media.0 = false;
     }
@@ -674,7 +671,7 @@ async fn handle_rtc_token(
     let allow_screen_share = actor_has_call_capability(
         state,
         body.realm_id.as_str(),
-        body.actor_id.signing_principal_id().as_str(),
+        &body.actor_id,
         CapabilityActionId::CALL_SCREEN_SHARE,
     )
     .await;
@@ -786,7 +783,7 @@ impl CallMediaCells {
     async fn load(
         state: &AppState,
         call_id: &str,
-        actor_id: &str,
+        actor_id: &arkret_wire::ActorId,
         device_id: &str,
     ) -> Result<Self, AppError> {
         let focus_cell = call_cell_ref(arkret_wire::CellFamilyId::CALL_FOCUS_V1, &[call_id])?;
@@ -794,7 +791,7 @@ impl CallMediaCells {
             call_cell_ref(arkret_wire::CellFamilyId::CALL_MODERATION_V1, &[call_id])?;
         let mute_cell = call_cell_ref(
             arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1,
-            &[call_id, actor_id, device_id],
+            &[call_id, &actor_id.to_string(), device_id],
         )?;
         Ok(Self {
             focus: load_call_cell(state, call_id, focus_cell).await?,
@@ -816,7 +813,7 @@ impl CallMediaCells {
     /// Whether `actor_id` is under an actor-wide ban in the moderation
     /// effective OR-Set. A ban value omits `device_id`.
     /// An absent cell carries no bans.
-    fn actor_is_banned(&self, actor_id: &str) -> bool {
+    fn actor_is_banned(&self, actor_id: &arkret_wire::ActorId) -> bool {
         let Some(rows) = self.moderation.as_ref().and_then(Value::as_array) else {
             return false;
         };
@@ -826,19 +823,35 @@ impl CallMediaCells {
             }
             let row = entry.get("value").unwrap_or(&Value::Null);
             row.get("action").and_then(Value::as_str) == Some("ban")
-                && row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
+                && row
+                    .get("actor_id")
+                    .and_then(|value| {
+                        serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                    })
+                    .as_ref()
+                    == Some(actor_id)
         })
     }
 
     /// Current moderator mute override for this call leg. Duplicate malformed
     /// rows fail closed: any matching `*_muted=true` removes that publish
     /// permission from the issued backend token.
-    fn participant_mute_override(&self, actor_id: &str, device_id: &str) -> (bool, bool) {
+    fn participant_mute_override(
+        &self,
+        actor_id: &arkret_wire::ActorId,
+        device_id: &str,
+    ) -> (bool, bool) {
         let Some(value) = self.mute_override.as_ref() else {
             return (false, false);
         };
         if value.get("status").and_then(Value::as_str) != Some("active")
-            || value.get("actor_id").and_then(Value::as_str) != Some(actor_id)
+            || value
+                .get("actor_id")
+                .and_then(|value| {
+                    serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
+                })
+                .as_ref()
+                != Some(actor_id)
             || value.get("device_id").and_then(Value::as_str) != Some(device_id)
         {
             return (false, false);
@@ -1278,6 +1291,13 @@ async fn arkret_rtc_token(
 mod tests {
     use super::*;
 
+    fn actor(principal: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ))
+    }
+
     #[test]
     fn participant_mute_override_reads_the_per_leg_cas_cell() {
         let cell = CallMediaCells {
@@ -1285,18 +1305,18 @@ mod tests {
             moderation: None,
             mute_override: Some(json!({
                 "status": "active",
-                "actor_id": "ak:did_core:web:alice.example",
+                "actor_id": actor("ak:did_core:web:alice.example"),
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
                 "audio_muted": true,
                 "video_muted": false,
-                "changed_by": "ak:did_core:web:mod.example",
+                "changed_by": actor("ak:did_core:web:mod.example"),
                 "changed_at": "2026-06-16T00:00:01.000Z"
             })),
         };
 
         assert_eq!(
             cell.participant_mute_override(
-                "ak:did_core:web:alice.example",
+                &actor("ak:did_core:web:alice.example"),
                 "ak:device:01904100-0000-7000-8000-000000000001",
             ),
             (true, false)
@@ -1311,7 +1331,7 @@ mod tests {
                 {
                     "tag": "ak:event:AcGlxGJUvk7f1IQL9A3Jlg9JcPIuUVquBS_eLDo7S71q",
                     "value": {
-                        "actor_id": "ak:did_core:web:bob.example",
+                        "actor_id": actor("ak:did_core:web:bob.example"),
                         "action": "ban"
                     },
                     "removed": true
@@ -1319,7 +1339,7 @@ mod tests {
                 {
                     "tag": "ak:event:AS4AFkLeK4cxIX2CmEC7OAwstCL0qkWN6ZHZB1fMNUMx",
                     "value": {
-                        "actor_id": "ak:did_core:web:carol.example",
+                        "actor_id": actor("ak:did_core:web:carol.example"),
                         "action": "ban"
                     }
                 }
@@ -1327,8 +1347,13 @@ mod tests {
             mute_override: None,
         };
 
-        assert!(!cell.actor_is_banned("ak:did_core:web:bob.example"));
-        assert!(cell.actor_is_banned("ak:did_core:web:carol.example"));
+        assert!(!cell.actor_is_banned(&actor("ak:did_core:web:bob.example")));
+        assert!(cell.actor_is_banned(&actor("ak:did_core:web:carol.example")));
+        let other_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:carol.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert!(!cell.actor_is_banned(&other_station));
     }
 
     #[test]
@@ -1465,12 +1490,11 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let owner = projection
         .realm_authority_root(realm_id)
         .map(|root| root.controller_id.to_string());
-    let realms = state.realm_directory().snapshot();
-    let members = arkret_identifiers::RealmId::new(realm_id.to_owned())
-        .ok()
-        .and_then(|id| realms.get(&id))
-        .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-        .unwrap_or_default();
+    let members = projection
+        .members_of_realm(realm_id)
+        .into_iter()
+        .map(|member| member.member.clone())
+        .collect();
     (owner, members)
 }
 
@@ -1481,11 +1505,12 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
 pub(crate) async fn actor_has_call_capability(
     state: &AppState,
     realm_id: &str,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     action: &str,
 ) -> bool {
     let (owner, members) = call_authz_principals(state, realm_id).await;
-    let root_controller_holds_action = owner.as_deref() == Some(actor)
+    let actor_key = actor.to_string();
+    let root_controller_holds_action = owner.as_deref() == Some(actor_key.as_str())
         && arkret_schema::embedded_capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
             .ok()
             .flatten()
@@ -1498,17 +1523,10 @@ pub(crate) async fn actor_has_call_capability(
     if root_controller_holds_action {
         return true;
     }
-    let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
-        return false;
-    };
-    let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        principal_id,
-        state.service_core_id().clone(),
-    ));
     state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {
-            actor: &actor_id,
+            actor,
             action,
             resource: realm_id,
             realm_id,

@@ -1316,9 +1316,21 @@ async fn peer_claim_policy_authorized(
     }
     match body.claim_purpose {
         PeerKeyPackageClaimPurpose::RealmMembership => {
+            let source = arkret_wire::DidCoreId::new(source_id.to_owned())
+                .map_err(|_| AppError::param_invalid("invalid source_id"))?;
+            let Some(requester_actor) =
+                crate::routing::federation::federation::joined_actor_for_principal_route(
+                    state,
+                    body.intended_realm_id.as_str(),
+                    &body.requester_id,
+                    &source,
+                )
+            else {
+                return Ok(false);
+            };
             if !crate::routing::federation::federation::federation_actor_origin_acceptable(
                 state,
-                body.requester_id.as_str(),
+                &requester_actor,
                 source_id,
                 None,
                 body.intended_realm_id.as_str(),
@@ -1329,11 +1341,6 @@ async fn peer_claim_policy_authorized(
                 return Ok(false);
             }
             let projection = state.projections().snapshot();
-            let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                body.requester_id.clone(),
-                arkret_wire::DidCoreId::new(source_id.to_owned())
-                    .map_err(|_| AppError::param_invalid("invalid source_id"))?,
-            ));
             if projection
                 .member(
                     body.intended_realm_id.as_str(),
@@ -1343,10 +1350,16 @@ async fn peer_claim_policy_authorized(
             {
                 return Ok(false);
             }
-            let target_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                body.target_principal_id.clone(),
-                state.service_core_id().clone(),
-            ));
+            let Some(target_actor) =
+                crate::routing::federation::federation::joined_actor_for_principal_route(
+                    state,
+                    body.intended_realm_id.as_str(),
+                    &body.target_principal_id,
+                    &state.service_core_id(),
+                )
+            else {
+                return Ok(false);
+            };
             let is_participant = |actor_id: &arkret_wire::ActorId| {
                 let actor_key = actor_id.to_string();
                 projection

@@ -321,8 +321,28 @@ async fn keys_query(
     let body = body.into_inner();
     let mut result = BTreeMap::new();
     let mut device_generations = BTreeMap::new();
+    let requester = super::session_actor::validated_session_actor(state, &session).await?;
     for (actor_core, devices) in body.device_keys {
-        if !keys_query_actor_visible_to_requester(state, &session.actor, actor_core.as_str()) {
+        // Device maps name cryptographic principals inside this Station only.
+        // Authorization is against its exact stored Account and Actor membership,
+        // never against the principal-only discovery directory.
+        let account_id =
+            arkret_wire::AccountId::new(actor_core.clone(), state.service_core_id().clone());
+        if state
+            .identities()
+            .account(&account_id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .is_none()
+        {
+            continue;
+        }
+        let target = arkret_wire::ActorId::account(account_id);
+        if !keys_query_actor_visible_to_requester(
+            &state.projections().snapshot(),
+            &requester,
+            &target,
+        ) {
             continue;
         }
         if let Some(generation) =
@@ -411,32 +431,28 @@ async fn keys_query(
 }
 
 fn keys_query_actor_visible_to_requester(
-    state: &AppState,
-    requester_id: &str,
-    actor: &str,
+    projection: &soland_domain::reducer::ProjectionState,
+    requester: &arkret_wire::ActorId,
+    actor: &arkret_wire::ActorId,
 ) -> bool {
-    if requester_id == actor {
+    if requester == actor {
         return true;
     }
-    let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester_id.to_owned()) else {
-        return false;
-    };
-    let Ok(actor_id) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
-        return false;
-    };
-    let realms = state.realm_directory().snapshot();
-    let projection = state.projections().snapshot();
-    realms.entries_iter().any(|(realm_id, entry)| {
-        if !entry.members.contains(&requester_actor_id) {
-            return false;
-        }
-        if entry.members.contains(&actor_id) {
-            return true;
-        }
-        projection
-            .member(realm_id.as_str(), actor)
-            .is_some_and(|membership| matches!(membership.state.as_str(), "join" | "leave" | "ban"))
-    })
+    let requester = requester.to_string();
+    let actor = actor.to_string();
+    projection
+        .members
+        .iter()
+        .any(|((realm_id, member_actor), membership)| {
+            if member_actor != &requester || membership.state != "join" {
+                return false;
+            }
+            projection
+                .member(realm_id, &actor)
+                .is_some_and(|membership| {
+                    matches!(membership.state.as_str(), "join" | "leave" | "ban")
+                })
+        })
 }
 
 fn verification_method_controller(verification_method: &str) -> &str {
@@ -685,7 +701,73 @@ async fn device_signing_keys_query(
 
 #[cfg(test)]
 mod tests {
-    use super::device_signature_kid_points_to_device_key;
+    use super::{device_signature_kid_points_to_device_key, keys_query_actor_visible_to_requester};
+
+    #[test]
+    fn key_visibility_requires_exact_actor_membership_not_a_shared_principal() {
+        use arkret_wire::{AccountId, ActorId, DidCoreId};
+        let actor = |principal: &str, station: &str| {
+            ActorId::account(AccountId::new(
+                DidCoreId::new(principal).unwrap(),
+                DidCoreId::new(station).unwrap(),
+            ))
+        };
+        let alice = actor(
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:station.example",
+        );
+        let other_alice = actor(
+            "ak:did_core:web:alice.example",
+            "ak:did_core:web:other.example",
+        );
+        let bob = actor(
+            "ak:did_core:web:bob.example",
+            "ak:did_core:web:station.example",
+        );
+        let mut projection = soland_domain::reducer::ProjectionState::default();
+        assert!(keys_query_actor_visible_to_requester(
+            &projection,
+            &alice,
+            &alice
+        ));
+        assert!(!keys_query_actor_visible_to_requester(
+            &projection,
+            &other_alice,
+            &alice
+        ));
+        for member in [&alice, &bob] {
+            let member = member.to_string();
+            projection.members.insert(
+                ("realm".into(), member.clone()),
+                soland_domain::reducer::SolandMembershipState {
+                    member,
+                    realm_id: "realm".into(),
+                    state: "join".into(),
+                    role: "member".into(),
+                    membership_event_ref: None,
+                    invited_at: None,
+                    joined_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    reason: None,
+                },
+            );
+        }
+        assert!(keys_query_actor_visible_to_requester(
+            &projection,
+            &alice,
+            &bob
+        ));
+        assert!(!keys_query_actor_visible_to_requester(
+            &projection,
+            &other_alice,
+            &bob
+        ));
+        assert!(!keys_query_actor_visible_to_requester(
+            &projection,
+            &bob,
+            &other_alice
+        ));
+    }
 
     #[test]
     fn device_signature_kid_projects_did_controller_to_core_actor() {

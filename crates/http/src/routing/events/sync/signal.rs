@@ -69,6 +69,8 @@ pub(super) async fn submit_signal(
     })?;
 
     admit_signal(state, &session, &envelope).await?;
+    let sender_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
 
     let envelope_digest = envelope
         .envelope_digest()
@@ -96,7 +98,7 @@ pub(super) async fn submit_signal(
         let record = soland_storage::SignalRelayRecord {
             realm_id: realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
-            sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+            sender_actor_id: sender_actor.to_string(),
             sender_device_id: envelope.sender_device_id.as_str().to_owned(),
             signal_class: envelope.signal_class,
             envelope_digest: envelope_digest.clone(),
@@ -113,7 +115,8 @@ pub(super) async fn submit_signal(
                 tracing::error!(%error, "failed to append signal to the live relay");
                 signal_rail_unavailable("append the signal to the live relay")
             })?;
-        dispatched_recipient_count = Some(eligible_recipient_count(state, &envelope));
+        dispatched_recipient_count =
+            Some(eligible_recipient_count(state, &envelope, &sender_actor));
         let _ = state.publish_event_notification(EventNotification::signal(
             realm_id.as_str().to_owned(),
             envelope.signal_class,
@@ -165,10 +168,6 @@ fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) 
 
 fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTreeSet<String> {
     let local_service_id = state.service_id().as_str();
-    let sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        envelope.sender_actor_id.clone(),
-        state.service_core_id().clone(),
-    ));
     let projection = state.projections().snapshot();
     projection
         .members
@@ -176,7 +175,6 @@ fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTr
         .filter(|membership| {
             membership.realm_id == envelope.realm_id.as_str()
                 && membership.state == "join"
-                && membership.member != sender.to_string()
                 && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
                     .is_ok_and(|actor| actor.route_service_id().as_str() != local_service_id)
                 && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
@@ -235,7 +233,9 @@ async fn admit_signal(
     }
 
     let realm_id = envelope.realm_id.as_str();
-    if !realm_has_member(state, realm_id, &session.actor).await {
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    if !realm_has_member(state, realm_id, &actor.to_string()).await {
         return Err(AppError::capability_denied(
             "actor is not a joined member of the realm",
         ));
@@ -270,7 +270,7 @@ async fn admit_signal(
         && !crate::routing::interop::webrtc::actor_has_call_capability(
             state,
             realm_id,
-            &session.actor,
+            &actor,
             arkret_wire::CapabilityActionId::CALL_MODERATE,
         )
         .await
@@ -286,9 +286,9 @@ async fn admit_signal(
     // binding; ordinary principals use the accepted device directory. The
     // shared outer shape remains `{actor}#{device_id}` in both branches.
     if session.agent_session.is_some() {
-        verify_signal_agent_proof(state, envelope).await
+        verify_signal_agent_proof(state, envelope, &actor).await
     } else {
-        verify_signal_device_proof(state, envelope).await
+        verify_signal_device_proof(state, envelope, &actor).await
     }
 }
 
@@ -303,10 +303,13 @@ fn signal_scope_send_eligible(
         return Ok(());
     };
     let projection = state.projections().snapshot();
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?
+            .to_string();
     let joined = projection
-        .circle_membership(circle_id.as_str(), &session.actor)
+        .circle_membership(circle_id.as_str(), &actor)
         .is_some_and(|membership| membership.state == "join")
-        && projection.circle_scope_visible_to_actor(circle_id.as_str(), &session.actor);
+        && projection.circle_scope_visible_to_actor(circle_id.as_str(), &actor);
     if !joined {
         return Err(AppError::capability_denied(
             "actor may not send signals into this Circle scope",
@@ -318,7 +321,11 @@ fn signal_scope_send_eligible(
 async fn verify_signal_device_proof(
     state: &AppState,
     envelope: &SignalEnvelope,
+    actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
+    // This identity adapter owns only this Station's account device directory.
+    // A peer's account must not borrow a local same-principal device record.
+    require_local_signal_device_account(actor, state.service_id())?;
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
@@ -374,20 +381,36 @@ async fn verify_signal_device_proof(
     })
 }
 
+fn require_local_signal_device_account(
+    actor: &arkret_wire::ActorId,
+    station_id: &str,
+) -> Result<(), AppError> {
+    if actor
+        .as_account_id()
+        .is_some_and(|account| account.station_id.as_str() == station_id)
+    {
+        Ok(())
+    } else {
+        Err(signal_proof_invalid(
+            "the exact Signal account has no accepted device directory here",
+        ))
+    }
+}
+
 async fn verify_signal_agent_proof(
     state: &AppState,
     envelope: &SignalEnvelope,
+    actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
     let sender_actor_id = envelope.sender_actor_id.clone();
-    let record = state
-        .agent_pairings()
-        .agent(sender_actor_id.as_str())
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
-            signal_rail_unavailable("resolve the Agent signing authorization")
-        })?
-        .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
+    let record =
+        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(state, actor)
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
+                signal_rail_unavailable("resolve the Agent signing authorization")
+            })?
+            .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
     if record.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active {
         return Err(signal_proof_invalid("Signal sender Agent is not active"));
     }
@@ -450,11 +473,17 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     }
 
     let projection = state.projections().snapshot();
-    let sender_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        envelope.sender_actor_id.clone(),
-        arkret_wire::DidCoreId::new(source_id.to_owned())
-            .map_err(|_| signal_invalid("source service id is invalid"))?,
-    ));
+    let source = arkret_wire::DidCoreId::new(source_id.to_owned())
+        .map_err(|_| signal_invalid("source service id is invalid"))?;
+    let sender_actor = crate::routing::federation::federation::joined_actor_for_principal_route(
+        state,
+        envelope.realm_id.as_str(),
+        &envelope.sender_actor_id,
+        &source,
+    )
+    .ok_or_else(|| {
+        signal_invalid("signal sender has no unambiguous joined Actor at its source Station")
+    })?;
     let membership_key = (
         envelope.realm_id.as_str().to_owned(),
         sender_actor.to_string(),
@@ -477,12 +506,10 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     }
     if let Some(circle_id) = envelope.scope_ref.circle_id()
         && (!projection
-            .circle_membership(circle_id.as_str(), envelope.sender_actor_id.as_str())
+            .circle_membership(circle_id.as_str(), &sender_actor.to_string())
             .is_some_and(|membership| membership.state == "join")
-            || !projection.circle_scope_visible_to_actor(
-                circle_id.as_str(),
-                envelope.sender_actor_id.as_str(),
-            ))
+            || !projection
+                .circle_scope_visible_to_actor(circle_id.as_str(), &sender_actor.to_string()))
     {
         return Err(signal_invalid(
             "signal sender is not eligible for the Circle scope",
@@ -492,23 +519,17 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         && !crate::routing::interop::webrtc::actor_has_call_capability(
             state,
             envelope.realm_id.as_str(),
-            envelope.sender_actor_id.as_str(),
+            &sender_actor,
             arkret_wire::CapabilityActionId::CALL_MODERATE,
         )
         .await
     {
         return Err(signal_invalid("signal sender lacks the moderation action"));
     }
-    if state
-        .agent_pairings()
-        .agent(envelope.sender_actor_id.as_str())
-        .await
-        .map_err(|_| signal_rail_unavailable("resolve peer Agent signing authorization"))?
-        .is_some()
-    {
-        verify_signal_agent_proof(state, envelope).await?;
+    if matches!(sender_actor, arkret_wire::ActorId::HostedPrincipal { .. }) {
+        verify_signal_agent_proof(state, envelope, &sender_actor).await?;
     } else {
-        verify_signal_device_proof(state, envelope).await?;
+        verify_signal_device_proof(state, envelope, &sender_actor).await?;
     }
 
     let local_service_id = state.service_id().as_str();
@@ -544,7 +565,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         .append_signal(soland_storage::SignalRelayRecord {
             realm_id: envelope.realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
-            sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+            sender_actor_id: sender_actor.to_string(),
             sender_device_id: envelope.sender_device_id.as_str().to_owned(),
             signal_class: envelope.signal_class,
             envelope_digest,
@@ -566,35 +587,23 @@ pub(in crate::routing::events) async fn accept_peer_signal(
 ///
 /// Reported as `dispatched_recipient_count`. It is an eligibility count, not a
 /// delivery guarantee: §4 is explicit that the rail has none.
-fn eligible_recipient_count(state: &AppState, envelope: &SignalEnvelope) -> u64 {
-    let sender = envelope.sender_actor_id.as_str();
-    match envelope.scope_ref.circle_id() {
-        Some(circle_id) => state
-            .projections()
-            .snapshot()
-            .circles
-            .get(circle_id.as_str())
-            .map(|circle| {
-                circle
-                    .members
-                    .iter()
-                    .filter(|member| member.as_str() != sender)
-                    .count() as u64
-            })
-            .unwrap_or(0),
-        None => state
-            .realm_directory()
-            .snapshot()
-            .get(&envelope.realm_id)
-            .map(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .filter(|member| member.as_str() != sender)
-                    .count() as u64
-            })
-            .unwrap_or(0),
-    }
+fn eligible_recipient_count(
+    state: &AppState,
+    envelope: &SignalEnvelope,
+    sender: &arkret_wire::ActorId,
+) -> u64 {
+    let projection = state.projections().snapshot();
+    let sender = sender.to_string();
+    projection
+        .members_of_realm(envelope.realm_id.as_str())
+        .into_iter()
+        .filter(|member| {
+            member.member != sender
+                && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
+                    projection.circle_scope_visible_to_actor(circle_id.as_str(), &member.member)
+                })
+        })
+        .count() as u64
 }
 
 fn mls_ciphersuite_is_active(canonical_id: &str) -> bool {
@@ -716,24 +725,28 @@ pub(crate) async fn pending_signals_for_subscriber(
 ) -> Vec<SignalEnvelope> {
     let now = chrono::Utc::now();
     let mut delivered = Vec::new();
+    let Ok(actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return delivered;
+    };
+    let actor_key = actor.to_string();
     let member_realms: Vec<String> = {
-        let realms = state.realm_directory().snapshot();
-        realms
-            .search(Default::default())
-            .into_iter()
-            .filter(|realm| {
-                realm
-                    .members
-                    .iter()
-                    .any(|member| member.as_str() == session.actor)
-            })
-            .map(|realm| realm.realm_id.as_str().to_owned())
+        let projection = state.projections().snapshot();
+        projection
+            .members
+            .iter()
+            .filter(|((_, member), state)| member == &actor_key && state.state == "join")
+            .map(|((realm, _), _)| realm.clone())
             .collect()
     };
     for realm_id in member_realms {
+        if !realm_has_member(state, &realm_id, &actor_key).await {
+            continue;
+        }
         let watermark = state
             .deliveries()
-            .signal_watermark(&session.actor, &session.device_id, &realm_id)
+            .signal_watermark(&actor_key, &session.device_id, &realm_id)
             .await
             .unwrap_or(0);
         let records = state
@@ -748,12 +761,10 @@ pub(crate) async fn pending_signals_for_subscriber(
                 continue;
             }
             // A device never receives its own Signal back.
-            if record.sender_actor_id == session.actor
-                && record.sender_device_id == session.device_id
-            {
+            if record.sender_actor_id == actor_key && record.sender_device_id == session.device_id {
                 continue;
             }
-            if !signal_visible_to_subscriber(state, &record, &session.actor) {
+            if !signal_visible_to_subscriber(state, &record, &actor_key) {
                 continue;
             }
             delivered.push(record.envelope);
@@ -761,7 +772,7 @@ pub(crate) async fn pending_signals_for_subscriber(
         if highest > watermark {
             let _ = state
                 .deliveries()
-                .advance_signal_watermark(&session.actor, &session.device_id, &realm_id, highest)
+                .advance_signal_watermark(&actor_key, &session.device_id, &realm_id, highest)
                 .await;
         }
     }
@@ -789,6 +800,24 @@ mod tests {
     use salvo::http::StatusCode;
 
     use super::*;
+
+    #[test]
+    fn signal_device_directory_never_substitutes_a_same_principal_local_account() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let local = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            station.clone(),
+        ));
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        ));
+        let hosted = arkret_wire::ActorId::hosted_principal(principal, station.clone());
+        assert!(require_local_signal_device_account(&local, station.as_str()).is_ok());
+        assert!(require_local_signal_device_account(&foreign, station.as_str()).is_err());
+        assert!(require_local_signal_device_account(&hosted, station.as_str()).is_err());
+    }
 
     #[test]
     fn only_active_registry_ciphersuites_are_accepted() {

@@ -397,16 +397,16 @@ fn authenticate_frame(
     }
 }
 
-fn signal_record(realm_id_str: &str) -> soland_storage::SignalRelayRecord {
+fn signal_record(
+    realm_id_str: &str,
+    sender: &arkret_wire::ActorId,
+) -> soland_storage::SignalRelayRecord {
     let sent_at = chrono::Utc::now();
     let realm_id = arkret_identifiers::RealmId::new(realm_id_str.to_owned()).unwrap();
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
-        sender_actor_id: arkret_identifiers::DidCoreId::new(
-            "ak:did_core:web:bob.example".to_owned(),
-        )
-        .unwrap(),
+        sender_actor_id: sender.signing_principal_id().clone(),
         sender_device_id: arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
@@ -446,7 +446,7 @@ fn signal_record(realm_id_str: &str) -> soland_storage::SignalRelayRecord {
     soland_storage::SignalRelayRecord {
         realm_id: realm_id_str.to_owned(),
         scope_ref: envelope.scope_ref.clone(),
-        sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+        sender_actor_id: sender.to_string(),
         sender_device_id: envelope.sender_device_id.as_str().to_owned(),
         signal_class: envelope.signal_class,
         envelope_digest: envelope.envelope_digest().unwrap().as_str().to_owned(),
@@ -505,6 +505,36 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
     // Derived, never copied: the demo Realm id is `retype(genesis.event_id)`
     // and the genesis freezes this deployment's own notary signer descriptor.
     let realm_id_str = state.development_demo_realm_id().to_string();
+    let account_actor = |principal: &str| {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(principal).unwrap(),
+            state.service_core_id(),
+        ))
+    };
+    let alice_actor = account_actor("ak:did_core:web:alice.example");
+    let bob_actor = account_actor("ak:did_core:web:bob.example");
+    // Demo directory entries are discovery metadata, not accepted membership.
+    // This transport fixture supplies its two complete Station-scoped members.
+    {
+        let joined_at = chrono::Utc::now();
+        let mut projection = state.projections().test_state().lock();
+        for actor in [&alice_actor, &bob_actor] {
+            projection.members.insert(
+                (realm_id_str.clone(), actor.to_string()),
+                soland_domain::reducer::SolandMembershipState {
+                    member: actor.to_string(),
+                    realm_id: realm_id_str.clone(),
+                    state: "join".into(),
+                    role: "member".into(),
+                    membership_event_ref: None,
+                    invited_at: None,
+                    joined_at,
+                    updated_at: joined_at,
+                    reason: None,
+                },
+            );
+        }
+    }
     let device_binding = install_alice_device_authority(&state).await;
     let description = crate::routing::system::describe::build_server_description(&state);
     let advertised = arkret_models_discovery::websocket_binding::select_websocket_binding(
@@ -638,15 +668,7 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
                 realm_ids: Some(vec![
                     arkret_identifiers::RealmId::new(realm_id_str.clone()).unwrap(),
                 ]),
-                actor_ids: Some(vec![arkret_wire::ActorId::account(
-                    arkret_wire::AccountId::new(
-                        arkret_identifiers::DidCoreId::new(
-                            "ak:did_core:web:alice.example".to_owned(),
-                        )
-                        .unwrap(),
-                        crate::test_event::station_id(),
-                    ),
-                )]),
+                actor_ids: Some(vec![alice_actor.clone()]),
                 after: None,
                 catchup: Some(true),
             }),
@@ -683,9 +705,15 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
             .collect()
     );
 
+    let signal = signal_record(&realm_id_str, &bob_actor);
+    assert_eq!(signal.sender_actor_id, bob_actor.to_string());
+    assert_eq!(
+        &signal.envelope.sender_actor_id,
+        bob_actor.signing_principal_id()
+    );
     state
         .deliveries()
-        .append_signal(signal_record(&realm_id_str))
+        .append_signal(signal)
         .await
         .expect("append live Signal");
     state
@@ -699,8 +727,15 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
 
     let mut signal_seen = false;
     let mut event_control_seen = false;
+    let control_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
     while !signal_seen || !event_control_seen {
-        match next_server_frame(&mut socket, "Signal/events control").await {
+        match tokio::time::timeout_at(
+            control_deadline,
+            next_server_frame(&mut socket, "Signal/events control"),
+        )
+        .await
+        .expect("Signal and epoch rotation arrive before the bounded deadline")
+        {
             WebSocketServerFrame::Data {
                 channel_id,
                 payload,
@@ -716,9 +751,45 @@ async fn live_tls_peer_covers_reauth_three_channels_heartbeat_signal_and_drain()
                     && payload["payload"].get("previous_epoch").is_none()
                     && payload["payload"]["new_epoch"] == serde_json::json!(7);
             }
+            WebSocketServerFrame::Ping { ping_id, .. } => {
+                send_client_frame(&mut socket, WebSocketClientFrame::Pong { ping_id }).await;
+            }
             _ => {}
         }
     }
+
+    assert!(
+        state
+            .deliveries()
+            .signal_watermark(&alice_actor.to_string(), ALICE_DEVICE, &realm_id_str)
+            .await
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        state
+            .deliveries()
+            .signal_watermark(
+                alice_actor.signing_principal_id().as_str(),
+                ALICE_DEVICE,
+                &realm_id_str
+            )
+            .await
+            .unwrap(),
+        0
+    );
+    let foreign_alice = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        alice_actor.signing_principal_id().clone(),
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+    ));
+    assert_eq!(
+        state
+            .deliveries()
+            .signal_watermark(&foreign_alice.to_string(), ALICE_DEVICE, &realm_id_str)
+            .await
+            .unwrap(),
+        0
+    );
 
     tokio::time::sleep(std::time::Duration::from_millis(
         WS_HEARTBEAT_INTERVAL_MS as u64,

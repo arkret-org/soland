@@ -1066,10 +1066,12 @@ async fn range_completeness_for_query(
     };
     let realm_id = RealmId::new(realms[0].clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     if !state
         .projections()
         .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &session.actor)
+        .realm_is_principal_control_for_actor(realm_id.as_str(), &actor.to_string())
     {
         return Ok(None);
     }

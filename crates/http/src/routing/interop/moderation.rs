@@ -14,7 +14,7 @@ use arkret_models_collaboration::events_payloads::moderation::{
     FrankingDataEventInclusionProof, FrankingProof, FrankingSealObservationOutcome,
     FrankingSealObservationRequest, ModerationReportPayload,
 };
-use arkret_wire::{EventKind, ScopeRef};
+use arkret_wire::{ActorId, EventKind, ScopeRef};
 use ed25519_dalek::Signer as _;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -426,7 +426,9 @@ pub(super) async fn validate_moderation_report_safety(
     validate_moderation_report_content_safety(
         state,
         realm_id,
-        reporter_id,
+        // MIMI's reported principal is provenance, not a verified Account or
+        // HostedPrincipal mapping. It cannot authorize a restricted Circle.
+        None,
         target_ref,
         effective_scope,
         evidence_package,
@@ -438,7 +440,7 @@ pub(super) async fn validate_moderation_report_safety(
 async fn validate_signed_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
-    reporter_id: &str,
+    reporter_actor: &ActorId,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -447,7 +449,7 @@ async fn validate_signed_moderation_report_safety(
     validate_moderation_report_content_safety(
         state,
         realm_id,
-        reporter_id,
+        Some(reporter_actor),
         target_ref,
         effective_scope,
         evidence_package,
@@ -459,7 +461,7 @@ async fn validate_signed_moderation_report_safety(
 async fn validate_moderation_report_content_safety(
     state: &AppState,
     realm_id: &str,
-    reporter_id: &str,
+    reporter_actor: Option<&ActorId>,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -467,7 +469,7 @@ async fn validate_moderation_report_content_safety(
 ) -> Result<ModerationReportSafety, AppError> {
     let effective_scope = moderation_effective_scope_value(realm_id, effective_scope)?;
     let target_scope =
-        moderation_target_effective_scope_value(state, realm_id, reporter_id, target_ref)?;
+        moderation_target_effective_scope_value(state, realm_id, reporter_actor, target_ref)?;
     if target_scope != effective_scope {
         return Err(moderation_target_not_found());
     }
@@ -528,7 +530,7 @@ fn moderation_target_not_found() -> AppError {
 fn moderation_target_effective_scope_value(
     state: &AppState,
     realm_id: &str,
-    reporter_id: &str,
+    reporter_actor: Option<&ActorId>,
     target_ref: &str,
 ) -> Result<Value, AppError> {
     if target_ref == realm_id {
@@ -572,7 +574,8 @@ fn moderation_target_effective_scope_value(
         return Err(moderation_target_not_found());
     };
     if let Some(circle_id) = scope_circle_id {
-        if !projection.circle_scope_visible_to_actor(&circle_id, reporter_id) {
+        let reporter_actor = reporter_actor.ok_or_else(moderation_target_not_found)?;
+        if !projection.circle_scope_visible_to_actor(&circle_id, &reporter_actor.to_string()) {
             return Err(moderation_target_not_found());
         }
         return Ok(json!({
@@ -1196,10 +1199,10 @@ async fn moderation_report(
     let payload: arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload =
         serde_json::from_value(Value::Object(event.payload.clone().into_iter().collect()))
             .map_err(|error| AppError::param_invalid(format!("report_event payload: {error}")))?;
-    let principal_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::internal(format!(
-            "authenticated session principal id is invalid: {error}"
-        ))
+    let reporter_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let reporter_account = reporter_actor.as_account_id().ok_or_else(|| {
+        AppError::capability_denied("self moderation reports require an authenticated account")
     })?;
     let event_value = serde_json::to_value(event)
         .map_err(|error| AppError::param_invalid(format!("report_event encode: {error}")))?;
@@ -1214,7 +1217,7 @@ async fn moderation_report(
         .map_err(|error| AppError::internal(format!("moderation replay lookup failed: {error}")))?
         .is_some_and(|record| record.canonical_bytes == canonical_bytes);
     if !exact_replay {
-        if !realm_has_member(state, event.realm_id.as_str(), &session.actor).await {
+        if !realm_has_member(state, event.realm_id.as_str(), &reporter_actor.to_string()).await {
             return Err(AppError::capability_denied(
                 "reporter_id cannot see the target realm",
             ));
@@ -1238,7 +1241,7 @@ async fn moderation_report(
         validate_signed_moderation_report_safety(
             state,
             event.realm_id.as_str(),
-            payload.reporter_id.as_str(),
+            &reporter_actor,
             payload.target_ref.as_str(),
             payload.effective_scope.as_ref(),
             &evidence_package,
@@ -1251,12 +1254,8 @@ async fn moderation_report(
             target_ref: payload.target_ref.to_string(),
             effective_scope: event.scope_ref.clone(),
         };
-    body.validate_authoring_context(
-        &arkret_wire::AccountId::new(principal_id, state.service_core_id().clone()),
-        &accepted_target,
-        digest_suite,
-    )
-    .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
+    body.validate_authoring_context(reporter_account, &accepted_target, digest_suite)
+        .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
     let report_id = body
         .report_id(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
@@ -1431,6 +1430,87 @@ mod report_safety_tests {
 
     fn realm_scope() -> Value {
         json!({"kind": "realm", "realm_id": REALM})
+    }
+
+    fn restricted_circle_state() -> (AppState, ActorId, String) {
+        let state = test_state();
+        let reporter = ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(REPORTER).unwrap(),
+            state.service_core_id().clone(),
+        ));
+        let circle_id = "ak:circle:AcsXlJSItqSzy43Swu0nFz2ijj4Yaf0RgjmoTeivRt8M".to_owned();
+        {
+            let mut projection = state.test_projection().lock();
+            projection
+                .messages
+                .get_mut(&TARGET.replacen("ak:message:", "ak:event:", 1))
+                .unwrap()
+                .content["scope_circle_id"] = json!(circle_id);
+            projection.circles.insert(
+                circle_id.clone(),
+                soland_domain::reducer::CircleProjection {
+                    circle_id: circle_id.clone(),
+                    realm_id: REALM.into(),
+                    profile_ref: None,
+                    title: "Restricted reports".into(),
+                    summary: None,
+                    display: json!({}),
+                    directory_visibility: "members".into(),
+                    join_rule: "invite".into(),
+                    history_access: "since_join".into(),
+                    content_encryption_floor: None,
+                    metadata_encryption_floor: None,
+                    encryption_profile: "none".into(),
+                    content_scheme: None,
+                    durability_policy: None,
+                    mls_group_ref: None,
+                    state: soland_domain::reducer::CircleLifecycleState::Active,
+                    state_changed_at: None,
+                    created_by: reporter.to_string(),
+                    created_at: now(),
+                    updated_by: None,
+                    updated_at: None,
+                    members: BTreeSet::from([reporter.to_string()]),
+                },
+            );
+        }
+        (state, reporter, circle_id)
+    }
+
+    #[test]
+    fn report_circle_visibility_requires_exact_reporter_actor() {
+        let (state, reporter, circle_id) = restricted_circle_state();
+        assert_eq!(
+            moderation_target_effective_scope_value(&state, REALM, Some(&reporter), TARGET)
+                .unwrap(),
+            json!({"kind": "circle", "realm_id": REALM, "circle_id": circle_id}),
+        );
+        let foreign = ActorId::account(arkret_wire::AccountId::new(
+            reporter.signing_principal_id().clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        ));
+        let hosted = ActorId::hosted_principal(
+            reporter.signing_principal_id().clone(),
+            reporter.route_service_id().clone(),
+        );
+        for other in [&foreign, &hosted] {
+            assert!(
+                moderation_target_effective_scope_value(&state, REALM, Some(other), TARGET)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn unmapped_mimi_reporter_cannot_use_principal_as_circle_membership() {
+        let (state, ..) = restricted_circle_state();
+        assert!(moderation_target_effective_scope_value(&state, REALM, None, TARGET).is_err());
+        // The provider-authenticated facade keeps its existing Realm reporting
+        // behavior, but no principal-only hint confers private Circle access.
+        assert_eq!(
+            moderation_target_effective_scope_value(&state, REALM, None, REALM).unwrap(),
+            realm_scope(),
+        );
     }
 
     fn hash(ch: char) -> String {

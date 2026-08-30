@@ -21,7 +21,9 @@ use arkret_models_collaboration::governance::invite_addressing::{
     InviteDelivery, InviteDeliveryTarget,
 };
 use arkret_models_collaboration::governance::operation_wire::Invite;
-use arkret_wire::{AccountDataKey, AuthzDecision, DidCoreId, Facet, InviteState};
+use arkret_wire::{
+    AccountDataKey, AccountId, ActorId, AuthzDecision, DidCoreId, Facet, InviteState,
+};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -59,27 +61,8 @@ async fn authz_check(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let session_actor_id = if session.agent_session.is_none() {
-        let account_pk = session
-            .account_pk
-            .ok_or_else(|| AppError::unauthenticated("session has no account binding"))?;
-        let account = state
-            .identities()
-            .account_by_id(account_pk)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::unauthenticated("session account no longer exists"))?;
-        arkret_wire::ActorId::account(account.account_id)
-    } else {
-        arkret_wire::ActorId::hosted_principal(
-            DidCoreId::new(session.actor.clone()).map_err(|error| {
-                AppError::internal(format!("session actor is invalid: {error}"))
-            })?,
-            DidCoreId::new(session.audience.clone()).map_err(|error| {
-                AppError::internal(format!("session audience is invalid: {error}"))
-            })?,
-        )
-    };
+    let session_actor_id =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     if body.actor_id != session_actor_id {
         return Err(AppError::capability_denied(
             "authorization checks may only target the authenticated actor",
@@ -301,6 +284,134 @@ mod tests {
     use super::{capability_resource_selector, parse_authz_resource};
 
     #[test]
+    fn effective_grants_query_preserves_explicit_actor_kind_and_credential_default() {
+        let principal = super::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = super::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let account =
+            super::ActorId::account(super::AccountId::new(principal.clone(), station.clone()));
+        let hosted = super::ActorId::hosted_principal(principal.clone(), station);
+        let service = super::ActorId::service(principal);
+        for actor in [&account, &hosted, &service] {
+            let parsed =
+                super::effective_grants_subject(Some(&actor.to_string()), false, &account).unwrap();
+            assert_eq!(&parsed, actor);
+            assert_eq!(
+                super::effective_grants_subject(None, false, actor).unwrap(),
+                *actor
+            );
+        }
+        assert!(!super::effective_grants_subject_allowed(
+            &hosted, &account, false
+        ));
+        assert!(!super::effective_grants_subject_allowed(
+            &service, &account, false
+        ));
+        assert!(super::effective_grants_subject(None, true, &account).is_err());
+        assert!(
+            super::effective_grants_subject(Some(&hosted.to_string()), true, &account).is_err()
+        );
+        assert!(
+            super::effective_grants_subject(
+                Some(account.signing_principal_id().as_str()),
+                false,
+                &account
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn effective_grants_query_rejects_same_principal_foreign_station_without_owner_scope() {
+        let principal = super::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = super::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let other = super::DidCoreId::new("ak:did_core:web:other.example").unwrap();
+        for (local, foreign) in [
+            (
+                super::ActorId::account(super::AccountId::new(principal.clone(), station.clone())),
+                super::ActorId::account(super::AccountId::new(principal.clone(), other.clone())),
+            ),
+            (
+                super::ActorId::hosted_principal(principal.clone(), station),
+                super::ActorId::hosted_principal(principal, other),
+            ),
+        ] {
+            let parsed =
+                super::effective_grants_subject(Some(&foreign.to_string()), false, &local).unwrap();
+            assert_eq!(parsed, foreign);
+            assert!(!super::effective_grants_subject_allowed(
+                &parsed, &local, false
+            ));
+            assert!(super::effective_grants_subject_allowed(
+                &parsed, &local, true
+            ));
+            assert!(super::effective_grants_subject_allowed(
+                &local, &local, false
+            ));
+        }
+    }
+
+    #[test]
+    fn invite_query_requires_exact_account_or_authenticated_self() {
+        let account = super::AccountId::new(
+            super::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        let actor = super::ActorId::account(account.clone());
+        assert_eq!(
+            super::invite_subject_account(None, None, &actor).unwrap(),
+            account
+        );
+        assert!(
+            super::invite_subject_account(Some(account.principal_id.to_string()), None, &actor)
+                .is_err()
+        );
+        assert!(
+            super::invite_subject_account(None, Some(account.station_id.to_string()), &actor)
+                .is_err()
+        );
+        let foreign = super::invite_subject_account(
+            Some(account.principal_id.to_string()),
+            Some("ak:did_core:web:other.example".into()),
+            &actor,
+        )
+        .unwrap();
+        assert_ne!(foreign, account);
+        assert_eq!(foreign.station_id.as_str(), "ak:did_core:web:other.example");
+        assert!(
+            super::invite_subject_account(
+                None,
+                None,
+                &super::ActorId::hosted_principal(account.principal_id, account.station_id)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn invite_account_comparison_rejects_principal_and_other_station() {
+        let account = super::AccountId::new(
+            super::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        );
+        assert!(super::stored_invite_account_matches(
+            &account.to_string(),
+            &account
+        ));
+        assert!(!super::stored_invite_account_matches(
+            account.principal_id.as_str(),
+            &account
+        ));
+        let foreign = super::AccountId::new(
+            account.principal_id.clone(),
+            super::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        );
+        assert!(!super::stored_invite_account_matches(
+            &foreign.to_string(),
+            &account
+        ));
+    }
+
+    #[test]
     fn realm_selector_uses_realm_id_as_resource() {
         let parsed = parse_authz_resource(&json!({
             "kind": "realm",
@@ -380,17 +491,16 @@ async fn effective_grants(
 ) -> soland_http::result::JsonResult<GrantList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let subject = query_param(req, "subject")
-        .ok_or_else(|| AppError::param_invalid("subject is required"))
-        .and_then(|value| {
-            DidCoreId::new(value).map_err(|_| AppError::param_invalid("subject is invalid"))
-        })?;
-    let subject_station_id = query_param(req, "subject_station_id")
-        .ok_or_else(|| AppError::param_invalid("subject_station_id is required"))
-        .and_then(|value| {
-            DidCoreId::new(value)
-                .map_err(|_| AppError::param_invalid("subject_station_id is invalid"))
-        })?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let legacy_subject_present = ["subject", "subject_station_id", "subject_account_id"]
+        .iter()
+        .any(|key| query_param(req, key).is_some());
+    let subject_actor = effective_grants_subject(
+        query_param(req, "subject_actor_id").as_deref(),
+        legacy_subject_present,
+        &session_actor,
+    )?;
     let realm_id = query_param(req, "realm_id")
         .ok_or_else(|| AppError::param_invalid("realm_id is required"))
         .and_then(|value| {
@@ -404,10 +514,11 @@ async fn effective_grants(
         })
         .transpose()?
         .unwrap_or_else(now);
-    let subject_is_self = subject.as_str() == session.actor.as_str()
-        && subject_station_id.as_str() == session.audience.as_str();
-    let caller_can_query_subject = subject_is_self
-        || session_owns_realm(state, session.actor.as_str(), realm_id.as_str()).await;
+    let caller_can_query_subject = effective_grants_subject_allowed(
+        &subject_actor,
+        &session_actor,
+        session_owns_realm(state, &session_actor, realm_id.as_str()).await,
+    );
     if !caller_can_query_subject {
         return Err(AppError::capability_denied(
             "effective-grants subject requires self or realm owner scope",
@@ -415,11 +526,7 @@ async fn effective_grants(
     }
     let grants = state
         .authorization()
-        .grants_for_subject_at(
-            &arkret_wire::ActorId::hosted_principal(subject, subject_station_id),
-            realm_id.as_str(),
-            evaluated_at,
-        )
+        .grants_for_subject_at(&subject_actor, realm_id.as_str(), evaluated_at)
         .into_iter()
         .map(capability_grant_from_authz_grant)
         .collect::<Result<Vec<_>, _>>()?;
@@ -431,6 +538,31 @@ async fn effective_grants(
         ),
         evaluated_at,
     })
+}
+
+fn effective_grants_subject(
+    subject_actor_id: Option<&str>,
+    legacy_subject_present: bool,
+    session_actor: &ActorId,
+) -> Result<ActorId, AppError> {
+    if legacy_subject_present {
+        return Err(AppError::param_invalid(
+            "effective-grants only accepts subject_actor_id; legacy subject fields are invalid",
+        ));
+    }
+    match subject_actor_id {
+        Some(value) => serde_json::from_str::<ActorId>(value)
+            .map_err(|_| AppError::param_invalid("subject_actor_id must be a complete ActorId")),
+        None => Ok(session_actor.clone()),
+    }
+}
+
+fn effective_grants_subject_allowed(
+    subject: &ActorId,
+    session_actor: &ActorId,
+    session_owns_realm: bool,
+) -> bool {
+    subject == session_actor || session_owns_realm
 }
 
 fn capability_grant_from_authz_grant(
@@ -666,14 +798,36 @@ fn insert_constraint_extension(
     Ok(())
 }
 
-async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bool {
+async fn session_owns_realm(state: &AppState, actor: &ActorId, realm_id: &str) -> bool {
     state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|meta| meta.owner.as_str() == actor)
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, now())
+}
+
+fn invite_subject_account(
+    subject: Option<String>,
+    station: Option<String>,
+    session_actor: &ActorId,
+) -> Result<AccountId, AppError> {
+    match (subject, station) {
+        (None, None) => session_actor
+            .as_account_id()
+            .cloned()
+            .ok_or_else(|| AppError::param_invalid("invite subject requires an Account")),
+        (Some(subject), Some(station)) => Ok(AccountId::new(
+            DidCoreId::new(subject).map_err(|_| AppError::param_invalid("subject is invalid"))?,
+            DidCoreId::new(station)
+                .map_err(|_| AppError::param_invalid("subject_station_id is invalid"))?,
+        )),
+        _ => Err(AppError::param_invalid(
+            "subject and subject_station_id must be supplied together",
+        )),
+    }
+}
+
+fn stored_invite_account_matches(stored: &str, account: &AccountId) -> bool {
+    serde_json::from_str::<AccountId>(stored).is_ok_and(|stored| &stored == account)
 }
 
 fn capability_resource_selector(
@@ -722,13 +876,20 @@ async fn invites(
 ) -> soland_http::result::JsonResult<AuthzInviteList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let subject = query_param(req, "subject").unwrap_or_else(|| session.actor.clone());
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let subject = invite_subject_account(
+        query_param(req, "subject"),
+        query_param(req, "subject_station_id"),
+        &session_actor,
+    )?;
+    let subject_actor = ActorId::account(subject.clone());
     let realm_filter = query_param(req, "realm_id");
-    let subject_is_self = subject.as_str() == session.actor.as_str();
+    let subject_is_self = subject_actor == session_actor;
     let caller_owns_realm = if subject_is_self {
         false
     } else if let Some(realm_id) = realm_filter.as_deref() {
-        session_owns_realm(state, session.actor.as_str(), realm_id).await
+        session_owns_realm(state, &session_actor, realm_id).await
     } else {
         false
     };
@@ -740,7 +901,10 @@ async fn invites(
     let holder_delivery_ids = if subject_is_self {
         let delivery = state
             .account_data()
-            .entry(subject.as_str(), AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+            .entry(
+                &subject_actor.to_string(),
+                AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+            )
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .map(|record| serde_json::from_value::<InviteDelivery>(record.payload))
@@ -771,12 +935,17 @@ async fn invites(
             || realm_filter
                 .as_deref()
                 .is_some_and(|realm_id| invite.realm_id.as_str() != realm_id)
-            || invite.invitee_id.as_deref() != Some(subject.as_str())
+            || !invite
+                .invitee_id
+                .as_deref()
+                .is_some_and(|stored| stored_invite_account_matches(stored, &subject))
             || holder_delivery_ids
                 .as_ref()
                 .is_some_and(|ids| !ids.contains(&invite.invite_id))
             || (!subject_is_self
-                && invite.inviter_id.as_str() != session.actor.as_str()
+                && !session_actor.as_account_id().is_some_and(|account| {
+                    stored_invite_account_matches(&invite.inviter_id, account)
+                })
                 && !caller_owns_realm)
             || invite
                 .expires_at
@@ -784,7 +953,7 @@ async fn invites(
         {
             continue;
         }
-        if realm_has_member_by_id(state, &invite.realm_id, &subject).await {
+        if realm_has_member_by_id(state, &invite.realm_id, &subject_actor.to_string()).await {
             continue;
         }
         invite_list.push(invite_record_to_sdk(invite)?);

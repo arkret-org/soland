@@ -1202,7 +1202,7 @@ async fn submit_federated_cascade_after_transport_validation(
                     )
                 })?;
             if record.controller_terminal_event_id != controller_event_id
-                || record.initiator_actor_id != *initiator
+                || record.initiator_actor_id != initiator
             {
                 return Err(cascade_error(
                     StatusCode::FORBIDDEN,
@@ -1479,7 +1479,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         }
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
-            event.actor_id.signing_principal_id().as_str(),
+            &event.actor_id,
             source_id.as_str(),
             Some(event.actor_id.route_service_id().as_str()),
             realm_id,
@@ -1561,7 +1561,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         .unwrap_or(&submission.controller_transition.event.actor_id);
     if !crate::routing::federation::federation::federation_actor_origin_acceptable(
         state,
-        initiator.signing_principal_id().as_str(),
+        initiator,
         source_id.as_str(),
         Some(source_id.as_str()),
         realm_id,

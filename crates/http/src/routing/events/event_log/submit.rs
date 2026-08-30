@@ -2889,7 +2889,7 @@ pub(crate) async fn submit_federation_events(
         let event_station_id = event_actor.route_service_id().to_string();
         if !crate::routing::federation::federation::federation_actor_origin_acceptable(
             state,
-            &actor,
+            &event_actor,
             &source_id,
             Some(&event_station_id),
             &binding_realm,
