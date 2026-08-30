@@ -2627,13 +2627,8 @@ pub(super) async fn submit_event_value_with_context(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
         }
-        if let Some(reason) = preflight_mls_welcome_recipient_reject(state, operation).await {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
+        // Recipient trust is checked by the claim ledger only after the exact
+        // destination receipt has been authenticated, never by a local DID lookup.
         if context.internal_admission.is_none()
             && let Some(reason) = preflight_mls_welcome_claim_ledger_reject(
                 state,

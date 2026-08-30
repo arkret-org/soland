@@ -184,9 +184,15 @@ impl ServiceRouteResolver {
         {
             return Ok(entry);
         }
-        self.store
-            .evict_route_cache(service_id, service_kind)
-            .await?;
+        self.resolved_routes
+            .lock()
+            .remove(&(service_id.to_string(), service_kind.to_owned()));
+        // Keep the authenticated locator for refresh and retry, but make the
+        // previous route unusable until a fresh record has been verified.
+        if let Some(mut entry) = self.store.route_cache(service_id, service_kind).await? {
+            entry.cache_expires_at = std::cmp::min(entry.cache_expires_at, now);
+            self.store.put_route_cache(entry).await?;
+        }
 
         if let Some(candidate) = self.fetcher.fetch_current(service_id, service_kind).await? {
             match self.accept(service_id, service_kind, candidate, now).await {
@@ -279,6 +285,9 @@ impl ServiceRouteResolver {
                         quarantined_at: now,
                     })
                     .await?;
+                self.store
+                    .evict_route_cache(service_id, service_kind)
+                    .await?;
                 return Err(ServiceError::Conflict("service route fork".to_owned()));
             }
             let exact_replay = record.record.record_sequence == floor.record_sequence
@@ -318,6 +327,9 @@ impl ServiceRouteResolver {
                         evidence: serde_json::json!({"source": format!("{:?}", candidate.source), "race": true}),
                         quarantined_at: now,
                     })
+                    .await?;
+                self.store
+                    .evict_route_cache(service_id, service_kind)
                     .await?;
                 return Err(ServiceError::Conflict("service route fork".to_owned()));
             }
@@ -464,6 +476,114 @@ mod tests {
 
     fn record_digest(record: &ServiceResolutionRecord) -> Hash {
         Hash::new(arkret_canonical::canonical_sha256(record).unwrap()).unwrap()
+    }
+
+    struct RetainedLocatorFetcher {
+        store: Arc<MemoryServiceRouteStore>,
+        current: Option<ServiceResolutionRecord>,
+        now: DateTime<Utc>,
+    }
+
+    #[async_trait]
+    impl ServiceRouteFetcher for RetainedLocatorFetcher {
+        async fn fetch_current(
+            &self,
+            service_id: &DidCoreId,
+            service_kind: &str,
+        ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+            let locator = self
+                .store
+                .route_cache(service_id, service_kind)
+                .await?
+                .expect("refresh must retain its authenticated locator");
+            assert!(!locator.is_routable_at(self.now));
+            assert_eq!(
+                locator.current_record_url,
+                "https://route.example/_arkret/open/services/id/resolution"
+            );
+            Ok(self.current.clone().map(|record| VerifiedRouteCandidate {
+                source: RouteSource::CurrentRecord,
+                description: description(&record),
+                record,
+            }))
+        }
+
+        async fn fetch_notice_candidate(
+            &self,
+            _: &DidCoreId,
+            _: &str,
+        ) -> ServiceResult<Option<VerifiedRouteCandidate>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn route_refresh_failure_retains_locator_without_reusing_stale_authority() {
+        let store = Arc::new(MemoryServiceRouteStore::new());
+        let first = record("did:webvh:z6mkrefresh:route.example", 0, None);
+        let expected = first.record.service_id.clone();
+        let now = first.record.issued_at + Duration::minutes(1);
+        ServiceRouteResolver::new(
+            store.clone(),
+            Arc::new(FakeFetcher {
+                current: Some(first.clone()),
+                notice: None,
+                calls: Mutex::new(Vec::new()),
+            }),
+        )
+        .resolve_route(&expected, "station", now, true)
+        .await
+        .unwrap();
+
+        let retry_at = now + Duration::seconds(1);
+        let unavailable = ServiceRouteResolver::new(
+            store.clone(),
+            Arc::new(RetainedLocatorFetcher {
+                store: store.clone(),
+                current: None,
+                now: retry_at,
+            }),
+        );
+        assert!(
+            unavailable
+                .resolve_route(&expected, "station", retry_at, true)
+                .await
+                .is_err()
+        );
+        assert!(
+            unavailable
+                .resolve_route(&expected, "station", retry_at, false)
+                .await
+                .is_err()
+        );
+        assert!(
+            !store
+                .route_cache(&expected, "station")
+                .await
+                .unwrap()
+                .unwrap()
+                .is_routable_at(retry_at)
+        );
+
+        let successor = record(
+            "did:webvh:z6mkrefresh:route.example",
+            1,
+            Some(record_digest(&first)),
+        );
+        let restarted = ServiceRouteResolver::new(
+            store.clone(),
+            Arc::new(RetainedLocatorFetcher {
+                store,
+                current: Some(successor),
+                now: retry_at,
+            }),
+        );
+        let refreshed = restarted
+            .resolve_route(&expected, "station", retry_at, false)
+            .await
+            .unwrap();
+        assert_eq!(refreshed.cache_entry.record_sequence, 1);
+        assert!(refreshed.is_routable_at(retry_at));
     }
 
     fn description(record: &ServiceResolutionRecord) -> VerifiedServiceDescribeMetadata {

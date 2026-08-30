@@ -110,16 +110,58 @@ pub(crate) async fn resolved_peer_route(
 ) -> Result<soland_services::service_route::ResolvedServiceRoute, String> {
     let core = arkret_wire::DidCoreId::new(service_id.to_owned())
         .map_err(|error| format!("federation destination is not a service core id: {error}"))?;
-    let route = state
-        .service_route_resolver()
-        .map_err(str::to_owned)?
-        .resolve_route(&core, service_kind, chrono::Utc::now(), force_refresh)
+    let resolver = state.service_route_resolver().map_err(str::to_owned)?;
+    let now = chrono::Utc::now();
+    let route = match resolver
+        .resolve_route(&core, service_kind, now, force_refresh)
         .await
-        .map_err(|error| error.to_string())?;
+    {
+        Ok(route) => route,
+        Err(soland_services::ServiceError::NotFound(_)) => {
+            // Configuration and endpoint discovery supply only a candidate
+            // locator. The expected identity comes from the business target;
+            // the shared resolver independently verifies the signed record,
+            // full method history, anti-rollback floor and Describe binding.
+            let endpoint = peer_url_for_service_id(state, service_id)
+                .ok_or_else(|| "verified service route unavailable".to_owned())?;
+            let carrier = configured_peer_resolution_carrier(&endpoint, &core)?;
+            resolver
+                .resolve_carrier(&carrier, &core, service_kind, now)
+                .await
+                .map_err(|error| error.to_string())?;
+            resolver
+                .resolve_route(&core, service_kind, now, false)
+                .await
+                .map_err(|error| error.to_string())?
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     route
         .require_trust_domain(peer_trust_domain_for_service_id(state, service_id).as_deref())
         .map_err(|error| error.to_string())?;
     Ok(route)
+}
+
+fn configured_peer_resolution_carrier(
+    endpoint: &str,
+    service_id: &arkret_wire::DidCoreId,
+) -> Result<arkret_models_identity::ServiceResolutionCarrier, String> {
+    let base =
+        arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(endpoint)
+            .map_err(|error| error.to_string())?;
+    let carrier = arkret_models_identity::ServiceResolutionCarrier::CurrentRecordUrl {
+        current_record_url: format!(
+            "{}{}",
+            base,
+            arkret_models_identity::canonical_service_current_record_path(service_id)
+                .trim_start_matches('/')
+        ),
+        pinned_record_digest: None,
+    };
+    carrier
+        .validate_shape(service_id)
+        .map_err(|error| error.to_string())?;
+    Ok(carrier)
 }
 
 pub(crate) fn peer_trust_domain_for_service_id(
@@ -172,6 +214,26 @@ pub(super) fn parse_peer_target(entry: &str) -> Option<FederationPeerTarget> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_candidate_pins_the_exact_target_without_becoming_a_verified_route() {
+        let first = arkret_wire::DidCoreId::new("ak:did_core:web:first.example").unwrap();
+        let second = arkret_wire::DidCoreId::new("ak:did_core:web:second.example").unwrap();
+        let carrier =
+            configured_peer_resolution_carrier("https://candidate.example/", &first).unwrap();
+        let other =
+            configured_peer_resolution_carrier("https://candidate.example/", &second).unwrap();
+        assert_ne!(
+            serde_json::to_value(&carrier).unwrap(),
+            serde_json::to_value(&other).unwrap()
+        );
+        assert!(carrier.validate_shape(&first).is_ok());
+        assert!(carrier.validate_shape(&second).is_err());
+        assert!(
+            configured_peer_resolution_carrier("https://user:password@candidate.example/", &first)
+                .is_err()
+        );
+    }
 
     #[test]
     fn peer_target_preserves_verified_trust_domain_binding() {

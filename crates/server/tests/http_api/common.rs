@@ -2801,10 +2801,22 @@ fn typed_relation_create_payload(payload: Value) -> Value {
         .expect("relation create payload requires relation_id");
     let kind = relation_payload_str(&payload, &["relation_kind", "kind"])
         .expect("relation create payload requires kind");
-    let from_ref = relation_payload_str(&payload, &["from_ref", "from"])
-        .expect("relation create payload requires from_ref");
-    let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
-        .expect("relation create payload requires to_ref");
+    let from_ref = serde_json::from_value(
+        payload
+            .get("from_ref")
+            .or_else(|| payload.get("from"))
+            .expect("relation create payload requires from_ref")
+            .clone(),
+    )
+    .expect("typed relation source endpoint");
+    let to_ref = serde_json::from_value(
+        payload
+            .get("to_ref")
+            .or_else(|| payload.get("to"))
+            .expect("relation create payload requires to_ref")
+            .clone(),
+    )
+    .expect("typed relation target endpoint");
     let rank = relation_payload_str(&payload, &["rank"]);
     // `#/$defs/relation_create_object` is the whole Relation object minus the
     // id, so the typed payload carries every required object member.
@@ -2821,10 +2833,10 @@ fn typed_relation_create_payload(payload: Value) -> Value {
         fields: Default::default(),
         state: None,
         state_changed_at: None,
-        created_by: arkret_wire::ActorId::service(
-            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
-                .expect("fixture actor id"),
-        ),
+        created_by: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            fixture_actor_core_id("did:web:alice.example"),
+            soland_test_support::fixture_station_id(),
+        )),
         created_at: "2026-08-18T00:00:00.000Z"
             .parse()
             .expect("fixture created_at"),

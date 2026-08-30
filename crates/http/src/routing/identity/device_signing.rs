@@ -143,10 +143,27 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             if sender_device_id.is_some_and(|sender| sender != requester_device_id.as_str()) {
                 return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
             }
+            let account = envelope.requester_actor_id.as_account_id()
+                .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+            if account.station_id.as_str() != state.service_id() {
+                // This key is supplied only by exact Event/Actor-bound,
+                // independently verified origin-Station admission evidence.
+                // A foreign account must never borrow our local device row.
+                let key = producer_signing_key
+                    .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+                if !device_signature_kid_points_to_device_key(
+                    envelope.signature.kid.as_str(),
+                    account.principal_id.as_str(),
+                    key.as_str(),
+                ) {
+                    return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+                }
+                return verify_welcome_signature(envelope, claim_receipt, key.as_str());
+            }
             let record = state
                 .identities()
                 .find_device(FindDeviceQuery {
-                    actor_id: envelope.requester_actor_id.signing_principal_id().to_string(),
+                    actor_id: account.principal_id.to_string(),
                     device_id: requester_device_id.as_str().to_owned(),
                 })
                 .await
@@ -197,9 +214,21 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             requester_agent_key_authorize_event_id,
         } => {
             if sender_device_id.is_some()
+                || !matches!(envelope.requester_actor_id, arkret_wire::ActorId::HostedPrincipal { .. })
                 || requester_agent_id != envelope.requester_actor_id.signing_principal_id()
                 || envelope.signature.kid.as_str()
                     != requester_agent_verification_method.as_str()
+            {
+                return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
+            }
+            if envelope.requester_actor_id.route_service_id().as_str() != state.service_id() {
+                let key = producer_signing_key
+                    .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
+                return verify_welcome_signature(envelope, claim_receipt, key.as_str());
+            }
+            if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+                state, &envelope.requester_actor_id,
+            ).await.map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?.is_none()
                 || !crate::routing::mls::current_agent_key_authorization_matches_method(
                     state,
                     requester_agent_id,
@@ -432,7 +461,213 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
 
 #[cfg(test)]
 mod tests {
-    use super::device_quorum_method_matches;
+    use arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding;
+    use arkret_wire::{AccountId, ActorId, DidCoreId};
+    use ed25519_dalek::Signer as _;
+    use serde_json::json;
+
+    use super::{device_quorum_method_matches, *};
+
+    fn signed_welcome_fixture(
+        actor: ActorId,
+        trust_binding: MlsRequesterTrustBinding,
+        method: &str,
+        key: &ed25519_dalek::SigningKey,
+    ) -> (MlsWelcomeClaimEnvelope, PeerKeyPackageClaimReceipt) {
+        let realm = "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5";
+        let receipt: PeerKeyPackageClaimReceipt = serde_json::from_value(json!({
+            "claim_request_id": "Y2xhaW0",
+            "request_digest": format!("sha256:{}", "11".repeat(32)),
+            "claims_digest": format!("sha256:{}", "22".repeat(32)),
+            "source_id": actor.route_service_id(),
+            "destination_id": "ak:did_core:web:destination.example",
+            "request": {
+                "claim_request_id": "Y2xhaW0",
+                "target_principal_id": "ak:did_core:web:bob.example",
+                "requester_id": actor.signing_principal_id(),
+                "intended_realm_id": realm,
+                "mls_group_id": "fixture-group",
+                "claim_purpose": "realm_membership",
+                "required_capabilities": ["ak.content.v1"],
+                "expires_at": "2099-01-01T00:00:00.000Z"
+            },
+            "claimed_at": "2026-08-31T00:00:00.000Z",
+            "expires_at": "2099-01-01T00:00:00.000Z",
+            "signature": {"kid": "did:web:destination.example#notary", "signature_algorithm": "Ed25519", "sig": "AA"}
+        })).unwrap();
+        let mut envelope = MlsWelcomeClaimEnvelope {
+            keypackage_ref: "ak:mls:keypackage:fixture".to_owned(),
+            keypackage_digest: arkret_wire::Hash::new(format!("sha256:{}", "33".repeat(32)))
+                .unwrap(),
+            intended_realm_id: arkret_wire::RealmId::new(realm).unwrap(),
+            claim_id: arkret_wire::NonEmptyString::new("fixture-claim").unwrap(),
+            requester_actor_id: actor,
+            trust_binding,
+            welcome_digest: arkret_wire::Hash::new(format!("sha256:{}", "44".repeat(32))).unwrap(),
+            created_at: receipt.claimed_at,
+            signature: arkret_models_crypto::KeyOperationSignature {
+                kid: arkret_wire::NonEmptyString::new(method).unwrap(),
+                signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+                sig: arkret_wire::Base64UrlString::new("AA").unwrap(),
+            },
+        };
+        envelope.signature.sig = arkret_wire::Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(
+                key.sign(&envelope.canonical_signing_bytes(&receipt).unwrap())
+                    .to_bytes(),
+            ),
+        )
+        .unwrap();
+        (envelope, receipt)
+    }
+
+    #[tokio::test]
+    async fn foreign_welcome_device_requires_verified_origin_key_not_a_local_same_principal_row() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[71; 32]);
+        let public = arkret_wire::DidKey::new(format!(
+            "did:key:{}",
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key.verifying_key().to_bytes())
+        ))
+        .unwrap();
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let actor = ActorId::account(AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
+        ));
+        let device =
+            arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap();
+        let authorize =
+            arkret_wire::EventId::new("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
+                .unwrap();
+        let (envelope, receipt) = signed_welcome_fixture(
+            actor,
+            MlsRequesterTrustBinding::RequesterDevice {
+                requester_device_id: device.clone(),
+                requester_device_authorize_event_id: authorize.clone(),
+            },
+            "did:web:alice.example#device",
+            &key,
+        );
+        let now = chrono::Utc::now();
+        state.identities().save_device_if_absent(soland_services::identity::DeviceIdentity {
+            actor_id: principal.to_string(), device_id: device.to_string(), display_name: None,
+            verification_state: "verified".into(),
+            payload: json!({"device_public_key": public, "device_authorize_event_id": authorize}),
+            created_at: now, updated_at: now, revoked_at: None,
+        }).await.unwrap();
+        assert!(
+            verify_mls_welcome_claim_envelope_signature(
+                &state,
+                &envelope,
+                &receipt,
+                Some(device.as_str()),
+                None
+            )
+            .await
+            .is_err()
+        );
+        verify_mls_welcome_claim_envelope_signature(
+            &state,
+            &envelope,
+            &receipt,
+            Some(device.as_str()),
+            Some(&public),
+        )
+        .await
+        .unwrap();
+        let mut rewritten = envelope.clone();
+        rewritten.requester_actor_id = ActorId::account(AccountId::new(
+            principal,
+            DidCoreId::new("ak:did_core:web:other-foreign.example").unwrap(),
+        ));
+        assert!(
+            verify_mls_welcome_claim_envelope_signature(
+                &state,
+                &rewritten,
+                &receipt,
+                Some(device.as_str()),
+                Some(&public)
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn hosted_and_pairwise_welcome_signatures_preserve_their_exact_actor_branch() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[72; 32]);
+        let multibase =
+            arkret_canonical::ed25519_pubkey_to_did_key_multibase(&key.verifying_key().to_bytes());
+        let public = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
+        let principal = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        let station = DidCoreId::new("ak:did_core:web:foreign.example").unwrap();
+        let actor = ActorId::hosted_principal(principal.clone(), station.clone());
+        let method = "did:web:agent.example#runtime";
+        let (envelope, receipt) = signed_welcome_fixture(
+            actor,
+            MlsRequesterTrustBinding::RequesterNativeAgent {
+                requester_agent_id: principal.clone(),
+                requester_agent_verification_method: arkret_wire::DidUrl::new(method.to_owned())
+                    .unwrap(),
+                requester_agent_key_authorize_event_id: arkret_wire::EventId::new(
+                    "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+                )
+                .unwrap(),
+            },
+            method,
+            &key,
+        );
+        assert!(
+            verify_mls_welcome_claim_envelope_signature(&state, &envelope, &receipt, None, None)
+                .await
+                .is_err()
+        );
+        verify_mls_welcome_claim_envelope_signature(
+            &state,
+            &envelope,
+            &receipt,
+            None,
+            Some(&public),
+        )
+        .await
+        .unwrap();
+        let mut wrong_branch = envelope.clone();
+        wrong_branch.requester_actor_id =
+            ActorId::account(AccountId::new(principal, station.clone()));
+        assert!(
+            verify_mls_welcome_claim_envelope_signature(
+                &state,
+                &wrong_branch,
+                &receipt,
+                None,
+                Some(&public)
+            )
+            .await
+            .is_err()
+        );
+        let pairwise = DidCoreId::new(format!("ak:did_core:key:{multibase}")).unwrap();
+        let method = format!("did:key:{multibase}#{multibase}");
+        let (envelope, receipt) = signed_welcome_fixture(
+            ActorId::account(AccountId::new(pairwise, station)),
+            MlsRequesterTrustBinding::RequesterMinimalMetadataPairwise {
+                requester_pairwise_verification_method: arkret_wire::DidUrl::new(method.clone())
+                    .unwrap(),
+            },
+            &method,
+            &key,
+        );
+        verify_mls_welcome_claim_envelope_signature(&state, &envelope, &receipt, None, None)
+            .await
+            .unwrap();
+    }
 
     #[test]
     fn device_quorum_method_requires_a_concrete_verification_method() {

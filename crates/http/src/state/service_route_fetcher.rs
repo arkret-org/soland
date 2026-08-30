@@ -9,7 +9,6 @@ use arkret_wire::{BindingKind, Did, DidCoreId, Hash, ServiceKind};
 use async_trait::async_trait;
 use chrono::Utc;
 use soland_services::identity::{DidService, PinnedDidVersionStatus};
-use soland_services::projection::ProjectionService;
 use soland_services::service_route::{
     RouteSource, ServiceRouteFetcher, VerifiedRouteCandidate, VerifiedServiceDescribeMetadata,
 };
@@ -20,7 +19,6 @@ use soland_storage::ServiceRouteStore;
 /// derives a URL from a service core id and never treats a configured endpoint
 /// as resolution evidence.
 pub(crate) struct VerifiedBindingRouteFetcher {
-    projections: ProjectionService,
     dids: DidService,
     route_store: Arc<dyn ServiceRouteStore>,
     transport: arkret_http_client::ServiceResolutionFetcher,
@@ -29,7 +27,6 @@ pub(crate) struct VerifiedBindingRouteFetcher {
 
 impl VerifiedBindingRouteFetcher {
     pub(crate) fn new(
-        projections: ProjectionService,
         dids: DidService,
         route_store: Arc<dyn ServiceRouteStore>,
         development_mode: bool,
@@ -40,7 +37,6 @@ impl VerifiedBindingRouteFetcher {
             arkret_egress_policy::OutboundPolicy::public_https()
         };
         Self {
-            projections,
             dids,
             route_store,
             transport: arkret_http_client::ServiceResolutionFetcher::with_egress_policy(egress),
@@ -453,12 +449,11 @@ impl ServiceRouteFetcher for VerifiedBindingRouteFetcher {
         else {
             return Ok(None);
         };
-        if !cache.is_routable_at(Utc::now()) {
-            return Ok(None);
-        }
+        // Expiry prevents routing through this entry, not fetching a new
+        // signed record from its previously authenticated locator.
         let carrier = ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url: cache.current_record_url,
-            pinned_record_digest: Some(cache.record_digest),
+            pinned_record_digest: None,
         };
         self.verify_carrier(&carrier, service_id, service_kind)
             .await

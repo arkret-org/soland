@@ -16,7 +16,7 @@
 //!   target holder's contact projection.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidCoreId, Hash};
+use arkret_identifiers::Hash;
 use arkret_models_collaboration::contact_operations::{
     BilateralContinuityCheckpoint, BilateralContinuityCheckpointCore,
     BilateralContinuityCheckpointProposal, BilateralContinuityCheckpointSignature,
@@ -64,11 +64,6 @@ fn core_id_matches_actor(
     actor_id: &arkret_wire::ActorId,
 ) -> bool {
     core_id == actor_id.signing_principal_id()
-}
-
-fn did_str_projects_to_actor(did: &str, actor_id: &arkret_wire::ActorId) -> bool {
-    arkret_wire::DidCoreId::new(did.to_owned())
-        .is_ok_and(|core_id| core_id == *actor_id.signing_principal_id())
 }
 
 use super::now;
@@ -4020,7 +4015,7 @@ fn granted_scopes(payload: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-
+    use arkret_identifiers::DidCoreId;
     use soland_storage_postgres::Db;
 
     use super::*;

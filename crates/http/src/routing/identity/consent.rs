@@ -1588,7 +1588,7 @@ mod tests {
     async fn quarantine_invalidation_is_planned_before_acceptance_and_fanned_out_after() {
         let state = AppState::new(production_test_config(), Db { pool: None });
         let device_id = "ak:device:01904100-0000-7000-8000-0000000000f1";
-        let updated_at = now();
+        let updated_at = arkret_canonical::canonical::normalize_timestamp_canonical(now());
         state
             .identities()
             .save_device(SaveDeviceCommand {

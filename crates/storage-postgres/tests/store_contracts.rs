@@ -2253,7 +2253,8 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract_when_conf
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
-    assert_mls_keypackage_retirement_contract(&store, &namespace).await;
+    let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
+    assert_mls_keypackage_retirement_contract(&store, &accounts, &namespace).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };
     let retired_id = format!("{namespace}-keypackage-published");
@@ -2273,7 +2274,8 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
-    assert_last_resort_claim_ledger_contract(&store, &namespace).await;
+    let accounts = soland_storage_postgres::PgAccountStore { pool: pool.clone() };
+    assert_last_resort_claim_ledger_contract(&store, &accounts, &namespace).await;
 
     let restarted_store = PgMlsKeyPackageStore { pool };
     let claim_request_id = format!("local-last-resort:{namespace}-01");

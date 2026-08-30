@@ -1125,7 +1125,6 @@ impl AppState {
         let service_route_resolver = Arc::new(ServiceRouteResolver::new(
             service_route_store.clone(),
             Arc::new(VerifiedBindingRouteFetcher::new(
-                projections.clone(),
                 dids.clone(),
                 service_route_store,
                 config.development_mode,

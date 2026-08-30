@@ -2480,8 +2480,10 @@ mod tests {
             })
         });
         let payload = serde_json::from_value(json!({
-            "principal_id": principal_id,
-            "station_id": "ak:did_core:web:principal.example",
+            "account_id": {
+                "principal_id": principal_id,
+                "station_id": "ak:did_core:web:principal.example"
+            },
             "recovery_authority_kind": "pcr_policy",
             "recovery_policy_id": "ak:policy:01904100-0000-7000-8000-000000000001",
             "recovery_policy_version": 1,

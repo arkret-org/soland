@@ -171,14 +171,14 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         realm.members.insert(actor_did.clone());
         realms.upsert(realm);
     }
-    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+    let member_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         actor_did,
         state.service_core_id(),
     ));
     state.test_projection().lock().members.insert(
-        (demo_realm_id().to_owned(), actor.to_string()),
+        (demo_realm_id().to_owned(), member_actor.to_string()),
         soland_domain::reducer::SolandMembershipState {
-            member: actor.to_string(),
+            member: member_actor.to_string(),
             realm_id: demo_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),

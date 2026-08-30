@@ -2032,7 +2032,7 @@ mod tests {
             .into_iter()
             .enumerate()
         {
-            let mut event = crate::test_event::raw_event_at(
+            let mut event = arkret_wire::test_support::raw_event_for_actor_at(
                 arkret_wire::EventKind::ProfileUpdate.as_str(),
                 arkret_wire::ScopeRef::Realm {
                     realm_id: RealmId::new(TEST_REALM).unwrap(),

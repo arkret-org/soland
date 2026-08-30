@@ -1227,9 +1227,9 @@ fn canonical_wire_event_record(
     .expect("contract canonical bytes");
     CanonicalEventRecord {
         event_id: event.event_id.as_str().to_owned(),
-        actor_id: actor_id.to_string(),
+        actor_id: event.actor_id.to_string(),
         actor_seq,
-        realm_id: Some(realm_id.to_owned()),
+        realm_id: Some(event.realm_id.to_string()),
         kind: event_kind.to_owned(),
         schema_id: arkret_wire::EventKind::try_new(event_kind)
             .and_then(|kind| kind.descriptor())
@@ -1332,11 +1332,7 @@ fn contract_ghost(
 }
 
 fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
-    let realm_id = event
-        .realm_id
-        .as_deref()
-        .expect("contract Applet Control Move has a Realm");
-    let control_proposal_ack = contract_control_proposal_ack(&event, realm_id, event.received_at);
+    let control_proposal_ack = contract_control_proposal_ack(&event, event.received_at);
     EventCommitRequest {
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
@@ -2042,12 +2038,12 @@ pub async fn assert_applet_formal_commit_transaction_contract(
 
 fn contract_control_proposal_ack(
     record: &CanonicalEventRecord,
-    realm_id: &str,
     now: chrono::DateTime<Utc>,
 ) -> arkret_wire::ControlProposalAck {
     let policy = arkret_wire::ControlProposalDecisionPolicy::default();
     let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
-        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).expect("typed realm id"),
+        realm_id: arkret_wire::RealmId::new(record.realm_id.clone().expect("accepted Event Realm"))
+            .expect("typed realm id"),
         proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
         received_at: now,
         decision_due_at: now + policy.decision_window,
@@ -2318,7 +2314,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         now,
     );
     let pairing_event_id = pairing_event.event_id.clone();
-    let pairing_ack = contract_control_proposal_ack(&pairing_event, &realm_id, now);
+    let pairing_ack = contract_control_proposal_ack(&pairing_event, now);
     let pairing_commit = EventCommitRequest {
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
@@ -2455,7 +2451,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         }),
         consent_projection: None,
         control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
-            contract_control_proposal_ack(&contact_event, &realm_id, now),
+            contract_control_proposal_ack(&contact_event, now),
         )),
         event: contact_event,
         device_revocation_transition: None,
@@ -2551,7 +2547,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             }),
             consent_projection: None,
             control_proposal_ingress: Some(ControlProposalIngress::AckRequired(
-                contract_control_proposal_ack(&failed_contact_event, &realm_id, now),
+                contract_control_proposal_ack(&failed_contact_event, now),
             )),
             event: failed_contact_event,
             device_revocation_transition: None,
@@ -3329,7 +3325,7 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     // batch would abort on receipt cardinality and never reach the outbox
     // insert, so the rollback assertion below would pass for the wrong reason.
     let control_proposal_ack =
-        |record: &CanonicalEventRecord| contract_control_proposal_ack(record, &realm_id, now);
+        |record: &CanonicalEventRecord| contract_control_proposal_ack(record, now);
     let colliding_id = format!("outbox:{namespace}:collision");
     // Two intents sharing one primary key: the first inserts, the second must
     // abort the batch.
@@ -3493,6 +3489,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
         0,
         now,
     );
+    let realm_id = record.realm_id.clone().expect("derived genesis Realm");
     let source = GovernanceDependencySource::ControlEvent(
         Hash::new(record.canonical_digest.clone()).expect("typed Control Event digest"),
     );
@@ -3500,7 +3497,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     events
         .put_realm_bootstrap_batch_atomic(
             vec![record.clone()],
-            vec![contract_control_proposal_ack(&record, &realm_id, now)],
+            vec![contract_control_proposal_ack(&record, now)],
             vec![GovernanceDependencyWrite {
                 realm_id: RealmId::new(realm_id.clone()).expect("typed Realm"),
                 source: source.clone(),
@@ -3534,11 +3531,7 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     let error = events
         .put_realm_bootstrap_batch_atomic(
             vec![rollback_record.clone()],
-            vec![contract_control_proposal_ack(
-                &rollback_record,
-                &rollback_realm_id,
-                now,
-            )],
+            vec![contract_control_proposal_ack(&rollback_record, now)],
             vec![GovernanceDependencyWrite {
                 realm_id: RealmId::new(wrong_realm_id).expect("typed wrong Realm"),
                 source: GovernanceDependencySource::ControlEvent(
@@ -3562,14 +3555,41 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     );
 }
 
-fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRow {
+async fn mls_keypackage_contract_account(
+    accounts: &dyn super::AccountStore,
+    namespace: &str,
+) -> AccountPk {
+    accounts
+        .put(&super::AccountRecord {
+            pk: AccountPk(0),
+            principal_id: DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
+            station_id: DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+            localpart: String::new(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: database_timestamp_now(),
+        })
+        .await
+        .expect("register KeyPackage Account owner")
+}
+
+fn mls_keypackage_contract_row(
+    namespace: &str,
+    suffix: &str,
+    owner_account_pk: AccountPk,
+) -> MlsKeyPackageRow {
     MlsKeyPackageRow {
         id: format!("{namespace}-keypackage-{suffix}"),
         keypackage_ref: format!("ak:mls:keypackage:{namespace}-{suffix}"),
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-        owner_account_pk: AccountPk(1),
-        actor_id: format!("ak:did_core:web:{namespace}.example"),
+        owner_account_pk,
+        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId {
+            principal_id: DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
+            station_id: DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+        })
+        .to_string(),
         device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
         endpoint_verification_method: None,
         intended_realm_id: None,
@@ -3617,13 +3637,15 @@ fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPac
 
 pub async fn assert_mls_keypackage_retirement_contract(
     store: &dyn MlsKeyPackageStore,
+    accounts: &dyn super::AccountStore,
     namespace: &str,
 ) {
-    let published = mls_keypackage_contract_row(namespace, "published");
-    let claimed = mls_keypackage_contract_row(namespace, "claimed");
-    let consumed = mls_keypackage_contract_row(namespace, "consumed");
-    let late = mls_keypackage_contract_row(namespace, "late-consume");
-    let revoked = mls_keypackage_contract_row(namespace, "revoked");
+    let owner_account_pk = mls_keypackage_contract_account(accounts, namespace).await;
+    let published = mls_keypackage_contract_row(namespace, "published", owner_account_pk);
+    let claimed = mls_keypackage_contract_row(namespace, "claimed", owner_account_pk);
+    let consumed = mls_keypackage_contract_row(namespace, "consumed", owner_account_pk);
+    let late = mls_keypackage_contract_row(namespace, "late-consume", owner_account_pk);
+    let revoked = mls_keypackage_contract_row(namespace, "revoked", owner_account_pk);
     for row in [&published, &claimed, &consumed, &late, &revoked] {
         assert!(store.put(row).await.expect("publish KeyPackage"));
     }
@@ -3780,9 +3802,11 @@ pub async fn assert_mls_keypackage_retirement_contract(
 
 pub async fn assert_last_resort_claim_ledger_contract(
     store: &dyn MlsKeyPackageStore,
+    accounts: &dyn super::AccountStore,
     namespace: &str,
 ) {
-    let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort");
+    let owner_account_pk = mls_keypackage_contract_account(accounts, namespace).await;
+    let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort", owner_account_pk);
     keypackage.last_resort = true;
     let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
     keypackage.last_resort_realm_id = Some(realm_id.to_owned());
@@ -4896,7 +4920,7 @@ fn contract_device_revoke_fixture(
         envelope: serde_json::to_value(&event).expect("contract wire event encodes"),
         received_at: created_at,
     };
-    let control_proposal_ack = contract_control_proposal_ack(&record, &realm_id, created_at);
+    let control_proposal_ack = contract_control_proposal_ack(&record, created_at);
     let selector = DeviceRevocationGateSelector {
         principal_id: actor_id,
         station_id,
@@ -5122,7 +5146,7 @@ pub async fn assert_consent_projection_commit_contract(
         now,
     );
     let grant_event_id = grant_event.event_id.clone();
-    let grant_ack = contract_control_proposal_ack(&grant_event, &realm_id, now);
+    let grant_ack = contract_control_proposal_ack(&grant_event, now);
     let dot = format!("{grant_event_id}:0");
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
@@ -5172,7 +5196,7 @@ pub async fn assert_consent_projection_commit_contract(
         now,
     );
     let rebind_event_id = rebind_event.event_id.clone();
-    let rebind_ack = contract_control_proposal_ack(&rebind_event, &realm_id, now);
+    let rebind_ack = contract_control_proposal_ack(&rebind_event, now);
     let mut rebound = granted.clone();
     rebound.peer_principal_id = other_peer;
     let rejected = stores
@@ -5239,7 +5263,7 @@ pub async fn assert_consent_projection_commit_contract(
         now,
     );
     let stale_event_id = stale_event.event_id.clone();
-    let stale_ack = contract_control_proposal_ack(&stale_event, &realm_id, now);
+    let stale_ack = contract_control_proposal_ack(&stale_event, now);
     let mut revoked = granted.clone();
     revoked.revoked_dots.insert(dot.clone());
     let stale_cas = AccountDataCasCommit {
@@ -5294,7 +5318,7 @@ pub async fn assert_consent_projection_commit_contract(
         1,
         now,
     );
-    let revoke_ack = contract_control_proposal_ack(&revoke_event, &realm_id, now);
+    let revoke_ack = contract_control_proposal_ack(&revoke_event, now);
     let applied_cas = AccountDataCasCommit {
         record: AccountDataRecord {
             revision: 2,

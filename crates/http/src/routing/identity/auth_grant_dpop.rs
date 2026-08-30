@@ -951,6 +951,7 @@ mod tests {
         let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
         let mut grant = test_introspection_grant();
         grant.account_id.station_id = DidCoreId::new("ak:did_core:web:origin.example").unwrap();
+        grant.audience_id = grant.account_id.station_id.clone();
         let expected = grant.account_id.clone();
         let (device, agent) = session_binding_from_introspection(&grant).unwrap();
         let mut session = session_from_verified_grant(&state, "test-grant", grant, device, agent);

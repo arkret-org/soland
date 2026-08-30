@@ -11,7 +11,7 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_identifiers::{DidCoreId, RealmId, SpaceId};
+use arkret_identifiers::{RealmId, SpaceId};
 use arkret_models_collaboration::governance::realm_governance::RealmLifecycleView;
 use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
@@ -880,6 +880,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
     use chrono::TimeZone;
     use serde_json::json;
     use soland_services::events::RealmInviteState;
