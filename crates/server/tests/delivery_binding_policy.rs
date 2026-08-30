@@ -158,7 +158,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         &mut state,
         &hlc,
         json!({
-            "allowed_binding_sources": ["explicit", "invite"],
+            "allowed_binding_sources": ["explicit", "join_policy"],
             "did_document_default_allowed": false,
             "allowed_recipient_ids": ["ak:did_core:web:principal.acme.example"],
             "required_endorser_ids": [],
@@ -358,7 +358,7 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         &mut state,
         &hlc,
         json!({
-            "allowed_binding_sources": ["invite", "organization_policy"],
+            "allowed_binding_sources": ["organization_policy"],
             "did_document_default_allowed": false,
             "allowed_recipient_ids": [],
             "required_endorser_ids": [],
@@ -391,7 +391,7 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
         &mut state,
         &hlc,
         json!({
-            "allowed_binding_sources": ["explicit", "invite"],
+            "allowed_binding_sources": ["explicit", "join_policy"],
             "did_document_default_allowed": false,
             // Sentinel ["*"] lifts only the recipient allow-list dimension so
             // this test exercises the service_acceptance_ref check.
@@ -560,7 +560,7 @@ fn delivery_binding_policy_event_projects_cell_value() {
         &mut state,
         &hlc,
         json!({
-            "allowed_binding_sources": ["explicit", "invite"],
+            "allowed_binding_sources": ["explicit", "join_policy"],
             "did_document_default_allowed": false,
             "allowed_recipient_ids": ["ak:did_core:web:principal.acme.example"],
             "required_endorser_ids": ["ak:did_core:web:acme.example"],

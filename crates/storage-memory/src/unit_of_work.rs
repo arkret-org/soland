@@ -1513,8 +1513,6 @@ mod tests {
         let join_event_digest =
             arkret_wire::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
         let admission_id = arkret_wire::ProtocolOpaqueId::new("membership-admission-1").unwrap();
-        let membership_incarnation =
-            arkret_wire::Hash::new(format!("sha256:{}", "42".repeat(32))).unwrap();
         let now = Utc::now();
         let verification_method =
             arkret_wire::DidUrl::new("did:web:join-actor.example#key-1").unwrap();
@@ -1524,16 +1522,15 @@ mod tests {
             join_event_id: join_event_id.clone(),
             join_event_digest: join_event_digest.clone(),
             membership_cell_id: arkret_wire::ProtocolOpaqueId::new("membership-cell-1").unwrap(),
-            membership_incarnation: membership_incarnation.clone(),
-            membership_head_at_acceptance: join_event_id.clone(),
             subject_id: subject_id.clone(),
             join_actor_id: join_actor_id.clone(),
             executed_by: None,
             authorization_ref: None,
             verification_method: verification_method.clone(),
             executor_id: executor_id.clone(),
-            executor_proof_key: arkret_wire::DidUrl::new("did:web:executor.example#key-1").unwrap(),
-            resource: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            executor_proof_key_kid: arkret_wire::DidUrl::new("did:web:executor.example#key-1")
+                .unwrap(),
+            resource_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
             action: arkret_wire::MembershipCompensationAction::Remove,
             deadline: now + Duration::hours(1),
         };
@@ -1562,12 +1559,6 @@ mod tests {
                 admission_id: admission_id.clone(),
                 join_event_id,
                 join_event_digest,
-                membership_incarnation,
-                accepted_frontier_digest: arkret_wire::Hash::new(format!(
-                    "sha256:{}",
-                    "43".repeat(32)
-                ))
-                .unwrap(),
                 accepted_at: now,
                 issuer_id: join_actor_id.clone(),
                 signature: signature(),

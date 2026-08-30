@@ -1798,9 +1798,8 @@ async fn validate_membership_compensation_live_state(
         .iter()
         .find_map(|proof| proof.as_producer())
         .map(|proof| &proof.verification_method);
-    if producer_method != Some(&core.executor_proof_key)
+    if producer_method != Some(&core.executor_proof_key_kid)
         || evidence.delegation.signature.verification_method != core.verification_method
-        || core.membership_head_at_acceptance != core.join_event_id
         || evidence.terminal_certificate.issuer_id != core.executor_id
         || evidence.single_use_cas_token.issuer_id != core.executor_id
         || evidence.join_accepted_proof.accepted_at > evidence.terminal_certificate.certified_at
@@ -1881,7 +1880,7 @@ async fn validate_membership_compensation_live_state(
         .map(|proof| &proof.verification_method);
     if accepted_join_digest != core.join_event_digest.as_str()
         || accepted_join_event.kind != arkret_wire::EventKind::MemberState
-        || accepted_join_event.realm_id != core.resource
+        || accepted_join_event.realm_id != core.resource_id
         || evidence.join_accepted_proof.issuer_id != accepted_join_event.principal_server_id
         || accepted_join_event.actor_id != core.join_actor_id
         || accepted_join_event.executed_by != core.executed_by
@@ -1907,7 +1906,7 @@ async fn validate_membership_compensation_live_state(
     let current_membership = state
         .projections()
         .snapshot()
-        .member(core.resource.as_str(), core.subject_id.as_str())
+        .member(core.resource_id.as_str(), core.subject_id.as_str())
         .cloned();
     let Some(current_membership) = current_membership else {
         return Err(SubmitOneError::new(
@@ -1917,8 +1916,7 @@ async fn validate_membership_compensation_live_state(
         ));
     };
     if current_membership.state != "join"
-        || current_membership.membership_event_ref.as_deref()
-            != Some(core.membership_head_at_acceptance.as_str())
+        || current_membership.membership_event_ref.as_deref() != Some(core.join_event_id.as_str())
     {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
