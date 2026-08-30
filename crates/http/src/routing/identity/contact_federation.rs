@@ -4020,7 +4020,7 @@ fn granted_scopes(payload: &Value) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-
+    use arkret_identifiers::DidCoreId;
     use soland_storage_postgres::Db;
 
     use super::*;

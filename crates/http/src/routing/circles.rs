@@ -727,6 +727,8 @@ async fn post_scope_rotate(
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
+
     use super::*;
 
     const ACTOR: &str = "ak:did_core:web:alice.example";

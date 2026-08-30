@@ -880,6 +880,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
     use chrono::TimeZone;
     use serde_json::json;
     use soland_services::events::RealmInviteState;

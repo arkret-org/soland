@@ -998,6 +998,7 @@ pub(super) async fn project_plaintext_visible_services_operation(
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::DidCoreId;
     use serde_json::json;
 
     use super::*;
