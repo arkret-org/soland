@@ -4121,8 +4121,7 @@ fn account_status_record(
         account_id: arkret_wire::AccountId::new(
             DidCoreId::new(format!("ak:did_core:web:{account_id}.example"))
                 .expect("principal core id"),
-            DidCoreId::new("ak:did_core:web:principal.example")
-                .expect("principal server core id"),
+            DidCoreId::new("ak:did_core:web:principal.example").expect("principal server core id"),
         ),
         principal_control_realm_id: RealmId::new(
             "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",

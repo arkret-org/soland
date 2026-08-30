@@ -902,10 +902,16 @@ mod tests {
                         )
                         .expect("notification id"),
                         schema: arkret_models_collaboration::objects::read_receipts::NotificationSchema::V1,
-                        actor_id: arkret_wire::DidCoreId::new(
-                            "ak:did_core:web:alice.example".to_owned(),
-                        )
+                        actor_id: arkret_wire::ActorId::hosted_principal(
+                            arkret_wire::DidCoreId::new(
+                                "ak:did_core:web:alice.example".to_owned(),
+                            )
                             .expect("actor DID"),
+                            arkret_wire::DidCoreId::new(
+                                "ak:did_core:web:principal.example".to_owned(),
+                            )
+                            .expect("principal server DID"),
+                        ),
                         source: arkret_models_collaboration::objects::read_receipts::NotificationSource::Event(
                             arkret_models_collaboration::objects::read_receipts::NotificationEventSource {
                                 source_event_id: arkret_wire::EventId::new(

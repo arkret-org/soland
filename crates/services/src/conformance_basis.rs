@@ -691,7 +691,7 @@ mod tests {
         let state = CellState::Value(json!([{"value": body}]));
         let grant = engine_grant_from_capability_cell_state(grant_id, &state)
             .expect("content grant must enter the effective capability set");
-        assert_eq!(grant.subject_id.as_str(), subject);
+        assert_eq!(grant.subject_id.signing_principal_id().as_str(), subject);
         assert_eq!(grant.actions, vec![action]);
     }
 

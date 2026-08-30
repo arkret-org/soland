@@ -145,7 +145,7 @@ impl PrincipalResolutionStore for MemoryPrincipalResolutionStore {
 #[cfg(test)]
 mod tests {
     use arkret_models_identity::PrincipalResolutionProjection;
-    use arkret_wire::{Did, DidCoreId, Hlc, PrincipalAuthorityKey, ScopeRef};
+    use arkret_wire::{AccountId, Did, DidCoreId, Hlc, ScopeRef};
     use chrono::{TimeZone, Utc};
     use soland_storage::{PrincipalResolutionCasResult, PrincipalResolutionRecord};
 
@@ -191,7 +191,7 @@ mod tests {
 
     fn record(genesis: &Event, current: Event) -> PrincipalResolutionRecord {
         PrincipalResolutionRecord {
-            authority_key: PrincipalAuthorityKey::new(principal(), principal_server()),
+            account_id: AccountId::new(principal(), principal_server()),
             pcr_realm_id: genesis.realm_id.clone(),
             genesis_event: genesis.clone(),
             projection: PrincipalResolutionProjection {
@@ -237,21 +237,18 @@ mod tests {
                 .unwrap(),
             PrincipalResolutionCasResult::Applied(_)
         ));
-        let authority_key = next.authority_key.clone();
-        assert_eq!(
-            store.by_authority_key(&authority_key).await.unwrap(),
-            Some(next)
-        );
+        let account_id = next.account_id.clone();
+        assert_eq!(store.by_account_id(&account_id).await.unwrap(), Some(next));
         assert_eq!(
             store
-                .history_newest_first(&authority_key, Some(update.event_id.as_str()), 8)
+                .history_newest_first(&account_id, Some(update.event_id.as_str()), 8)
                 .await
                 .unwrap(),
             vec![genesis]
         );
         assert!(matches!(
             store
-                .history_newest_first(&authority_key, Some("ak:event:missing"), 8)
+                .history_newest_first(&account_id, Some("ak:event:missing"), 8)
                 .await,
             Err(PersistenceError::NotFound(_))
         ));
@@ -265,7 +262,7 @@ mod tests {
         store.compare_and_set(None, accepted.clone()).await.unwrap();
 
         let mut substituted = accepted;
-        substituted.authority_key = PrincipalAuthorityKey::new(
+        substituted.account_id = AccountId::new(
             principal(),
             DidCoreId::new("ak:did_core:web:other-principal-server.example").unwrap(),
         );

@@ -142,7 +142,7 @@ fn current(
 #[cfg(test)]
 mod tests {
     use arkret_models_collaboration::account_lifecycle::{
-        AccountStatusPrincipalAuthority, UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
+        UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
     };
     use arkret_models_collaboration::objects::account_status::AccountStatus;
     use arkret_signatures::account_status::{
@@ -165,12 +165,10 @@ mod tests {
             UnsignedAccountStatusRecord {
                 schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
                 account_authority_id: DidCoreId::new("ak:did_core:web:authority.example").unwrap(),
-                account_id: arkret_wire::ServiceAccountId::new("account-1").unwrap(),
-                principal_authority: AccountStatusPrincipalAuthority {
-                    principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                    principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
-                        .unwrap(),
-                },
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
                 principal_control_realm_id: RealmId::new(
                     "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
                 )
@@ -250,12 +248,10 @@ mod tests {
                 ..
             }
         ));
+        let account_key = genesis.account_id.to_string();
         assert_eq!(
             store
-                .current(
-                    genesis.account_authority_id.as_str(),
-                    genesis.account_id.as_str()
-                )
+                .current(genesis.account_authority_id.as_str(), &account_key)
                 .await
                 .unwrap()
                 .unwrap()
@@ -339,12 +335,10 @@ mod tests {
             store.append(&genesis, &receipt(&other, 21)).await,
             Err(PersistenceError::SchemaViolation(_))
         ));
+        let account_key = genesis.account_id.to_string();
         assert!(
             store
-                .current(
-                    genesis.account_authority_id.as_str(),
-                    genesis.account_id.as_str()
-                )
+                .current(genesis.account_authority_id.as_str(), &account_key)
                 .await
                 .unwrap()
                 .is_none()

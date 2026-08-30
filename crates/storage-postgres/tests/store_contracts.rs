@@ -837,7 +837,7 @@ fn seal_dependency_contract_availability(
             "seal-dependency-event-bytes:{marker}"
         )))
         .unwrap(),
-        holder_id: event.actor_id.clone(),
+        holder_id: event.actor_id.signing_principal_id().clone(),
         retention_expires_at: created_at + chrono::Duration::days(1),
         holder_signer_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
             "ak:signer_evidence:{}",
@@ -1400,11 +1400,12 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let notification_uuid = uuid::Uuid::now_v7();
     let notification_id =
         arkret_wire::NotificationId::new(format!("ak:notification:{notification_uuid}")).unwrap();
-    let controller_account_id =
-        arkret_wire::ServiceAccountId::new(format!("account-{run_id}")).unwrap();
-    let recipient_actor_id =
+    let controller_account_pk = soland_storage::AccountPk(1);
+    let recipient_actor_id = arkret_wire::ActorId::hosted_principal(
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:notification-{run_id}.example"))
-            .unwrap();
+            .unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+    );
     let recipient_id =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:controller-{run_id}.example"))
             .unwrap();
@@ -1438,7 +1439,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let write = |delta| AccountNotificationDeltaWrite {
         delta,
         recipient_actor_id: recipient_actor_id.clone(),
-        controller_account_id: controller_account_id.clone(),
+        controller_account_pk,
         recipient_id: recipient_id.clone(),
         source_account_artifact_id: artifact_id.clone(),
     };
@@ -1448,7 +1449,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
         .await
         .unwrap();
     let inserted = store
-        .list_for_account(&controller_account_id, recipient_id.as_str(), None)
+        .list_for_account(&controller_account_pk, recipient_id.as_str(), None)
         .await
         .unwrap();
     assert_eq!(inserted.len(), 1);
@@ -1490,7 +1491,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
         .unwrap();
     let updated = store
         .list_for_account(
-            &controller_account_id,
+            &controller_account_pk,
             recipient_id.as_str(),
             Some(inserted_position),
         )
@@ -1525,7 +1526,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     store.put_account_delta(write(removal)).await.unwrap();
     let removed = store
         .list_for_account(
-            &controller_account_id,
+            &controller_account_pk,
             recipient_id.as_str(),
             Some(updated_position),
         )
@@ -1936,7 +1937,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         .await
         .unwrap();
     sql_query("DELETE FROM canonical_events WHERE actor_id = $1")
-        .bind::<Text, _>(event.actor_id.as_str())
+        .bind::<Text, _>(event.actor_id.to_string())
         .execute(&mut *cleanup_conn)
         .await
         .unwrap();
@@ -2787,6 +2788,6 @@ mod control_move_ingress_negatives {
                 arkret_canonical::DigestSuite::Sha256,
             )
             .expect("the byte-identical class and Ack remain idempotent");
-        cleanup_control_schedule_test_actor(&pool, fixture.event.actor_id.as_str()).await;
+        cleanup_control_schedule_test_actor(&pool, &fixture.event.actor_id.to_string()).await;
     }
 }

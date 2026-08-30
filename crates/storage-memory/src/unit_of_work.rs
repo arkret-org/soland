@@ -1511,11 +1511,20 @@ mod tests {
 
     fn membership_compensation_request() -> EventCommitRequest {
         let realm_id = realm_id();
-        let join_actor_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:join-actor.example").unwrap();
-        let subject_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:join-subject.example").unwrap();
-        let executor_id = arkret_wire::DidCoreId::new("ak:did_core:web:executor.example").unwrap();
+        let principal_server_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
+        let join_actor_id = arkret_wire::ActorId::hosted_principal(
+            arkret_wire::DidCoreId::new("ak:did_core:web:join-actor.example").unwrap(),
+            principal_server_id.clone(),
+        );
+        let member_id = arkret_wire::ActorId::hosted_principal(
+            arkret_wire::DidCoreId::new("ak:did_core:web:join-subject.example").unwrap(),
+            principal_server_id.clone(),
+        );
+        let executor_id = arkret_wire::ActorId::hosted_principal(
+            arkret_wire::DidCoreId::new("ak:did_core:web:executor.example").unwrap(),
+            principal_server_id,
+        );
         let join_event_id =
             arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x41; 32]);
         let join_event_digest =
@@ -1530,7 +1539,7 @@ mod tests {
             join_event_id: join_event_id.clone(),
             join_event_digest: join_event_digest.clone(),
             membership_cell_id: arkret_wire::ProtocolOpaqueId::new("membership-cell-1").unwrap(),
-            subject_id: subject_id.clone(),
+            member_id: member_id.clone(),
             join_actor_id: join_actor_id.clone(),
             executed_by: None,
             authorization_ref: None,
@@ -1568,7 +1577,7 @@ mod tests {
                 join_event_id,
                 join_event_digest,
                 accepted_at: now,
-                issuer_id: join_actor_id.clone(),
+                issuer_id: join_actor_id.signing_principal_id().clone(),
                 signature: signature(),
             },
             terminal_certificate: arkret_wire::MembershipCompensationTerminalCertificate {
@@ -1582,7 +1591,7 @@ mod tests {
                 terminal_state:
                     arkret_wire::MembershipCompensationTerminalState::FailedAfterMembershipAcceptance,
                 certified_at: now,
-                issuer_id: join_actor_id.clone(),
+                issuer_id: join_actor_id.signing_principal_id().clone(),
                 signature: signature(),
             },
             single_use_cas_token: arkret_wire::MembershipCompensationCasToken {
@@ -1590,10 +1599,10 @@ mod tests {
                 admission_id,
                 delegation_digest,
                 expected_state: arkret_wire::MembershipCompensationExpectedState::Unused,
-                destination_id: executor_id.clone(),
+                destination_id: executor_id.route_service_id().clone(),
                 issued_at: now,
                 expires_at: now + Duration::hours(1),
-                issuer_id: join_actor_id,
+                issuer_id: join_actor_id.signing_principal_id().clone(),
                 signature: signature(),
             },
         };
@@ -1607,7 +1616,7 @@ mod tests {
             serde_json::from_value(request.event.envelope.clone()).unwrap();
         event.kind = arkret_wire::EventKind::MemberState;
         event.payload = serde_json::from_value(serde_json::json!({
-            "actor_id": subject_id,
+            "member_id": member_id,
             "membership": "leave",
             "reason": "compensate failed admission"
         }))
@@ -1726,10 +1735,10 @@ mod tests {
         );
         let mut event: arkret_wire::Event =
             serde_json::from_value(request.event.envelope.clone()).unwrap();
-        event.principal_server_id =
-            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
-        event.executed_by =
-            Some(arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap());
+        event.executed_by = Some(arkret_wire::ActorId::hosted_principal(
+            arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+        ));
         event
             .refresh_content_bound_identity_with_digest_suite(request.event.digest_suite)
             .unwrap();
@@ -1756,26 +1765,21 @@ mod tests {
         let mut record = AgentCleanupRecord {
             schema: AgentMembershipCascadeSchema::V1,
             realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
-            controller_authority: arkret_wire::PrincipalAuthorityKey {
-                principal_id: arkret_wire::DidCoreId::new(controller.event.actor_id.clone())
-                    .unwrap(),
-                principal_server_id: arkret_wire::DidCoreId::new(
-                    "ak:did_core:web:principal.example",
-                )
-                .unwrap(),
-            },
+            controller_authority: serde_json::from_str::<arkret_wire::ActorId>(
+                &controller.event.actor_id,
+            )
+            .unwrap()
+            .as_account_id()
+            .cloned()
+            .unwrap(),
             controller_membership_generation_ref: arkret_wire::EventId::from_digest(
                 arkret_canonical::DigestSuite::Sha256,
                 [0x42; 32],
             ),
-            initiator_authority: arkret_wire::PrincipalAuthorityKey {
-                principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example")
-                    .unwrap(),
-                principal_server_id: arkret_wire::DidCoreId::new(
-                    "ak:did_core:web:principal.example",
-                )
-                .unwrap(),
-            },
+            initiator_authority: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:moderator.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+            ),
             controller_terminal_event_id: arkret_wire::EventId::new(
                 controller.event.event_id.clone(),
             )
@@ -2043,12 +2047,13 @@ mod tests {
         let mut delegated = request;
         let mut event: arkret_wire::Event =
             serde_json::from_value(delegated.event.envelope.clone()).unwrap();
-        event.executed_by = Some(
+        event.executed_by = Some(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::project_did_to_core_id(
                 &arkret_wire::Did::new("did:web:controller.example").unwrap(),
             )
             .unwrap(),
-        );
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+        )));
         delegated.event.canonical_digest = event
             .event_digest_with_digest_suite(delegated.event.digest_suite)
             .unwrap();

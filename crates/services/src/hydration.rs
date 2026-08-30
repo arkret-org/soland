@@ -1590,7 +1590,7 @@ pub fn normalize_persisted_realm_id(id: &str) -> String {
 #[cfg(test)]
 mod agent_membership_reconcile_tests {
     use arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding;
-    use arkret_wire::PrincipalAuthorityKey;
+    use arkret_wire::AccountId;
 
     use super::*;
     use crate::events::DirectoryProvenance;
@@ -1611,11 +1611,10 @@ mod agent_membership_reconcile_tests {
         projection.agent_membership_bindings.insert(
             (realm_id.to_string(), agent.to_string()),
             AgentControllerMembershipBinding {
-                controller_authority: PrincipalAuthorityKey {
-                    principal_id: controller,
-                    principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
-                        .unwrap(),
-                },
+                controller_authority: AccountId::new(
+                    controller,
+                    DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
                 controller_membership_generation_ref: arkret_identifiers::EventId::new(
                     "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim",
                 )

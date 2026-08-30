@@ -3345,37 +3345,51 @@ mod tests {
     impl AccountLookupPort for StaticAccount {
         async fn find_account_by_actor(
             &self,
-            actor_id: &str,
+            account_id: &AccountId,
         ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(
-                (actor_id == "ak:did_core:web:alice.example").then(|| AccountIdentity {
-                    account_id: arkret_identifiers::ServiceAccountId::new("account-alice").unwrap(),
+                (account_id.principal_id.as_str() == "ak:did_core:web:alice.example").then(|| {
+                    AccountIdentity {
+                        account_pk: AccountPk(1),
+                        account_id: account_id.clone(),
+                    }
                 }),
             )
         }
 
         async fn account_by_id(
             &self,
-            account_id: &str,
+            account_pk: AccountPk,
         ) -> ServiceResult<Option<AccountProfileState>> {
-            Ok(
-                (account_id == "account-alice").then(|| AccountProfileState {
-                    id: arkret_identifiers::ServiceAccountId::new("account-alice").unwrap(),
-                    principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                    localpart: "alice".to_owned(),
-                    display_name: None,
-                    bio: None,
-                    avatar_blob_ref: None,
-                    created_at: Utc::now(),
-                }),
-            )
+            Ok((account_pk == AccountPk(1)).then(|| AccountProfileState {
+                pk: AccountPk(1),
+                account_id: AccountId::new(
+                    DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
+                principal_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                localpart: "alice".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: Utc::now(),
+            }))
         }
 
-        async fn register_account(&self, _command: RegisterAccountCommand) -> ServiceResult<()> {
-            Ok(())
+        async fn register_account(
+            &self,
+            command: RegisterAccountCommand,
+        ) -> ServiceResult<AccountIdentity> {
+            Ok(AccountIdentity {
+                account_pk: AccountPk(1),
+                account_id: command.account_id,
+            })
         }
 
-        async fn account(&self, _actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
+        async fn account(
+            &self,
+            _account_id: &AccountId,
+        ) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
 
@@ -3387,13 +3401,13 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_account(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn delete_account(&self, _account_id: &AccountId) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn account_localparts(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
         ) -> ServiceResult<Vec<AccountLocalpartState>> {
             Ok(Vec::new())
         }
@@ -3407,7 +3421,7 @@ mod tests {
 
         async fn add_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
             _primary: bool,
         ) -> ServiceResult<AccountLocalpartState> {
@@ -3416,13 +3430,17 @@ mod tests {
 
         async fn set_primary_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
         ) -> ServiceResult<AccountLocalpartState> {
             unreachable!()
         }
 
-        async fn remove_localpart(&self, _actor_id: &str, _localpart: &str) -> ServiceResult<()> {
+        async fn remove_localpart(
+            &self,
+            _account_pk: AccountPk,
+            _localpart: &str,
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -3663,12 +3681,18 @@ mod tests {
         );
         let account = service
             .find_account_by_actor(FindAccountByActorQuery {
-                actor_id: "ak:did_core:web:alice.example".to_owned(),
+                account_id: AccountId::new(
+                    DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                    DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
             })
             .await
             .expect("lookup account")
             .expect("account exists");
-        assert_eq!(account.account_id.as_str(), "account-alice");
+        assert_eq!(
+            account.account_id.principal_id.as_str(),
+            "ak:did_core:web:alice.example"
+        );
     }
 
     #[tokio::test]
