@@ -423,10 +423,6 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     );
     assert_eq!(body["handle"], "bob-example:local.host");
     assert_eq!(body["audience"], realm_id);
-    assert_eq!(
-        body["member_delivery_binding"]["recipient_id"],
-        state.service_id().as_str()
-    );
 
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",

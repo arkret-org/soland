@@ -2495,7 +2495,6 @@ CREATE TABLE public.realm_invites (
     realm_id text NOT NULL,
     inviter_id text NOT NULL,
     invitee_id text,
-    invite_delivery_target jsonb,
     introduction_evidence_digest text,
     third_party_invite jsonb,
     invite_token text NOT NULL,

@@ -1328,20 +1328,17 @@ impl PeerReadAuthz {
                 let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
                     return;
                 };
-                let Some(invitee_id) = payload.get("invitee_id").and_then(Value::as_str) else {
+                let Some(invitee_account) = payload.get("invitee_account_id").and_then(|value| {
+                    serde_json::from_value::<arkret_wire::AccountId>(value.clone()).ok()
+                }) else {
                     return;
                 };
-                let source_matches = payload
-                    .get("invite_delivery_target")
-                    .and_then(Value::as_object)
-                    .and_then(|target| target.get("recipient_id"))
-                    .and_then(Value::as_str)
-                    .is_some_and(|service_id| service_id == self.source_id);
+                let source_matches = invitee_account.station_id.as_str() == self.source_id;
                 if source_matches {
                     self.pending_realm_invites.insert(
                         (realm_id, invite_id.to_owned()),
                         PendingPeerInvite {
-                            invitee_id: invitee_id.to_owned(),
+                            invitee_id: invitee_account.to_string(),
                             invited_at: record_event_time(record),
                         },
                     );

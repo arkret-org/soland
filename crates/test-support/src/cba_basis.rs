@@ -435,7 +435,6 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             arkret_wire::EventKind::RealmPolicyBundle,
             arkret_wire::EventKind::RealmJoinRule,
             arkret_wire::EventKind::RealmDiscovery,
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
             arkret_wire::EventKind::MemberState,
         ]
         .into_iter()
@@ -673,16 +672,11 @@ async fn persist_and_project_realm_genesis_event(
             serde_json::json!({"value": "invite_only"}),
         ),
         (
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            serde_json::json!({"unroutable_membership_allowed": false}),
-        ),
-        (
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,
                 "actor_id": actor_id,
-                "membership": "join",
-                "delivery_status": "unroutable"
+                "membership": "join"
             }),
         ),
     ];
@@ -695,8 +689,8 @@ async fn persist_and_project_realm_genesis_event(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm.clone(),
             },
-            actor_id.clone(),
-            event.station_id.clone(),
+            actor_id.signing_principal_id().clone(),
+            event.actor_id.route_service_id().clone(),
             actor_seq,
             Hlc::new(format!("0196419b0000-{actor_seq:04x}-51c0a1ed"))
                 .expect("fixture bootstrap HLC"),
@@ -799,7 +793,7 @@ pub fn apply_registered_cba_plane(
     let seal = realm_basis_seal(
         &default_deployment,
         event.realm_id.as_str(),
-        &event.actor_id,
+        event.actor_id.signing_principal_id(),
         basis,
     );
     apply_registered_cba_plane_seal(event, verification_method, seal.id);

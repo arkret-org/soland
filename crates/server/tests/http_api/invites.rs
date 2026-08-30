@@ -275,12 +275,6 @@ async fn seed_dispatch_fixture_for_target(
         arkret_canonical::canonical_sha256(&evidence).expect("introduction evidence digest");
     let payload = serde_json::json!({
         "invitee_id": fixture_actor_core_id(BOB),
-        "invite_delivery_target": {
-            "recipient_id": recipient_id.clone(),
-            "service_resolution": serde_json::to_value(&service_resolution)
-                .expect("service resolution carrier serializes"),
-            "recipient_kind": "station"
-        },
         "introduction_evidence_digest": evidence_digest,
         "expires_at": "2099-01-01T00:00:00.000Z"
     });

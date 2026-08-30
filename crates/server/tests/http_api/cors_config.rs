@@ -234,18 +234,6 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
     let event_id = "ak:event:ARdpHJI61pXl2eDxXq5o-JwwZDx5_mx7XTPBZMba03_p";
     let payload = serde_json::json!({
         "invitee_id": fixture_actor_core_id(bob_did),
-        "invite_delivery_target": {
-            "recipient_id": state.service_id(),
-            "service_resolution": {
-                "current_record_url": format!(
-                    "https://soland.local{}",
-                    arkret_models_identity::canonical_service_current_record_path(
-                        &arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap()
-                    )
-                )
-            },
-            "recipient_kind": "station"
-        },
         "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
         "expires_at": "2099-01-01T00:00:00.000Z"
     });

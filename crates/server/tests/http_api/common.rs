@@ -924,13 +924,6 @@ pub(crate) async fn seed_test_realm(
                 realm_id: realm_id.clone(),
                 inviter_id: owner_core.to_string(),
                 invitee_id: Some(invitee_core.to_string()),
-                invite_delivery_target: Some(serde_json::json!({
-                    "recipient_id": recipient_id,
-                    "service_resolution": {
-                        "current_record_url": current_record_url
-                    },
-                    "recipient_kind": "station"
-                })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_invite: None,
                 invite_token: invite_token.clone(),
@@ -978,12 +971,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
                 realm_id: realm_id.to_owned(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
-                delivery_status: None,
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: None,
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
                 invited_at: None,
                 joined_at: now,
                 updated_at: now,
@@ -1379,7 +1367,10 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
         .json(
             &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
-                actor_id: actor_core,
+                actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    actor_core,
+                    arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+                )),
                 realm_id: Some(
                     RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
                 ),
@@ -1777,12 +1768,15 @@ pub(crate) async fn project_test_authorized_device(
         ))
         .await
         .expect("persist accepted device authorization Event");
-    let authority_key =
-        arkret_wire::AccountId::new(genesis.actor_id.clone(), genesis.station_id.clone());
+    let account_id = genesis
+        .actor_id
+        .as_account_id()
+        .expect("PCR genesis actor is an account")
+        .clone();
     let persistence = state.test_persistence();
     let resolutions = persistence.principal_resolutions();
     if resolutions
-        .by_authority_key(&authority_key)
+        .by_account_id(&account_id)
         .await
         .expect("read principal authority pair")
         .is_none()
@@ -1791,7 +1785,7 @@ pub(crate) async fn project_test_authorized_device(
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key,
+                    account_id,
                     pcr_realm_id: realm_id.clone(),
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
@@ -2075,7 +2069,13 @@ pub(crate) async fn seed_test_realm_basis_seal(
         .unwrap_or_else(|| {
             panic!("fixture grant must be reconstructible at the head Seal: {cell_state:?}")
         });
-        assert_eq!(projected.subject_id, subject_core);
+        assert_eq!(
+            projected.subject_id,
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                subject_core.clone(),
+                arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+            ))
+        );
         assert_eq!(projected.realm_id, realm_id);
         assert!(
             !projected.actions.is_empty(),
@@ -2818,8 +2818,10 @@ fn typed_relation_create_payload(payload: Value) -> Value {
         fields: Default::default(),
         state: None,
         state_changed_at: None,
-        created_by: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
-            .expect("fixture actor id"),
+        created_by: arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                .expect("fixture actor id"),
+        ),
         created_at: "2026-08-18T00:00:00.000Z"
             .parse()
             .expect("fixture created_at"),

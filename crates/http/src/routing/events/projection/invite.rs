@@ -500,7 +500,6 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
         realm_id: operation.realm_id.to_string(),
         inviter_id,
         invitee_id: None,
-        invite_delivery_target: None,
         introduction_evidence_digest: None,
         third_party_invite,
         invite_token: String::new(),
@@ -643,7 +642,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&chrono::Utc))
         .or_else(|| Some(operation.created_at + chrono::Duration::days(7)));
-    let invite_delivery_target = invite_delivery_target_for_operation(operation);
     let introduction_evidence_digest = introduction_evidence_digest_for_operation(operation);
     let invites = state.realm_invites();
     match invites.get(&invite_id).await {
@@ -652,7 +650,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
                 && existing.realm_id == operation.realm_id.as_str()
                 && existing.inviter_id == inviter_id
                 && existing.invitee_id.as_deref() == Some(invitee_id.as_str())
-                && existing.invite_delivery_target == invite_delivery_target
                 && existing.introduction_evidence_digest == introduction_evidence_digest
                 && existing.third_party_invite.is_none()
                 && existing.claim_nonces.is_empty()
@@ -730,7 +727,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         realm_id: operation.realm_id.to_string(),
         inviter_id,
         invitee_id: Some(invitee_id.as_str().to_owned()),
-        invite_delivery_target,
         introduction_evidence_digest,
         third_party_invite: None,
         invite_token,
@@ -870,30 +866,6 @@ fn invitee_for_operation(operation: &Operation) -> Option<DidCoreId> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .and_then(|value| DidCoreId::new(value.to_owned()).ok())
-}
-
-fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> {
-    let target = operation.payload.get("invite_delivery_target")?;
-    let object = target.as_object()?;
-    let service_id = object.get("recipient_id").and_then(Value::as_str)?;
-    if arkret_identifiers::DidCoreId::new(service_id.to_owned()).is_err() {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_id"
-        );
-        return None;
-    }
-    if let Some(service_kind) = object.get("recipient_kind").and_then(Value::as_str)
-        && service_kind != "station"
-    {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            service_kind = %service_kind,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_kind"
-        );
-        return None;
-    }
-    Some(target.clone())
 }
 
 fn introduction_evidence_digest_for_operation(operation: &Operation) -> Option<String> {
@@ -1060,12 +1032,6 @@ mod tests {
                 realm_id: CANCEL_REALM.to_owned(),
                 inviter_id: CANCEL_INVITER.to_owned(),
                 invitee_id: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
-                invite_delivery_target: (!third_party).then(|| {
-                    json!({
-                        "recipient_id": "ak:did_core:web:soland.example",
-                        "recipient_kind": "station"
-                    })
-                }),
                 introduction_evidence_digest: None,
                 third_party_invite: third_party.then(|| ThirdPartyInvite {
                     oob_code_kind:
@@ -1137,10 +1103,6 @@ mod tests {
             .unwrap();
         assert_eq!(record.status, "pending");
         assert_eq!(record.invitee_id.as_deref(), expected_invitee);
-        assert_eq!(
-            record.invite_delivery_target.is_some(),
-            expected_invitee.is_some()
-        );
         assert_eq!(record.invite_token, "private-token");
         assert_eq!(
             state.projections().cell_value(
@@ -1282,7 +1244,6 @@ mod tests {
                 realm_id: realm_id.to_string(),
                 inviter_id: inviter_id.to_owned(),
                 invitee_id: Some(invitee_id.to_owned()),
-                invite_delivery_target: Some(delivery_target.clone()),
                 introduction_evidence_digest: Some(evidence_digest.clone()),
                 third_party_invite: None,
                 invite_token: "private-token".to_owned(),
@@ -1310,7 +1271,6 @@ mod tests {
             arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
             json!({
                 "invitee_id": invitee_id,
-                "invite_delivery_target": delivery_target,
                 "introduction_evidence_digest": evidence_digest,
                 "expires_at": "2026-08-05T10:00:00.000Z"
             }),
@@ -1367,7 +1327,6 @@ mod tests {
                 realm_id: realm_id.to_string(),
                 inviter_id: "ak:did_core:web:mallory.example".to_owned(),
                 invitee_id: Some(invitee_id.to_owned()),
-                invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
                 invite_token: "private-token".to_owned(),

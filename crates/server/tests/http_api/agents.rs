@@ -157,22 +157,23 @@ fn attach_fixture_service_admission(
 
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
-    let actor_id = arkret_wire::project_did_to_core_id(
+    let principal_id = arkret_wire::project_did_to_core_id(
         &arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
     )
-    .unwrap()
-    .into_string();
+    .unwrap();
+    let actor_id = principal_id.to_string();
+    let account_id =
+        arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id().clone());
     let persistence = state.test_persistence();
     let accounts = persistence.accounts();
-    let service_account_id = if let Some(account) = accounts.get(&actor_id).await.unwrap() {
-        account.id
+    let account_pk = if let Some(account) = accounts.get(&account_id).await.unwrap() {
+        account.pk
     } else {
-        let account_id =
-            arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string()).unwrap();
         accounts
             .put(&soland_storage::AccountRecord {
-                id: account_id.clone(),
-                principal_id: arkret_wire::DidCoreId::new(actor_id.clone()).unwrap(),
+                pk: soland_storage::AccountPk(1),
+                principal_id,
+                station_id: state.service_core_id().clone(),
                 localpart: "alice".to_owned(),
                 display_name: Some("Alice".to_owned()),
                 bio: None,
@@ -180,15 +181,14 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
                 created_at: now,
             })
             .await
-            .unwrap();
-        account_id
+            .unwrap()
     };
     state
         .test_persistence()
         .sessions()
         .put(&soland_storage::SessionRecord {
             token_hash: test_session_credential_hash(token, state.service_id()),
-            service_account_id,
+            account_pk,
             actor: actor_id.clone(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             audience: state.service_id().clone(),
@@ -302,10 +302,11 @@ pub(crate) async fn seed_active_controller_device_generation(
     .into_event();
     let realm = arkret_identifiers::RealmId::from_event_id(&bootstrap.event_id);
     let realm_id = realm.to_string();
-    let authority_key = arkret_wire::AccountId::new(
-        bootstrap.actor_id.clone(),
-        arkret_wire::DidCoreId::new(state.service_id().to_owned()).unwrap(),
-    );
+    let authority_key = bootstrap
+        .actor_id
+        .as_account_id()
+        .expect("PCR bootstrap actor is an account")
+        .clone();
     let verification_method =
         arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
             .expect("fixture verification method is a DID URL");
@@ -435,7 +436,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             .unwrap();
     }
     let resolution_record = soland_storage::PrincipalResolutionRecord {
-        authority_key: authority_key.clone(),
+        account_id: authority_key.clone(),
         pcr_realm_id: realm.clone(),
         genesis_event: bootstrap.clone(),
         current_event: bootstrap.clone(),
@@ -461,7 +462,9 @@ pub(crate) async fn seed_active_controller_device_generation(
         "Principal Control",
         soland_services::events::DirectoryProvenance::AcceptedEvent(bootstrap.event_id.to_string()),
     );
-    realm_entry.members.insert(bootstrap.actor_id.clone());
+    realm_entry
+        .members
+        .insert(bootstrap.actor_id.signing_principal_id().clone());
     state.test_realms().lock().upsert(realm_entry);
     state
         .test_persistence()
@@ -824,7 +827,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
         panic!("combined Realm+actor selector must return realm_actor frontier");
     };
     assert_eq!(actor_frontier.realm_id, controller_realm_id);
-    assert_eq!(actor_frontier.actor_id, controller_id);
+    assert_eq!(
+        actor_frontier.actor_id.signing_principal_id(),
+        &controller_id
+    );
     let next_actor_seq = actor_frontier.next_actor_seq;
     let now =
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
@@ -862,7 +868,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     pcr_genesis.created_at = now;
     pcr_genesis.requirements.schema_profile_refs =
         vec![arkret_wire::ProfileRef::new(arkret_wire::SchemaId::REALM_V1).unwrap()];
-    pcr_genesis.executed_by = Some(controller_id.clone());
+    pcr_genesis.executed_by = Some(arkret_wire::ActorId::service(controller_id.clone()));
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
     pcr_genesis

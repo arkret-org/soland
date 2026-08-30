@@ -292,7 +292,7 @@ mod federated_producer_event_proof_tests {
 
     fn sign_with_protected_header(
         proof: &arkret_wire::ProducerEventProof,
-        actor_id: &arkret_wire::DidCoreId,
+        actor_id: &arkret_wire::ActorId,
         key: &SigningKey,
         header: serde_json::Value,
     ) -> String {
@@ -466,7 +466,9 @@ mod managed_agent_pcr_batch_tests {
             payload,
         )
         .unwrap();
-        event.executed_by = Some(crate::test_actor_id_str("did:web:alice.example"));
+        event.executed_by = Some(arkret_wire::ActorId::service(crate::test_actor_id_str(
+            "did:web:alice.example",
+        )));
         event.authorization_ref = Some(
             arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
         );

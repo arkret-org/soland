@@ -2041,8 +2041,7 @@ mod requested_scope_tests {
             uuid::Uuid::parse_str("019f6131-3dc4-76f1-ade6-00f4225a8528")
                 .expect("valid notification uuid"),
         );
-        record.controller_account_pk =
-            Some(arkret_wire::ServiceAccountId::new("account-test-controller".to_owned()).unwrap());
+        record.controller_account_pk = Some(soland_storage::AccountPk(1));
         record.recipient_id = Some("ak:did_core:web:soland.example".to_owned());
         record.approval_request_id =
             Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
@@ -2053,10 +2052,7 @@ mod requested_scope_tests {
             context.notification_id.as_str(),
             "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
         );
-        assert_eq!(
-            context.controller_account_pk.as_str(),
-            "account-test-controller"
-        );
+        assert_eq!(context.controller_account_pk.get(), 1);
     }
 
     #[test]

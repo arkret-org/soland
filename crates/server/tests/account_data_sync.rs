@@ -477,7 +477,7 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
         .read_cursors
         .values()
         .filter(|marker| {
-            marker.actor_id.as_str() == actor
+            marker.actor_id.signing_principal_id().as_str() == actor
                 && realm_id.is_none_or(|realm_id| marker.realm_id.as_str() == realm_id)
         })
         .map(|marker| {

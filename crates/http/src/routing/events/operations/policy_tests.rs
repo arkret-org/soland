@@ -52,8 +52,15 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
     .unwrap();
     let now = chrono::Utc::now();
     let alice_did = arkret_identifiers::Did::new(ALICE_DID.to_owned()).unwrap();
-    let alice = crate::test_actor_id(&alice_did);
-    let bob = crate::test_actor_id_str("did:webvh:z6mkbob:bob.example");
+    let alice_account = arkret_wire::AccountId::new(
+        crate::test_actor_id(&alice_did),
+        state.service_core_id().clone(),
+    );
+    let alice = arkret_wire::ActorId::account(alice_account.clone());
+    let bob = arkret_wire::AccountId::new(
+        crate::test_actor_id_str("did:webvh:z6mkbob:bob.example"),
+        state.service_core_id().clone(),
+    );
     let mut realm_create = op(
         realm_id.clone(),
         "000000000691",
@@ -79,7 +86,6 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
             realm_id.clone(),
             bob,
-            arkret_models_identity::DeliveryStatus::Unroutable,
         )
         .to_value()
         .unwrap(),
@@ -120,8 +126,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         arkret_wire::EventKind::MemberState,
         arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
             realm_id.clone(),
-            alice.clone(),
-            arkret_models_identity::DeliveryStatus::Unroutable,
+            alice_account,
         )
         .to_value()
         .unwrap(),
@@ -171,7 +176,7 @@ fn registered_projection_inputs(
         arkret_wire::ScopeRef::Realm {
             realm_id: operation.realm_id.clone(),
         },
-        operation.context.sender.clone(),
+        operation.context.sender.signing_principal_id().clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!("019041000000-{actor_seq:04x}-aabbccdd")).unwrap(),
         operation.payload.clone(),
@@ -257,7 +262,6 @@ fn op(
         kind.as_ref(),
         payload,
     );
-    operation.context.sender.route_service_id() = crate::test_event::station_id();
     if let Some(executed_by) = executed_by {
         operation.context.executed_by = Some(serde_json::from_value(executed_by).unwrap());
     }
@@ -267,7 +271,10 @@ fn op(
             "ak:did_core:web:agent.example" => AGENT_CORE_ID,
             sender => sender,
         };
-        operation.context.sender = arkret_identifiers::DidCoreId::new(sender.to_owned()).unwrap();
+        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(sender.to_owned()).unwrap(),
+            crate::test_event::station_id(),
+        ));
     }
     operation
 }
@@ -444,9 +451,6 @@ fn install_projected_grant(
         actions,
         constraints,
     );
-    let station_id = crate::test_event::station_id().into_string();
-    grant.issuer_station_id = arkret_wire::DidCoreId::new(station_id.clone()).unwrap();
-    grant.subject_station_id = Some(arkret_wire::DidCoreId::new(station_id).unwrap());
     authorization.upsert_projected_grant(grant.clone());
     grant
 }
@@ -558,14 +562,9 @@ fn insert_joined_realm_member(
             realm_id: realm_id.to_string(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("unroutable".to_owned()),
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: Some(
                 "ak:event:AT41F_H8VlBMeU1YjfZKP1IwxWus1cykljb2DVv43LvY".to_owned(),
             ),
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -1104,10 +1103,6 @@ async fn register_native_agent_membership_context(
         )
         .await
         .expect("realm meta");
-    let controller_authority = arkret_wire::AccountId {
-        principal_id: arkret_identifiers::DidCoreId::new(controller.to_owned()).unwrap(),
-        station_id: crate::test_event::station_id(),
-    };
     {
         let mut projection = state.test_projection().lock();
         projection.members.insert(
@@ -1117,21 +1112,12 @@ async fn register_native_agent_membership_context(
                 realm_id: realm_id.to_string(),
                 state: "join".to_owned(),
                 role: "owner".to_owned(),
-                delivery_status: Some("unroutable".to_owned()),
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: Some(AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID.to_owned()),
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
                 invited_at: None,
                 joined_at: now,
                 updated_at: now,
                 reason: None,
             },
-        );
-        projection.membership_authorities.insert(
-            (realm_id.to_string(), controller.to_owned()),
-            controller_authority,
         );
     }
 
@@ -1203,7 +1189,7 @@ async fn register_native_agent_membership_context(
             id: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_ref: "keypackage-01904100-0000-7000-8000-0000000007d1".to_owned(),
             keypackage_digest: format!("sha256:{}", "1".repeat(64)),
-            owner_account_id: arkret_wire::ServiceAccountId::new("account-agent").unwrap(),
+            owner_account_pk: 1,
             actor_id: agent.to_owned(),
             device_id: None,
             endpoint_verification_method: Some(format!("{agent}#runtime-key")),
@@ -1431,10 +1417,6 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         arkret_wire::EventKind::InviteCreate,
         json!({
             "invitee_id": "ak:did_core:web:charlie.example",
-            "invite_delivery_target": {
-                "recipient_id": "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x",
-                "recipient_kind": "station"
-            },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "expires_at": "2026-08-05T10:00:00.000Z"
         }),
@@ -1491,13 +1473,6 @@ async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
         arkret_wire::EventKind::InviteCreate,
         json!({
             "invitee_id": "ak:did_core:web:charlie.example",
-            "invite_delivery_target": {
-                "recipient_id": "ak:did_core:web:local.host",
-                "service_resolution": {
-                    "current_record_url": "https://local.host/_arkret/open/services/ak%3Adid_core%3Aweb%3Alocal.host/resolution"
-                },
-                "recipient_kind": "station"
-            },
             "introduction_evidence_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
             "expires_at": "2026-08-05T10:00:00.000Z"
         }),
@@ -2707,7 +2682,7 @@ fn moderation_appeal_actor_uses_schema_id_fields() {
         );
         assert_eq!(
             policy::moderation_actor_for_test(&operation, &kind).unwrap(),
-            Some(ACTOR)
+            Some(&operation.context.sender)
         );
     }
 

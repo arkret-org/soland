@@ -29,12 +29,7 @@ fn state_with_successor() -> ProjectionState {
             realm_id: REALM.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("unroutable".to_owned()),
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -65,7 +60,10 @@ fn transfer_changes_only_controller_and_epoch() {
     );
     assert!(matches!(effect, ProjectionEffect::RealmLifecycle { .. }));
     let after = state.realm_authority_root(REALM).unwrap();
-    assert_eq!(after.controller_id.as_str(), SUCCESSOR);
+    assert_eq!(
+        after.controller_id.signing_principal_id().as_str(),
+        SUCCESSOR
+    );
     assert_eq!(after.controller_epoch, before.controller_epoch + 1);
     assert_eq!(after.authority_generation, before.authority_generation);
 }

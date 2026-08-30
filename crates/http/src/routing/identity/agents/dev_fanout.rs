@@ -400,8 +400,7 @@ mod tests {
             Some(controller_id.as_str())
         );
         assert!(!projection.issuer_has_projected_capability(
-            controller_id.as_str(),
-            controller_id.as_str(),
+            &arkret_wire::ActorId::service(controller_id.clone()),
             realm_id,
             CapabilityActionId::MESSAGE_CREATE,
             realm_id,

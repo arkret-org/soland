@@ -1369,7 +1369,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
 /// authz engine, mirroring what the capability-grant projection would fold in.
 fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
-    let mut grant = soland_http::authz::install_projected_grant(
+    let grant = soland_http::authz::install_projected_grant(
         state.test_authz(),
         realm_id.to_owned(),
         fixture_actor_core_id("did:web:alice.example").to_string(),
@@ -1378,10 +1378,6 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
         vec![action.to_owned()],
         vec![],
     );
-    grant.issuer_station_id =
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
-    grant.subject_station_id =
-        Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
 }
 

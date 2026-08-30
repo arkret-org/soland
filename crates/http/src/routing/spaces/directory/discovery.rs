@@ -69,8 +69,14 @@ mod tests {
         state
             .contacts()
             .save_contact(soland_services::identity::ContactRecord {
-                requester_id: arkret_wire::DidCoreId::new(alice.to_owned()).unwrap(),
-                target_id: arkret_wire::DidCoreId::new(bob.to_owned()).unwrap(),
+                requester_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new(alice.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                )),
+                target_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new(bob.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                )),
                 contact_round_id: Some(
                     arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
                 ),

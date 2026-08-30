@@ -815,7 +815,7 @@ mod tests {
         );
         let target = caller_signed_circle_member_target(ACTOR, CIRCLE, &event).unwrap();
 
-        assert_eq!(target.actor_id.as_str(), BOB);
+        assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Join);
     }
 
@@ -849,7 +849,7 @@ mod tests {
         let target =
             caller_signed_circle_member_delete_target(ACTOR, CIRCLE, BOB, REALM, &event).unwrap();
 
-        assert_eq!(target.actor_id.as_str(), BOB);
+        assert_eq!(target.actor_id.signing_principal_id().as_str(), BOB);
         assert_eq!(target.membership, CircleMembership::Leave);
     }
 

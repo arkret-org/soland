@@ -1701,7 +1701,7 @@ mod tests {
             serde_json::json!({"membership": "leave"}),
         )
         .unwrap();
-        event.executed_by = Some(initiator);
+        event.executed_by = Some(arkret_wire::ActorId::service(initiator));
         event
             .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .unwrap();

@@ -123,7 +123,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         .compare_and_set(
             None,
             soland_storage::PrincipalResolutionRecord {
-                authority_key: authority,
+                account_id: authority,
                 pcr_realm_id: pcr_realm_id.clone(),
                 genesis_event: genesis.clone(),
                 current_event: genesis.clone(),

@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{RealmId, ServiceAccountId};
+use arkret_identifiers::RealmId;
 use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
@@ -167,12 +167,7 @@ fn install_routable_member(state: &AppState, realm_id: &str, member: &arkret_wir
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(state.service_id().to_owned()),
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -333,31 +328,6 @@ async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str)
     login["session_credential"].as_str().unwrap().to_owned()
 }
 
-async fn rebind_session_to_foreign_auth_account(
-    state: &AppState,
-    actor_id: &arkret_wire::DidCoreId,
-    device_id: &str,
-) -> ServiceAccountId {
-    let persistence = state.test_persistence();
-    let local_account = persistence
-        .accounts()
-        .get(actor_id.as_str())
-        .await
-        .unwrap()
-        .expect("Station local account");
-    let foreign_auth_account_id = ServiceAccountId::new("auth-server-alice-account").unwrap();
-    assert_ne!(local_account.id, foreign_auth_account_id);
-
-    let mut sessions = persistence.sessions().snapshot_all().await.unwrap();
-    let session = sessions
-        .iter_mut()
-        .find(|session| session.actor == actor_id.as_str() && session.device_id == device_id)
-        .expect("dev-login session");
-    session.service_account_id = foreign_auth_account_id;
-    persistence.sessions().put(session).await.unwrap();
-    local_account.id
-}
-
 async fn project_authorized_principal_device(
     state: &AppState,
     principal_did: &str,
@@ -437,11 +407,11 @@ async fn project_authorized_principal_device(
         ))
         .await
         .unwrap();
-    let authority_key = arkret_wire::AccountId::new(principal_id.clone(), station_id);
+    let account_id = arkret_wire::AccountId::new(principal_id.clone(), station_id);
     if state
         .test_persistence()
         .principal_resolutions()
-        .by_authority_key(&authority_key)
+        .by_account_id(&account_id)
         .await
         .unwrap()
         .is_none()
@@ -452,7 +422,7 @@ async fn project_authorized_principal_device(
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key,
+                    account_id,
                     pcr_realm_id: pcr_realm_id.clone(),
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),
@@ -505,11 +475,16 @@ async fn mls_lifecycle_end_to_end_body() {
     let alice_core =
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(alice_did).unwrap())
             .unwrap();
-    // A production session grant carries the Account Authority process's service-local
-    // account id. It is intentionally different from this Station's
-    // account id and must not be used as the KeyPackage owner lookup key.
-    let alice_local_account_id =
-        rebind_session_to_foreign_auth_account(&state, &alice_core, alice_device).await;
+    let alice_account_id =
+        arkret_wire::AccountId::new(alice_core.clone(), state.service_core_id().clone());
+    let alice_local_account_pk = state
+        .test_persistence()
+        .accounts()
+        .get(&alice_account_id)
+        .await
+        .unwrap()
+        .expect("Station local account")
+        .pk;
     let event_signing_key = SigningKey::from_bytes(&[21_u8; 32]);
     let alice_device_authorize_event_id =
         project_authorized_principal_device(&state, alice_did, alice_device, &event_signing_key)
@@ -664,7 +639,7 @@ async fn mls_lifecycle_end_to_end_body() {
         .unwrap()
         .expect("publish must mirror into the store");
     assert_eq!(
-        persisted_keypackage.owner_account_id, alice_local_account_id,
+        persisted_keypackage.owner_account_pk, alice_local_account_pk,
         "KeyPackage owner must use the Station local account id"
     );
     for rejected_id in [mismatched_capabilities_id, noncanonical_capabilities_id] {

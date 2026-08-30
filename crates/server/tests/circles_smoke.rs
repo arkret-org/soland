@@ -139,8 +139,7 @@ fn seed_encrypted_realm(
 /// AKP-0007 smoke helper — write a `(realm_id, actor)` membership entry
 /// directly into the projection's `members` cache so the test can focus
 /// on the Circle strict-subset invariant without booting the full
-/// `ak.member.state` join pipeline (delivery_binding_policy
-/// pre-conditions, FSM cell synthesis, etc.). The Circle handler reads
+/// `ak.member.state` join pipeline. The Circle handler reads
 /// the same cache via `ProjectionState::member`.
 fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &str, actor: &str) {
     let now = chrono::Utc::now();
@@ -151,12 +150,7 @@ fn add_realm_member(state: &mut ProjectionState, _hlc: &ServerHlc, realm_id: &st
             realm_id: realm_id.to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: None,
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,

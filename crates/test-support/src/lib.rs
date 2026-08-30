@@ -868,7 +868,7 @@ pub async fn project_authorized_principal_device(
         .find(|record| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
         .expect("PCR genesis Event");
     let genesis: arkret_wire::Event = serde_json::from_value(genesis_record.envelope).unwrap();
-    let station_id = genesis.station_id.clone();
+    let station_id = genesis.actor_id.route_service_id().clone();
     let now = chrono::Utc::now();
     let device_public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         signing_key.verifying_key().as_bytes(),
@@ -932,7 +932,7 @@ pub async fn project_authorized_principal_device(
     if state
         .test_persistence()
         .principal_resolutions()
-        .by_authority_key(&authority_key)
+        .by_account_id(&authority_key)
         .await
         .unwrap()
         .is_none()
@@ -943,7 +943,7 @@ pub async fn project_authorized_principal_device(
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key,
+                    account_id: authority_key,
                     pcr_realm_id: pcr_realm_id.clone(),
                     genesis_event: genesis.clone(),
                     current_event: genesis.clone(),

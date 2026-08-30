@@ -1552,11 +1552,12 @@ mod did_binding_tests {
         let verification_method = format!("{did}#{device_id}");
         let (envelope_bytes, proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
 
         let error = verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1577,8 +1578,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         let jws = detached_jws_with_header(
             &key,
@@ -1591,7 +1593,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1610,8 +1612,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "ES256"}), &binding_bytes);
@@ -1619,7 +1622,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1638,8 +1641,9 @@ mod did_binding_tests {
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
@@ -1647,7 +1651,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             &envelope_bytes,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,
@@ -1667,8 +1671,9 @@ mod did_binding_tests {
 
         let (_, mut proof) = event_proof_fixture(&verification_method);
         let actor_id = crate::test_actor_id(&did);
+        let actor = arkret_wire::ActorId::service(actor_id.clone());
         let binding_bytes = proof
-            .canonical_binding_bytes(&actor_id)
+            .canonical_binding_bytes(&actor)
             .expect("binding bytes");
         proof.jws =
             detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
@@ -1676,7 +1681,7 @@ mod did_binding_tests {
         verify_registered_identity_resolution_event_proof_async(
             &proof,
             br#"{"actor_id":"ak:did_core:web:principal.example","kind":"ak.other.event"}"#,
-            &actor_id,
+            &actor,
             &verification_method,
             actor_id.as_str(),
             &state,

@@ -208,33 +208,46 @@ fn welcome_fixture_is_the_current_closed_wire_contract() {
     .expect("Welcome fixture must deserialize through the current closed SDK model");
 }
 
-fn publish_payload(id: &str, actor: &str, device: &str, not_after: i64) -> serde_json::Value {
-    json!({
-        "action": "publish",
-        "keypackage_id": id,
-        "principal_id": actor,
-        "owner_account_id": "account-alice",
-        "device_id": device,
-        "lifetime": {"not_before": 1, "not_after": not_after},
-        "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa",
-        "key_package_bytes_b64": b64(b"opaque-keypackage-bytes"),
-    })
+fn publish_projection(
+    id: &str,
+    actor: &str,
+    device: &str,
+    not_after: i64,
+    last_resort: bool,
+) -> MlsKeyPackagePublishProjection {
+    let key_package_bytes = b"opaque-keypackage-bytes".to_vec();
+    MlsKeyPackagePublishProjection {
+        keypackage_id: id.to_owned(),
+        keypackage_ref: id.to_owned(),
+        keypackage_digest: arkret_canonical::sha256_digest(&key_package_bytes),
+        owner_account_pk: 1,
+        actor_id: actor.to_owned(),
+        device_id: Some(device.to_owned()),
+        lifetime: KeyPackageLifetimeProjection {
+            not_before: 1,
+            not_after,
+        },
+        key_package_bytes,
+        capabilities: Vec::new(),
+        last_resort,
+        trust_anchor: MlsKeyPackagePublishTrustAnchor::DeviceAuthorize(
+            "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa".to_owned(),
+        ),
+        created_at: 100,
+    }
 }
 
 #[test]
 fn keypackage_publish_then_claim_succeeds() {
     let mut state = ProjectionState::default();
-    let publish = op_at(
-        100,
-        "ak.mls.keypackage",
-        publish_payload(
-            "keypackage-01",
-            "ak:did_core:web:alice.example",
-            "ak:device:alice-desktop",
-            1_000_000,
-        ),
+    let publish = publish_projection(
+        "keypackage-01",
+        "ak:did_core:web:alice.example",
+        "ak:device:alice-desktop",
+        1_000_000,
+        false,
     );
-    let effect = apply_keypackage_publish(&mut state, &publish);
+    let effect = apply_keypackage_upload_projection(&mut state, &publish);
     assert!(matches!(
         effect,
         ProjectionEffect::Mls(MlsEffect::KeyPackagePublished { ref keypackage_id, .. })
@@ -282,17 +295,14 @@ fn keypackage_publish_then_claim_succeeds() {
 #[test]
 fn keypackage_claim_twice_second_fails() {
     let mut state = ProjectionState::default();
-    let publish = op_at(
-        100,
-        "ak.mls.keypackage",
-        publish_payload(
-            "keypackage-02",
-            "ak:did_core:web:alice.example",
-            "ak:device:alice-desktop",
-            1_000_000,
-        ),
+    let publish = publish_projection(
+        "keypackage-02",
+        "ak:did_core:web:alice.example",
+        "ak:device:alice-desktop",
+        1_000_000,
+        false,
     );
-    let _ = apply_keypackage_publish(&mut state, &publish);
+    let _ = apply_keypackage_upload_projection(&mut state, &publish);
 
     // First claim — wins.
     let claim1 = op_at(
@@ -339,17 +349,14 @@ fn keypackage_claim_twice_second_fails() {
 #[test]
 fn keypackage_claim_same_group_renews_instead_of_conflicting() {
     let mut state = ProjectionState::default();
-    let publish = op_at(
-        100,
-        "ak.mls.keypackage",
-        publish_payload(
-            "keypackage-renew",
-            "ak:did_core:web:alice.example",
-            "ak:device:alice-desktop",
-            1_000_000,
-        ),
+    let publish = publish_projection(
+        "keypackage-renew",
+        "ak:did_core:web:alice.example",
+        "ak:device:alice-desktop",
+        1_000_000,
+        false,
     );
-    let _ = apply_keypackage_publish(&mut state, &publish);
+    let _ = apply_keypackage_upload_projection(&mut state, &publish);
 
     let claim = |at: i64| {
         op_at(
@@ -404,15 +411,14 @@ fn keypackage_claim_same_group_renews_instead_of_conflicting() {
 #[test]
 fn last_resort_keypackage_reuses_within_realm_only() {
     let mut state = ProjectionState::default();
-    let mut payload = publish_payload(
+    let publish = publish_projection(
         "keypackage-last-resort",
         "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
+        true,
     );
-    payload["last_resort"] = json!(true);
-    let publish = op_at(100, "ak.mls.keypackage", payload);
-    let _ = apply_keypackage_publish(&mut state, &publish);
+    let _ = apply_keypackage_upload_projection(&mut state, &publish);
 
     for group_id in ["mls-group-first", "mls-group-second"] {
         let claim = op_at(
@@ -465,15 +471,14 @@ fn last_resort_keypackage_reuses_within_realm_only() {
 #[test]
 fn revoked_last_resort_keypackage_cannot_be_reused() {
     let mut state = ProjectionState::default();
-    let mut payload = publish_payload(
+    let publish = publish_projection(
         "keypackage-revoked-last-resort",
         "ak:did_core:web:alice.example",
         "ak:device:alice-desktop",
         1_000_000,
+        true,
     );
-    payload["last_resort"] = json!(true);
-    let publish = op_at(100, "ak.mls.keypackage", payload);
-    let _ = apply_keypackage_publish(&mut state, &publish);
+    let _ = apply_keypackage_upload_projection(&mut state, &publish);
     state
         .mls_key_packages
         .get_mut("keypackage-revoked-last-resort")
@@ -502,17 +507,14 @@ fn revoked_last_resort_keypackage_cannot_be_reused() {
 #[test]
 fn keypackage_claim_rejects_mismatched_device_authorization() {
     let mut state = ProjectionState::default();
-    let publish = op_at(
-        100,
-        "ak.mls.keypackage",
-        publish_payload(
-            "keypackage-03",
-            "ak:did_core:web:alice.example",
-            "ak:device:alice-desktop",
-            1_000_000,
-        ),
+    let publish = publish_projection(
+        "keypackage-03",
+        "ak:did_core:web:alice.example",
+        "ak:device:alice-desktop",
+        1_000_000,
+        false,
     );
-    let _ = apply_keypackage_publish(&mut state, &publish);
+    let _ = apply_keypackage_upload_projection(&mut state, &publish);
 
     let claim = op_at(
         200,

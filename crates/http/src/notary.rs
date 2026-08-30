@@ -2409,7 +2409,9 @@ mod tests {
         let event_ops = vec![(
             notary_cell.clone(),
             IssuedOp {
-                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                    "did:web:alice.example",
+                )),
                 op: SealedOp::new(
                     move_id.clone(),
                     arkret_wire::cba::LatticeOp {
@@ -2438,7 +2440,9 @@ mod tests {
         let remote_event_ops = vec![(
             notary_cell,
             IssuedOp {
-                issuer_id: crate::test_actor_id_str("did:web:alice.example"),
+                issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                    "did:web:alice.example",
+                )),
                 op: SealedOp::new(
                     move_id,
                     arkret_wire::cba::LatticeOp {

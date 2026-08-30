@@ -482,7 +482,6 @@ pub(super) fn admin_invite_item(
             DidCoreId::new(invitee_id)
                 .expect("RealmInviteRecord invitee_id must be a validated DID core id")
         }),
-        invite_delivery_target: invite.invite_delivery_target.clone(),
         introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
         token_hash: arkret_canonical::sha256_digest(invite.invite_token.as_bytes()),
         status: invite.status.clone(),

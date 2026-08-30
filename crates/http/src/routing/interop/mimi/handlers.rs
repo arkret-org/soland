@@ -1309,7 +1309,10 @@ mod consent_proof_tests {
         let mut request = MimiUpdateConsentRequestBody {
             consent_id,
             decision: MimiConsentDecision::Accept,
-            actor_id,
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                actor_id,
+                state.service_core_id().clone(),
+            )),
             consent_event: EventInitialSubmission::online(consent_event),
             signature: PayloadProof {
                 kind: proof_kind::DETACHED_JWS.to_owned(),
@@ -1368,12 +1371,12 @@ mod consent_proof_tests {
             .expect("device verification method");
         let actor_did = Did::new(actor_did.to_owned()).unwrap();
         let device_id = DeviceId::new(device_id.to_owned()).unwrap();
-        let station_id = request.consent_event.event.station_id.clone();
+        let station_id = request.actor_id.route_service_id().clone();
         let created_at = now();
         let mut genesis = arkret_wire::test_support::raw_event_at(
             EventKind::RealmCreate.as_str(),
             ScopeRef::RealmGenesis,
-            request.actor_id.clone(),
+            request.actor_id.signing_principal_id().clone(),
             station_id.clone(),
             0,
             Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
@@ -1400,7 +1403,7 @@ mod consent_proof_tests {
             ScopeRef::Realm {
                 realm_id: pcr_realm_id.clone(),
             },
-            request.actor_id.clone(),
+            request.actor_id.signing_principal_id().clone(),
             station_id.clone(),
             1,
             Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
@@ -1440,8 +1443,8 @@ mod consent_proof_tests {
             .compare_and_set(
                 None,
                 soland_storage::PrincipalResolutionRecord {
-                    authority_key: arkret_wire::AccountId::new(
-                        request.actor_id.clone(),
+                    account_id: arkret_wire::AccountId::new(
+                        request.actor_id.signing_principal_id().clone(),
                         station_id,
                     ),
                     pcr_realm_id,
@@ -1529,8 +1532,11 @@ mod consent_proof_tests {
         let state = state();
         let mut request = request(&state);
         install_authorized_actor_device(&state, &request).await;
-        request.consent_event.event.station_id =
-            DidCoreId::new("ak:did_core:web:other-station.invalid".to_owned()).unwrap();
+        request.consent_event.event.actor_id =
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                request.actor_id.signing_principal_id().clone(),
+                DidCoreId::new("ak:did_core:web:other-station.invalid".to_owned()).unwrap(),
+            ));
         request
             .consent_event
             .event

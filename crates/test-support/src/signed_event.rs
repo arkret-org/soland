@@ -92,10 +92,6 @@ pub fn complete_realm_bootstrap_unit(
             serde_json::json!({"value": {"discoverability": "invite_only"}}),
         ),
         (
-            arkret_wire::EventKind::RealmDeliveryBindingPolicy,
-            serde_json::json!({"unroutable_membership_allowed": false}),
-        ),
-        (
             arkret_wire::EventKind::MemberState,
             serde_json::json!({
                 "realm_id": realm_id,

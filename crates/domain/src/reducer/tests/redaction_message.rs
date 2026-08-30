@@ -261,24 +261,18 @@ fn membership_join_leave() {
         .realm_join_rules
         .insert(realm_id.to_owned(), "public".to_owned());
 
-    // `membership=join` MUST carry `delivery_status` per
-    // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
-    // We use `unroutable` so the projection write path does not
-    // additionally require a projected `ak.realm.delivery_binding_policy`
-    // cell (`routable` joins are exercised by the delivery-binding
-    // suite).
     let join_payload = serde_json::json!({
         "realm_id": realm_id,
         "actor_id": "ak:did_core:web:bob",
-        "membership": "join",
-        "delivery_status": "unroutable"
+        "membership": "join"
     });
     let (_, join_writes) =
         projected_cell_writes(arkret_wire::EventKind::MemberState, realm_id, &join_payload);
     let mut join = make_operation(arkret_wire::EventKind::MemberState, realm_id, join_payload);
-    join.context.sender =
+    join.context.sender = arkret_wire::ActorId::service(
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new("did:web:bob").unwrap())
-            .unwrap();
+            .unwrap(),
+    );
     state.apply_projected(&join, &join_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
@@ -292,9 +286,10 @@ fn membership_join_leave() {
         &leave_payload,
     );
     let mut leave = make_operation(arkret_wire::EventKind::MemberState, realm_id, leave_payload);
-    leave.context.sender =
+    leave.context.sender = arkret_wire::ActorId::service(
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new("did:web:bob").unwrap())
-            .unwrap();
+            .unwrap(),
+    );
     state.apply_projected(&leave, &leave_writes, &hlc);
     assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }

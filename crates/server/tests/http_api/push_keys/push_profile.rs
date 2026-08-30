@@ -997,7 +997,7 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
     .await;
     assert_eq!(allowed.status_code, Some(StatusCode::OK));
 
-    let mut grant = soland_http::authz::install_projected_grant(
+    let grant = soland_http::authz::install_projected_grant(
         state.test_authz(),
         demo_realm_id().to_owned(),
         fixture_actor_core_id(bob).to_string(),
@@ -1006,10 +1006,6 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
-    grant.issuer_station_id =
-        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap();
-    grant.subject_station_id =
-        Some(arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap());
     state.test_authz().upsert_projected_grant(grant);
     let granted = post_signal(
         state.clone(),
@@ -1419,7 +1415,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify_
             .unwrap();
     assert_eq!(
         stale_notify.outcomes[0].reason_code,
-        Some(arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale)
+        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushGatewayUnreachable)
     );
 
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(

@@ -59,7 +59,10 @@ mod cba_capability_cell_tests {
             .expect("the CBA registry wrapper must resolve to an effective grant");
         assert_eq!(grant.grant_id, grant_id);
         assert_eq!(grant.realm_id, realm_id);
-        assert_eq!(grant.subject_id.as_str(), "ak:did_core:web:owner.example");
+        assert_eq!(
+            grant.subject_id.signing_principal_id().as_str(),
+            "ak:did_core:web:owner.example"
+        );
         assert!(
             grant
                 .actions
@@ -127,6 +130,10 @@ mod agent_key_tests {
     const GRANT_3: &str = "ak:grant:Af-etF0vTHwlpJOwEu53s_Pq08WOwxuO7UxIWltAiAmk";
     const OWNER_GRANT: &str = "ak:grant:Aam5L1XcrHrrRfNk_9wOcpOu9263GPwRPTjzYXdIgYb0";
     const REALM_OWNER: &str = "ak:did_core:web:alice.example";
+
+    fn actor(value: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
+    }
 
     #[test]
     fn agent_and_service_high_risk_grants_require_finite_expiry() {
@@ -808,8 +815,7 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
         assert!(state.issuer_has_projected_capability(
-            AGENT,
-            AGENT,
+            &actor(AGENT),
             REALM,
             "ak.message.create",
             REALM,
@@ -826,8 +832,7 @@ mod agent_key_tests {
             crate::reducer::ProjectionEffect::CapabilityRevokeProjected { .. }
         ));
         assert!(!state.issuer_has_projected_capability(
-            AGENT,
-            AGENT,
+            &actor(AGENT),
             REALM,
             "ak.message.create",
             REALM,
@@ -854,8 +859,7 @@ mod agent_key_tests {
         ));
 
         let mut root = state.realm_authority_root(REALM).unwrap();
-        root.controller_id =
-            arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example").unwrap();
+        root.controller_id = actor("ak:did_core:web:bob.example");
         root.controller_epoch += 1;
         state.realm_null_subject_cells.insert(
             (
@@ -865,8 +869,7 @@ mod agent_key_tests {
             arkret_state::lattice::CellState::Value(serde_json::to_value(&root).unwrap()),
         );
         assert!(state.issuer_has_projected_capability(
-            AGENT,
-            AGENT,
+            &actor(AGENT),
             REALM,
             "ak.message.create",
             REALM,
@@ -882,8 +885,7 @@ mod agent_key_tests {
             arkret_state::lattice::CellState::Value(serde_json::to_value(root).unwrap()),
         );
         assert!(!state.issuer_has_projected_capability(
-            AGENT,
-            AGENT,
+            &actor(AGENT),
             REALM,
             "ak.message.create",
             REALM,
@@ -1477,87 +1479,6 @@ mod federation_revoke_fanout_tests {
             ProjectionEffect::CapabilityGrantProjected { .. }
         ));
     }
-
-    fn delivery_binding_grant_payload() -> serde_json::Value {
-        json!({
-            "event_id": GRANT.replacen("ak:grant:", "ak:event:", 1),
-            "grant": {
-                "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-                "realm_id": REALM,
-                "issuer_id": OWNER,
-                "issuer_authority_refs": [{
-                    "kind": "realm_root",
-                    "realm_id": REALM,
-                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                    "controller_epoch_at_issuance": 0,
-                    "authority_generation": 0
-                }],
-                "subject": PEER_SERVICE_ID,
-                // The realm-level admin capability governs the delivery-binding
-                // policy. `ak.realm.delivery_binding_policy` is an event kind,
-                // not a registered capability action, so the grant carries the
-                // registered `ak.realm.admin` action that authorizes it.
-                "actions": ["ak.realm.admin"],
-                "resources": [{ "kind": "realm", "realm_id": REALM }],
-            }
-        })
-    }
-
-    #[test]
-    fn revoking_service_delegation_marks_peer_delivery_revoked() {
-        let mut state = ProjectionState::default();
-        seed_realm_authority(&mut state);
-        let now = chrono::Utc::now();
-
-        // Before any grant: nothing revoked.
-        assert!(state.federation_delivery_revoked_peers(REALM).is_empty());
-
-        // Grant β's federation delivery binding service delegation. An active
-        // grant MUST NOT appear in the revoked set.
-        let effect = state.apply_capability_grant(
-            &capability_op(
-                "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                arkret_wire::EventKind::CapabilityGrant,
-                delivery_binding_grant_payload(),
-            ),
-            now,
-        );
-        assert!(
-            matches!(effect, ProjectionEffect::CapabilityGrantProjected { .. }),
-            "grant must project before revoke: {effect:?}"
-        );
-        assert!(
-            state.federation_delivery_revoked_peers(REALM).is_empty(),
-            "active service delegation must not be reported as revoked"
-        );
-
-        // Revoke it: the peer service DID is now delivery-revoked for this Realm.
-        let effect = state.apply_capability_revoke(
-            &capability_op(
-                "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                arkret_wire::EventKind::CapabilityRevoke,
-                json!({ "grant_id": GRANT, "realm_id": REALM }),
-            ),
-            now,
-        );
-        assert!(
-            matches!(effect, ProjectionEffect::CapabilityRevokeProjected { .. }),
-            "revoke must project: {effect:?}"
-        );
-        let revoked = state.federation_delivery_revoked_peers(REALM);
-        assert!(
-            revoked.contains(PEER_SERVICE_ID),
-            "revoked service delegation peer MUST be reported"
-        );
-
-        // Scope check: another Realm sees no revocation from this grant.
-        assert!(
-            state
-                .federation_delivery_revoked_peers(OTHER_REALM)
-                .is_empty(),
-            "revocation is scoped to the grant's Realm"
-        );
-    }
 }
 
 mod realm_owner_authority_tests {
@@ -1572,6 +1493,10 @@ mod realm_owner_authority_tests {
     const OWNER: &str = "ak:did_core:web:owner.example";
     const CO_OWNER: &str = "ak:did_core:web:co-owner.example";
     const STRANGER: &str = "ak:did_core:web:stranger.example";
+
+    fn actor(value: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(value).unwrap())
+    }
 
     fn grant_op(
         operation_slot: &str,
@@ -1601,7 +1526,6 @@ mod realm_owner_authority_tests {
                         "authority_generation": 0
                     }],
                     "subject": subject,
-                    "subject_station_id": subject,
                     "actions": actions,
                     "resources": [{
                         "kind": "realm",
@@ -1667,14 +1591,14 @@ mod realm_owner_authority_tests {
 
     fn issue(state: &mut ProjectionState, operation: &Operation) -> ProjectionEffect {
         let mut operation = operation.clone();
-        let issuer = super::grant_issuer(&operation.payload).unwrap_or_default();
+        let issuer = super::grant_issuer(&operation.payload).expect("fixture grant issuer");
         let current_controller = state
             .realm_authority_root(REALM)
-            .map(|root| root.controller_id.to_string());
-        if current_controller.as_deref() != Some(issuer.as_str())
+            .map(|root| root.controller_id);
+        if current_controller.as_ref() != Some(&issuer)
             && let Some(parent) = state
                 .projected_capability_grants()
-                .find(|grant| grant.subject_id.as_str() == issuer && !grant.revoked)
+                .find(|grant| grant.subject_id == issuer && !grant.revoked)
         {
             operation.payload["grant"]["issuer_authority_refs"] = serde_json::json!([{
                 "kind": "grant",
@@ -1704,21 +1628,23 @@ mod realm_owner_authority_tests {
         // A forged `realm_states[..].owner` is a discardable presentation
         // mirror. It never authorizes anything; only the registered cell does.
         let forged = realm(None, Some(OWNER));
-        assert!(!forged.actor_holds_effective_realm_owner(REALM, OWNER, OWNER, chrono::Utc::now()));
+        assert!(!forged.actor_holds_effective_realm_owner(
+            REALM,
+            &actor(OWNER),
+            chrono::Utc::now()
+        ));
         assert!(!forged.actor_governs_realm(
             REALM,
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             &["ak.realm.admin"],
             chrono::Utc::now()
         ));
 
         let rooted = realm(Some(OWNER), Some(STRANGER));
-        assert!(rooted.actor_holds_effective_realm_owner(REALM, OWNER, OWNER, chrono::Utc::now()));
+        assert!(rooted.actor_holds_effective_realm_owner(REALM, &actor(OWNER), chrono::Utc::now()));
         assert!(!rooted.actor_holds_effective_realm_owner(
             REALM,
-            STRANGER,
-            STRANGER,
+            &actor(STRANGER),
             chrono::Utc::now()
         ));
     }
@@ -1729,36 +1655,31 @@ mod realm_owner_authority_tests {
         let now = chrono::Utc::now();
         assert!(rooted.realm_owner_operationally_covers_action(
             REALM,
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             "ak.invite.create",
             now
         ));
         assert!(rooted.realm_owner_operationally_covers_action(
             REALM,
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             "ak.realm.profile",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             "ak.audit.export",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             "ak.realm.destroy",
             now
         ));
         assert!(!rooted.realm_owner_operationally_covers_action(
             REALM,
-            STRANGER,
-            STRANGER,
+            &actor(STRANGER),
             "ak.invite.create",
             now
         ));
@@ -1783,8 +1704,7 @@ mod realm_owner_authority_tests {
             // ...and the literal grant it just signed is then usable.
             assert!(
                 state.issuer_holds_literal_capability(
-                    OWNER,
-                    OWNER,
+                    &actor(OWNER),
                     REALM,
                     action,
                     REALM,
@@ -1804,8 +1724,7 @@ mod realm_owner_authority_tests {
             &["ak.schema.realm.v1", "ak.profile.calendar_event.v1"],
         );
         assert!(calendar.owner_may_issue_grant_for(
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             REALM,
             CapabilityActionId::RSVP_SET,
             now,
@@ -1817,8 +1736,7 @@ mod realm_owner_authority_tests {
             &["ak.profile.calendar_notification_dispatch.v1"],
         );
         assert!(unrelated.owner_may_issue_grant_for(
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             REALM,
             CapabilityActionId::RSVP_SET,
             now,
@@ -1826,15 +1744,13 @@ mod realm_owner_authority_tests {
 
         let absent = realm(Some(OWNER), None);
         assert!(absent.owner_may_issue_grant_for(
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             REALM,
             CapabilityActionId::RSVP_SET,
             now,
         ));
         assert!(!absent.owner_may_issue_grant_for(
-            OWNER,
-            OWNER,
+            &actor(OWNER),
             REALM,
             "ak.agent.sidecar.write",
             now,
@@ -1855,8 +1771,7 @@ mod realm_owner_authority_tests {
         );
         assert!(state.actor_holds_effective_realm_owner(
             REALM,
-            CO_OWNER,
-            CO_OWNER,
+            &actor(CO_OWNER),
             chrono::Utc::now()
         ));
 
@@ -1975,16 +1890,14 @@ mod realm_owner_authority_tests {
         // The co-owner holds the aggregate, but not the non-Event surface it
         // does not cover.
         assert!(!state.issuer_has_projected_capability(
-            CO_OWNER,
-            CO_OWNER,
+            &actor(CO_OWNER),
             REALM,
             "ak.audit.export",
             REALM,
             chrono::Utc::now()
         ));
         assert!(state.issuer_has_projected_capability(
-            CO_OWNER,
-            CO_OWNER,
+            &actor(CO_OWNER),
             REALM,
             "ak.strand.create",
             REALM,

@@ -245,8 +245,7 @@ async fn seed_agent_grant_session(
         .unwrap(),
         approval_notification_id: new_prefixed_uuid7("ak:notification:"),
         approval_requested_at: now,
-        controller_account_id: arkret_wire::ServiceAccountId::new(uuid::Uuid::now_v7().to_string())
-            .unwrap(),
+        controller_account_pk: soland_storage::AccountPk(1),
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: request
@@ -424,8 +423,10 @@ async fn seed_agent_grant_session(
             )
             .as_str(),
             "issuer_id": "ak:did_core:web:coauth.local",
-            "subject_id": outcome.agent_id.as_str(),
-            "service_account_id": format!("agent-{slug}"),
+            "account_id": {
+                "principal_id": outcome.agent_id.as_str(),
+                "station_id": state.service_id()
+            },
             "audience_id": state.service_id(),
             "scopes": granted_scopes,
             "expires_at": (chrono::Utc::now() + chrono::Duration::minutes(5))
@@ -1042,8 +1043,8 @@ async fn events_describe_and_single_event_submit_work_body() {
         panic!("actor-only selector must return non-authoring aggregate");
     };
     assert_eq!(
-        frontier.actor_id,
-        fixture_actor_core_id("did:web:alice.example")
+        frontier.actor_id.signing_principal_id(),
+        &fixture_actor_core_id("did:web:alice.example")
     );
     assert_eq!(frontier.frontiers.len(), 2);
     let demo_frontier = frontier
@@ -1261,27 +1262,28 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     );
     {
         let projection = state.test_projection().lock();
+        let actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor_core.clone(),
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+        ));
         let authority_root = projection
             .realm_authority_root(&realm_id)
             .expect("accepted genesis must register the Realm authority-root cell");
         assert!(
-            authority_root.is_genesis_for(actor_core.as_str()),
+            authority_root.is_genesis_for(&actor_id),
             "the authority root's controller is the Realm creator at epoch/generation 0"
         );
         assert!(
-            projection.actor_holds_effective_realm_owner(
-                &realm_id,
-                actor_core.as_str(),
-                actor_core.as_str(),
-                chrono::Utc::now(),
-            ),
+            projection.actor_holds_effective_realm_owner(&realm_id, &actor_id, chrono::Utc::now(),),
             "the authority-root controller holds effective ak.realm.owner"
         );
         assert!(
             !projection.actor_holds_effective_realm_owner(
                 &realm_id,
-                fixture_actor_core_id("did:web:mallory.example").as_str(),
-                fixture_actor_core_id("did:web:mallory.example").as_str(),
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    fixture_actor_core_id("did:web:mallory.example"),
+                    arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+                )),
                 chrono::Utc::now()
             ),
             "nobody else does"
@@ -1401,7 +1403,14 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         assert!(
             restarted_projection
                 .realm_authority_root(&realm_id)
-                .is_some_and(|root| root.is_genesis_for(actor_core.as_str())),
+                .is_some_and(|root| {
+                    root.is_genesis_for(&arkret_wire::ActorId::account(
+                        arkret_wire::AccountId::new(
+                            actor_core.clone(),
+                            arkret_wire::DidCoreId::new(restarted.service_id().clone()).unwrap(),
+                        ),
+                    ))
+                }),
             "restart must rebuild the Realm authority root from canonical create"
         );
         // The registered `effect_projection` for each initial facet is
@@ -1458,18 +1467,6 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
     let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
     let payload = serde_json::json!({
         "invitee_id": fixture_actor_core_id("did:web:carol.example"),
-        "invite_delivery_target": {
-            "recipient_id": state.service_id(),
-            "service_resolution": {
-                "current_record_url": format!(
-                    "https://soland.local{}",
-                    arkret_models_identity::canonical_service_current_record_path(
-                        &arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap()
-                    )
-                )
-            },
-            "recipient_kind": "station"
-        },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2099-01-01T00:00:00.000Z"
     });

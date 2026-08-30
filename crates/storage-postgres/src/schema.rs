@@ -1136,7 +1136,6 @@ diesel::table! {
         realm_id -> Text,
         inviter_id -> Text,
         invitee_id -> Nullable<Text>,
-        invite_delivery_target -> Nullable<Jsonb>,
         introduction_evidence_digest -> Nullable<Text>,
         third_party_invite -> Nullable<Jsonb>,
         invite_token -> Text,

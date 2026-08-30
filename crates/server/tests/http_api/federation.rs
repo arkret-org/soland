@@ -49,12 +49,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(PEER_SOURCE_ID.to_owned()),
-            recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -72,12 +67,7 @@ async fn seed_peer_delivery_binding(state: &AppState) {
             realm_id: test_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: Some("routable".to_owned()),
-            recipient_id: Some(service_id().to_owned()),
-            recipient_service_resolution: None,
             membership_event_ref: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_frontier: Some(PEER_DELIVERY_FRONTIER.to_owned()),
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -137,8 +127,11 @@ fn resign_federation_event(event: Value) -> Value {
 fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
-    event.station_id = arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
-        .expect("fixture peer source is a service core ID");
+    event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        event.actor_id.signing_principal_id().clone(),
+        arkret_wire::DidCoreId::new(PEER_SOURCE_ID.to_owned())
+            .expect("fixture peer source is a Station core ID"),
+    ));
     if event.seal_ref.is_some() {
         event.seal_ref = Some(
             test_realm_basis_for_station(
@@ -1273,9 +1266,6 @@ fn peer_submit_body(event: &Value) -> Value {
             realm_policy_digest: arkret_identifiers::Hash::new(sha256_json(&binding_payload))
                 .unwrap(),
             membership_frontier: vec![arkret_wire::EventId::new(event_id).unwrap()],
-            delivery_binding_frontier: vec![
-                arkret_wire::EventId::new(PEER_DELIVERY_FRONTIER.to_owned()).unwrap(),
-            ],
             destination_kind: "station".to_owned(),
         },
         events: vec![peer_event_submission(event)],

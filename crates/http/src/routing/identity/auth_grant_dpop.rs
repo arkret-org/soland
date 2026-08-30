@@ -839,8 +839,10 @@ mod tests {
             )
             .unwrap(),
             issuer_id: DidCoreId::new("ak:did_core:web:coauth.local").unwrap(),
-            subject_id: DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-            account_pk: arkret_wire::ServiceAccountId::new("alice").unwrap(),
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                DidCoreId::new("ak:did_core:web:soland.local").unwrap(),
+            ),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
             ),
@@ -902,7 +904,10 @@ mod tests {
         // the typed holder binding is self-contained.
         grant.device_id = None;
         grant.device_binding = None;
-        grant.subject_id = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        grant.account_id = arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
+            DidCoreId::new("ak:did_core:web:soland.local").unwrap(),
+        );
         grant.scopes = vec!["ak.self.events.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {
             agent_id: DidCoreId::new("ak:did_core:web:agent.example").unwrap(),

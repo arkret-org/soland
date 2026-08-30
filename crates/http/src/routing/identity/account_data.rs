@@ -694,6 +694,7 @@ mod tests {
         AccountProfileState, AgentController, AgentDirectoryPort, DeviceDirectoryPort,
         DeviceIdentity, SaveDeviceCommand,
     };
+    use soland_storage::AccountPk;
 
     use super::*;
 
@@ -705,14 +706,14 @@ mod tests {
     impl AccountLookupPort for NoAccounts {
         async fn find_account_by_actor(
             &self,
-            _actor_id: &str,
+            _account_id: &arkret_wire::AccountId,
         ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(None)
         }
 
         async fn account_by_id(
             &self,
-            _account_id: &str,
+            _account_pk: AccountPk,
         ) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
@@ -720,11 +721,14 @@ mod tests {
         async fn register_account(
             &self,
             _command: soland_services::identity::RegisterAccountCommand,
-        ) -> ServiceResult<()> {
-            Ok(())
+        ) -> ServiceResult<AccountIdentity> {
+            unreachable!("NoAccounts mock: register_account is not exercised by these tests")
         }
 
-        async fn account(&self, _actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
+        async fn account(
+            &self,
+            _account_id: &arkret_wire::AccountId,
+        ) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
 
@@ -736,13 +740,13 @@ mod tests {
             Ok(())
         }
 
-        async fn delete_account(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn delete_account(&self, _account_id: &arkret_wire::AccountId) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn account_localparts(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
         ) -> ServiceResult<Vec<AccountLocalpartState>> {
             Ok(Vec::new())
         }
@@ -756,7 +760,7 @@ mod tests {
 
         async fn add_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
             _primary: bool,
         ) -> ServiceResult<AccountLocalpartState> {
@@ -765,13 +769,17 @@ mod tests {
 
         async fn set_primary_localpart(
             &self,
-            _actor_id: &str,
+            _account_pk: AccountPk,
             _localpart: &str,
         ) -> ServiceResult<AccountLocalpartState> {
             unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
         }
 
-        async fn remove_localpart(&self, _actor_id: &str, _localpart: &str) -> ServiceResult<()> {
+        async fn remove_localpart(
+            &self,
+            _account_pk: AccountPk,
+            _localpart: &str,
+        ) -> ServiceResult<()> {
             Ok(())
         }
 

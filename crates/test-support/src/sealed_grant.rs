@@ -30,7 +30,6 @@ use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::compute_state_root;
 use arkret_wire::{Seal, SealBasis};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_http::state::AppState;
 use soland_services::projection::ProjectionService;
@@ -102,16 +101,6 @@ pub async fn seal_accepted_capability_grant(
     .expect("capability grant cell ref");
     assert_eq!(direct.cell_id, expected_cell);
     let projected_op = direct.op.clone();
-    assert_eq!(
-        projected_op
-            .value
-            .as_ref()
-            .and_then(|value| value.get("grant"))
-            .and_then(|grant| grant.get("issuer_station_id"))
-            .and_then(Value::as_str),
-        Some(event.station_id.as_str()),
-        "canonical registry projection materializes the accepted issuer Station"
-    );
     let op = IssuedOp {
         issuer_id: event.actor_id.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),

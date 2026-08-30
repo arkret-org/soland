@@ -18,12 +18,7 @@ fn seed_state(history_access: &str) -> (ProjectionState, ServerHlc, chrono::Date
                 realm_id: REALM.to_owned(),
                 state: "join".to_owned(),
                 role: "member".to_owned(),
-                delivery_status: None,
-                recipient_id: None,
-                recipient_service_resolution: None,
                 membership_event_ref: None,
-                delivery_binding_frontier: None,
-                delivery_binding_expires_at: None,
                 invited_at: None,
                 joined_at: base,
                 updated_at: base,
@@ -244,10 +239,6 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         .get_mut(&(REALM.to_owned(), ALICE.to_owned()))
         .unwrap()
         .membership_event_ref = Some(controller_generation.to_string());
-    state.membership_authorities.insert(
-        (REALM.to_owned(), ALICE.to_owned()),
-        controller_authority.clone(),
-    );
     state.agent_membership_bindings.insert(
         (REALM.to_owned(), BOB.to_owned()),
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {

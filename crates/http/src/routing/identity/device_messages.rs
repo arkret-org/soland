@@ -1004,13 +1004,17 @@ mod tests {
     async fn production_service_fanout_reaches_every_active_holder_device_and_is_readable() {
         let state = production_test_state();
         let holder = "ak:did_core:web:holder.example";
-        let account_id = arkret_wire::ServiceAccountId::new("holder-account").unwrap();
+        let account_id = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
         let first_device = "ak:device:01904100-0000-7000-8000-0000000000d1";
         let second_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
         state
             .identities()
             .save_account(AccountProfileState {
-                id: account_id.clone(),
+                pk: soland_storage::AccountPk(1),
+                account_id: account_id.clone(),
                 principal_id: arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
@@ -1057,7 +1061,7 @@ mod tests {
             crate::state::EventNotificationKind::Account {
                 account_id: ref received_account_id,
                 recipient_id: ref received_recipient_id,
-            } if received_account_id == account_id.as_str()
+            } if received_account_id == &account_id.to_string()
                 && received_recipient_id == state.service_id()
         ));
         for device_id in [first_device, second_device] {

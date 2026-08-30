@@ -1065,29 +1065,39 @@ mod constraint_tests {
         const SERVICE: &str = "ak:did_core:web:applet.example";
         const TARGET_PS: &str = "ak:did_core:web:principal.example";
         let mut applet_grant = grant(Vec::new());
-        applet_grant.subject_id = arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap();
-        applet_grant.subject_station_id =
-            Some(arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap());
+        let subject = arkret_wire::ActorId::hosted_principal(
+            arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap(),
+            arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap(),
+        );
+        applet_grant.subject_id = subject.clone();
         let grant_id = applet_grant.grant_id.clone();
         let grants = std::collections::BTreeMap::from([(grant_id.clone(), applet_grant)]);
         let now = chrono::Utc::now();
 
         assert!(
-            effective_historical_grants_for_subject(&grants, SERVICE, TARGET_PS, REALM, now,)
+            effective_historical_grants_for_subject(&grants, &subject, REALM, now)
                 .contains_key(&grant_id)
         );
         assert!(
             effective_historical_grants_for_subject(
                 &grants,
-                SERVICE,
-                "ak:did_core:web:wrong-principal.example",
+                &arkret_wire::ActorId::hosted_principal(
+                    arkret_wire::DidCoreId::new(SERVICE).unwrap(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:wrong-principal.example").unwrap(),
+                ),
                 REALM,
                 now,
             )
             .is_empty()
         );
         assert!(
-            effective_historical_grants_for_subject(&grants, SERVICE, "", REALM, now).is_empty(),
+            effective_historical_grants_for_subject(
+                &grants,
+                &arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(SERVICE).unwrap()),
+                REALM,
+                now,
+            )
+            .is_empty(),
             "a missing Station coordinate cannot match an Applet grant"
         );
     }

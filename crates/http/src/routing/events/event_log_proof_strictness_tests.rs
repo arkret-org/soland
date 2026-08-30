@@ -101,12 +101,12 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
     let actor_id =
         arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(did.clone()).unwrap())
             .unwrap();
-    let subject_id = actor_id.clone();
+    let actor = arkret_wire::ActorId::service(actor_id.clone());
     let zero_hash = arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
     let mut identity = arkret_models_identity::member_identity::MemberIdentity::new(
         realm_id.clone(),
-        actor_id.clone(),
-        subject_id,
+        actor.clone(),
+        actor.clone(),
         arkret_models_identity::member_identity::DisplayProfile {
             display_name: "Alice".to_owned(),
             avatar_blob_ref: None,
@@ -127,7 +127,7 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
         URL_SAFE_NO_PAD.encode(signing_key.sign(&canonical_bytes).to_bytes());
     let payload = json!({
         "realm_id": realm_id.as_str(),
-        "actor_id": actor_id.as_str(),
+        "actor_id": actor,
         "segment": "member_identity",
         "identity_payload": {
             "member_identity": identity
@@ -687,10 +687,12 @@ async fn applet_registration_requires_realm_admin() {
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
-            issuer_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            issuer_station_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            subject_id: arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            subject_station_id: Some(arkret_wire::DidCoreId::new(owner.to_owned()).unwrap()),
+            issuer_id: arkret_wire::ActorId::service(
+                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            ),
+            subject_id: arkret_wire::ActorId::service(
+                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
+            ),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             constraints: Vec::new(),
@@ -1356,12 +1358,14 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
     crate::authz::Grant {
         grant_id: grant_id.to_owned(),
         realm_id: DATA_EVENT_REALM.to_owned(),
-        issuer_id: arkret_wire::DidCoreId::new("ak:did_core:web:owner.example".to_owned()).unwrap(),
-        issuer_station_id: arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
-        subject_id: arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR.to_owned()).unwrap(),
-        subject_station_id: Some(
-            arkret_wire::DidCoreId::new(DATA_EVENT_STATION.to_owned()).unwrap(),
-        ),
+        issuer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:owner.example").unwrap(),
+            arkret_wire::DidCoreId::new(DATA_EVENT_STATION).unwrap(),
+        )),
+        subject_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(DATA_EVENT_ACTOR).unwrap(),
+            arkret_wire::DidCoreId::new(DATA_EVENT_STATION).unwrap(),
+        )),
         resource: DATA_EVENT_STRAND.to_owned(),
         actions: vec![action.to_owned()],
         constraints: Vec::new(),
@@ -2036,7 +2040,9 @@ fn strictness_issued(
     op: arkret_state::lattice::SealedOp,
 ) -> arkret_state::lattice::ordered_log::IssuedOp {
     arkret_state::lattice::ordered_log::IssuedOp {
-        issuer_id: crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
+        issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+            "did:webvh:z6mkfixture:alice.example",
+        )),
         op,
     }
 }

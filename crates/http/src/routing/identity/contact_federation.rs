@@ -4038,6 +4038,13 @@ mod tests {
             .expect("fixture uses a did:web Core identifier")
     }
 
+    fn account_actor(principal_id: &str, station_id: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal_id).unwrap(),
+            arkret_wire::DidCoreId::new(station_id).unwrap(),
+        ))
+    }
+
     fn test_config() -> AppConfig {
         AppConfig {
             public_base_url: "http://test".to_owned(),
@@ -4117,11 +4124,13 @@ mod tests {
         }))
         .expect("request receipt fixture");
 
+        let requester = account_actor(requester_id, source_id);
+        let target_actor = account_actor(target, state.service_id());
         let outcome = project_delivered_contact_fact(
             &state,
             "ak.contact.requested",
-            requester_id,
-            target,
+            &requester,
+            &target_actor,
             &payload,
             request_event_ref,
             Some(&request_receipt),
@@ -4136,7 +4145,7 @@ mod tests {
 
         let record = state
             .contacts()
-            .contact_any(requester_id, target)
+            .contact_any(&requester, &target_actor)
             .await
             .expect("contact store lookup")
             .expect("pending_incoming row was projected");
@@ -4198,7 +4207,12 @@ mod tests {
             serde_json::to_value(right_basis).unwrap()
         );
         assert_eq!(
-            first_arrival[0].core.holder.contact_actor_id().as_str(),
+            first_arrival[0]
+                .core
+                .holder
+                .contact_actor_id()
+                .signing_principal_id()
+                .as_str(),
             ALICE,
             "requests[0] issuer is the sole mechanical glare initiator"
         );
@@ -4209,8 +4223,8 @@ mod tests {
         let state = AppState::new(test_config(), Db { pool: None });
         let now = chrono::Utc::now();
         let record = ContactRecord {
-            requester_id: arkret_wire::DidCoreId::new(ALICE).unwrap(),
-            target_id: arkret_wire::DidCoreId::new(BOB).unwrap(),
+            requester_id: account_actor(ALICE, ALICE_SERVICE),
+            target_id: account_actor(BOB, BOB_SERVICE),
             contact_round_id: None,
             version: None,
             granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -4288,8 +4302,8 @@ mod tests {
         state
             .contacts()
             .save_contact(ContactRecord {
-                requester_id: arkret_wire::DidCoreId::new(ALICE).unwrap(),
-                target_id: arkret_wire::DidCoreId::new(BOB).unwrap(),
+                requester_id: account_actor(ALICE, ALICE_SERVICE),
+                target_id: account_actor(BOB, BOB_SERVICE),
                 contact_round_id: None,
                 version: None,
                 granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -4315,9 +4329,11 @@ mod tests {
         drop(state);
         let restarted = AppState::new_with_persistence(config, Db { pool: None }, persistence);
         restarted.hydrate().await.unwrap();
+        let alice = account_actor(ALICE, ALICE_SERVICE);
+        let bob = account_actor(BOB, BOB_SERVICE);
         let row = restarted
             .contacts()
-            .contact_any(ALICE, BOB)
+            .contact_any(&alice, &bob)
             .await
             .unwrap()
             .unwrap();
@@ -4379,8 +4395,8 @@ mod tests {
         }))
         .unwrap();
         let record = ContactRecord {
-            requester_id: arkret_wire::DidCoreId::new(ALICE).unwrap(),
-            target_id: arkret_wire::DidCoreId::new(BOB).unwrap(),
+            requester_id: account_actor(ALICE, ALICE_SERVICE),
+            target_id: account_actor(BOB, BOB_SERVICE),
             contact_round_id: None,
             version: None,
             granted_to_target_scopes: Vec::new(),

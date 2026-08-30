@@ -146,9 +146,13 @@ fn capability_grant_resources_pass_the_artifact_schema() {
 
 #[test]
 fn membership_target_reads_actor_id() {
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(TEST_SUBJECT).unwrap(),
+        arkret_wire::DidCoreId::new(TEST_STATION).unwrap(),
+    ));
     let canonical = wire_operation(
         arkret_wire::EventKind::MemberState,
-        json!({"actor_id": TEST_SUBJECT, "membership": "join"}),
+        json!({"actor_id": actor, "membership": "join"}),
     );
-    assert_eq!(membership_target(&canonical), Some(TEST_SUBJECT));
+    assert_eq!(membership_target(&canonical), Some(actor));
 }

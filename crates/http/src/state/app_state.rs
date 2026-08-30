@@ -2392,7 +2392,6 @@ mod membership_hydration_tests {
             .member(realm_id, member)
             .expect("joined member restored to reducer projection");
         assert_eq!(hydrated.state, "join");
-        assert_eq!(hydrated.delivery_status.as_deref(), Some("unroutable"));
     }
 
     // Regression: the MLS KeyPackage + commit-epoch projections — which the
@@ -2414,7 +2413,7 @@ mod membership_hydration_tests {
                 id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
-                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
+                owner_account_pk: soland_storage::AccountPk(1),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2444,7 +2443,7 @@ mod membership_hydration_tests {
                 id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
-                owner_account_id: arkret_wire::ServiceAccountId::new("account-bob").unwrap(),
+                owner_account_pk: soland_storage::AccountPk(1),
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2880,8 +2879,7 @@ mod membership_hydration_tests {
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
         assert!(!proj.issuer_has_projected_capability(
-            owner,
-            owner,
+            &arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(owner).unwrap()),
             realm_id,
             "ak.message.create",
             realm_id,

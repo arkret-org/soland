@@ -848,7 +848,9 @@ mod tests {
             .authority_root
             .expect("staged authority root must survive lease pre-admission");
 
-        assert!(root.is_genesis_for(ACTOR_CORE));
+        assert!(root.is_genesis_for(&arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new(ACTOR_CORE).unwrap(),
+        )));
     }
 
     #[test]
@@ -904,7 +906,10 @@ mod tests {
         let issued_at = chrono::Utc::now();
         let lease = sign_lease_fields(
             &state,
-            arkret_wire::DidCoreId::new(ACTOR_CORE).expect("fixture actor CoreId"),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(ACTOR_CORE).expect("fixture actor CoreId"),
+                state.service_core_id().clone(),
+            )),
             arkret_wire::DeviceId::new("ak:device:019f0000-0000-7000-8000-00000000de01")
                 .expect("fixture device id"),
             scope_ref,

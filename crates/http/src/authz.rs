@@ -760,6 +760,10 @@ fn evaluate_constraint(
 mod tests {
     use super::*;
 
+    fn actor(principal_id: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(principal_id).unwrap())
+    }
+
     /// Fold a projected grant into the read index, mirroring what the
     /// capability-cell projection driver does for an accepted grant Event.
     fn project(
@@ -787,7 +791,7 @@ mod tests {
     fn owner_without_explicit_grant_is_denied() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "ak:did_core:web:alice",
+            &actor("ak:did_core:web:alice"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -803,7 +807,7 @@ mod tests {
     fn unknown_action_denied_for_owner_without_registry_entry() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "ak:did_core:web:alice",
+            &actor("ak:did_core:web:alice"),
             "ak.future.action",
             "ak:space:1",
             "ak:space:1",
@@ -835,7 +839,7 @@ mod tests {
         );
 
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.future.action",
             "ak:space:1",
             "ak:space:1",
@@ -857,7 +861,7 @@ mod tests {
             "ak.circle.audit",
         ] {
             let result = engine.check(
-                "ak:did_core:web:alice",
+                &actor("ak:did_core:web:alice"),
                 action,
                 "ak:circle:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
@@ -875,7 +879,7 @@ mod tests {
         let engine = SolandAuthzEngine::new();
         let members = vec!["ak:did_core:web:bob".to_owned()];
         let read = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
@@ -887,7 +891,7 @@ mod tests {
         assert_eq!(read.reason, "capability_denied");
 
         let write = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -913,7 +917,7 @@ mod tests {
             vec![],
         );
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
@@ -938,7 +942,7 @@ mod tests {
             vec![],
         );
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -976,7 +980,7 @@ mod tests {
             }],
         );
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -1016,7 +1020,7 @@ mod tests {
             }],
         );
         let reviewed = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -1039,7 +1043,7 @@ mod tests {
             }],
         );
         let quarantined = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -1065,7 +1069,7 @@ mod tests {
         );
         engine.mark_projected_grant_revoked(&grant.grant_id);
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -1103,7 +1107,7 @@ mod tests {
         engine.upsert_projected_grant(child.clone());
         engine.mark_projected_grant_revoked(&parent.grant_id);
         let result = engine.check(
-            "ak:did_core:web:carol",
+            &actor("ak:did_core:web:carol"),
             "ak.message.create",
             "ak:space:1",
             "ak:space:1",
@@ -1129,7 +1133,7 @@ mod tests {
     fn stranger_denied() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
-            "ak:did_core:web:eve",
+            &actor("ak:did_core:web:eve"),
             "ak.strand.read",
             "ak:space:1",
             "ak:space:1",
@@ -1153,7 +1157,7 @@ mod tests {
             vec![],
         );
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",
@@ -1178,7 +1182,7 @@ mod tests {
             vec![],
         );
         let result = engine.check(
-            "ak:did_core:web:bob",
+            &actor("ak:did_core:web:bob"),
             "ak.pin.add",
             "ak:realm:1",
             "ak:realm:1",

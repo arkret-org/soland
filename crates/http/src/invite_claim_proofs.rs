@@ -538,7 +538,10 @@ mod tests {
             .canonical_digest()
             .unwrap();
         let transcript_body = InviteSubjectProofBody::from_wire_parts(
-            SUBJECT,
+            arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(SUBJECT).unwrap(),
+                arkret_wire::DidCoreId::new(SERVICE).unwrap(),
+            ),
             invite_id,
             REALM,
             token_commitment,

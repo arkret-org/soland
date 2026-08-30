@@ -978,7 +978,6 @@ mod tests {
                 realm_id: LIFECYCLE_REALM.to_owned(),
                 inviter_id: LIFECYCLE_ACTOR.to_owned(),
                 invitee_id: Some("ak:did_core:web:bob.example".to_owned()),
-                invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
                 invite_token: token.to_owned(),
@@ -1026,7 +1025,9 @@ mod tests {
                 &[(
                     lifecycle_cell,
                     arkret_state::lattice::ordered_log::IssuedOp {
-                        issuer_id: crate::test_actor_id_str("did:web:owner.example"),
+                        issuer_id: arkret_wire::ActorId::service(crate::test_actor_id_str(
+                            "did:web:owner.example",
+                        )),
                         op: arkret_state::lattice::SealedOp::new(
                             create_move,
                             arkret_wire::LatticeOp {
@@ -1067,7 +1068,6 @@ mod tests {
                 realm_id: LIFECYCLE_REALM.to_owned(),
                 inviter_id: LIFECYCLE_ACTOR.to_owned(),
                 invitee_id: Some(invitee_id.to_owned()),
-                invite_delivery_target: None,
                 introduction_evidence_digest: None,
                 third_party_invite: None,
                 invite_token: "private-token".to_owned(),

@@ -2230,7 +2230,6 @@ pub struct RealmInviteState {
     pub realm_id: String,
     pub inviter_id: String,
     pub invitee_id: Option<String>,
-    pub invite_delivery_target: Option<Value>,
     pub introduction_evidence_digest: Option<String>,
     pub third_party_invite: Option<ThirdPartyInvite>,
     pub invite_token: String,

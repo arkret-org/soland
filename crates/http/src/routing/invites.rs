@@ -760,7 +760,6 @@ async fn persist_private_invite_projection(
             )
             .to_string(),
         ),
-        invite_delivery_target: None,
         introduction_evidence_digest,
         third_party_invite: None,
         invite_token: crate::routing::generate_invite_token(
@@ -2033,26 +2032,6 @@ fn validate_invite_delivery_event_binding(
             "invite_event.payload.invitee_id must equal invite_address.subject_id",
         ));
     }
-    if payload
-        .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_id"))
-        .and_then(Value::as_str)
-        != Some(delivery.invite_address.recipient_id.as_str())
-    {
-        return Err(super::events::peer::schema_violation(
-            "invite_event.payload.invite_delivery_target.recipient_id must equal invite_address.recipient_id",
-        ));
-    }
-    if let Some(service_kind) = payload
-        .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_kind"))
-        .and_then(Value::as_str)
-        && service_kind != "station"
-    {
-        return Err(super::events::peer::schema_violation(
-            "invite_delivery_target.recipient_kind must be station",
-        ));
-    }
     let evidence_digest =
         canonical::canonical_sha256(&body["introduction_evidence"]).map_err(|error| {
             super::events::peer::schema_violation(format!(
@@ -2122,7 +2101,11 @@ mod invite_locator_security_tests {
         state
             .identities()
             .save_account(AccountProfileState {
-                id: arkret_wire::ServiceAccountId::new("production-holder-account").unwrap(),
+                pk: soland_storage::AccountPk(1),
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                ),
                 principal_id: DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),
                 display_name: None,
@@ -2517,10 +2500,6 @@ mod invite_locator_security_tests {
                 "created_at": "2026-07-29T10:00:00.000Z",
                 "payload": {
                     "invite_id": invite_id,
-                    "invite_delivery_target": {
-                        "recipient_id": state.service_id(),
-                        "recipient_kind": "station"
-                    },
                     "introduction_evidence_digest":
                         format!("sha256:{}", "a".repeat(64)),
                     "expires_at": "2026-08-05T10:00:00.000Z"
@@ -2537,6 +2516,10 @@ mod invite_locator_security_tests {
             // is a DID and belongs only where a complete DID is required
             // (verification methods, proof controllers).
             actor_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                state.service_core_id().clone(),
+            )),
             device_id: Some(
                 arkret_wire::DeviceId::new(
                     "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),

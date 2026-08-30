@@ -178,12 +178,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             realm_id: demo_realm_id().to_owned(),
             state: "join".to_owned(),
             role: "member".to_owned(),
-            delivery_status: None,
-            recipient_id: None,
-            recipient_service_resolution: None,
             membership_event_ref: None,
-            delivery_binding_frontier: None,
-            delivery_binding_expires_at: None,
             invited_at: None,
             joined_at: now,
             updated_at: now,
@@ -254,8 +249,10 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             )),
         );
         let authority_root = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-            arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
-                .unwrap(),
+            arkret_wire::ActorId::service(
+                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                    .unwrap(),
+            ),
         );
         projection.realm_null_subject_cells.insert(
             (
@@ -282,7 +279,9 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
     let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
     let notary_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer_id: arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+        issuer_id: arkret_wire::ActorId::service(
+            arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+        ),
         op: arkret_state::lattice::SealedOp::new(
             move_id.clone(),
             arkret_wire::LatticeOp {
@@ -306,8 +305,10 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ))
     .unwrap();
     let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer_id: arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
-            .unwrap(),
+        issuer_id: arkret_wire::ActorId::service(
+            arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                .unwrap(),
+        ),
         op: arkret_state::lattice::SealedOp::new(
             admin_grant_move_id.clone(),
             arkret_wire::LatticeOp {
@@ -658,8 +659,10 @@ fn managed_actor_provision_event(
         schema: AppletManagedActorProvisionPayload::SCHEMA.to_owned(),
         applet_id: package.applet_id.clone(),
         service_id: package.service_id.clone(),
-        actor_id: actor.actor_id.clone(),
-        actor_station_id: actor_station_id.clone(),
+        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor.actor_id.clone(),
+            actor_station_id.clone(),
+        )),
         actor_role,
         initial_resolution: actor.initial_resolution.clone(),
         method_history_evidence: actor.method_history_evidence.clone().try_into().unwrap(),
@@ -731,7 +734,7 @@ fn applet_managed_pcr_genesis_event(
         now,
     )
     .unwrap();
-    event.executed_by = Some(package.service_id.clone());
+    event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     event.authorization_ref = Some(applet_authority_ref.into());
     event.applet_id = Some(package.applet_id.clone());
     event.refs = vec![arkret_wire::EventRef::new(
@@ -920,6 +923,10 @@ async fn signed_ghost_provision_body(
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                ghost_actor_id.clone(),
+                actor_station_id.clone(),
+            )),
             now,
             Some(&delegation),
         )
@@ -941,7 +948,7 @@ async fn signed_ghost_provision_body(
         now,
     )
     .unwrap();
-    profile_event.executed_by = Some(package.service_id.clone());
+    profile_event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     profile_event.applet_id = Some(applet_id.clone());
     profile_event.authorization_ref = Some(delegation.authorization_ref.clone());
     profile_event.refs = vec![arkret_wire::EventRef::new(
@@ -1933,7 +1940,7 @@ async fn applet_message_event(
     .expect("SDK Event builder accepts applet transaction fixture");
     event.prev_refs =
         vec![arkret_wire::EventId::new((*prev_ref).to_owned()).expect("fixture prev_ref")];
-    event.executed_by = Some(package.service_id.clone());
+    event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     event.authorization_ref =
         Some(arkret_wire::AuthorizationRef::new((*authorization_ref).to_owned()).unwrap());
     event.applet_id = Some(
@@ -2635,11 +2642,13 @@ async fn signed_install_events(
         let grant = CapabilityGrantCreateBody {
             schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
             realm_id: Some(realm_id.clone()),
-            issuer_id: actor_core_id.clone(),
-            subject: CapabilitySubject::CoreDid(package.service_id.clone()),
-            subject_station_id: Some(
+            issuer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                actor_core_id.clone(),
                 arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
-            ),
+            )),
+            subject: CapabilitySubject::Actor(arkret_wire::ActorId::service(
+                package.service_id.clone(),
+            )),
             actions: vec![action.clone()],
             resources: vec![
                 serde_json::from_value(json!({
@@ -2841,7 +2850,7 @@ async fn signed_install_events(
         now,
     )
     .unwrap();
-    bot_profile_event.executed_by = Some(package.service_id.clone());
+    bot_profile_event.executed_by = Some(arkret_wire::ActorId::service(package.service_id.clone()));
     bot_profile_event.authorization_ref = Some(applet_authority_ref.into());
     bot_profile_event.applet_id = Some(package.applet_id.clone());
     bot_profile_event.refs = vec![arkret_wire::EventRef::new(
