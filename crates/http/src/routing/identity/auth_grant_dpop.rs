@@ -841,7 +841,7 @@ mod tests {
             issuer_id: DidCoreId::new("ak:did_core:web:coauth.local").unwrap(),
             account_id: arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                DidCoreId::new("ak:did_core:web:soland.local").unwrap(),
+                crate::test_event::station_id(),
             ),
             device_id: Some(
                 DeviceId::new("ak:device:0196419b-0000-7000-8000-000000000001").unwrap(),
@@ -906,7 +906,7 @@ mod tests {
         grant.device_binding = None;
         grant.account_id = arkret_wire::AccountId::new(
             DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
-            DidCoreId::new("ak:did_core:web:soland.local").unwrap(),
+            grant.audience_id.clone(),
         );
         grant.scopes = vec!["ak.self.events.read.scan.v1".to_owned()];
         grant.holder_binding = SessionGrantHolderBinding::AgentRuntime {

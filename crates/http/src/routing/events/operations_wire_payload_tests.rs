@@ -111,12 +111,17 @@ fn relation_derived_edge_admission_is_not_duplicated_in_the_payload_validator() 
 }
 
 fn capability_grant_payload() -> Value {
+    let account_actor = |principal| {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+            arkret_wire::DidCoreId::new(TEST_STATION).unwrap(),
+        ))
+    };
     let grant = json!({
         "schema": "ak.schema.capability.v1",
         "realm_id": TEST_REALM,
-        "issuer_id": TEST_ISSUER,
-        "subject": TEST_SUBJECT,
-        "subject_station_id": TEST_STATION,
+        "issuer_id": account_actor(TEST_ISSUER),
+        "subject": account_actor(TEST_SUBJECT),
         "actions": ["ak.strand.read"],
         "resources": [{"kind": "strand", "realm_id": TEST_REALM, "strand_id": TEST_STRAND}],
         "issued_at": "2026-08-17T00:00:00.000Z",
@@ -145,14 +150,14 @@ fn capability_grant_resources_pass_the_artifact_schema() {
 }
 
 #[test]
-fn membership_target_reads_actor_id() {
+fn membership_target_reads_member_id() {
     let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(TEST_SUBJECT).unwrap(),
         arkret_wire::DidCoreId::new(TEST_STATION).unwrap(),
     ));
     let canonical = wire_operation(
         arkret_wire::EventKind::MemberState,
-        json!({"actor_id": actor, "membership": "join"}),
+        json!({"member_id": actor, "membership": "join"}),
     );
     assert_eq!(membership_target(&canonical), Some(actor));
 }

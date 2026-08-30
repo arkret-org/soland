@@ -35,9 +35,9 @@ pub(super) async fn set_read_cursor(
 ) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor = local_account_actor(state, &session.actor)?;
     let submission = body.into_inner().advance_event;
-    let cursor =
-        validate_caller_signed_read_cursor(&session.actor, &session.device_id, &submission.event)?;
+    let cursor = validate_caller_signed_read_cursor(&actor, &session.device_id, &submission.event)?;
     let realm_id = cursor.realm_id.clone();
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
@@ -55,7 +55,7 @@ pub(super) async fn set_read_cursor(
             .read_cursors
             .values()
             .find(|marker| {
-                marker.actor_id.signing_principal_id().as_str() == session.actor
+                marker.actor_id == actor
                     && marker.realm_id.as_str() == realm_id.as_str()
                     && marker.read_scope == cursor.read_scope
             })
@@ -96,7 +96,7 @@ pub(super) async fn set_read_cursor(
 }
 
 fn validate_caller_signed_read_cursor(
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     session_device_id: &str,
     event: &Event,
 ) -> Result<ReadCursor, AppError> {
@@ -105,7 +105,7 @@ fn validate_caller_signed_read_cursor(
             "advance_event.event.kind must be ak.read_cursor.advance",
         ));
     }
-    if event.actor_id.signing_principal_id().as_str() != actor {
+    if &event.actor_id != actor {
         return Err(AppError::param_invalid(
             "advance_event.event.actor_id must be the authenticated caller",
         ));
@@ -156,19 +156,30 @@ pub(super) async fn get_read_cursors(
 ) -> JsonResult<ReadCursorList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor = local_account_actor(state, &session.actor)?;
     let realm_id = realm_id.into_inner().unwrap_or_default();
     let markers = {
         let proj = state.projections().snapshot();
         proj.read_cursors
             .values()
             .filter(|m| {
-                m.actor_id.signing_principal_id().as_str() == session.actor
-                    && (realm_id.is_empty() || m.realm_id.as_str() == realm_id)
+                m.actor_id == actor && (realm_id.is_empty() || m.realm_id.as_str() == realm_id)
             })
             .cloned()
             .collect::<Vec<ReadMarkerOutcome>>()
     };
     json_ok(ReadCursorList { markers })
+}
+
+fn local_account_actor(
+    state: &AppState,
+    principal: &str,
+) -> Result<arkret_wire::ActorId, AppError> {
+    Ok(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal)
+            .map_err(|error| AppError::internal(format!("session principal: {error}")))?,
+        state.service_core_id().clone(),
+    )))
 }
 
 fn validate_read_scope(scope: &ReadCursorScope) -> Result<(), AppError> {
@@ -266,6 +277,10 @@ mod tests {
     const DEVICE_ID: &str = "ak:device:01964137-0000-7000-8000-000000000001";
     const REALM_ID: &str = "ak:realm:ATp5qI_DaGqeL1spvchnU-p10lfIfsboDfYyWaObd1Y6";
 
+    fn actor() -> arkret_wire::ActorId {
+        crate::test_account_actor(&arkret_wire::Did::new(ACTOR_DID).unwrap())
+    }
+
     fn signed_shape() -> Event {
         let created_at = "2026-08-08T00:00:00.000Z".parse().expect("timestamp");
         crate::test_event::raw_event_at(
@@ -279,7 +294,7 @@ mod tests {
             json!({
                 "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
-                "actor_id": ACTOR_ID,
+                "actor_id": actor(),
                 "device_id": DEVICE_ID,
                 "realm_id": REALM_ID,
                 "read_scope": {"kind": "realm"},
@@ -296,7 +311,7 @@ mod tests {
 
     #[test]
     fn accepts_exact_holder_and_session_device_binding() {
-        let cursor = validate_caller_signed_read_cursor(ACTOR_ID, DEVICE_ID, &signed_shape())
+        let cursor = validate_caller_signed_read_cursor(&actor(), DEVICE_ID, &signed_shape())
             .expect("valid caller-signed cursor");
         assert_eq!(cursor.actor_id.signing_principal_id().as_str(), ACTOR_ID);
         assert_eq!(cursor.device_id.as_str(), DEVICE_ID);
@@ -306,7 +321,7 @@ mod tests {
     #[test]
     fn rejects_cross_device_signed_cursor() {
         let error = validate_caller_signed_read_cursor(
-            ACTOR_ID,
+            &actor(),
             "ak:device:01964137-0000-7000-8000-000000000002",
             &signed_shape(),
         )
@@ -321,8 +336,18 @@ mod tests {
             "updated_at".to_owned(),
             serde_json::Value::String("2026-08-08T00:00:01.000Z".to_owned()),
         );
-        let error = validate_caller_signed_read_cursor(ACTOR_ID, DEVICE_ID, &event)
+        let error = validate_caller_signed_read_cursor(&actor(), DEVICE_ID, &event)
             .expect_err("timestamp drift must fail closed");
         assert!(error.message.contains("updated_at"));
+    }
+
+    #[test]
+    fn rejects_same_principal_cursor_from_another_station() {
+        let remote = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(ACTOR_ID).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        validate_caller_signed_read_cursor(&remote, DEVICE_ID, &signed_shape())
+            .expect_err("a different Station is a different cursor owner");
     }
 }

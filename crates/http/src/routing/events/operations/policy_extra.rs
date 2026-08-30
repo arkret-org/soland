@@ -294,24 +294,16 @@ fn read_receipt_parent_link_kind(link_kind: &str) -> bool {
     matches!(link_kind, "governed_by" | "inherits_policy_from")
 }
 
-/// The principal an `ak.member.state` / `ak.circle.member.state` operation acts
-/// on.
-///
-/// `event-payload.schema.json#/$defs/membership_payload` and
-/// `#/$defs/circle_member_state_payload` both name it `actor_id` and are
-/// `additionalProperties:false`; `member` / `actor` are not spec fields. When
-/// the payload omits `actor_id` the subject is the Event author.
+/// The complete member ActorId named by a membership operation's closed payload.
 pub(crate) fn membership_target(operation: &Operation) -> Option<arkret_wire::ActorId> {
     operation
         .payload
         .get("member_id")
-        .or_else(|| operation.payload.get("actor_id"))
         .cloned()
         .map(serde_json::from_value)
         .transpose()
         .ok()
         .flatten()
-        .or_else(|| Some(operation.context.sender.clone()))
 }
 
 pub(crate) async fn validate_audience_mention_operation_policy(

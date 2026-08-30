@@ -16,6 +16,12 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
     AppState::new(config, Db { pool: None })
 }
 
+// Match the SDK raw projected-operation fixture's explicit self-Station account.
+fn projected_fixture_actor(principal: &str) -> arkret_wire::ActorId {
+    let principal = arkret_wire::DidCoreId::new(principal).unwrap();
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), principal))
+}
+
 fn dev_proof_envelope() -> serde_json::Map<String, Value> {
     let mut object = serde_json::Map::new();
     object.insert(
@@ -353,7 +359,7 @@ async fn circle_scoped_write_requires_circle_membership() {
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
-                members: std::collections::BTreeSet::from([member.to_owned()]),
+                members: std::collections::BTreeSet::from([projected_fixture_actor(member).to_string()]),
             },
         );
     }
@@ -442,7 +448,7 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
-                members: std::collections::BTreeSet::from([member.to_owned()]),
+                members: std::collections::BTreeSet::from([projected_fixture_actor(member).to_string()]),
             },
         );
         // A Strand scoped to the Circle, and a Message inside it.
@@ -557,7 +563,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
-                members: std::collections::BTreeSet::from([member.to_owned()]),
+                members: std::collections::BTreeSet::from([projected_fixture_actor(member).to_string()]),
             },
         );
         for (morph_id, scope_circle_id) in [
@@ -693,12 +699,8 @@ async fn applet_registration_requires_realm_admin() {
         .upsert_projected_grant(arkret_policy::authz::authority::Grant {
             grant_id: "ak:grant:AalTkzF6-XUhCWUy_4kjpVH_cPBfisUGqmSjxDr-hwGb".to_owned(),
             realm_id: realm_id.to_owned(),
-            issuer_id: arkret_wire::ActorId::service(
-                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            ),
-            subject_id: arkret_wire::ActorId::service(
-                arkret_wire::DidCoreId::new(owner.to_owned()).unwrap(),
-            ),
+            issuer_id: projected_fixture_actor(owner),
+            subject_id: projected_fixture_actor(owner),
             resource: realm_id.to_owned(),
             actions: vec!["ak.realm.admin".to_owned()],
             constraints: Vec::new(),
@@ -942,12 +944,11 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
     let state = make_state(true);
     let valid = json!({
         "payload": {
-            "actor_id": "ak:did_core:web:bob.example",
+            "member_id": data_event_account("ak:did_core:web:bob.example"),
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "membership": "join",
             "reason": "invite_accept",
-            "invite_ref": "ak:invite:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
-            "delivery_status": "unroutable"
+            "invite_ref": "ak:invite:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
         }
     });
     validate_event_schema_and_payload(
@@ -1215,6 +1216,12 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
     let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
+        "actor_id".to_owned(),
+        json!(crate::test_account_actor(
+            &arkret_wire::Did::new("did:web:alice.example").unwrap()
+        )),
+    );
+    object.insert(
         "proofs".to_owned(),
         json!([{
             "kind": "detached_jws",
@@ -1261,6 +1268,12 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     let canonical_bytes = br#"{"actor_id":"ak:did_core:web:stale-proof.example","event_id":"ak:event:test","kind":"ak.identity.resolution.update"}"#;
     let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
+    object.insert(
+        "actor_id".to_owned(),
+        json!(crate::test_account_actor(
+            &arkret_wire::Did::new("did:web:stale-proof.example").unwrap()
+        )),
+    );
     object.insert(
         "proofs".to_owned(),
         json!([{

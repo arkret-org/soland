@@ -246,7 +246,6 @@ mod tests {
             json!({
                 "sender": "ak:did_core:web:bob.example",
                 "invite_id": invite_id,
-                "delivery_status": "routable",
             }),
         );
 

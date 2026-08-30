@@ -309,9 +309,12 @@ pub(crate) async fn validate_member_identity_proof(
             )
         })?;
     let payload_realm = payload.get("realm_id").and_then(Value::as_str);
-    let payload_actor = payload.get("actor_id").and_then(Value::as_str);
+    let payload_actor = payload
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
     if payload_realm != Some(identity.realm_id.as_str())
-        || payload_actor != Some(identity.actor_id.signing_principal_id().as_str())
+        || payload_actor.as_ref() != Some(&identity.actor_id)
     {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,

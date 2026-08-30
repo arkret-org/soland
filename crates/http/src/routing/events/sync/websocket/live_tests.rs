@@ -195,8 +195,7 @@ async fn run_introspection_mock(
             "grant": {
                 "id": "ak:session_grant:ATLC-gY-xpE0kN3QXVYxo0Kh32EoNCTBQTSFuu_P57e6",
                 "issuer_id": "ak:did_core:web:coauth.local",
-                "subject_id": "ak:did_core:web:alice.example",
-                "account_pk": "alice",
+                "account_id": {"principal_id": "ak:did_core:web:alice.example", "station_id": audience},
                 "device_id": device_binding.device_id.clone(),
                 "device_binding": device_binding.clone(),
                 "audience_id": audience,

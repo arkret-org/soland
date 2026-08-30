@@ -526,9 +526,9 @@ fn caller_signed_circle_member_target(
     }
     let target_actor = event
         .payload
-        .get("actor_id")
+        .get("member_id")
         .cloned()
-        .ok_or_else(|| AppError::param_missing("member_event payload.actor_id is required"))?;
+        .ok_or_else(|| AppError::param_missing("member_event payload.member_id is required"))?;
     let membership = event
         .payload
         .get("membership")
@@ -536,7 +536,7 @@ fn caller_signed_circle_member_target(
         .ok_or_else(|| AppError::param_missing("member_event payload.membership is required"))?;
     Ok(CircleMemberTarget {
         actor_id: serde_json::from_value(target_actor)
-            .map_err(|error| AppError::param_invalid(format!("actor_id: {error}")))?,
+            .map_err(|error| AppError::param_invalid(format!("member_id: {error}")))?,
         membership: parse_sdk_field("membership", membership)?,
     })
 }

@@ -1206,7 +1206,9 @@ mod tests {
             arkret_wire::EventKind::CircleMemberState,
             json!({
                 "circle_id": "ak:circle:Acz03N1u4b-3h3OIv0LXsw-CHe-rsMKeWw7ZvA-ohkgx",
-                "actor_id": "ak:did_core:web:agent.example",
+                "member_id": arkret_wire::ActorId::hosted_principal(
+                    arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap(), crate::test_event::station_id(),
+                ),
                 "membership": "join"
             }),
             chrono::Utc::now(),
@@ -1241,9 +1243,10 @@ mod tests {
             arkret_wire::EventKind::MemberState,
             json!({
                 "realm_id": "ak:realm:AZMBgosRorGR60hpKELRWvzusosD1_lNIH_hWSFojM0p",
-                "actor_id": "ak:did_core:web:member.example",
-                "membership": "join",
-                "delivery_status": "unroutable"
+                "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    arkret_wire::DidCoreId::new("ak:did_core:web:member.example").unwrap(), crate::test_event::station_id(),
+                )),
+                "membership": "join"
             }),
             chrono::Utc::now(),
         );
