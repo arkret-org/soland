@@ -408,6 +408,10 @@ fn device_message_intent_conflict() -> AppError {
 /// pair, and the `ak.device.authorize` projection for the controller
 /// principal), so this fanout is naturally isolated from agent-bound devices;
 /// `fanout_skips_devices_registered_under_other_principals` pins that fact.
+/// After at least one durable queue write, the materializer also publishes an
+/// account-context wakeup. The wakeup carries no private body and is only a
+/// latency hint; account subscribe always rebuilds its delta from durable
+/// queue positions.
 pub(crate) async fn fanout_actor_private_update(
     state: &AppState,
     actor: &str,
@@ -516,6 +520,33 @@ pub(crate) async fn fanout_actor_private_update(
     }
     if let Err(error) = prune_device_messages_for_limits(state).await {
         tracing::error!(%error, actor, "failed to prune to-device messages after actor-private fanout");
+    }
+    if delivered > 0 {
+        match state.identities().account(actor).await {
+            Ok(Some(account)) => {
+                let _ = state.publish_event_notification(crate::state::EventNotification::account(
+                    account.id.to_string(),
+                    state.service_id().clone(),
+                ));
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    actor,
+                    "actor-private fanout queued messages without a local account wakeup target"
+                );
+            }
+            Err(error) => {
+                // The queue rows are durable and the bounded account long poll
+                // re-reads them at timeout. A failed lookup can delay delivery,
+                // but it must not turn an accepted private update into a
+                // failed or duplicated write.
+                tracing::warn!(
+                    %error,
+                    actor,
+                    "actor-private fanout could not publish an account-stream wakeup"
+                );
+            }
+        }
     }
     delivered
 }
@@ -842,7 +873,7 @@ fn device_message_envelope_from_record(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
+    use soland_services::identity::{AccountProfileState, DeviceIdentity, SaveDeviceCommand};
 
     use super::*;
 
@@ -968,12 +999,27 @@ mod tests {
     async fn production_service_fanout_reaches_every_active_holder_device_and_is_readable() {
         let state = production_test_state();
         let holder = "ak:did_core:web:holder.example";
+        let account_id = arkret_wire::ServiceAccountId::new("holder-account").unwrap();
         let first_device = "ak:device:01904100-0000-7000-8000-0000000000d1";
         let second_device = "ak:device:01904100-0000-7000-8000-0000000000d2";
+        state
+            .identities()
+            .save_account(AccountProfileState {
+                id: account_id.clone(),
+                principal_id: arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
+                localpart: "holder".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now(),
+            })
+            .await
+            .expect("holder account saved");
         save_active_device(&state, holder, first_device).await;
         save_active_device(&state, holder, second_device).await;
         let updated_at = now();
         let cell = json!({"entries": [{"invite_id": "one"}]});
+        let mut account_wakeups = state.test_subscribe_event_notifications();
 
         let delivered = fanout_actor_private_update(
             &state,
@@ -996,6 +1042,19 @@ mod tests {
             delivered, 2,
             "service fanout has no origin device to exclude"
         );
+        let wakeup =
+            tokio::time::timeout(std::time::Duration::from_secs(1), account_wakeups.recv())
+                .await
+                .expect("account stream wakeup timeout")
+                .expect("account stream wakeup channel");
+        assert!(matches!(
+            wakeup.kind,
+            crate::state::EventNotificationKind::Account {
+                account_id: ref received_account_id,
+                recipient_id: ref received_recipient_id,
+            } if received_account_id == account_id.as_str()
+                && received_recipient_id == state.service_id()
+        ));
         for device_id in [first_device, second_device] {
             let queued = state
                 .deliveries()
