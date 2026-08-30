@@ -376,12 +376,12 @@ impl ProjectionState {
 
         // Delivery is derived from the exact ActorId. Membership carries no
         // parallel routing binding or server sidecar.
-        if new_state == "join" {
-            if let Err(reason) = self.check_membership_join_admission(operation) {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        if new_state == "join"
+            && let Err(reason) = self.check_membership_join_admission(operation)
+        {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
 
         self.project_accepted_membership(
