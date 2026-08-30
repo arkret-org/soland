@@ -16,7 +16,7 @@
 //!   target holder's contact projection.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{DidCoreId, Hash};
+use arkret_identifiers::Hash;
 use arkret_models_collaboration::contact_operations::{
     BilateralContinuityCheckpoint, BilateralContinuityCheckpointCore,
     BilateralContinuityCheckpointProposal, BilateralContinuityCheckpointSignature,
