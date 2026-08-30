@@ -2068,11 +2068,12 @@ mod applet_managed_actor_pcr_access_tests {
 pub(crate) async fn load_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
-    actor_id: arkret_wire::DidCoreId,
+    actor_id: arkret_wire::ActorId,
 ) -> Result<RealmActorFrontierView, AppError> {
+    let actor_key = actor_id.to_string();
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())
+        .canonical_events_for_realm_actor(realm_id.as_str(), &actor_key)
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
     let (next_actor_seq, frontier_event_ids) =
