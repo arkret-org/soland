@@ -533,6 +533,20 @@ CREATE TABLE public.canonical_events (
     CONSTRAINT canonical_events_identity_key UNIQUE (digest_suite, digest)
 );
 
+-- Transport-only membership compensation evidence accepted with one Event.
+-- The FK supplies Event identity without copying it into the evidence body;
+-- canonical_bytes are retained independently because this carrier is outside
+-- the Event digest and must be replayed/federated unchanged.
+CREATE TABLE public.membership_compensation_evidence (
+    event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
+    admission_id text NOT NULL,
+    delegation_digest text NOT NULL,
+    canonical_bytes bytea NOT NULL,
+    evidence jsonb NOT NULL,
+    accepted_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT membership_compensation_evidence_single_use_key UNIQUE (admission_id, delegation_digest)
+);
+
 CREATE INDEX canonical_events_realm_pk_idx
     ON public.canonical_events USING btree (realm_pk, received_at, pk);
 

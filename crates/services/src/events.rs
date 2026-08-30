@@ -824,6 +824,8 @@ use crate::federation::FederationDeliveryRecord;
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
+    pub membership_compensation_evidence:
+        Option<soland_storage::MembershipCompensationEvidenceRecord>,
     pub governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
     pub device_pairing_authorization: Option<CommitDevicePairingAuthorization>,
     pub contact_projection: Option<CommitContactProjection>,
@@ -1003,6 +1005,10 @@ pub trait EventReadPort: Send + Sync {
         deliveries: Vec<FederationDeliveryRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
+    async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn canonical_events_for_actor(&self, actor_id: &str)
@@ -1354,6 +1360,12 @@ impl EventQueryService {
     }
     pub async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {
         self.events.canonical_event(event_id).await
+    }
+    pub async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>> {
+        self.events.membership_compensation_evidence(event_id).await
     }
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
@@ -2574,6 +2586,7 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                membership_compensation_evidence: None,
                 governance_dependencies: Vec::new(),
                 device_pairing_authorization: None,
                 contact_projection: None,

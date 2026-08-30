@@ -337,6 +337,7 @@ async fn prepare_ghost_event(
     let outbox = Vec::new();
     let device_id = parsed.device_id_str().to_owned();
     let command = soland_services::events::CommitAcceptedEventCommand {
+        membership_compensation_evidence: None,
         governance_dependencies: Vec::new(),
         device_pairing_authorization: None,
         contact_projection: None,

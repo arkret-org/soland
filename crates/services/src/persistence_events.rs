@@ -123,6 +123,7 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
+        membership_compensation_evidence: command.membership_compensation_evidence,
         governance_dependencies: command.governance_dependencies,
         device_pairing_authorization: command.device_pairing_authorization.map(|commit| {
             soland_storage::DevicePairingAuthorizationCommit {
@@ -223,6 +224,16 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .put(persistence_canonical_event(record))
             .await?;
         Ok(())
+    }
+    async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::MembershipCompensationEvidenceRecord>> {
+        Ok(self
+            .0
+            .events()
+            .membership_compensation_evidence(event_id)
+            .await?)
     }
     async fn store_realm_bootstrap_batch(
         &self,

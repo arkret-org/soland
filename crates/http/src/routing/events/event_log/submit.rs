@@ -947,6 +947,22 @@ impl SubmitOneError {
     }
 }
 
+pub(super) fn validate_membership_compensation_semantics(
+    event: &arkret_wire::Event,
+    evidence: Option<&arkret_wire::MembershipCompensationSubmissionEvidence>,
+) -> Result<(), SubmitOneError> {
+    let Some(evidence) = evidence else {
+        return Ok(());
+    };
+    evidence.validate_for_event(event).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            format!("membership compensation evidence is invalid: {error}"),
+        )
+    })
+}
+
 /// Map a rejected Event submission onto the HTTP error family without losing the
 /// wire discriminator.
 ///
@@ -1107,6 +1123,10 @@ async fn submit_initial_event_batch_outcome_inner(
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?;
     for (submission, digest_suite) in submissions.into_iter().zip(digest_suites.iter().copied()) {
         validate_initial_submission_in_context(&submission, submit_context, digest_suite)?;
+        validate_membership_compensation_semantics(
+            &submission.event,
+            submission.membership_compensation_evidence.as_ref(),
+        )?;
         validate_initial_publication_session_context(session, &submission)?;
         if let Some(lease) = &submission.authorization_lease {
             validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
@@ -2421,6 +2441,15 @@ pub(crate) async fn submit_federation_events(
             &format!("invalid federation transport contract: {error}"),
         );
         return;
+    }
+    for submission in &submit.events {
+        if let Err(error) = validate_membership_compensation_semantics(
+            &submission.event,
+            submission.membership_compensation_evidence.as_ref(),
+        ) {
+            render_error(res, error.status, &error.code, &error.message);
+            return;
+        }
     }
     let arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref,

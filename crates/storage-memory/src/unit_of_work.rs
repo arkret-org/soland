@@ -547,6 +547,79 @@ fn stage_consent_projection(
     Ok(())
 }
 
+fn stage_membership_compensation_evidence(
+    staged: &mut std::collections::BTreeMap<
+        String,
+        soland_storage::MembershipCompensationEvidenceRecord,
+    >,
+    request: &EventCommitRequest,
+) -> PersistenceResult<()> {
+    let event = serde_json::from_value::<arkret_wire::Event>(request.event.envelope.clone())
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Event envelope is not canonical wire: {error}"
+            ))
+        })?;
+    let selects_compensation = event.authorization_ref.as_ref().is_some_and(|value| {
+        arkret_wire::MembershipCompensationDelegationRef::new(value.as_str()).is_ok()
+    });
+    let record = match (
+        selects_compensation,
+        request.membership_compensation_evidence.as_ref(),
+    ) {
+        (false, None) => return Ok(()),
+        (true, None) | (false, Some(_)) => {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: membership compensation carrier presence mismatch".to_owned(),
+            ));
+        }
+        (true, Some(record)) => record,
+    };
+    let expected_bytes =
+        arkret_canonical::canonical_json_bytes(&record.evidence).map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: membership compensation evidence is not canonicalizable: {error}"
+            ))
+        })?;
+    if record.event_id != request.event.event_id
+        || record.event_digest != request.event.canonical_digest
+        || record.admission_id != record.evidence.delegation.core.admission_id.as_str()
+        || record.delegation_digest != record.evidence.delegation.delegation_digest.as_str()
+        || record.canonical_bytes != expected_bytes
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: membership compensation evidence record is not self-consistent"
+                .to_owned(),
+        ));
+    }
+    record.evidence.validate_for_event(&event).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "membership_compensation_conflict: compensation evidence does not bind Event: {error}"
+        ))
+    })?;
+    if let Some(existing) = staged.get(&record.event_id) {
+        return if existing == record {
+            Ok(())
+        } else {
+            Err(PersistenceError::Conflict(
+                "membership_compensation_conflict: Event replay changed its compensation evidence"
+                    .to_owned(),
+            ))
+        };
+    }
+    if staged.values().any(|existing| {
+        existing.admission_id == record.admission_id
+            && existing.delegation_digest == record.delegation_digest
+    }) {
+        return Err(PersistenceError::Conflict(
+            "membership_compensation_conflict: compensation delegation was already consumed"
+                .to_owned(),
+        ));
+    }
+    staged.insert(record.event_id.clone(), record.clone());
+    Ok(())
+}
+
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
     async fn commit_event(
@@ -575,6 +648,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut consent_cells = self.consent_cells.data.lock();
         let mut account_data = self.account_data.data.lock();
         let mut governance_dependencies = self.governance_dependencies.data.lock();
+        let mut membership_compensation_evidence =
+            self.events.membership_compensation_evidence.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -590,6 +665,12 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_consent_cells = consent_cells.clone();
         let mut staged_account_data = account_data.clone();
         let mut staged_governance_dependencies = governance_dependencies.clone();
+        let mut staged_membership_compensation_evidence = membership_compensation_evidence.clone();
+
+        stage_membership_compensation_evidence(
+            &mut staged_membership_compensation_evidence,
+            &request,
+        )?;
 
         stage_device_pairing_authorization(
             &mut staged_pairings,
@@ -652,6 +733,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 ));
             }
             *pairings = staged_pairings;
+            *membership_compensation_evidence = staged_membership_compensation_evidence;
             return Ok(EventCommitOutcome {
                 event_inserted: false,
                 projections_inserted: 0,
@@ -764,6 +846,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *consent_cells = staged_consent_cells;
         *account_data = staged_account_data;
         *governance_dependencies = staged_governance_dependencies;
+        *membership_compensation_evidence = staged_membership_compensation_evidence;
 
         let outcome = EventCommitOutcome {
             event_inserted: true,
@@ -818,6 +901,8 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut device_revocations = self.device_revocations.state.lock();
         let mut agent_membership_cascades = self.agent_membership_cascades.data.lock();
         let mut governance_dependencies = self.governance_dependencies.data.lock();
+        let mut membership_compensation_evidence =
+            self.events.membership_compensation_evidence.lock();
 
         let mut staged_events = events.clone();
         let mut staged_control_proposal_acks = control_proposal_acks.clone();
@@ -837,6 +922,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         let mut staged_device_revocations = device_revocations.clone();
         let mut staged_agent_membership_cascades = agent_membership_cascades.clone();
         let mut staged_governance_dependencies = governance_dependencies.clone();
+        let mut staged_membership_compensation_evidence = membership_compensation_evidence.clone();
         let mut event_inserted = false;
         let mut projections_inserted = 0;
         let mut outbox_inserted = 0;
@@ -848,6 +934,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         )?;
 
         for event_request in request.events {
+            stage_membership_compensation_evidence(
+                &mut staged_membership_compensation_evidence,
+                &event_request,
+            )?;
             stage_device_pairing_authorization(
                 &mut staged_pairings,
                 &event_request.event.event_id,
@@ -1235,6 +1325,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *device_revocations = staged_device_revocations;
         *agent_membership_cascades = staged_agent_membership_cascades;
         *governance_dependencies = staged_governance_dependencies;
+        *membership_compensation_evidence = staged_membership_compensation_evidence;
 
         #[cfg(feature = "fault-injection")]
         self.fault_injector
@@ -1250,8 +1341,6 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
 #[cfg(test)]
 mod tests {
     use chrono::{Duration, Utc};
-    #[cfg(feature = "fault-injection")]
-    use soland_storage::EventStore;
     use soland_storage::{
         AgentMembershipCascadeCommit, AgentMembershipCascadeStore, AppletAuthoringPreviewCommit,
         AppletAuthoringPreviewRecord, AppletIdentityCommit, AppletRecordCommit,
@@ -1259,8 +1348,8 @@ mod tests {
         DeviceRevocationGateLinearizationRequest, DeviceRevocationGateSelector,
         DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTransition,
         EventBatchCommitRequest, EventCommitRequest, EventCommitUnitOfWork,
-        EventProjectionStoreRegistry, FrankingReplayNonceCommit, IdempotencyRecord,
-        PersistenceError, ProjectionEventRecord,
+        EventProjectionStoreRegistry, EventStore, FrankingReplayNonceCommit, IdempotencyRecord,
+        MembershipCompensationEvidenceRecord, PersistenceError, ProjectionEventRecord,
     };
 
     use super::stage_control_proposal_ack;
@@ -1357,6 +1446,7 @@ mod tests {
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
             governance_dependencies: Vec::new(),
+            membership_compensation_evidence: None,
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -1380,6 +1470,213 @@ mod tests {
             idempotency,
             outbox: Vec::new(),
         }
+    }
+
+    fn compensation_control_ack(
+        realm_id: &str,
+        event_digest: &str,
+        received_at: chrono::DateTime<Utc>,
+    ) -> arkret_wire::ControlProposalAck {
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+            proposal_digest: arkret_wire::Hash::new(event_digest.to_owned()).unwrap(),
+            received_at,
+            decision_due_at: received_at + policy.decision_window,
+            absolute_due_at: received_at + policy.absolute_horizon,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "44".repeat(32)))
+                .unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:principal.example#authority-1",
+                )
+                .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "00".repeat(32)))
+                    .unwrap(),
+                created_at: received_at,
+                jws: "e30..c2ln".to_owned(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+    }
+
+    fn membership_compensation_request() -> EventCommitRequest {
+        let realm_id = realm_id();
+        let join_actor_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:join-actor.example").unwrap();
+        let subject_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:join-subject.example").unwrap();
+        let executor_id = arkret_wire::DidCoreId::new("ak:did_core:web:executor.example").unwrap();
+        let join_event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x41; 32]);
+        let join_event_digest =
+            arkret_wire::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
+        let admission_id = arkret_wire::ProtocolOpaqueId::new("membership-admission-1").unwrap();
+        let membership_incarnation =
+            arkret_wire::Hash::new(format!("sha256:{}", "42".repeat(32))).unwrap();
+        let now = Utc::now();
+        let verification_method =
+            arkret_wire::DidUrl::new("did:web:join-actor.example#key-1").unwrap();
+        let core = arkret_wire::MembershipCompensationDelegationCore {
+            authority: arkret_wire::MembershipCompensationAuthority::V1,
+            admission_id: admission_id.clone(),
+            join_event_id: join_event_id.clone(),
+            join_event_digest: join_event_digest.clone(),
+            membership_cell_id: arkret_wire::ProtocolOpaqueId::new("membership-cell-1").unwrap(),
+            membership_incarnation: membership_incarnation.clone(),
+            membership_head_at_acceptance: join_event_id.clone(),
+            subject_id: subject_id.clone(),
+            join_actor_id: join_actor_id.clone(),
+            executed_by: None,
+            authorization_ref: None,
+            verification_method: verification_method.clone(),
+            executor_id: executor_id.clone(),
+            executor_proof_key: arkret_wire::DidUrl::new("did:web:executor.example#key-1").unwrap(),
+            resource: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            action: arkret_wire::MembershipCompensationAction::Remove,
+            deadline: now + Duration::hours(1),
+        };
+        let delegation_digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            arkret_canonical::canonical_json_bytes(&core).unwrap(),
+        ))
+        .unwrap();
+        let delegation_id = arkret_wire::MembershipCompensationDelegationRef::new(format!(
+            "ak:membership_compensation_delegation:sha256:{}",
+            delegation_digest.as_str().strip_prefix("sha256:").unwrap()
+        ))
+        .unwrap();
+        let signature = || arkret_wire::ProtocolSignature {
+            verification_method: verification_method.clone(),
+            created_at: now,
+            jws: arkret_wire::Base64UrlString::new("AA").unwrap(),
+        };
+        let evidence = arkret_wire::MembershipCompensationSubmissionEvidence {
+            delegation: arkret_wire::MembershipCompensationExecutorDelegation {
+                delegation_id: delegation_id.clone(),
+                core,
+                delegation_digest: delegation_digest.clone(),
+                signature: signature(),
+            },
+            join_accepted_proof: arkret_wire::MembershipJoinAcceptedProof {
+                admission_id: admission_id.clone(),
+                join_event_id,
+                join_event_digest,
+                membership_incarnation,
+                accepted_frontier_digest: arkret_wire::Hash::new(format!(
+                    "sha256:{}",
+                    "43".repeat(32)
+                ))
+                .unwrap(),
+                accepted_at: now,
+                issuer_id: join_actor_id.clone(),
+                signature: signature(),
+            },
+            terminal_certificate: arkret_wire::MembershipCompensationTerminalCertificate {
+                domain: arkret_wire::MembershipCompensationTerminalDomain::V1,
+                admission_id: admission_id.clone(),
+                delegation_digest: delegation_digest.clone(),
+                operation_id: arkret_wire::ProtocolOperationId::new(
+                    "ak:operation:019a6aa0-1000-7000-8000-000000000000",
+                )
+                .unwrap(),
+                terminal_state:
+                    arkret_wire::MembershipCompensationTerminalState::FailedAfterMembershipAcceptance,
+                certified_at: now,
+                issuer_id: join_actor_id.clone(),
+                signature: signature(),
+            },
+            single_use_cas_token: arkret_wire::MembershipCompensationCasToken {
+                domain: arkret_wire::MembershipCompensationCasDomain::V1,
+                admission_id,
+                delegation_digest,
+                expected_state: arkret_wire::MembershipCompensationExpectedState::Unused,
+                destination_id: executor_id.clone(),
+                issued_at: now,
+                expires_at: now + Duration::hours(1),
+                issuer_id: join_actor_id,
+                signature: signature(),
+            },
+        };
+        let mut request = event_request(
+            "membership-compensation".to_owned(),
+            realm_id.clone(),
+            "ak:did_core:web:join-actor.example",
+            None,
+        );
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(request.event.envelope.clone()).unwrap();
+        event.kind = arkret_wire::EventKind::MemberState;
+        event.payload = serde_json::from_value(serde_json::json!({
+            "actor_id": subject_id,
+            "membership": "leave",
+            "reason": "compensate failed admission"
+        }))
+        .unwrap();
+        event.executed_by = Some(executor_id);
+        event.authorization_ref =
+            Some(arkret_wire::AuthorizationRef::new(delegation_id.as_str()).unwrap());
+        event
+            .refresh_content_bound_identity_with_digest_suite(request.event.digest_suite)
+            .unwrap();
+        request.event.event_id = event.event_id.to_string();
+        request.event.kind = event.kind.to_string();
+        request.event.schema_id = "arkret://events/member/state/v1".to_owned();
+        request.event.canonical_digest = event
+            .event_digest_with_digest_suite(request.event.digest_suite)
+            .unwrap();
+        request.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        request.event.envelope = serde_json::to_value(event).unwrap();
+        request.control_proposal_ingress = Some(
+            arkret_state::state::store::ControlProposalIngress::AckRequired(
+                compensation_control_ack(
+                    &realm_id,
+                    &request.event.canonical_digest,
+                    request.event.received_at,
+                ),
+            ),
+        );
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(&evidence).unwrap();
+        request.membership_compensation_evidence = Some(MembershipCompensationEvidenceRecord {
+            event_id: request.event.event_id.clone(),
+            event_digest: request.event.canonical_digest.clone(),
+            admission_id: evidence.delegation.core.admission_id.to_string(),
+            delegation_digest: evidence.delegation.delegation_digest.to_string(),
+            canonical_bytes,
+            evidence,
+        });
+        request
+    }
+
+    fn retarget_compensation_event(mut request: EventCommitRequest) -> EventCommitRequest {
+        let mut event: arkret_wire::Event =
+            serde_json::from_value(request.event.envelope.clone()).unwrap();
+        event.actor_seq += 1;
+        event
+            .refresh_content_bound_identity_with_digest_suite(request.event.digest_suite)
+            .unwrap();
+        request.event.event_id = event.event_id.to_string();
+        request.event.actor_seq = event.actor_seq;
+        request.event.canonical_digest = event
+            .event_digest_with_digest_suite(request.event.digest_suite)
+            .unwrap();
+        request.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        request.event.envelope = serde_json::to_value(event).unwrap();
+        request.control_proposal_ingress = Some(
+            arkret_state::state::store::ControlProposalIngress::AckRequired(
+                compensation_control_ack(
+                    request.event.realm_id.as_deref().unwrap(),
+                    &request.event.canonical_digest,
+                    request.event.received_at,
+                ),
+            ),
+        );
+        let record = request.membership_compensation_evidence.as_mut().unwrap();
+        record.event_id = request.event.event_id.clone();
+        record.event_digest = request.event.canonical_digest.clone();
+        request
     }
 
     #[cfg(feature = "fault-injection")]
@@ -1584,6 +1881,7 @@ mod tests {
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
             governance_dependencies: Vec::new(),
+            membership_compensation_evidence: None,
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -1692,6 +1990,7 @@ mod tests {
         (
             EventCommitRequest {
                 governance_dependencies: Vec::new(),
+                membership_compensation_evidence: None,
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,
@@ -1816,6 +2115,54 @@ mod tests {
         ));
         assert!(store.events.data.lock().contains_key(&event_id));
         assert!(store.events.quarantined.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn membership_compensation_evidence_is_atomic_replay_safe_and_single_use() {
+        let store = SolandMemoryPersistenceStore::new();
+        let request = membership_compensation_request();
+        let event_id = request.event.event_id.clone();
+
+        let accepted = store.commit_event(request.clone()).await.unwrap();
+        assert!(accepted.event_inserted);
+        let stored = store
+            .events
+            .membership_compensation_evidence(&event_id)
+            .await
+            .unwrap()
+            .expect("accepted compensation evidence is durable");
+        assert_eq!(
+            stored.canonical_bytes,
+            request
+                .membership_compensation_evidence
+                .as_ref()
+                .unwrap()
+                .canonical_bytes
+        );
+
+        let replay = store.commit_event(request.clone()).await.unwrap();
+        assert_eq!(replay, soland_storage::EventCommitOutcome::default());
+
+        let mut changed_carrier = request.clone();
+        let changed = changed_carrier
+            .membership_compensation_evidence
+            .as_mut()
+            .unwrap();
+        changed.evidence.single_use_cas_token.signature.created_at += Duration::seconds(1);
+        changed.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&changed.evidence).unwrap();
+        assert!(matches!(
+            store.commit_event(changed_carrier).await,
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("Event replay changed its compensation evidence")
+        ));
+
+        let second_event = retarget_compensation_event(request);
+        assert!(matches!(
+            store.commit_event(second_event).await,
+            Err(PersistenceError::Conflict(reason))
+                if reason.contains("compensation delegation was already consumed")
+        ));
     }
 
     #[cfg(feature = "fault-injection")]

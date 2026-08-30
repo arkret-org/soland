@@ -18,10 +18,124 @@ use crate::{ExistsRow, PgPool, PgTransactionError, control_seal_schedule, pg_con
 
 #[derive(diesel::QueryableByName)]
 struct EventPreflightRow {
+    #[diesel(sql_type = BigInt)]
+    pk: i64,
     #[diesel(sql_type = Binary)]
     canonical_bytes: Vec<u8>,
     #[diesel(sql_type = Text)]
     state: String,
+}
+
+#[derive(diesel::QueryableByName)]
+struct MembershipCompensationBytesRow {
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+}
+
+async fn commit_membership_compensation_evidence(
+    conn: &mut AsyncPgConnection,
+    event_pk: i64,
+    request: &EventCommitRequest,
+    event_already_existed: bool,
+) -> PersistenceResult<()> {
+    let event = serde_json::from_value::<arkret_wire::Event>(request.event.envelope.clone())
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Event envelope is not canonical wire: {error}"
+            ))
+        })?;
+    let selects_compensation = event.authorization_ref.as_ref().is_some_and(|value| {
+        arkret_wire::MembershipCompensationDelegationRef::new(value.as_str()).is_ok()
+    });
+    let record = match (
+        selects_compensation,
+        request.membership_compensation_evidence.as_ref(),
+    ) {
+        (false, None) => return Ok(()),
+        (true, None) | (false, Some(_)) => {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: membership compensation carrier presence mismatch".to_owned(),
+            ));
+        }
+        (true, Some(record)) => record,
+    };
+    let expected_bytes =
+        arkret_canonical::canonical_json_bytes(&record.evidence).map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: membership compensation evidence is not canonicalizable: {error}"
+            ))
+        })?;
+    if record.event_id != request.event.event_id
+        || record.event_digest != request.event.canonical_digest
+        || record.admission_id != record.evidence.delegation.core.admission_id.as_str()
+        || record.delegation_digest != record.evidence.delegation.delegation_digest.as_str()
+        || record.canonical_bytes != expected_bytes
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: membership compensation evidence record is not self-consistent"
+                .to_owned(),
+        ));
+    }
+    record.evidence.validate_for_event(&event).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "membership_compensation_conflict: compensation evidence does not bind Event: {error}"
+        ))
+    })?;
+    if event_already_existed {
+        let stored = sql_query(
+            "SELECT canonical_bytes FROM membership_compensation_evidence WHERE event_pk = $1",
+        )
+        .bind::<BigInt, _>(event_pk)
+        .get_result::<MembershipCompensationBytesRow>(conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        return match stored {
+            Some(stored) if stored.canonical_bytes == record.canonical_bytes => Ok(()),
+            Some(_) => Err(PersistenceError::Conflict(
+                "membership_compensation_conflict: Event replay changed its compensation evidence"
+                    .to_owned(),
+            )),
+            None => Err(PersistenceError::Conflict(
+                "schema_violation: accepted compensation Event is missing durable evidence"
+                    .to_owned(),
+            )),
+        };
+    }
+    let evidence_value = serde_json::to_value(&record.evidence).map_err(|error| {
+        PersistenceError::Internal(format!(
+            "membership compensation evidence serialization failed: {error}"
+        ))
+    })?;
+    sql_query(
+        "INSERT INTO membership_compensation_evidence \
+         (event_pk, admission_id, delegation_digest, canonical_bytes, evidence) \
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind::<BigInt, _>(event_pk)
+    .bind::<Text, _>(&record.admission_id)
+    .bind::<Text, _>(&record.delegation_digest)
+    .bind::<Binary, _>(&record.canonical_bytes)
+    .bind::<Jsonb, _>(&evidence_value)
+    .execute(conn)
+    .await
+    .map_err(|error| {
+        if matches!(
+            &error,
+            diesel::result::Error::DatabaseError(
+                diesel::result::DatabaseErrorKind::UniqueViolation,
+                _
+            )
+        ) {
+            PersistenceError::Conflict(
+                "membership_compensation_conflict: compensation delegation was already consumed"
+                    .to_owned(),
+            )
+        } else {
+            PersistenceError::database(error)
+        }
+    })?;
+    Ok(())
 }
 
 #[derive(diesel::QueryableByName)]
@@ -627,7 +741,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     item.event.digest_suite,
                 )?;
                 let stored = sql_query(
-                    "SELECT canonical_bytes, state FROM canonical_events WHERE id = $1",
+                    "SELECT pk, canonical_bytes, state FROM canonical_events WHERE id = $1",
                 )
                 .bind::<Binary, _>(identity.id.to_vec())
                 .get_result::<EventPreflightRow>(&mut *conn)
@@ -643,6 +757,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     if stored.state == "quarantined" {
                         return Ok(CommitTransactionOutcome::Collision);
                     }
+                    commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
                     continue;
                 }
                 if let Some(previous) = incoming.get(&item.event.event_id) {
@@ -845,6 +960,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .map_err(PersistenceError::database)?
             .pk;
             event_inserted = true;
+            commit_membership_compensation_evidence(conn, event_pk, &request, false).await?;
 
             let typed_event = serde_json::from_value::<arkret_wire::Event>(
                 request.event.envelope.clone(),

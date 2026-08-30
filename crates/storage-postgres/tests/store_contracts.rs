@@ -105,6 +105,7 @@ fn franking_event_request(
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     soland_storage::EventCommitRequest {
         governance_dependencies: Vec::new(),
+        membership_compensation_evidence: None,
         device_pairing_authorization: None,
         contact_projection: None,
         consent_projection: None,
@@ -1876,6 +1877,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
             governance_dependencies: Vec::new(),
+            membership_compensation_evidence: None,
             device_pairing_authorization: None,
             contact_projection: None,
             consent_projection: None,
@@ -2151,6 +2153,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
             events: vec![
                 EventCommitRequest {
                     governance_dependencies: Vec::new(),
+                    membership_compensation_evidence: None,
                     device_pairing_authorization: None,
                     contact_projection: None,
                     consent_projection: None,
@@ -2164,6 +2167,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                 },
                 EventCommitRequest {
                     governance_dependencies: Vec::new(),
+                    membership_compensation_evidence: None,
                     device_pairing_authorization: None,
                     contact_projection: None,
                     consent_projection: None,
@@ -2561,6 +2565,7 @@ mod control_move_ingress_negatives {
         ) -> EventCommitRequest {
             EventCommitRequest {
                 governance_dependencies: Vec::new(),
+                membership_compensation_evidence: None,
                 device_pairing_authorization: None,
                 contact_projection: None,
                 consent_projection: None,

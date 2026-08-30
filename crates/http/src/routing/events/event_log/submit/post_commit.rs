@@ -354,10 +354,24 @@ async fn federation_submissions(
                 .map(|record| vec![record.ingress_receipt.clone()])
                 .unwrap_or_default(),
             control_proposal_ack,
-            membership_compensation_evidence: membership_compensation_evidence.cloned(),
+            membership_compensation_evidence: membership_compensation_evidence
+                .filter(|evidence| {
+                    authorization_selects_compensation(
+                        event.authorization_ref.as_ref(),
+                        &evidence.delegation.delegation_id,
+                    )
+                })
+                .cloned(),
         });
     }
     Ok(submissions)
+}
+
+fn authorization_selects_compensation(
+    authorization_ref: Option<&arkret_wire::AuthorizationRef>,
+    delegation_id: &arkret_wire::MembershipCompensationDelegationRef,
+) -> bool {
+    authorization_ref.map(arkret_wire::AuthorizationRef::as_str) == Some(delegation_id.as_str())
 }
 
 /// Preserve a protocol-atomic local Event batch as one federation request.
@@ -1222,7 +1236,31 @@ pub(super) fn typed_frontier_or_fallback(
 mod tests {
     use serde_json::json;
 
-    use super::routable_member_delivery_target;
+    use super::{authorization_selects_compensation, routable_member_delivery_target};
+
+    #[test]
+    fn compensation_carrier_follows_only_its_exact_event() {
+        let delegation_id = arkret_wire::MembershipCompensationDelegationRef::new(format!(
+            "ak:membership_compensation_delegation:sha256:{}",
+            "11".repeat(32)
+        ))
+        .unwrap();
+        let selected = arkret_wire::AuthorizationRef::new(delegation_id.as_str()).unwrap();
+        let ordinary = arkret_wire::AuthorizationRef::new(
+            "ak:grant:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM",
+        )
+        .unwrap();
+
+        assert!(authorization_selects_compensation(
+            Some(&selected),
+            &delegation_id
+        ));
+        assert!(!authorization_selects_compensation(
+            Some(&ordinary),
+            &delegation_id
+        ));
+        assert!(!authorization_selects_compensation(None, &delegation_id));
+    }
 
     #[test]
     fn bootstrap_fanout_reads_routable_peer_service_from_member_join() {

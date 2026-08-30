@@ -5,6 +5,20 @@ use super::{
     PublicationEvidenceRecord, Value, async_trait,
 };
 
+/// Canonical transport-only evidence accepted with one membership
+/// compensation Event. These bytes are not part of the Event envelope or
+/// digest; they are retained separately so replay and federation can use the
+/// exact evidence that passed admission.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MembershipCompensationEvidenceRecord {
+    pub event_id: String,
+    pub event_digest: String,
+    pub admission_id: String,
+    pub delegation_digest: String,
+    pub canonical_bytes: Vec<u8>,
+    pub evidence: arkret_wire::MembershipCompensationSubmissionEvidence,
+}
+
 /// Trait for message storage operations.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
@@ -43,6 +57,11 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    /// Accepted membership-compensation transport evidence for one Event.
+    async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<MembershipCompensationEvidenceRecord>>;
     /// Commit one validated ordinary-Realm bootstrap unit. Implementations
     /// MUST insert every canonical Event **and every federation outbox row** in
     /// one transaction or insert none: an accepted Event whose delivery intent

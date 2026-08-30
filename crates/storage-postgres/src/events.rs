@@ -7,11 +7,11 @@ use super::{
     DeviceInventoryRecord, DirectConversationFoundingCommitOutcome,
     DirectConversationFoundingSlotRecord, EventBatchReceipt, EventStore, ExistsRow,
     FederationOutboxRecord, IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome,
-    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, MessageRecord,
-    MessageStore, Nullable, OptionalExtension, PeerEventsPageQuery, PersistenceError,
-    PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord, QueryableByName,
-    RealmEventStats, RunQueryDsl, Text, Timestamptz, Uuid, Value, async_trait,
-    identity_anchor_slot_conflicts, ids, pg_conn, sql_query, sql_types,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow,
+    MembershipCompensationEvidenceRecord, MessageRecord, MessageStore, Nullable, OptionalExtension,
+    PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl, Text, Timestamptz,
+    Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids, pg_conn, sql_query, sql_types,
 };
 use crate::control_seal_schedule;
 use crate::federation::{
@@ -83,6 +83,24 @@ struct PkRow {
 struct TextIdRow {
     #[diesel(sql_type = Text)]
     id: String,
+}
+
+#[derive(QueryableByName)]
+struct MembershipCompensationEvidenceRow {
+    #[diesel(sql_type = Binary)]
+    event_id: Vec<u8>,
+    #[diesel(sql_type = SmallInt)]
+    digest_suite: i16,
+    #[diesel(sql_type = Binary)]
+    event_digest: Vec<u8>,
+    #[diesel(sql_type = Text)]
+    admission_id: String,
+    #[diesel(sql_type = Text)]
+    delegation_digest: String,
+    #[diesel(sql_type = Binary)]
+    canonical_bytes: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    evidence: Value,
 }
 
 #[derive(QueryableByName)]
@@ -870,6 +888,60 @@ impl EventStore for PgEventStore {
         rows.into_iter()
             .map(FederationOutboxRecord::try_from)
             .collect()
+    }
+
+    async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<MembershipCompensationEvidenceRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        let event_id_bytes = ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        let row = sql_query(
+            "SELECT event.id AS event_id, event.digest_suite, event.digest AS event_digest, \
+                    evidence.admission_id, evidence.delegation_digest, evidence.canonical_bytes, \
+                    evidence.evidence \
+             FROM membership_compensation_evidence evidence \
+             JOIN canonical_events event ON event.pk = evidence.event_pk \
+             WHERE event.id = $1 AND event.state = 'accepted'",
+        )
+        .bind::<Binary, _>(event_id_bytes.to_vec())
+        .get_result::<MembershipCompensationEvidenceRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        row.map(|row| {
+            let evidence = serde_json::from_value(row.evidence).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "stored membership compensation evidence is invalid: {error}"
+                ))
+            })?;
+            let digest: [u8; 32] = row.event_digest.try_into().map_err(|_| {
+                PersistenceError::Internal(
+                    "stored membership compensation Event digest has invalid length".to_owned(),
+                )
+            })?;
+            let event_id: [u8; 33] = row.event_id.try_into().map_err(|_| {
+                PersistenceError::Internal(
+                    "stored membership compensation Event id has invalid length".to_owned(),
+                )
+            })?;
+            Ok(MembershipCompensationEvidenceRecord {
+                event_id: ids::format_event_id(&event_id),
+                event_digest: ids::format_event_digest(row.digest_suite as u8, &digest)
+                    .ok_or_else(|| {
+                        PersistenceError::Internal(
+                            "stored membership compensation digest suite is invalid".to_owned(),
+                        )
+                    })?,
+                admission_id: row.admission_id,
+                delegation_digest: row.delegation_digest,
+                canonical_bytes: row.canonical_bytes,
+                evidence,
+            })
+        })
+        .transpose()
     }
 
     async fn put_realm_bootstrap_batch_atomic(

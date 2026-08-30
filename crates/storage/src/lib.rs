@@ -193,6 +193,8 @@ pub enum ConflictCode {
     EventNotAccepted,
     /// A declared precondition does not hold.
     FailedPrecondition,
+    /// Membership compensation evidence changed, expired, or was consumed.
+    MembershipCompensationConflict,
     /// The actor chain exceeded its sibling or predecessor fork cap.
     ForkQuarantine,
     /// A Realm with this id already exists.
@@ -221,7 +223,7 @@ pub enum ConflictCode {
 
 impl ConflictCode {
     /// Every registered code, in the order the variants are declared.
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 24] = [
         Self::ApprovalNonceReused,
         Self::AppletRevoked,
         Self::CasConflict,
@@ -233,6 +235,7 @@ impl ConflictCode {
         Self::EventIdDigestMismatch,
         Self::EventNotAccepted,
         Self::FailedPrecondition,
+        Self::MembershipCompensationConflict,
         Self::ForkQuarantine,
         Self::RealmAlreadyExists,
         Self::RecoveryPolicyConflict,
@@ -261,6 +264,7 @@ impl ConflictCode {
             Self::EventIdDigestMismatch => "event_id_digest_mismatch",
             Self::EventNotAccepted => "event_not_accepted",
             Self::FailedPrecondition => "failed_precondition",
+            Self::MembershipCompensationConflict => "membership_compensation_conflict",
             Self::ForkQuarantine => "fork_quarantine",
             Self::RealmAlreadyExists => "realm_already_exists",
             Self::RecoveryPolicyConflict => "recovery_policy_conflict",

@@ -538,6 +538,10 @@ async fn submit_initial_event_submission_with_commit_extensions(
             .realm_digest_suite(submission.event.realm_id.as_str())
     };
     validate_initial_submission_in_context(&submission, submit_context, digest_suite)?;
+    super::validate_membership_compensation_semantics(
+        &submission.event,
+        submission.membership_compensation_evidence.as_ref(),
+    )?;
     validate_initial_publication_session_context(session, &submission)?;
     if let Some(lease) = &submission.authorization_lease {
         validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
@@ -1722,6 +1726,209 @@ fn moderation_franking_replay_nonce(
         }))
 }
 
+fn membership_compensation_signature_bytes<T: serde::Serialize>(
+    value: &T,
+) -> Result<Vec<u8>, SubmitOneError> {
+    let mut value = serde_json::to_value(value).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("membership compensation evidence cannot be encoded: {error}"),
+        )
+    })?;
+    value
+        .as_object_mut()
+        .and_then(|object| object.remove("signature"))
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "membership compensation signed object is missing signature",
+            )
+        })?;
+    arkret_canonical::canonical_json_bytes(&value).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("membership compensation transcript is not canonicalizable: {error}"),
+        )
+    })
+}
+
+async fn verify_membership_compensation_signature<T: serde::Serialize>(
+    state: &AppState,
+    value: &T,
+    signature: &arkret_wire::ProtocolSignature,
+    issuer_id: &arkret_wire::DidCoreId,
+    label: &str,
+) -> Result<(), SubmitOneError> {
+    let bytes = membership_compensation_signature_bytes(value)?;
+    crate::jws_verify::verify_did_controlled_ed25519_signature_async(
+        &bytes,
+        signature.jws.as_str(),
+        signature.verification_method.as_str(),
+        issuer_id.as_str(),
+        state,
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            format!("{label} signature is invalid: {error}"),
+        )
+    })
+}
+
+async fn validate_membership_compensation_live_state(
+    state: &AppState,
+    event: &Event,
+    evidence: &arkret_wire::MembershipCompensationSubmissionEvidence,
+) -> Result<(), SubmitOneError> {
+    evidence.validate_for_event(event).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            format!("membership compensation evidence is invalid: {error}"),
+        )
+    })?;
+    let core = &evidence.delegation.core;
+    let producer_method = event
+        .proofs
+        .iter()
+        .find_map(|proof| proof.as_producer())
+        .map(|proof| &proof.verification_method);
+    if producer_method != Some(&core.executor_proof_key)
+        || evidence.delegation.signature.verification_method != core.verification_method
+        || core.membership_head_at_acceptance != core.join_event_id
+        || evidence.terminal_certificate.issuer_id != core.executor_id
+        || evidence.single_use_cas_token.issuer_id != core.executor_id
+        || evidence.join_accepted_proof.accepted_at > evidence.terminal_certificate.certified_at
+        || evidence.terminal_certificate.certified_at > event.created_at
+        || evidence.single_use_cas_token.issued_at > event.created_at
+        || event.created_at >= evidence.single_use_cas_token.expires_at
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            "membership compensation signer or canonical time binding is invalid",
+        ));
+    }
+    verify_membership_compensation_signature(
+        state,
+        &evidence.delegation,
+        &evidence.delegation.signature,
+        &core.join_actor_id,
+        "delegation",
+    )
+    .await?;
+    verify_membership_compensation_signature(
+        state,
+        &evidence.join_accepted_proof,
+        &evidence.join_accepted_proof.signature,
+        &evidence.join_accepted_proof.issuer_id,
+        "join accepted proof",
+    )
+    .await?;
+    verify_membership_compensation_signature(
+        state,
+        &evidence.terminal_certificate,
+        &evidence.terminal_certificate.signature,
+        &evidence.terminal_certificate.issuer_id,
+        "terminal certificate",
+    )
+    .await?;
+    verify_membership_compensation_signature(
+        state,
+        &evidence.single_use_cas_token,
+        &evidence.single_use_cas_token.signature,
+        &evidence.single_use_cas_token.issuer_id,
+        "single-use CAS token",
+    )
+    .await?;
+
+    let accepted_join = state
+        .event_queries()
+        .canonical_event(core.join_event_id.as_str())
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("membership compensation join lookup failed: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "dependency_missing",
+                "membership compensation join Event is unavailable",
+            )
+        })?;
+    let accepted_join_digest = accepted_join.canonical_digest.clone();
+    let accepted_join_event =
+        serde_json::from_value::<Event>(accepted_join.envelope).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored membership compensation join Event is invalid: {error}"),
+            )
+        })?;
+    let join_producer_method = accepted_join_event
+        .proofs
+        .iter()
+        .find_map(|proof| proof.as_producer())
+        .map(|proof| &proof.verification_method);
+    if accepted_join_digest != core.join_event_digest.as_str()
+        || accepted_join_event.kind != arkret_wire::EventKind::MemberState
+        || accepted_join_event.realm_id != core.resource
+        || evidence.join_accepted_proof.issuer_id != accepted_join_event.principal_server_id
+        || accepted_join_event.actor_id != core.join_actor_id
+        || accepted_join_event.executed_by != core.executed_by
+        || accepted_join_event.authorization_ref != core.authorization_ref
+        || join_producer_method != Some(&core.verification_method)
+        || accepted_join_event
+            .payload
+            .get("actor_id")
+            .and_then(Value::as_str)
+            != Some(core.subject_id.as_str())
+        || accepted_join_event
+            .payload
+            .get("membership")
+            .and_then(Value::as_str)
+            != Some("join")
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            "membership compensation does not bind the accepted join provenance",
+        ));
+    }
+    let current_membership = state
+        .projections()
+        .snapshot()
+        .member(core.resource.as_str(), core.subject_id.as_str())
+        .cloned();
+    let Some(current_membership) = current_membership else {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            "membership compensation target is already absent",
+        ));
+    };
+    if current_membership.state != "join"
+        || current_membership.membership_event_ref.as_deref()
+            != Some(core.membership_head_at_acceptance.as_str())
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "membership_compensation_conflict",
+            "membership compensation target was superseded by another membership incarnation",
+        ));
+    }
+    Ok(())
+}
+
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
@@ -1993,6 +2200,48 @@ pub(super) async fn submit_event_value_with_context(
         if existing.canonical_bytes == parsed.canonical_bytes
             || exact_producer_retry(&existing.canonical_bytes, &submitted_event)
         {
+            let stored_compensation_evidence = service
+                .membership_compensation_evidence(parsed.event_id.as_str())
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("stored membership compensation evidence lookup failed: {error}"),
+                    )
+                })?;
+            match (
+                stored_compensation_evidence.as_ref(),
+                context.membership_compensation_evidence,
+            ) {
+                (None, None) => {}
+                (Some(stored), Some(incoming)) => {
+                    let incoming_bytes = arkret_canonical::canonical_json_bytes(incoming)
+                        .map_err(|error| {
+                            SubmitOneError::new(
+                                StatusCode::BAD_REQUEST,
+                                "schema_violation",
+                                format!(
+                                    "membership compensation evidence is not canonicalizable: {error}"
+                                ),
+                            )
+                        })?;
+                    if stored.canonical_bytes != incoming_bytes {
+                        return Err(SubmitOneError::new(
+                            StatusCode::CONFLICT,
+                            "membership_compensation_conflict",
+                            "the same Event was replayed with different membership compensation evidence",
+                        ));
+                    }
+                }
+                (Some(_), None) | (None, Some(_)) => {
+                    return Err(SubmitOneError::new(
+                        StatusCode::CONFLICT,
+                        "membership_compensation_conflict",
+                        "the Event replay does not match its accepted membership compensation carrier",
+                    ));
+                }
+            }
             if control_event_for_proposal.is_some() {
                 restore_exact_duplicate_control_event(
                     state,
@@ -2057,6 +2306,9 @@ pub(super) async fn submit_event_value_with_context(
         let record =
             super::identity_anchor::canonical_record(&parsed, envelope.clone(), received_at);
         return Err(quarantine_verified_event_collision(state, record).await);
+    }
+    if let Some(evidence) = context.membership_compensation_evidence {
+        validate_membership_compensation_live_state(state, &submitted_event, evidence).await?;
     }
     if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
         && service
@@ -3061,7 +3313,29 @@ pub(super) async fn submit_event_value_with_context(
             expires_at: approval.expires_at,
             consumed_at: received_at,
         });
+    let membership_compensation_evidence = context
+        .membership_compensation_evidence
+        .map(|evidence| -> Result<_, SubmitOneError> {
+            let canonical_bytes =
+                arkret_canonical::canonical_json_bytes(evidence).map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("membership compensation evidence is not canonicalizable: {error}"),
+                    )
+                })?;
+            Ok(soland_storage::MembershipCompensationEvidenceRecord {
+                event_id: parsed.event_id.to_string(),
+                event_digest: parsed.canonical_digest.clone(),
+                admission_id: evidence.delegation.core.admission_id.to_string(),
+                delegation_digest: evidence.delegation.delegation_digest.to_string(),
+                canonical_bytes,
+                evidence: evidence.clone(),
+            })
+        })
+        .transpose()?;
     let command = soland_services::events::CommitAcceptedEventCommand {
+        membership_compensation_evidence,
         governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: commit_options
             .as_ref()
@@ -3293,6 +3567,13 @@ pub(super) async fn submit_event_value_with_context(
                 return Err(SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
                     "schema_violation",
+                    message,
+                ));
+            }
+            if conflict == Some(ConflictCode::MembershipCompensationConflict) {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "membership_compensation_conflict",
                     message,
                 ));
             }

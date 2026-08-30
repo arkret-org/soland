@@ -5,11 +5,12 @@ use super::{
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord,
     EventBatchReceipt, EventStore, FederationOutboxRecord, FederationOutboxState,
     IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, MemoryGovernanceDependencyStore, MessageRecord, MessageStore,
-    Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult, ProjectionEventRecord,
-    PublicationEvidenceRecord, RealmEventStats, async_trait, event_position_cmp,
-    identity_anchor_slot_conflicts, ids, peer_page_record_after_cursor, peer_page_record_matches,
-    receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
+    IdentityAnchorReanchorSlot, MembershipCompensationEvidenceRecord,
+    MemoryGovernanceDependencyStore, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
+    PersistenceError, PersistenceResult, ProjectionEventRecord, PublicationEvidenceRecord,
+    RealmEventStats, async_trait, event_position_cmp, identity_anchor_slot_conflicts, ids,
+    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
+    record_is_peer_authz_state_record, stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -105,6 +106,8 @@ pub(crate) struct MemoryEventStore {
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
     publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
+    pub(crate) membership_compensation_evidence:
+        Mutex<BTreeMap<String, MembershipCompensationEvidenceRecord>>,
     /// Shared with `MemoryFederationOutboxStore` so the atomic Event batches
     /// commit their delivery intents in the same staged mutation as the Events,
     /// mirroring the single PostgreSQL transaction.
@@ -133,6 +136,7 @@ impl MemoryEventStore {
             devices,
             receipts: Mutex::new(BTreeMap::new()),
             publication_evidence,
+            membership_compensation_evidence: Mutex::new(BTreeMap::new()),
             federation_outbox,
             projections,
             event_outbox_ids: Mutex::new(BTreeMap::new()),
@@ -463,6 +467,20 @@ impl EventStore for MemoryEventStore {
             .get(event_id)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn membership_compensation_evidence(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<MembershipCompensationEvidenceRecord>> {
+        ids::parse_event_id(event_id).ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!("malformed canonical Event id: {event_id:?}"))
+        })?;
+        Ok(self
+            .membership_compensation_evidence
+            .lock()
+            .get(event_id)
+            .cloned())
     }
 
     async fn federation_outbox_for_event(

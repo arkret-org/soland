@@ -57,6 +57,9 @@ pub struct AccountDataCasCommit {
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
+    /// Transport-only membership compensation evidence committed in the same
+    /// atomic unit as the Event. It never enters `event.canonical_bytes`.
+    pub membership_compensation_evidence: Option<crate::MembershipCompensationEvidenceRecord>,
     /// Governance history edges whose source Control Event is this Event.
     /// These become visible in the same durable boundary as that source row.
     pub governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
