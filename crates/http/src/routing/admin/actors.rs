@@ -44,9 +44,7 @@ async fn get_actor(
             soland_http::error::AppError::internal("account store unavailable")
         })?
         .into_iter()
-        .find(|account| {
-            account.principal_id.as_str() == actor_id || account.id.as_str() == actor_id
-        })
+        .find(|account| account.principal_id.as_str() == actor_id)
         .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
     let (device_counts, realm_counts) = queries::actor_count_maps(state).await;
     let actor = queries::admin_actor_row(state, &account, &device_counts, &realm_counts)

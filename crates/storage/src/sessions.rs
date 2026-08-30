@@ -29,6 +29,8 @@ pub fn decode_session_agent_payload(payload: &Value) -> Option<AgentSessionRecor
 mod tests {
     use arkret_wire::FreshnessState;
 
+    use crate::AccountPk;
+
     use super::{
         AgentSessionRecord, SessionRecord, decode_session_agent_payload, encode_session_payload,
     };
@@ -37,8 +39,7 @@ mod tests {
     fn session_payload_round_trips_agent_session() {
         let record = SessionRecord {
             token_hash: "grant".to_owned(),
-            service_account_id: arkret_identifiers::ServiceAccountId::new("account-grant")
-                .unwrap(),
+            account_pk: AccountPk(1),
             actor: "did:web:alice.example".to_owned(),
             device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
             audience: "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),

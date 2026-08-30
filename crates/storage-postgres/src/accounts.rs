@@ -323,24 +323,35 @@ pub struct PgAccountLifecycleStore {
 }
 #[async_trait]
 impl AccountLifecycleStore for PgAccountLifecycleStore {
-    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
+    async fn put(
+        &self,
+        account_pk: AccountPk,
+        record: &AccountLifecycleRecord,
+    ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO account_lifecycle \
-             (principal_id, state, reason, changed_by, changed_at) \
+             (account_pk, state, reason, changed_by, changed_at) \
              VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (principal_id) DO UPDATE SET \
+             ON CONFLICT (account_pk) DO UPDATE SET \
                state = EXCLUDED.state, \
                reason = EXCLUDED.reason, \
                changed_by = EXCLUDED.changed_by, \
                changed_at = EXCLUDED.changed_at",
         )
-        .bind::<Text, _>(did)
+        .bind::<BigInt, _>(account_pk.get())
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Text>, _>(&record.reason)
-        .bind::<Nullable<Text>, _>(&record.changed_by)
+        .bind::<Nullable<Jsonb>, _>(
+            record
+                .changed_by
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| PersistenceError::database(format!("changed_by JSON: {error}")))?,
+        )
         .bind::<Timestamptz, _>(record.changed_at)
         .execute(&mut *conn)
         .await
@@ -348,44 +359,54 @@ impl AccountLifecycleStore for PgAccountLifecycleStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn delete(&self, did: &str) -> PersistenceResult<()> {
+    async fn delete(&self, account_pk: AccountPk) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM account_lifecycle WHERE principal_id = $1")
-            .bind::<Text, _>(did)
+        sql_query("DELETE FROM account_lifecycle WHERE account_pk = $1")
+            .bind::<BigInt, _>(account_pk.get())
             .execute(&mut *conn)
             .await
             .map(|_| ())
             .map_err(PersistenceError::database)
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>> {
+    async fn snapshot_all(
+        &self,
+    ) -> PersistenceResult<Vec<(arkret_wire::AccountId, AccountLifecycleRecord)>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "SELECT principal_id, state, reason, changed_by, changed_at \
-             FROM account_lifecycle ORDER BY principal_id",
+        let rows = sql_query(
+            "SELECT a.principal_id, a.principal_server_id, l.state, l.reason, \
+                    l.changed_by, l.changed_at \
+             FROM account_lifecycle l \
+             JOIN accounts a ON a.pk = l.account_pk \
+             ORDER BY a.principal_server_id, a.principal_id",
         )
         .load::<AccountLifecycleRow>(&mut *conn)
         .await
-        .map(|rows| {
-            rows.into_iter()
-                .map(|row| {
-                    (
-                        row.principal_id.into_string(),
-                        AccountLifecycleRecord {
-                            state: row.state,
-                            reason: row.reason,
-                            changed_by: row.changed_by,
-                            changed_at: row.changed_at,
-                        },
-                    )
-                })
-                .collect()
-        })
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?;
+        rows.into_iter()
+            .map(|row| {
+                let changed_by = row
+                    .changed_by
+                    .map(serde_json::from_value::<arkret_wire::ActorId>)
+                    .transpose()
+                    .map_err(|error| {
+                        PersistenceError::database(format!("stored changed_by JSON: {error}"))
+                    })?;
+                Ok((
+                    arkret_wire::AccountId::new(row.principal_id, row.principal_server_id),
+                    AccountLifecycleRecord {
+                        state: row.state,
+                        reason: row.reason,
+                        changed_by,
+                        changed_at: row.changed_at,
+                    },
+                ))
+            })
+            .collect()
     }
 }
 pub struct PgAccountDataStore {
@@ -536,11 +557,13 @@ struct AccountLifecycleRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
+    principal_server_id: arkret_wire::DidCoreId,
+    #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Text>)]
     reason: Option<String>,
-    #[diesel(sql_type = Nullable<Text>)]
-    changed_by: Option<arkret_wire::DidCoreId>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    changed_by: Option<Value>,
     #[diesel(sql_type = Timestamptz)]
     changed_at: chrono::DateTime<chrono::Utc>,
 }

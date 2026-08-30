@@ -2249,16 +2249,14 @@ fn realm_fanout_authority_is_current(state: &AppState, row: &PendingFederationDe
     };
     let projection = state.projections().snapshot();
     binding.authority_witnesses.iter().any(|witness| {
+        let member_key = witness.member_id.to_string();
         projection
-            .member(&binding.realm_id, &witness.member_id)
+            .member(&binding.realm_id, &member_key)
             .is_some_and(|member| {
                 member.state == "join"
-                    && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_id.as_deref() == Some(row.delivery.peer_id.as_str())
+                    && witness.member_id.route_service_id() == &row.delivery.peer_id
                     && member.membership_event_ref.as_deref()
                         == Some(witness.membership_event_ref.as_str())
-                    && member.delivery_binding_frontier.as_deref()
-                        == Some(witness.delivery_binding_frontier.as_str())
             })
     })
 }
@@ -2694,7 +2692,6 @@ mod tests {
                         ))
                         .unwrap(),
                         membership_frontier: Vec::new(),
-                        delivery_binding_frontier: Vec::new(),
                         destination_kind: "principal_server".to_owned(),
                     },
                 events: vec![

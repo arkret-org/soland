@@ -201,13 +201,14 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
 
     async fn save_account_lifecycle(
         &self,
-        actor_id: &str,
+        account_pk: AccountPk,
+        _actor_id: &str,
         lifecycle: crate::identity::AccountLifecycleState,
     ) -> crate::ServiceResult<()> {
         self.0
             .account_lifecycle()
             .put(
-                actor_id,
+                account_pk,
                 &soland_storage::AccountLifecycleRecord {
                     state: lifecycle.state,
                     reason: lifecycle.reason,
@@ -219,14 +220,23 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(())
     }
 
-    async fn delete_account_lifecycle(&self, actor_id: &str) -> crate::ServiceResult<()> {
-        self.0.account_lifecycle().delete(actor_id).await?;
+    async fn delete_account_lifecycle(
+        &self,
+        account_pk: AccountPk,
+        _actor_id: &str,
+    ) -> crate::ServiceResult<()> {
+        self.0.account_lifecycle().delete(account_pk).await?;
         Ok(())
     }
 
     async fn account_lifecycles(
         &self,
-    ) -> crate::ServiceResult<Vec<(String, crate::identity::AccountLifecycleState)>> {
+    ) -> crate::ServiceResult<
+        Vec<(
+            arkret_wire::AccountId,
+            crate::identity::AccountLifecycleState,
+        )>,
+    > {
         Ok(self
             .0
             .account_lifecycle()

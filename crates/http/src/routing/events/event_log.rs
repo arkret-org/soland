@@ -84,9 +84,8 @@ use crate::wire::describe;
 mod admission;
 use admission::policy_bundle_value_from_state_payload;
 pub use admission::{
-    SolandEventsSubmitRequestBody, events_submit_pre_admit_check,
-    federation_delivery_binding_frontier_is_current, frozen_realm_check, realm_policy_bundle_check,
-    terminal_realm_check,
+    SolandEventsSubmitRequestBody, events_submit_pre_admit_check, frozen_realm_check,
+    realm_policy_bundle_check, terminal_realm_check,
 };
 
 pub(crate) mod endpoints;

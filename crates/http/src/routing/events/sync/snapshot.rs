@@ -1258,7 +1258,6 @@ pub(crate) fn required_current_baseline_kind(kind: &arkret_wire::EventKind) -> b
             | arkret_wire::EventKind::RealmDiscovery
             | arkret_wire::EventKind::RealmAlias
             | arkret_wire::EventKind::RealmPlaintextVisibleServices
-            | arkret_wire::EventKind::RealmDeliveryBindingPolicy
             | arkret_wire::EventKind::RealmSetDefaultStrand
             | arkret_wire::EventKind::StrandCreate
     )

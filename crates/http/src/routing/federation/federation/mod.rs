@@ -40,9 +40,7 @@ pub(in crate::routing) use signature::{
 };
 #[cfg(test)]
 use signature::{validate_federation_headers, validate_signature_input};
-pub(crate) use wire::{
-    FederationTrustHeaders, delivery_binding_handed_over_response, delivery_binding_stale_response,
-};
+pub(crate) use wire::FederationTrustHeaders;
 
 #[cfg(test)]
 #[path = "../federation_tests.rs"]

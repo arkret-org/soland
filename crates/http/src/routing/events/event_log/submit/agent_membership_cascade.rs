@@ -1450,44 +1450,6 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             return;
         }
     }
-    match federation_service_binding_current_for_destination(
-        state,
-        &submission.service_binding_ref,
-        None,
-    )
-    .await
-    {
-        FederationServiceBindingCheck::Current => {}
-        FederationServiceBindingCheck::Reject(reason) => {
-            render_error(res, StatusCode::CONFLICT, reason, reason);
-            return;
-        }
-        FederationServiceBindingCheck::Stale(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_id,
-                    &evidence.actor_id,
-                    evidence
-                        .new_service_resolution
-                        .as_ref()
-                        .expect("stale evidence requires a verified route carrier"),
-                    &evidence.handover_frontier,
-                    evidence.witness,
-                ),
-            ));
-            return;
-        }
-        FederationServiceBindingCheck::HandedOver(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_id,
-                ),
-            ));
-            return;
-        }
-    }
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
     let profile_gate =
         match crate::routing::federation::federation::federation_profile_intersection_for_peer(

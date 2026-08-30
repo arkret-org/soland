@@ -83,7 +83,7 @@ CREATE TABLE public.accounts (
 );
 
 ALTER TABLE ONLY public.accounts
-    ADD CONSTRAINT accounts_principal_server_key UNIQUE (principal_id, principal_server_id);
+    ADD CONSTRAINT accounts_principal_server_key UNIQUE (principal_server_id, principal_id);
 
 CREATE TABLE public.account_localparts (
     id uuid PRIMARY KEY,

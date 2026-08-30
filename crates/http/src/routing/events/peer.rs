@@ -309,8 +309,8 @@ async fn peer_account_status_submit(
         crate::account_erasure_worker::ensure_intent(
             state,
             record.account_authority_id.as_str(),
-            record.account_id.as_str(),
-            &record.principal_authority.principal_id,
+            &record.account_id,
+            &record.account_id.principal_id,
             &record.account_status_record_id,
         )
         .await?;
@@ -356,13 +356,13 @@ async fn enqueue_account_status_fanout(
     record: &arkret_models_collaboration::account_lifecycle::AccountStatusRecord,
     receipt: &arkret_models_collaboration::account_lifecycle::AccountStatusReceipt,
 ) -> Result<(AccountStatusPropagationState, Option<u64>), AppError> {
-    if record.principal_authority.principal_server_id.as_str() != state.service_id() {
+    if record.account_id.principal_server_id.as_str() != state.service_id() {
         return Ok((AccountStatusPropagationState::NotRequired, None));
     }
     let targets =
-        crate::routing::identity::account::lifecycle::deactivation_peer_service_targets_for_actor(
+        crate::routing::identity::account::lifecycle::deactivation_peer_service_targets_for_account(
             state,
-            record.principal_authority.principal_id.as_str(),
+            &record.account_id,
         );
     if targets.len() > 256 {
         return Err(AppError::internal(
@@ -1530,13 +1530,14 @@ impl PeerReadAuthz {
         let Some(payload) = record_payload(record) else {
             return;
         };
-        let Some(actor) = payload
+        let Some(actor_id) = payload
             .get("actor_id")
-            .and_then(Value::as_str)
-            .or_else(|| payload.get("actor").and_then(Value::as_str))
+            .or_else(|| payload.get("actor"))
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
         else {
             return;
         };
+        let actor = actor_id.to_string();
         let membership = payload
             .get("membership")
             .and_then(Value::as_str)
@@ -1544,28 +1545,14 @@ impl PeerReadAuthz {
             .unwrap_or_default();
         match membership {
             "join" | "active" => {
-                let Some(binding) = payload.get("delivery_binding").and_then(Value::as_object)
-                else {
-                    self.remove_realm_member(&realm_id, actor);
-                    return;
-                };
-                let source_matches = binding
-                    .get("recipient_id")
-                    .and_then(Value::as_str)
-                    .is_some_and(|did| did == self.source_id);
-                let routable = payload
-                    .get("delivery_status")
-                    .and_then(Value::as_str)
-                    .is_none_or(|status| status == "routable");
-                if !source_matches || !routable || !binding_expiry_allows(binding.get("expires_at"))
-                {
-                    self.remove_realm_member(&realm_id, actor);
+                if actor_id.route_service_id().as_str() != self.source_id {
+                    self.remove_realm_member(&realm_id, &actor);
                     return;
                 }
                 let previous = self
                     .realm_members
                     .get(&realm_id)
-                    .and_then(|members| members.get(actor));
+                    .and_then(|members| members.get(&actor));
                 let membership = PeerMembership {
                     joined_at: previous
                         .map(|member| member.joined_at)
@@ -1575,14 +1562,14 @@ impl PeerReadAuthz {
                 self.realm_members
                     .entry(realm_id)
                     .or_default()
-                    .insert(actor.to_owned(), membership);
+                    .insert(actor, membership);
             }
             "invite" | "invited" => {
                 if let Some(member) = self
                     .realm_members
                     .entry(realm_id)
                     .or_default()
-                    .get_mut(actor)
+                    .get_mut(&actor)
                 {
                     member
                         .invited_at
@@ -1590,7 +1577,7 @@ impl PeerReadAuthz {
                 }
             }
             "leave" | "ban" | "removed" | "banned" | "left" => {
-                self.remove_realm_member(&realm_id, actor);
+                self.remove_realm_member(&realm_id, &actor);
             }
             _ => {}
         }
@@ -1722,13 +1709,6 @@ fn parse_rfc3339(value: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn binding_expiry_allows(value: Option<&Value>) -> bool {
-    value
-        .and_then(Value::as_str)
-        .and_then(parse_rfc3339)
-        .is_none_or(|expires_at| expires_at > Utc::now())
 }
 
 async fn peer_events_query_response(

@@ -775,7 +775,7 @@ mod tests {
             Ok(())
         }
 
-        async fn clear_localparts(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn clear_localparts(&self, _account_pk: AccountPk) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -789,13 +789,18 @@ mod tests {
 
         async fn save_account_lifecycle(
             &self,
+            _account_pk: AccountPk,
             _actor_id: &str,
             _lifecycle: AccountLifecycleState,
         ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn delete_account_lifecycle(
+            &self,
+            _account_pk: AccountPk,
+            _actor_id: &str,
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }

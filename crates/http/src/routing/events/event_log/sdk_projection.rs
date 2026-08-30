@@ -780,7 +780,6 @@ async fn is_validated_realm_bootstrap_member(state: &AppState, record: &Accepted
                 | arkret_wire::event_kind_str::REALM_DISCOVERY
                 | arkret_wire::event_kind_str::REALM_ALIAS
                 | arkret_wire::event_kind_str::REALM_PLAINTEXT_VISIBLE_SERVICES
-                | arkret_wire::event_kind_str::REALM_DELIVERY_BINDING_POLICY
                 | arkret_wire::event_kind_str::MEMBER_STATE
         )
     {

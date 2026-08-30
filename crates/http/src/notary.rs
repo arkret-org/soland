@@ -1881,7 +1881,7 @@ async fn local_service_is_eligible_availability_holder(
                     "PCR create Principal Server admission binding is invalid: {error}"
                 ))
             })?;
-        return Ok(&create.principal_server_id == service_id);
+        return Ok(create.actor_id.route_service_id() == service_id);
     }
     for (cell, cell_state) in predecessor_state {
         let cell_id =
@@ -1908,18 +1908,7 @@ async fn local_service_is_eligible_availability_holder(
         if event.kind != arkret_wire::EventKind::MemberState {
             continue;
         }
-        let payload = serde_json::from_value::<
-            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
-        >(serde_json::to_value(&event.payload).map_err(|error| {
-            NotaryError::Construction(format!("serialize membership payload: {error}"))
-        })?)
-        .map_err(|error| NotaryError::Construction(error.to_string()))?;
-        let principal_server_id = payload.delivery_binding.and_then(|binding| {
-            (binding.recipient_kind
-                == arkret_models_identity::RecipientServiceKind::PrincipalServer)
-                .then_some(binding.recipient_id)
-        });
-        if principal_server_id.as_ref() == Some(service_id) {
+        if event.actor_id.route_service_id() == service_id {
             return Ok(true);
         }
     }

@@ -811,13 +811,19 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .snapshot()
         .members_of_realm(realm_id)
         .into_iter()
-        .filter(|member| {
-            member.state == "join"
-                && member.delivery_status.as_deref() == Some("routable")
-                && member.recipient_id.as_deref() == Some(state.service_id())
+        .filter_map(|member| {
+            if member.state != "join" {
+                return None;
+            }
+            let actor_id = serde_json::from_str::<arkret_wire::ActorId>(&member.member).ok()?;
+            if actor_id.route_service_id().as_str() != state.service_id() {
+                return None;
+            }
+            member
+                .membership_event_ref
+                .as_deref()
+                .and_then(|event_ref| arkret_wire::EventId::new(event_ref.to_owned()).ok())
         })
-        .filter_map(|member| member.delivery_binding_frontier.as_deref())
-        .filter_map(|event_ref| arkret_wire::EventId::new(event_ref.to_owned()).ok())
         .collect::<Vec<_>>();
     source_refs.sort();
     source_refs.dedup();
@@ -831,29 +837,23 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .flatten()
             .map(|(profile, _)| match profile {
                 arkret_wire::notary::NotaryValue::SingleSigner { signer, .. } => {
-                    normalize_join_candidate_service_id(signer.actor_id.as_str())
-                        .into_iter()
-                        .map(|service_id| service_id.to_string())
-                        .collect()
+                    std::iter::once(signer.actor_id.route_service_id().to_string()).collect()
                 }
                 arkret_wire::notary::NotaryValue::Threshold { signers, .. }
                 | arkret_wire::notary::NotaryValue::OpenSet { signers } => signers
                     .into_iter()
-                    .filter_map(|member| {
-                        normalize_join_candidate_service_id(member.actor_id.as_str())
-                    })
-                    .map(|service_id| service_id.to_string())
+                    .map(|member| member.actor_id.route_service_id().to_string())
                     .collect(),
                 arkret_wire::notary::NotaryValue::Mixed {
                     signer,
                     recovery_signers,
                     ..
-                } => normalize_join_candidate_service_id(signer.actor_id.as_str())
-                    .into_iter()
-                    .chain(recovery_signers.into_iter().filter_map(|member| {
-                        normalize_join_candidate_service_id(member.actor_id.as_str())
-                    }))
-                    .map(|service_id| service_id.to_string())
+                } => std::iter::once(signer.actor_id.route_service_id().to_string())
+                    .chain(
+                        recovery_signers
+                            .into_iter()
+                            .map(|member| member.actor_id.route_service_id().to_string()),
+                    )
                     .collect(),
             })
             .unwrap_or_default();
@@ -883,7 +883,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             encryption_profile,
             digest_algorithm,
             priority: Some(0),
-            source: RealmJoinCandidateSource::MemberDeliveryBinding,
+            source: RealmJoinCandidateSource::JoinedMemberAccount,
             source_refs,
             frontier_ref: None,
             seal_basis,
@@ -898,15 +898,6 @@ pub(super) async fn join_candidates_for_resolved_realm(
             .then_with(|| left.service_id.as_str().cmp(right.service_id.as_str()))
     });
     candidates
-}
-
-fn normalize_join_candidate_service_id(value: &str) -> Option<arkret_wire::DidCoreId> {
-    arkret_wire::DidCoreId::new(value.to_owned())
-        .ok()
-        .or_else(|| {
-            let did = arkret_wire::Did::new(value.to_owned()).ok()?;
-            arkret_wire::project_did_to_core_id(&did).ok()
-        })
 }
 use arkret_identifiers::DidCoreId;
 

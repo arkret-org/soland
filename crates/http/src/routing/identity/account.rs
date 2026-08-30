@@ -174,7 +174,7 @@ pub(crate) use social::{
 pub(crate) mod lifecycle;
 // Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
-    AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
+    AccountLifecycleChange, deactivation_peer_service_targets_for_account,
     set_account_lifecycle_state,
 };
 
@@ -765,29 +765,36 @@ async fn local_account_register(
         ));
     }
 
-    let account = AccountRecord {
-        id: crate::ids::generate_account_id(),
-        principal_id: principal_id.clone(),
-        localpart,
-        display_name: body
-            .display_name
-            .clone()
-            .or_else(|| Some(body.handle.trim_start_matches('@').to_owned())),
-        bio: None,
-        avatar_blob_ref: None,
-        created_at: now(),
-    };
-    state
+    let account_id = arkret_wire::AccountId::new(
+        principal_id.clone(),
+        arkret_wire::DidCoreId::new(state.service_id().to_owned())
+            .map_err(|error| AppError::internal(format!("service id is invalid: {error}")))?,
+    );
+    let created_at = now();
+    let display_name = body
+        .display_name
+        .clone()
+        .or_else(|| Some(body.handle.trim_start_matches('@').to_owned()));
+    let identity = state
         .identities()
         .register_account(soland_services::identity::RegisterAccountCommand {
-            account_id: account.id.clone(),
-            principal_id: principal_id.clone(),
-            localpart: account.localpart.clone(),
-            display_name: account.display_name.clone(),
-            created_at: account.created_at,
+            account_id: account_id.clone(),
+            localpart: localpart.clone(),
+            display_name: display_name.clone(),
+            created_at,
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let account = AccountRecord {
+        pk: identity.account_pk,
+        account_id,
+        principal_id: principal_id.clone(),
+        localpart,
+        display_name,
+        bio: None,
+        avatar_blob_ref: None,
+        created_at,
+    };
     if let Some(device_id) = body.device_id.as_deref() {
         let device_id = validate_device_id(device_id)
             .map_err(|_| AppError::param_invalid("invalid device_id"))?;
@@ -1143,27 +1150,32 @@ async fn project_account(
             registration_audit,
         });
     }
+    let account_id = arkret_wire::AccountId::new(
+        principal_id.clone(),
+        arkret_wire::DidCoreId::new(state.service_id().to_owned())
+            .map_err(|error| AppError::internal(format!("service id is invalid: {error}")))?,
+    );
+    let created_at = now();
+    let identity = state
+        .identities()
+        .register_account(soland_services::identity::RegisterAccountCommand {
+            account_id: account_id.clone(),
+            localpart: String::new(),
+            display_name: body.display_name.clone(),
+            created_at,
+        })
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let account = AccountRecord {
-        id: crate::ids::generate_account_id(),
+        pk: identity.account_pk,
+        account_id,
         principal_id,
         localpart: String::new(),
         display_name: body.display_name.clone(),
         bio: None,
         avatar_blob_ref: None,
-        created_at: now(),
+        created_at,
     };
-    state
-        .identities()
-        .save_account(account.clone())
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    if !account.localpart.is_empty() {
-        state
-            .identities()
-            .add_localpart(account.principal_id.as_str(), &account.localpart, true)
-            .await
-            .map_err(localpart_persistence_error)?;
-    }
     if let Some(device_id) = body.device_id.as_ref() {
         // A device becomes `verified` only through an accepted and projected
         // `ak.device.authorize` carrying its possession proof. Minting a

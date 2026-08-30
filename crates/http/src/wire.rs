@@ -348,13 +348,6 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "soland has no inbound resolver-health signal feed or per-write gate for this verdict"
         }),
         json!({
-            "area": "federation.delivery_binding_handover_emit",
-            "status": "implemented",
-            "spec": "B1.9 / federation.md service-binding handover",
-            "implemented": "the peer Event receive track compares the submitted delivery-binding frontier with the accepted member projection, applies handover grace, and emits typed delivery_binding_stale details only when a fresh verified new-service resolution carrier is available; otherwise it fails closed without redirecting",
-            "reason": "member projection, accepted frontier witness, and verified service-route cache jointly supply the handover proof"
-        }),
-        json!({
             "area": "audit.policy_receipt_emit",
             "status": "unsupported",
             "spec": "B1.12 / B1.16",

@@ -401,18 +401,20 @@ pub(super) async fn peer_event_batch_fanout_records(
     // depends on projection-install visibility or on the first Realm-create
     // envelope carrying a destination of its own.
     for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
-        let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope)
+        let Some((member_id, service_id)) = joined_member_route_target(&parsed.kind, envelope)
         else {
             continue;
         };
-        if service_id == state.service_id()
-            || peers.iter().any(|peer| peer.service_id == service_id)
+        if service_id.as_str() == state.service_id()
+            || peers
+                .iter()
+                .any(|peer| peer.service_id == service_id.as_str())
         {
             continue;
         }
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
-            service_id,
+            service_id.as_str(),
             "principal_server",
             false,
         )
@@ -420,13 +422,11 @@ pub(super) async fn peer_event_batch_fanout_records(
         .ok();
         peers.push(DynamicPeerEventTarget {
             url,
-            service_id: service_id.to_owned(),
+            service_id: service_id.to_string(),
             membership_frontier: vec![parsed.event_id.to_string()],
-            delivery_binding_frontier: vec![parsed.event_id.to_string()],
             authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
-                member_id: member_id.to_owned(),
+                member_id,
                 membership_event_ref: parsed.event_id.to_string(),
-                delivery_binding_frontier: parsed.event_id.to_string(),
             }],
         });
     }
@@ -532,20 +532,20 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     }
     let mut peers = Vec::new();
     for (parsed, envelope) in parsed_events.iter().zip(envelopes) {
-        let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope)
+        let Some((member_id, service_id)) = joined_member_route_target(&parsed.kind, envelope)
         else {
             continue;
         };
-        if service_id == state.service_id()
+        if service_id.as_str() == state.service_id()
             || peers
                 .iter()
-                .any(|peer: &DynamicPeerEventTarget| peer.service_id == service_id)
+                .any(|peer: &DynamicPeerEventTarget| peer.service_id == service_id.as_str())
         {
             continue;
         }
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
-            service_id,
+            service_id.as_str(),
             "principal_server",
             false,
         )
@@ -553,13 +553,11 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         .ok();
         peers.push(DynamicPeerEventTarget {
             url,
-            service_id: service_id.to_owned(),
+            service_id: service_id.to_string(),
             membership_frontier: Vec::new(),
-            delivery_binding_frontier: Vec::new(),
             authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
-                member_id: member_id.to_owned(),
+                member_id,
                 membership_event_ref: parsed.event_id.to_string(),
-                delivery_binding_frontier: parsed.event_id.to_string(),
             }],
         });
     }
@@ -627,28 +625,24 @@ pub(super) async fn direct_conversation_founding_fanout_records(
     Ok(records)
 }
 
-fn routable_member_delivery_target<'a>(
+fn joined_member_route_target(
     kind: &str,
-    envelope: &'a Value,
-) -> Option<(&'a str, &'a str)> {
+    envelope: &Value,
+) -> Option<(arkret_wire::ActorId, arkret_wire::DidCoreId)> {
     if kind != arkret_wire::EventKind::MemberState.as_str() {
         return None;
     }
-    let payload = envelope.get("payload")?;
-    if payload.get("membership").and_then(Value::as_str) != Some("join")
-        || payload.get("delivery_status").and_then(Value::as_str) != Some("routable")
+    let payload = serde_json::from_value::<
+        arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+    >(envelope.get("payload")?.clone())
+    .ok()?;
+    if payload.membership
+        != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
     {
         return None;
     }
-    let member_id = payload.get("actor_id").and_then(Value::as_str)?;
-    let service_id = payload
-        .get("delivery_binding")
-        .and_then(Value::as_object)
-        .and_then(|binding| binding.get("recipient_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|service_id| !service_id.is_empty())?;
-    Some((member_id, service_id))
+    let service_id = payload.member_id.route_service_id().clone();
+    Some((payload.member_id, service_id))
 }
 
 /// Federation delivery intents for one accepted Event, built **before** its
@@ -674,13 +668,15 @@ pub(super) async fn peer_event_fanout_records(
     // `dynamic_peer_event_targets` yet. Treat the accepted Event as the
     // authority witness for that exact target, matching the atomic Realm
     // bootstrap path above.
-    if let Some((member_id, service_id)) = routable_member_delivery_target(&parsed.kind, envelope)
-        && service_id != state.service_id()
-        && !peers.iter().any(|peer| peer.service_id == service_id)
+    if let Some((member_id, service_id)) = joined_member_route_target(&parsed.kind, envelope)
+        && service_id.as_str() != state.service_id()
+        && !peers
+            .iter()
+            .any(|peer| peer.service_id == service_id.as_str())
     {
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
-            service_id,
+            service_id.as_str(),
             "principal_server",
             false,
         )
@@ -688,13 +684,11 @@ pub(super) async fn peer_event_fanout_records(
         .ok();
         peers.push(DynamicPeerEventTarget {
             url,
-            service_id: service_id.to_owned(),
+            service_id: service_id.to_string(),
             membership_frontier: vec![parsed.event_id.to_string()],
-            delivery_binding_frontier: vec![parsed.event_id.to_string()],
             authority_witnesses: vec![soland_services::federation::RealmFanoutAuthorityWitness {
-                member_id: member_id.to_owned(),
+                member_id,
                 membership_event_ref: parsed.event_id.to_string(),
-                delivery_binding_frontier: parsed.event_id.to_string(),
             }],
         });
     }
@@ -748,10 +742,6 @@ pub(super) async fn peer_event_fanout_records(
             hasher_input.extend_from_slice(dependency.event_id.as_bytes());
             hasher_input.extend_from_slice(b"|");
             hasher_input.extend_from_slice(dependency.canonical_digest.as_bytes());
-        }
-        for frontier in &peer.delivery_binding_frontier {
-            hasher_input.extend_from_slice(b"|");
-            hasher_input.extend_from_slice(frontier.as_bytes());
         }
         let idempotency_key = format!("ak:outbox:event:{}", sha256_hex(&hasher_input));
         let mut peer_events = dependencies
@@ -1078,7 +1068,6 @@ struct DynamicPeerEventTarget {
     url: Option<String>,
     service_id: String,
     membership_frontier: Vec<String>,
-    delivery_binding_frontier: Vec<String>,
     authority_witnesses: Vec<soland_services::federation::RealmFanoutAuthorityWitness>,
 }
 
@@ -1110,17 +1099,16 @@ async fn dynamic_peer_event_targets(
             String,
             (
                 BTreeSet<String>,
-                BTreeSet<String>,
                 Vec<soland_services::federation::RealmFanoutAuthorityWitness>,
             ),
         > = BTreeMap::new();
         for member in projection.members_of_realm(parsed.realm_id.as_str()) {
-            if member.state != "join" || member.delivery_status.as_deref() != Some("routable") {
+            if member.state != "join" {
                 continue;
             }
-            let Some(service_id) = member.recipient_id.as_deref() else {
-                continue;
-            };
+            let member_id = serde_json::from_str::<arkret_wire::ActorId>(&member.member)
+                .map_err(|error| format!("invalid projected member ActorId: {error}"))?;
+            let service_id = member_id.route_service_id().as_str();
             if service_id == state.service_id() {
                 continue;
             }
@@ -1139,22 +1127,13 @@ async fn dynamic_peer_event_targets(
                     member.member
                 )
             })?;
-            let delivery_binding_frontier =
-                member.delivery_binding_frontier.as_deref().ok_or_else(|| {
-                    format!(
-                        "routable member {} lacks a delivery-binding frontier",
-                        member.member
-                    )
-                })?;
             let entry = service_frontiers.entry(service_id.to_owned()).or_default();
             entry.0.insert(membership_event_ref.to_owned());
-            entry.1.insert(delivery_binding_frontier.to_owned());
             entry
-                .2
+                .1
                 .push(soland_services::federation::RealmFanoutAuthorityWitness {
-                    member_id: member.member.clone(),
+                    member_id,
                     membership_event_ref: membership_event_ref.to_owned(),
-                    delivery_binding_frontier: delivery_binding_frontier.to_owned(),
                 });
         }
 
@@ -1162,9 +1141,7 @@ async fn dynamic_peer_event_targets(
     };
 
     let mut targets = Vec::new();
-    for (service_id, (membership_frontier, delivery_binding_frontier, authority_witnesses)) in
-        service_frontiers
-    {
+    for (service_id, (membership_frontier, authority_witnesses)) in service_frontiers {
         let url = crate::routing::federation::federation::resolved_peer_base_url(
             state,
             &service_id,
@@ -1177,7 +1154,6 @@ async fn dynamic_peer_event_targets(
             url,
             service_id,
             membership_frontier: membership_frontier.into_iter().collect(),
-            delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
             authority_witnesses,
         });
     }
@@ -1205,14 +1181,11 @@ fn service_binding_ref_for_realm_target(
 ) -> Option<arkret_models_collaboration::event_sync::FederationServiceBindingRef> {
     let membership_frontier =
         typed_frontier_or_fallback(&target.membership_frontier, fallback_event_id)?;
-    let delivery_binding_frontier =
-        typed_frontier_or_fallback(&target.delivery_binding_frontier, fallback_event_id)?;
     Some(
         arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: RealmId::new(realm_id.to_owned()).ok()?,
             realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
             membership_frontier,
-            delivery_binding_frontier,
             destination_kind: "principal_server".to_owned(),
         },
     )
@@ -1236,7 +1209,7 @@ pub(super) fn typed_frontier_or_fallback(
 mod tests {
     use serde_json::json;
 
-    use super::{authorization_selects_compensation, routable_member_delivery_target};
+    use super::{authorization_selects_compensation, joined_member_route_target};
 
     #[test]
     fn compensation_carrier_follows_only_its_exact_event() {
@@ -1263,42 +1236,44 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_fanout_reads_routable_peer_service_from_member_join() {
+    fn bootstrap_fanout_derives_peer_service_from_joined_account_id() {
         let envelope = json!({
             "payload": {
-                "actor_id": "ak:did_core:web:bob.example",
-                "membership": "join",
-                "delivery_status": "routable",
-                "delivery_binding": {
-                    "binding_source": "explicit",
-                    "recipient_id": "ak:did_core:web:soland-beta.example"
-                }
+                "member_id": {
+                    "kind": "account",
+                    "account_id": {
+                        "principal_id": "ak:did_core:web:bob.example",
+                        "principal_server_id": "ak:did_core:web:soland-beta.example"
+                    }
+                },
+                "membership": "join"
             }
         });
+        let (member_id, service_id) =
+            joined_member_route_target(arkret_wire::EventKind::MemberState.as_str(), &envelope)
+                .expect("joined account has a route service");
         assert_eq!(
-            routable_member_delivery_target(
-                arkret_wire::EventKind::MemberState.as_str(),
-                &envelope,
-            ),
-            Some((
-                "ak:did_core:web:bob.example",
-                "ak:did_core:web:soland-beta.example"
-            ))
+            member_id.signing_principal_id().as_str(),
+            "ak:did_core:web:bob.example"
         );
+        assert_eq!(service_id.as_str(), "ak:did_core:web:soland-beta.example");
         assert_eq!(
-            routable_member_delivery_target(
-                arkret_wire::EventKind::RealmCreate.as_str(),
-                &envelope,
-            ),
+            joined_member_route_target(arkret_wire::EventKind::RealmCreate.as_str(), &envelope,),
             None
         );
         assert_eq!(
-            routable_member_delivery_target(
+            joined_member_route_target(
                 arkret_wire::EventKind::MemberState.as_str(),
                 &json!({
                     "payload": {
-                        "membership": "join",
-                        "delivery_status": "unroutable"
+                        "member_id": {
+                            "kind": "account",
+                            "account_id": {
+                                "principal_id": "ak:did_core:web:bob.example",
+                                "principal_server_id": "ak:did_core:web:soland-beta.example"
+                            }
+                        },
+                        "membership": "leave"
                     }
                 }),
             ),

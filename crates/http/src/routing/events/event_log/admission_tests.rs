@@ -134,7 +134,6 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
                 )
                 .unwrap(),
             ],
-            delivery_binding_frontier: Vec::new(),
             destination_kind: "principal_server".to_owned(),
         },
         events: Vec::new(),
@@ -162,7 +161,6 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
             ))
             .unwrap(),
             membership_frontier: vec![event_id.clone()],
-            delivery_binding_frontier: vec![event_id],
             destination_kind: "principal_server".to_owned(),
         },
         events: Vec::new(),
@@ -171,32 +169,4 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
 
     SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)
         .unwrap();
-}
-
-#[test]
-fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
-    let event_id =
-        arkret_identifiers::EventId::new("ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19")
-            .unwrap();
-    let current = vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()];
-
-    federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
-        .unwrap();
-
-    let stale =
-        arkret_identifiers::EventId::new("ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1")
-            .unwrap();
-    let err = federation_delivery_binding_frontier_is_current(
-        &[stale],
-        vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()],
-    )
-    .unwrap_err();
-    assert_eq!(err, "delivery_binding_stale");
-
-    let err = federation_delivery_binding_frontier_is_current(
-        &[],
-        vec!["ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19".to_owned()],
-    )
-    .unwrap_err();
-    assert_eq!(err, "schema_violation");
 }

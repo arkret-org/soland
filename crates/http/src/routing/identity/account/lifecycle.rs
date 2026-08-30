@@ -49,6 +49,8 @@ pub(crate) async fn set_account_lifecycle_state(
         .map_err(|_| AppError::param_invalid("invalid account identity core"))?;
     let changed_by = arkret_wire::DidCoreId::new(changed_by.to_owned())
         .map_err(|_| AppError::param_invalid("invalid state-change actor identity core"))?;
+    let principal_server_id = arkret_wire::DidCoreId::new(state.service_id().to_owned())
+        .map_err(|_| AppError::internal("configured service identity is invalid"))?;
     let principal_id_value = principal_id.as_str();
     let changed_by_id_value = changed_by.as_str();
     let next_status = parse_account_lifecycle_target_state(next_state)?;
@@ -93,14 +95,16 @@ pub(crate) async fn set_account_lifecycle_state(
         let record = AccountLifecycleState {
             state: next_state.to_owned(),
             reason: reason.clone(),
-            changed_by: Some(changed_by.clone()),
+            changed_by: Some(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                changed_by.clone(),
+                principal_server_id,
+            ))),
             changed_at,
         };
-        persist_account_lifecycle_record(state, principal_id_value, &record).await?;
+        persist_account_lifecycle_record(state, account.pk, principal_id_value, &record).await?;
         if next_state == "deactivated" {
             let fanout =
-                run_account_deactivation_fanout(state, principal_id_value, account.id.as_str())
-                    .await?;
+                run_account_deactivation_fanout(state, principal_id_value, account.pk).await?;
             sessions_revoked = fanout.sessions_revoked;
             devices_revoked = fanout.devices_revoked;
             applet_delegated_sessions_revoked = fanout.applet_delegated_sessions_revoked;
@@ -202,7 +206,7 @@ struct AccountDeactivationFanout {
 async fn run_account_deactivation_fanout(
     state: &AppState,
     principal_id: &str,
-    owner_account_id: &str,
+    owner_account_pk: soland_storage::AccountPk,
 ) -> Result<AccountDeactivationFanout, AppError> {
     let applet_delegated_sessions_revoked =
         active_delegated_sessions_for_actor(state, principal_id)
@@ -216,7 +220,7 @@ async fn run_account_deactivation_fanout(
         .map_err(AppError::internal)?;
     let (to_device_messages_dropped, push_routes_revoked) =
         purge_delivery_state_for_actor(state, principal_id).await?;
-    let keypackages_retired = retire_owner_account_keypackages(state, owner_account_id).await?;
+    let keypackages_retired = retire_owner_account_keypackages(state, owner_account_pk).await?;
     let identity_link_cache_invalidated = state
         .invalidate_cached_handle_claims_for_subject(principal_id)
         .await;
@@ -263,11 +267,11 @@ async fn purge_delivery_state_for_actor(
 
 async fn retire_owner_account_keypackages(
     state: &AppState,
-    owner_account_id: &str,
+    owner_account_pk: soland_storage::AccountPk,
 ) -> Result<usize, AppError> {
     state
         .mls_key_packages()
-        .retire_owner_account_keypackages(owner_account_id, now().timestamp())
+        .retire_owner_account_keypackages(owner_account_pk, now().timestamp())
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage retirement failed: {error}")))
 }
@@ -354,7 +358,14 @@ async fn append_account_deactivation_propagation_state(
     identity_link_cache_invalidated: usize,
     capability_cache_invalidated: usize,
 ) {
-    let peer_targets = deactivation_peer_service_targets_for_actor(state, principal_id);
+    let peer_targets = arkret_wire::DidCoreId::new(principal_id.to_owned())
+        .ok()
+        .zip(arkret_wire::DidCoreId::new(state.service_id().to_owned()).ok())
+        .map(|(principal_id, principal_server_id)| {
+            let account_id = arkret_wire::AccountId::new(principal_id, principal_server_id);
+            deactivation_peer_service_targets_for_account(state, &account_id)
+        })
+        .unwrap_or_default();
     let target_ids = peer_targets
         .iter()
         .filter_map(|target| target.get("service_id").and_then(Value::as_str))
@@ -428,15 +439,16 @@ async fn append_account_deactivation_propagation_state(
     }
 }
 
-pub(crate) fn deactivation_peer_service_targets_for_actor(
+pub(crate) fn deactivation_peer_service_targets_for_account(
     state: &AppState,
-    actor: &str,
+    account_id: &arkret_wire::AccountId,
 ) -> Vec<Value> {
     let projection = state.projections().snapshot();
+    let account_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let actor_realms = projection
         .members
         .values()
-        .filter(|member| member.member == actor && member.state == "join")
+        .filter(|member| member.member == account_actor && member.state == "join")
         .map(|member| member.realm_id.clone())
         .collect::<std::collections::BTreeSet<_>>();
     let mut targets: std::collections::BTreeMap<
@@ -444,17 +456,17 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
         (
             std::collections::BTreeSet<String>,
             std::collections::BTreeSet<String>,
-            std::collections::BTreeSet<String>,
         ),
     > = std::collections::BTreeMap::new();
     for realm_id in actor_realms {
         for member in projection.members_of_realm(&realm_id) {
-            if member.delivery_status.as_deref() != Some("routable") {
+            if member.state != "join" {
                 continue;
             }
-            let Some(service_id) = member.recipient_id.as_deref() else {
+            let Ok(member_id) = serde_json::from_str::<arkret_wire::ActorId>(&member.member) else {
                 continue;
             };
+            let service_id = member_id.route_service_id().as_str();
             if service_id == state.service_id() {
                 continue;
             }
@@ -463,23 +475,15 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
             if let Some(frontier) = member.membership_event_ref.as_deref() {
                 entry.1.insert(frontier.to_owned());
             }
-            if let Some(frontier) = member
-                .delivery_binding_frontier
-                .as_deref()
-                .or(member.membership_event_ref.as_deref())
-            {
-                entry.2.insert(frontier.to_owned());
-            }
         }
     }
     targets
         .into_iter()
-        .map(|(service_id, (realm_ids, membership_frontier, delivery_binding_frontier))| {
+        .map(|(service_id, (realm_ids, membership_frontier))| {
             json!({
                 "service_id": service_id,
                 "realm_ids": realm_ids.into_iter().collect::<Vec<_>>(),
                 "membership_frontier": membership_frontier.into_iter().collect::<Vec<_>>(),
-                "delivery_binding_frontier": delivery_binding_frontier.into_iter().collect::<Vec<_>>(),
             })
         })
         .collect()
@@ -501,42 +505,46 @@ fn deterministic_erasure_receipt_id(
 /// exact package to persist before receipt fanout.
 pub(crate) async fn execute_account_status_erasure(
     state: &AppState,
-    account_id: &str,
-    actor: &str,
+    account_id: &arkret_wire::AccountId,
     triggering_status_record_id: &arkret_wire::AccountStatusRecordId,
 ) -> Result<ErasureReceiptPackage, AppError> {
-    if let Some(mut account) = state
+    let actor = account_id.principal_id.as_str();
+    let mut account = state
         .identities()
         .account(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-    {
-        let previous_localpart = account.localpart.clone();
-        account.display_name = Some("[user erased]".to_owned());
-        account.bio = None;
-        account.avatar_blob_ref = None;
-        account.localpart = String::new();
-        state
-            .identities()
-            .save_account(account)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        state
-            .identities()
-            .clear_localparts(actor)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-        if !previous_localpart.is_empty() {
-            record_handle_release(state, &previous_localpart)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
-        }
+        .ok_or_else(|| AppError::not_found("erasure account not found"))?;
+    if account.account_id != *account_id {
+        return Err(AppError::conflict("erasure account identity mismatch"));
     }
-    let fanout = run_account_deactivation_fanout(state, actor, account_id).await?;
+    let account_pk = account.pk;
+    let previous_localpart = account.localpart.clone();
+    account.display_name = Some("[user erased]".to_owned());
+    account.bio = None;
+    account.avatar_blob_ref = None;
+    account.localpart = String::new();
+    state
+        .identities()
+        .save_account(account)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .identities()
+        .clear_localparts(account_pk)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if !previous_localpart.is_empty() {
+        record_handle_release(state, &previous_localpart)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
+    let fanout = run_account_deactivation_fanout(state, actor, account_pk).await?;
     let memberships_removed = remove_realm_memberships_for_actor(state, actor);
     let changed_at = now();
     persist_account_lifecycle_record(
         state,
+        account_pk,
         actor,
         &AccountLifecycleState {
             state: "erasure_pending".to_owned(),
@@ -613,30 +621,13 @@ async fn enqueue_erasure_receipt_fanout(
         .iter()
         .map(String::as_str)
         .collect::<std::collections::BTreeSet<_>>();
-    let recipient_services = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
+    let projection = state.projections().snapshot();
+    let recipient_services = affected
         .into_iter()
-        .filter(|event| {
-            event
-                .realm_id
-                .as_deref()
-                .is_some_and(|realm_id| affected.contains(realm_id))
-        })
-        .filter(|event| event.kind == arkret_wire::EventKind::MemberState.as_str())
-        .filter_map(|event| {
-            event
-                .envelope
-                .get("payload")
-                .and_then(Value::as_object)
-                .and_then(|payload| payload.get("delivery_binding"))
-                .and_then(Value::as_object)
-                .and_then(|binding| binding.get("recipient_id"))
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
+        .flat_map(|realm_id| projection.members_of_realm(realm_id))
+        .filter(|member| member.state == "join")
+        .filter_map(|member| serde_json::from_str::<arkret_wire::ActorId>(&member.member).ok())
+        .map(|member_id| member_id.route_service_id().to_string())
         .filter(|service| service != state.service_id())
         .collect::<std::collections::BTreeSet<_>>();
     let peers = crate::routing::federation::federation::configured_peer_targets(state)
@@ -855,19 +846,20 @@ fn erasure_retained_stub(
 
 async fn persist_account_lifecycle_record(
     state: &AppState,
+    account_pk: soland_storage::AccountPk,
     principal_id: &str,
     record: &AccountLifecycleState,
 ) -> Result<(), AppError> {
     if record.state == "active" {
         state
             .identities()
-            .delete_account_lifecycle(principal_id)
+            .delete_account_lifecycle(account_pk, principal_id)
             .await
             .map_err(|error| AppError::internal(error.to_string()))
     } else {
         state
             .identities()
-            .save_account_lifecycle(principal_id, record.clone())
+            .save_account_lifecycle(account_pk, principal_id, record.clone())
             .await
             .map_err(|error| AppError::internal(error.to_string()))
     }

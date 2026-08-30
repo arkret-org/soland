@@ -1308,18 +1308,16 @@ async fn caller_can_read_delivery_target_service(
     recipient_id: &str,
 ) -> bool {
     for witness in &binding.authority_witnesses {
+        let member_key = witness.member_id.to_string();
         let witness_is_current = state
             .projections()
             .snapshot()
-            .member(&binding.realm_id, &witness.member_id)
+            .member(&binding.realm_id, &member_key)
             .is_some_and(|member| {
                 member.state == "join"
-                    && member.delivery_status.as_deref() == Some("routable")
-                    && member.recipient_id.as_deref() == Some(recipient_id)
+                    && witness.member_id.route_service_id().as_str() == recipient_id
                     && member.membership_event_ref.as_deref()
                         == Some(witness.membership_event_ref.as_str())
-                    && member.delivery_binding_frontier.as_deref()
-                        == Some(witness.delivery_binding_frontier.as_str())
             });
         if !witness_is_current {
             continue;
@@ -1334,22 +1332,7 @@ async fn caller_can_read_delivery_target_service(
         if !event_visible_to_session(state, &membership_event, session).await {
             continue;
         }
-        let delivery_binding_event =
-            if witness.delivery_binding_frontier == witness.membership_event_ref {
-                membership_event
-            } else {
-                let Ok(Some(delivery_binding_event)) = state
-                    .event_queries()
-                    .canonical_event(&witness.delivery_binding_frontier)
-                    .await
-                else {
-                    continue;
-                };
-                delivery_binding_event
-            };
-        if event_visible_to_session(state, &delivery_binding_event, session).await {
-            return true;
-        }
+        return true;
     }
     false
 }

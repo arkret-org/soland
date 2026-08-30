@@ -180,7 +180,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_pk: account.account_id.clone(),
+        controller_account_pk: account.pk,
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -248,7 +248,7 @@ pub(super) async fn submit_agent_runtime_key_request(
                             ))
                         },
                     )?,
-                    controller_account_pk: account.account_id.clone(),
+                    controller_account_pk: account.pk,
                     recipient_id: arkret_identifiers::DidCoreId::new(state.service_id().clone())
                         .map_err(|error| {
                             AppError::internal(format!(
@@ -1256,7 +1256,7 @@ fn ensure_current_runtime_key_request_matches(
 pub(super) struct AccountNotificationContext {
     notification_id: arkret_wire::NotificationId,
     recipient_actor_id: arkret_wire::DidCoreId,
-    controller_account_pk: arkret_wire::ServiceAccountId,
+    controller_account_pk: soland_storage::AccountPk,
     recipient_id: arkret_wire::DidCoreId,
     approval_request_id: arkret_wire::OpaqueLocalId,
 }

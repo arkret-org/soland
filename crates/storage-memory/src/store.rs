@@ -146,6 +146,7 @@ impl SolandMemoryPersistenceStore {
         let fault_injector = Arc::new(FaultInjector::default());
         let account_localparts = MemoryAccountLocalpartStore::new();
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
+        let account_lifecycle = MemoryAccountLifecycleStore::new(accounts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
         let device_inventory_data = devices.shared_data();
         let device_revocations = MemoryDeviceRevocationStore::new(device_inventory_data.clone());
@@ -173,7 +174,7 @@ impl SolandMemoryPersistenceStore {
             fault_injector: fault_injector.clone(),
             accounts,
             account_localparts,
-            account_lifecycle: MemoryAccountLifecycleStore::new(),
+            account_lifecycle,
             sessions: MemorySessionStore::new(),
             account_data: MemoryAccountDataStore::new(),
             contacts: MemoryContactStore::new(),

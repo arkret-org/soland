@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_models_collaboration::account_lifecycle::{
-    AccountStatusPrincipalAuthority, AccountStatusReceipt, AccountStatusRecord,
-    UnsignedAccountStatusReceipt, UnsignedAccountStatusRecord,
+    AccountStatusReceipt, AccountStatusRecord, UnsignedAccountStatusReceipt,
+    UnsignedAccountStatusRecord,
 };
 use arkret_models_collaboration::http_bodies::DevicePairingState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
@@ -19,7 +19,7 @@ use arkret_wire::{
 use chrono::{Duration, Utc};
 
 use super::{
-    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
+    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountPk,
     AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
     AgentApprovalNonceCommit, AppletIdentityCommit, AppletRecordCommit, AppletStore,
     CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
@@ -77,6 +77,7 @@ pub fn minimal_history_signer_evidence(
     };
     let pairwise_actor_id =
         DidCoreId::new("ak:did_core:key:z6MkfixtureService").expect("fixture actor");
+    let source_actor_id = arkret_wire::ActorId::service(pairwise_actor_id.clone());
     let verification_method =
         DidUrl::new("did:key:z6MkfixtureService#history-response").expect("fixture method");
     let mut identity_link =
@@ -142,7 +143,7 @@ pub fn minimal_history_signer_evidence(
         epoch: 7,
         leaf_index: 1,
         pairwise_actor_id: pairwise_actor_id.clone(),
-        source_actor_id: pairwise_actor_id,
+        source_actor_id,
         verification_method,
         response_signing_public_key_b64u: b64(&response_key),
         response_signing_public_key_digest: digest(&response_key),
@@ -2411,9 +2412,14 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
     let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
     let contact_record = ContactRecord {
-        requester_id: DidCoreId::new(principal_id.clone()).unwrap(),
-        target_id: DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example"))
-            .unwrap(),
+        requester_id: arkret_wire::ActorId::hosted_principal(
+            DidCoreId::new(principal_id.clone()).unwrap(),
+            DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+        ),
+        target_id: arkret_wire::ActorId::hosted_principal(
+            DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example")).unwrap(),
+            DidCoreId::new("ak:did_core:web:peer-principal.example").unwrap(),
+        ),
         contact_round_id: None,
         version: None,
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],
@@ -3100,9 +3106,10 @@ pub async fn assert_federation_outbox_store_contract(
             realm_id,
             source_event_ids: vec![source_event.event_id.clone()],
             authority_witnesses: vec![RealmFanoutAuthorityWitness {
-                member_id: "ak:did_core:web:alice.example".to_owned(),
+                member_id: arkret_wire::ActorId::service(
+                    DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                ),
                 membership_event_ref: source_event.event_id.clone(),
-                delivery_binding_frontier: source_event.event_id,
             }],
         },
         created_at: 1_000,
@@ -3563,8 +3570,7 @@ fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRo
         keypackage_ref: format!("ak:mls:keypackage:{namespace}-{suffix}"),
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-        owner_account_id: arkret_identifiers::ServiceAccountId::new(format!("{namespace}-account"))
-            .unwrap(),
+        owner_account_pk: AccountPk(1),
         actor_id: format!("ak:did_core:web:{namespace}.example"),
         device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
         endpoint_verification_method: None,
@@ -4112,14 +4118,12 @@ fn account_status_record(
         schema: SchemaId::ACCOUNT_STATUS_RECORD_V1.to_owned(),
         account_authority_id: DidCoreId::new("ak:did_core:web:authority.example")
             .expect("account authority core id"),
-        account_id: arkret_identifiers::ServiceAccountId::new(account_id)
-            .expect("account id is valid"),
-        principal_authority: AccountStatusPrincipalAuthority {
-            principal_id: DidCoreId::new("ak:did_core:web:alice.example")
+        account_id: arkret_wire::AccountId::new(
+            DidCoreId::new(format!("ak:did_core:web:{account_id}.example"))
                 .expect("principal core id"),
-            principal_server_id: DidCoreId::new("ak:did_core:web:principal.example")
+            DidCoreId::new("ak:did_core:web:principal.example")
                 .expect("principal server core id"),
-        },
+        ),
         principal_control_realm_id: RealmId::new(
             "ak:realm:ARQRpvtCGBgQfVQzTK4_Hgbg0D0HSnc3gPCvXOQUICir",
         )

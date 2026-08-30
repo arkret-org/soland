@@ -50,6 +50,10 @@ impl MemoryAccountStore {
         );
     }
 
+    pub(crate) fn shared_data(&self) -> Arc<Mutex<BTreeMap<String, AccountRecord>>> {
+        self.data.clone()
+    }
+
     fn primary_localpart_from(
         localparts: &BTreeMap<String, AccountLocalpartRecord>,
         account_pk: AccountPk,
@@ -327,34 +331,57 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
     }
 }
 pub(crate) struct MemoryAccountLifecycleStore {
-    data: Arc<Mutex<BTreeMap<String, AccountLifecycleRecord>>>,
+    data: Arc<Mutex<BTreeMap<AccountPk, AccountLifecycleRecord>>>,
+    accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>,
 }
 impl MemoryAccountLifecycleStore {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(accounts: Arc<Mutex<BTreeMap<String, AccountRecord>>>) -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
+            accounts,
         }
     }
 }
 #[async_trait]
 impl AccountLifecycleStore for MemoryAccountLifecycleStore {
-    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()> {
-        self.data.lock().insert(did.to_owned(), record.clone());
+    async fn put(
+        &self,
+        account_pk: AccountPk,
+        record: &AccountLifecycleRecord,
+    ) -> PersistenceResult<()> {
+        self.data.lock().insert(account_pk, record.clone());
         Ok(())
     }
 
-    async fn delete(&self, did: &str) -> PersistenceResult<()> {
-        self.data.lock().remove(did);
+    async fn delete(&self, account_pk: AccountPk) -> PersistenceResult<()> {
+        self.data.lock().remove(&account_pk);
         Ok(())
     }
 
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>> {
-        Ok(self
-            .data
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(AccountId, AccountLifecycleRecord)>> {
+        let accounts = self.accounts.lock();
+        self.data
             .lock()
             .iter()
-            .map(|(did, record)| (did.clone(), record.clone()))
-            .collect())
+            .map(|(account_pk, record)| {
+                let account = accounts
+                    .values()
+                    .find(|account| account.pk == *account_pk)
+                    .ok_or_else(|| {
+                        PersistenceError::NotFound(format!(
+                            "account lifecycle owner pk {}",
+                            account_pk.get()
+                        ))
+                    })?;
+                Ok((
+                    AccountId::new(
+                        account.principal_id.clone(),
+                        account.principal_server_id.clone(),
+                    ),
+                    record.clone(),
+                ))
+            })
+            .collect()
     }
 }
 // In-memory contact store

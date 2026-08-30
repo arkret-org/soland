@@ -403,7 +403,7 @@ pub struct AccountLocalpartState {
 pub struct AccountLifecycleState {
     pub state: String,
     pub reason: Option<String>,
-    pub changed_by: Option<DidCoreId>,
+    pub changed_by: Option<arkret_wire::ActorId>,
     pub changed_at: DateTime<Utc>,
 }
 
@@ -1011,11 +1011,16 @@ pub trait AccountLookupPort: Send + Sync {
     ) -> ServiceResult<()>;
     async fn save_account_lifecycle(
         &self,
+        account_pk: AccountPk,
         actor_id: &str,
         lifecycle: AccountLifecycleState,
     ) -> ServiceResult<()>;
-    async fn delete_account_lifecycle(&self, actor_id: &str) -> ServiceResult<()>;
-    async fn account_lifecycles(&self) -> ServiceResult<Vec<(String, AccountLifecycleState)>> {
+    async fn delete_account_lifecycle(
+        &self,
+        account_pk: AccountPk,
+        actor_id: &str,
+    ) -> ServiceResult<()>;
+    async fn account_lifecycles(&self) -> ServiceResult<Vec<(AccountId, AccountLifecycleState)>> {
         Ok(Vec::new())
     }
 }
@@ -2377,11 +2382,12 @@ impl IdentityService {
 
     pub async fn save_account_lifecycle(
         &self,
+        account_pk: AccountPk,
         actor_id: &str,
         lifecycle: AccountLifecycleState,
     ) -> ServiceResult<()> {
         self.accounts
-            .save_account_lifecycle(actor_id, lifecycle.clone())
+            .save_account_lifecycle(account_pk, actor_id, lifecycle.clone())
             .await?;
         if lifecycle.state == "active" {
             self.account_lifecycles.lock().remove(actor_id);
@@ -2393,8 +2399,14 @@ impl IdentityService {
         Ok(())
     }
 
-    pub async fn delete_account_lifecycle(&self, actor_id: &str) -> ServiceResult<()> {
-        self.accounts.delete_account_lifecycle(actor_id).await?;
+    pub async fn delete_account_lifecycle(
+        &self,
+        account_pk: AccountPk,
+        actor_id: &str,
+    ) -> ServiceResult<()> {
+        self.accounts
+            .delete_account_lifecycle(account_pk, actor_id)
+            .await?;
         self.account_lifecycles.lock().remove(actor_id);
         Ok(())
     }
@@ -2404,6 +2416,7 @@ impl IdentityService {
         *self.account_lifecycles.lock() = lifecycles
             .into_iter()
             .filter(|(_, lifecycle)| lifecycle.state != "active")
+            .map(|(account_id, lifecycle)| (account_id.principal_id.to_string(), lifecycle))
             .collect();
         Ok(())
     }
@@ -3413,7 +3426,7 @@ mod tests {
             Ok(())
         }
 
-        async fn clear_localparts(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn clear_localparts(&self, _account_pk: AccountPk) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -3427,13 +3440,18 @@ mod tests {
 
         async fn save_account_lifecycle(
             &self,
+            _account_pk: AccountPk,
             _actor_id: &str,
             _lifecycle: AccountLifecycleState,
         ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ServiceResult<()> {
+        async fn delete_account_lifecycle(
+            &self,
+            _account_pk: AccountPk,
+            _actor_id: &str,
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }

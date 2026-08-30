@@ -109,27 +109,20 @@ impl SolandEventsSubmitRequestBody {
     /// Spec B1.6 — validate the `service_binding_ref` carried on a
     /// federation submit. All fields MUST be populated and well-shaped
     /// per SDK typed validators (already enforced by deserialisation); we
-    /// additionally reject `membership_frontier` and
-    /// `delivery_binding_frontier` if they are non-empty arrays containing
-    /// duplicates.
+    /// additionally reject a `membership_frontier` containing duplicates.
     pub fn validate_federation_service_binding(
         binding: &FederationServiceBindingRef,
     ) -> Result<(), (&'static str, String)> {
-        for (name, frontier) in [
-            ("membership_frontier", &binding.membership_frontier),
-            (
-                "delivery_binding_frontier",
-                &binding.delivery_binding_frontier,
-            ),
-        ] {
-            let mut seen = std::collections::BTreeSet::new();
-            for entry in frontier {
-                if !seen.insert(entry.as_str()) {
-                    return Err((
-                        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
-                        format!("{name} contains duplicate entry {:?}", entry.as_str()),
-                    ));
-                }
+        let mut seen = std::collections::BTreeSet::new();
+        for entry in &binding.membership_frontier {
+            if !seen.insert(entry.as_str()) {
+                return Err((
+                    arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                    format!(
+                        "membership_frontier contains duplicate entry {:?}",
+                        entry.as_str()
+                    ),
+                ));
             }
         }
         if binding.destination_kind.trim().is_empty() {
@@ -140,31 +133,6 @@ impl SolandEventsSubmitRequestBody {
         }
         Ok(())
     }
-}
-
-pub fn federation_delivery_binding_frontier_is_current<I>(
-    request_frontier: &[EventId],
-    current_frontiers: I,
-) -> Result<(), &'static str>
-where
-    I: IntoIterator<Item = String>,
-{
-    if request_frontier.is_empty() {
-        return Err("schema_violation");
-    }
-    let current = current_frontiers
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>();
-    if current.is_empty() {
-        return Err("delivery_binding_stale");
-    }
-    if request_frontier
-        .iter()
-        .any(|event_id| !current.contains(event_id.as_str()))
-    {
-        return Err("delivery_binding_stale");
-    }
-    Ok(())
 }
 
 /// Reject receipt objects at the `ak.self.events.command.submit.v1` entrypoint.

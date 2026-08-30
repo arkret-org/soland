@@ -1,11 +1,5 @@
-use std::collections::BTreeMap;
-
-use arkret_identifiers::DidCoreId;
-use serde_json::{Value, json};
-
 // ════════════════════════════════════════════════════════════════════════
-// Federation S2S trust-domain headers, idempotency cache key, delivery
-// binding handover (spec B1.7 / B1.8 / B1.9 / T14).
+// Federation S2S trust-domain headers.
 // ════════════════════════════════════════════════════════════════════════
 
 /// Spec B1.7 — the two federation trust-domain headers that MUST appear
@@ -82,81 +76,3 @@ impl HeaderViolation {
         }
     }
 }
-
-/// Spec B1.9 — emit-shape for `delivery_binding_stale` (409). Returned
-/// when a peer attempts to push events using a stale delivery binding. The
-/// response carries the new recipient service DID and a frontier the sender
-/// should replay from after re-binding.
-pub(crate) fn delivery_binding_stale_response(
-    new_recipient_id: &arkret_wire::DidCoreId,
-    actor_id: &arkret_wire::DidCoreId,
-    new_recipient_resolution: &arkret_models_identity::ServiceResolutionCarrier,
-    handover_frontier: &[arkret_identifiers::EventId],
-    witness: Value,
-) -> Value {
-    let witness = match witness {
-        Value::Object(object) => object.into_iter().collect::<BTreeMap<_, _>>(),
-        other => BTreeMap::from([("value".to_owned(), other)]),
-    };
-    let details = arkret_models_identity::artifacts_device_identity::DeliveryBindingStale {
-        new_recipient_id: new_recipient_id.clone(),
-        new_recipient_resolution: new_recipient_resolution.clone(),
-        handover_frontier: handover_frontier.to_vec(),
-        handover_proof:
-            arkret_models_identity::artifacts_device_identity::DeliveryBindingStaleHandoverProof {
-                frontier: handover_frontier.to_vec(),
-                recipient_id: new_recipient_id.clone(),
-                actor_id: actor_id.clone(),
-                witness: arkret_wire::wire_strings::NonEmptyJsonObject::new(witness)
-                    .expect("delivery binding witness must be non-empty"),
-                extra: Default::default(),
-            },
-        extra: Default::default(),
-    };
-    error_envelope_with_details(
-        arkret_wire::ErrorCode::DELIVERY_BINDING_STALE,
-        "delivery binding is stale; rebind to the new recipient service",
-        details,
-    )
-}
-
-/// Spec B1.9 — emit-shape for `delivery_binding_handed_over` (409).
-/// Returned when the inbound delivery is a duplicate of a binding that has
-/// already been handed over to the new recipient.
-pub(crate) fn delivery_binding_handed_over_response(new_recipient_id: &DidCoreId) -> Value {
-    error_envelope_with_details(
-        arkret_wire::ErrorCode::DELIVERY_BINDING_HANDED_OVER,
-        "delivery binding has already been handed over to the new recipient",
-        json!({
-            "new_recipient_id": new_recipient_id.as_str(),
-        }),
-    )
-}
-
-fn error_envelope_with_details(
-    code: &'static str,
-    message: &'static str,
-    details: impl serde::Serialize,
-) -> Value {
-    let details =
-        serde_json::to_value(details).unwrap_or_else(|_| Value::Object(Default::default()));
-    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message);
-    if let Some(object) = details.as_object() {
-        for (key, value) in object {
-            envelope = envelope.with_detail(key.clone(), value.clone());
-        }
-    }
-    serde_json::to_value(envelope).unwrap_or_else(|_| {
-        json!({
-            "type": format!("https://arkret.org/problems/{code}"),
-            "title": code.replace('_', " "),
-            "status": arkret_wire::ErrorCode::from_wire(code)
-                .map_or(500, |entry| entry.http_status()),
-            "detail": message,
-        })
-    })
-}
-
-#[cfg(test)]
-#[path = "wire_tests.rs"]
-mod wire_tests;

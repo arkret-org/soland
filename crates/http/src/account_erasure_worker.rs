@@ -29,7 +29,7 @@ enum ExecutionState {
 struct AccountErasureExecution {
     receiver_id: arkret_wire::DidCoreId,
     account_authority_id: arkret_wire::DidCoreId,
-    account_id: String,
+    account_id: arkret_wire::AccountId,
     principal_id: arkret_wire::DidCoreId,
     triggering_status_record_id: AccountStatusRecordId,
     storage_boundary: ErasureStorageBoundary,
@@ -56,7 +56,7 @@ fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppErro
     struct Coordinates<'a> {
         receiver_id: &'a arkret_wire::DidCoreId,
         account_authority_id: &'a arkret_wire::DidCoreId,
-        account_id: &'a str,
+        account_id: &'a arkret_wire::AccountId,
         principal_id: &'a arkret_wire::DidCoreId,
         triggering_status_record_id: &'a AccountStatusRecordId,
         storage_boundary: ErasureStorageBoundary,
@@ -78,7 +78,7 @@ fn execution_hash(execution: &AccountErasureExecution) -> Result<String, AppErro
 pub async fn ensure_intent(
     state: &AppState,
     account_authority_id: &str,
-    account_id: &str,
+    account_id: &arkret_wire::AccountId,
     principal_id: &arkret_wire::DidCoreId,
     record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
@@ -91,7 +91,7 @@ pub async fn ensure_intent(
             .map_err(|error| {
                 AppError::internal(format!("Account Authority DID invalid: {error}"))
             })?,
-        account_id: account_id.to_owned(),
+        account_id: account_id.clone(),
         principal_id: principal_id.clone(),
         triggering_status_record_id: record_id.clone(),
         storage_boundary: ErasureStorageBoundary::AccountPrivateStore,
@@ -159,7 +159,7 @@ async fn store_execution(
 
 async fn run_execution(
     state: &AppState,
-    account_id: &str,
+    account_id: &arkret_wire::AccountId,
     principal_id: &arkret_wire::DidCoreId,
     record_id: &AccountStatusRecordId,
 ) -> Result<(), AppError> {
@@ -203,7 +203,6 @@ async fn run_execution(
         let package = crate::routing::identity::account::lifecycle::execute_account_status_erasure(
             state,
             &execution.account_id,
-            execution.principal_id.as_str(),
             &execution.triggering_status_record_id,
         )
         .await?;
@@ -258,8 +257,8 @@ pub async fn run_once(state: &AppState) -> Result<usize, AppError> {
     {
         run_execution(
             state,
-            record.account_id.as_str(),
-            &record.principal_authority.principal_id,
+            &record.account_id,
+            &record.account_id.principal_id,
             &record.account_status_record_id,
         )
         .await?;
@@ -294,7 +293,11 @@ mod tests {
                 "ak:did_core:web:authority.example".to_owned(),
             )
             .unwrap(),
-            account_id: "account-1".to_owned(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:principal.example".to_owned())
+                    .unwrap(),
+            ),
             principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
                 .unwrap(),
             triggering_status_record_id: AccountStatusRecordId::new(

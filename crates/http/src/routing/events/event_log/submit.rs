@@ -867,39 +867,6 @@ impl InternalEventAdmission {
     }
 }
 
-const DELIVERY_BINDING_HANDOVER_GRACE_SECONDS: i64 = 86_400;
-
-#[derive(Debug, Clone)]
-struct DeliveryBindingMemberView {
-    member: String,
-    realm_id: String,
-    recipient_id: String,
-    membership_event_ref: Option<String>,
-    delivery_binding_frontier_ref: String,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-struct DeliveryBindingHandoverEvidence {
-    realm_id: String,
-    actor_id: arkret_wire::DidCoreId,
-    new_recipient_id: arkret_wire::DidCoreId,
-    new_service_resolution: Option<arkret_models_identity::ServiceResolutionCarrier>,
-    handover_frontier: Vec<EventId>,
-    membership_event_ref: Option<String>,
-    delivery_binding_frontier_ref: String,
-    updated_at: DateTime<Utc>,
-    witness: Value,
-}
-
-#[derive(Debug, Clone)]
-enum FederationServiceBindingCheck {
-    Current,
-    Reject(&'static str),
-    Stale(DeliveryBindingHandoverEvidence),
-    HandedOver(DeliveryBindingHandoverEvidence),
-}
-
 impl SubmitOneError {
     pub(in crate::routing) fn new(
         status: StatusCode,
@@ -2022,7 +1989,10 @@ async fn direct_bootstrap_source_is_contact_authority(
     {
         return false;
     }
-    let Some(creator) = event_string_field_from_value(first, "actor_id") else {
+    let Some(creator) = first
+        .get("actor_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+    else {
         return false;
     };
     let realm = first.get("payload").cloned().and_then(|payload| {
@@ -2044,25 +2014,22 @@ async fn direct_bootstrap_source_is_contact_authority(
         {
             return None;
         }
-        let payload = event.get("payload")?;
-        if payload.get("membership").and_then(Value::as_str) != Some("join") {
+        let payload = serde_json::from_value::<
+            arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+        >(event.get("payload")?.clone())
+        .ok()?;
+        if payload.membership
+            != arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Join
+        {
             return None;
         }
-        let peer = payload.get("actor_id").and_then(Value::as_str)?;
-        if peer == creator {
+        if payload.member_id == creator {
             return None;
         }
-        let binding = payload.get("delivery_binding")?;
-        (binding.get("recipient_id").and_then(Value::as_str) == Some(state.service_id().as_str()))
-            .then(|| peer.to_owned())
+        (payload.member_id.route_service_id().as_str() == state.service_id().as_str())
+            .then_some(payload.member_id)
     });
     let Some(peer) = peer else {
-        return false;
-    };
-    let Ok(creator) = arkret_wire::DidCoreId::new(creator) else {
-        return false;
-    };
-    let Ok(peer) = arkret_wire::DidCoreId::new(peer) else {
         return false;
     };
     state
@@ -2715,44 +2682,6 @@ pub(crate) async fn submit_federation_events(
                 "peer_state_stale_unavailable",
                 "federation peer_stale state is unavailable",
             );
-            return;
-        }
-    }
-    match federation_service_binding_current_for_destination(
-        state,
-        &service_binding_ref,
-        Some(&submissions),
-    )
-    .await
-    {
-        FederationServiceBindingCheck::Current => {}
-        FederationServiceBindingCheck::Reject(reason) => {
-            render_error(res, StatusCode::CONFLICT, reason, reason);
-            return;
-        }
-        FederationServiceBindingCheck::Stale(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_id,
-                    &evidence.actor_id,
-                    evidence
-                        .new_service_resolution
-                        .as_ref()
-                        .expect("stale evidence requires a verified route carrier"),
-                    &evidence.handover_frontier,
-                    evidence.witness,
-                ),
-            ));
-            return;
-        }
-        FederationServiceBindingCheck::HandedOver(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_id,
-                ),
-            ));
             return;
         }
     }
@@ -3482,21 +3411,16 @@ async fn submit_direct_conversation_federation(
         );
         return;
     }
-    let peer_actor = submission.events[1]
-        .event
-        .payload
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let destination = submission.events[1]
-        .event
-        .payload
-        .get("delivery_binding")
-        .and_then(Value::as_object)
-        .and_then(|binding| binding.get("recipient_id"))
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if peer_actor.is_empty() || destination != state.service_id() {
+    let peer_actor = submission.events[1].event.payload.clone();
+    let peer_actor = serde_json::from_value::<
+        arkret_models_collaboration::governance::membership_invite::MembershipPayload,
+    >(peer_actor)
+    .ok()
+    .map(|payload| payload.member_id);
+    if peer_actor
+        .as_ref()
+        .is_none_or(|actor_id| actor_id.route_service_id().as_str() != state.service_id())
+    {
         render_error(
             res,
             StatusCode::FORBIDDEN,
@@ -3668,14 +3592,12 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
     Some(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
 }
 
-mod delivery_binding;
 mod ingress_receipt;
 mod outcome;
 mod post_commit;
 mod preflight;
 mod value;
 
-use delivery_binding::*;
 pub(in crate::routing) use ingress_receipt::validate_authorization_lease_for_event;
 use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;

@@ -11,11 +11,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    account_lifecycle (principal_id) {
-        principal_id -> Text,
+    account_lifecycle (account_pk) {
+        account_pk -> Int8,
         state -> Text,
         reason -> Nullable<Text>,
-        changed_by -> Nullable<Text>,
+        changed_by -> Nullable<Jsonb>,
         changed_at -> Timestamptz,
     }
 }
@@ -1812,6 +1812,7 @@ diesel::table! {
 }
 
 diesel::joinable!(account_localparts -> accounts (account_pk));
+diesel::joinable!(account_lifecycle -> accounts (account_pk));
 diesel::joinable!(agent_participation -> agent_principals (agent_id));
 diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_pk));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));

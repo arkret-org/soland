@@ -40,9 +40,13 @@ pub trait AccountLocalpartStore: Send + Sync {
 }
 #[async_trait]
 pub trait AccountLifecycleStore: Send + Sync {
-    async fn put(&self, did: &str, record: &AccountLifecycleRecord) -> PersistenceResult<()>;
-    async fn delete(&self, did: &str) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<(String, AccountLifecycleRecord)>>;
+    async fn put(
+        &self,
+        account_pk: AccountPk,
+        record: &AccountLifecycleRecord,
+    ) -> PersistenceResult<()>;
+    async fn delete(&self, account_pk: AccountPk) -> PersistenceResult<()>;
+    async fn snapshot_all(&self) -> PersistenceResult<Vec<(AccountId, AccountLifecycleRecord)>>;
 }
 /// Trait for actor-private account data storage.
 ///

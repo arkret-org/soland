@@ -122,7 +122,7 @@ pub struct AccountLocalpartRecord {
 pub struct AccountLifecycleRecord {
     pub state: String,
     pub reason: Option<String>,
-    pub changed_by: Option<DidCoreId>,
+    pub changed_by: Option<arkret_wire::ActorId>,
     pub changed_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -595,14 +595,14 @@ impl std::fmt::Display for FederationOutboxState {
     }
 }
 
-/// One exact accepted member/delivery-binding generation that authorized a
-/// distinct Realm fanout target when the local Event was accepted.
+/// One exact accepted membership generation that authorized a distinct Realm
+/// fanout target when the local Event was accepted. Routing is derived from
+/// the complete ActorId; no transport binding is part of this authority.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RealmFanoutAuthorityWitness {
-    pub member_id: String,
+    pub member_id: arkret_wire::ActorId,
     pub membership_event_ref: String,
-    pub delivery_binding_frontier: String,
 }
 
 /// Durable metadata that distinguishes a Realm Event fanout obligation from
@@ -635,18 +635,13 @@ impl RealmFanoutBinding {
         }
         let mut witnesses = BTreeSet::new();
         for witness in &self.authority_witnesses {
-            DidCoreId::new(witness.member_id.clone())
+            witness
+                .member_id
+                .validate()
                 .map_err(|error| format!("invalid Realm fanout member id: {error}"))?;
             EventId::new(witness.membership_event_ref.clone())
                 .map_err(|error| format!("invalid Realm fanout membership Event ref: {error}"))?;
-            EventId::new(witness.delivery_binding_frontier.clone()).map_err(|error| {
-                format!("invalid Realm fanout delivery-binding frontier: {error}")
-            })?;
-            if !witnesses.insert((
-                witness.member_id.as_str(),
-                witness.membership_event_ref.as_str(),
-                witness.delivery_binding_frontier.as_str(),
-            )) {
+            if !witnesses.insert((&witness.member_id, witness.membership_event_ref.as_str())) {
                 return Err("Realm fanout authority witnesses must be unique".to_owned());
             }
         }

@@ -820,11 +820,6 @@ mod tests {
                 5,
                 json!({"value": "invite_only"}),
             ),
-            event(
-                EventKind::RealmDeliveryBindingPolicy,
-                6,
-                json!({"allow_unroutable_members": true}),
-            ),
             creator_member,
         ];
 

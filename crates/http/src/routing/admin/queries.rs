@@ -125,9 +125,9 @@ pub(super) fn admin_actor_row(
     let principal_id = account.principal_id.clone();
     let status = state.account_lifecycle_status(principal_id.as_str());
     let deactivation_federation_incomplete = (status == AccountStatus::Deactivated).then(|| {
-        !crate::routing::identity::account::deactivation_peer_service_targets_for_actor(
+        !crate::routing::identity::account::deactivation_peer_service_targets_for_account(
             state,
-            principal_id.as_str(),
+            &account.account_id,
         )
         .is_empty()
     });
