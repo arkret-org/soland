@@ -3805,6 +3805,15 @@ pub(super) async fn submit_event_value_with_context(
             event.event_id.clone(),
             crate::routing::events::projection::projection_event_json(&event),
         ));
+    } else {
+        // Actor-scoped streams consume durable control history even when the
+        // Event has no timeline projection. Its canonical envelope supplies
+        // only a wake-up hint; subscribers reload the accepted record.
+        let _ = state.publish_event_notification(crate::state::EventNotification::event(
+            parsed.realm_id.to_string(),
+            parsed.event_id.to_string(),
+            envelope_for_bootstrap.clone(),
+        ));
     }
     if let Some(payload) = strand_status_audit_payload {
         append_audit_log(

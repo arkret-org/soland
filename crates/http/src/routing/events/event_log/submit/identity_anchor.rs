@@ -561,7 +561,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
         Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.to_string(),
-            station_id: payload.station_id.to_string(),
+            station_id: payload.account_id.station_id.to_string(),
             new_device_generation: payload.new_device_generation,
             reanchor_digest: first.canonical_digest.clone(),
             authorize_digest: second.canonical_digest.clone(),
@@ -699,6 +699,12 @@ pub(super) async fn submit_identity_anchor_batch(
                     &[operation],
                 )
                 .await;
+            } else {
+                let _ = state.publish_event_notification(crate::state::EventNotification::event(
+                    parsed.realm_id.to_string(),
+                    parsed.event_id.to_string(),
+                    envelope.clone(),
+                ));
             }
         }
         if is_bootstrap
@@ -1293,9 +1299,10 @@ async fn validate_unit_relationships(
     .map_err(|message| {
         SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", message)
     })?;
-    if payload.principal_id.as_str() != first.actor_id.as_str()
+    if first.actor.as_account_id() != Some(&payload.account_id)
+        || payload.account_id.station_id != state.service_core_id()
         || payload.replacement_authorize_payload_digest != replacement_payload_digest
-        || authorize.principal_id.as_str() != first.actor_id.as_str()
+        || authorize.principal_id != payload.account_id.principal_id
         || authorize.authorization_binding_kind
             != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
     {
@@ -1533,6 +1540,8 @@ async fn validate_reanchor_recovery_session(
     if session.state != arkret_models_crypto::SessionState::Verified
         || session.expires_at <= now()
         || session_id != &reanchor.recovery_session_id
+        || session.principal_id != reanchor.account_id.principal_id
+        || session.station_id != reanchor.account_id.station_id
         || session.principal_id != authorize.principal_id
         || session.requesting_device_id != authorize.device_id.as_str()
         || session.policy_id != reanchor.recovery_policy_id.as_str()
@@ -1887,8 +1896,7 @@ async fn build_reanchor_batch_receipt(
         scope: arkret_wire::EventBatchReceiptScope::DeviceReanchor(
             arkret_wire::DeviceReanchorReceiptScope {
                 kind: arkret_wire::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
-                principal_id: payload.principal_id,
-                station_id: payload.station_id,
+                account_id: payload.account_id,
                 realm_id: reanchor.realm_id.clone(),
                 previous_device_generation: payload.previous_device_generation,
                 new_device_generation: payload.new_device_generation,

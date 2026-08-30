@@ -24,6 +24,13 @@ pub(crate) fn session_actor_from_credential(
             "session audience does not match this Station",
         ));
     }
+    if let Some(grant) = session.session_grant.as_ref()
+        && (grant.account_id.principal_id != principal || grant.account_id.station_id != station)
+    {
+        return Err(AppError::unauthenticated(
+            "session must retain the signed grant's exact AccountId",
+        ));
+    }
     let hosted = match session
         .session_grant
         .as_ref()

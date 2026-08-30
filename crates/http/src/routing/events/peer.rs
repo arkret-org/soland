@@ -1195,11 +1195,7 @@ impl PeerEventsQueryParts {
             RealmId::new(realm.clone())
                 .map_err(|_| AppError::param_invalid(format!("invalid realm: {realm}")))?;
         }
-        for actor in &self.actors {
-            if validate_did(actor).is_err() {
-                return Err(AppError::param_invalid(format!("invalid actor: {actor}")));
-            }
-        }
+        super::sync::canonical_actor_selectors(&self.actors)?;
         if let Some(kind) = &self.kind_filter
             && (!kind.starts_with("ak.") || kind.contains(' '))
         {

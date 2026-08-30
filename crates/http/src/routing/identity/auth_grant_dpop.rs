@@ -561,6 +561,7 @@ pub(crate) fn session_record_from_introspected_grant_for_logout(
         agent_session,
         session_grant: Some(SessionGrantAuthorizationState {
             grant_id: grant.id.clone(),
+            account_id: grant.account_id.clone(),
             issuer_id: grant.issuer_id.clone(),
             scopes: grant.scopes.clone(),
             credential_class: grant.credential_class,
@@ -691,6 +692,7 @@ pub(crate) fn session_from_verified_grant(
 ) -> SessionRecord {
     let grant_context = SessionGrantAuthorizationState {
         grant_id: grant.id.clone(),
+        account_id: grant.account_id.clone(),
         issuer_id: grant.issuer_id.clone(),
         scopes: grant.scopes.clone(),
         credential_class: grant.credential_class,
@@ -714,6 +716,51 @@ pub(crate) fn session_from_verified_grant(
         created_at: crate::wire::now(),
         revoked_at: None,
     }
+}
+
+/// Resolve the exact account authority retained from the authenticated credential.
+/// A principal string is never sufficient to reconstruct a missing Station.
+pub(crate) async fn authenticated_session_account_id(
+    state: &AppState,
+    session: &SessionRecord,
+) -> Result<arkret_wire::AccountId, soland_http::error::AppError> {
+    use soland_http::error::{AppError, ErrorCode};
+    let unauthenticated = || {
+        AppError::new(
+            ErrorCode::Unauthenticated,
+            "authenticated session has no exact account authority",
+        )
+    };
+    let signed_account = session
+        .session_grant
+        .as_ref()
+        .map(|grant| &grant.account_id);
+    let persisted_account = match session.account_pk.clone() {
+        Some(account_pk) => Some(
+            state
+                .identities()
+                .account_by_id(account_pk)
+                .await
+                .map_err(|error| AppError::internal(error.to_string()))?
+                .ok_or_else(unauthenticated)?
+                .account_id,
+        ),
+        None => None,
+    };
+    if let (Some(signed), Some(persisted)) = (signed_account, persisted_account.as_ref())
+        && signed != persisted
+    {
+        return Err(unauthenticated());
+    }
+    let account_id = signed_account
+        .cloned()
+        .or(persisted_account)
+        .ok_or_else(unauthenticated)?;
+    account_id.validate().map_err(|_| unauthenticated())?;
+    if account_id.principal_id.as_str() != session.actor {
+        return Err(unauthenticated());
+    }
+    Ok(account_id)
 }
 
 /// The §6a/§6b session binding of an introspected grant, exposed for the
@@ -894,6 +941,37 @@ mod tests {
         assert_eq!(
             err.2,
             "session grant device metadata does not match its holder binding"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_retains_signed_account_and_never_fills_a_missing_station() {
+        let mut config = crate::config::AppConfig::test_default();
+        config.seed_demo_data = false;
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+        let mut grant = test_introspection_grant();
+        grant.account_id.station_id = DidCoreId::new("ak:did_core:web:origin.example").unwrap();
+        let expected = grant.account_id.clone();
+        let (device, agent) = session_binding_from_introspection(&grant).unwrap();
+        let mut session = session_from_verified_grant(&state, "test-grant", grant, device, agent);
+        assert_eq!(
+            authenticated_session_account_id(&state, &session)
+                .await
+                .unwrap(),
+            expected
+        );
+        session.actor = "ak:did_core:web:other.example".to_owned();
+        assert!(
+            authenticated_session_account_id(&state, &session)
+                .await
+                .is_err()
+        );
+        session.actor = expected.principal_id.to_string();
+        session.session_grant = None;
+        assert!(
+            authenticated_session_account_id(&state, &session)
+                .await
+                .is_err()
         );
     }
 

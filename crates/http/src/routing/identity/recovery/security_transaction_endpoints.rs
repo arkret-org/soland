@@ -1415,7 +1415,13 @@ async fn continue_issue_terminal_receipt(
                     AppError::conflict("durable device re-anchor Event is unavailable")
                         .with_wire_code("security_transaction_failed_precondition")
                 })?;
-            if reanchor_event.actor_id != transaction.resource.principal_id.as_str() {
+            let recovery_account_id = arkret_wire::AccountId::new(
+                transaction.resource.principal_id.clone(),
+                recovery_session.station_id.clone(),
+            );
+            if reanchor_event.actor_id
+                != arkret_wire::ActorId::account(recovery_account_id.clone()).to_string()
+            {
                 return Err(AppError::conflict(
                     "device re-anchor Event belongs to a different principal",
                 )
@@ -1450,7 +1456,7 @@ async fn continue_issue_terminal_receipt(
                     &authorization_event.canonical_digest,
                 )
                 .map_err(AppError::internal)?;
-            if reanchor_payload.principal_id != transaction.resource.principal_id
+            if reanchor_payload.account_id != recovery_account_id
                 || !authorize_follows_reanchor
                 || reanchor_payload.replacement_authorize_payload_digest
                     != replacement_payload_digest

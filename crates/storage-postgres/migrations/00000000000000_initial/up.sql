@@ -1611,9 +1611,8 @@ CREATE TABLE public.federation_frontier_exchange (
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
 
 CREATE TABLE public.invite_receive_policies (
-    subject_id text PRIMARY KEY,
+    account_pk bigint PRIMARY KEY REFERENCES public.accounts(pk) ON DELETE CASCADE,
     policy_payload jsonb NOT NULL,
-    denied_subject_ids text[] DEFAULT '{}'::text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 

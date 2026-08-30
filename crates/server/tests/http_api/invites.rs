@@ -195,7 +195,7 @@ impl DispatchFixture {
             .and_then(|record| {
                 record
                     .payload
-                    .get("entries")
+                    .get("quarantine_entries")
                     .and_then(Value::as_array)
                     .cloned()
             })
@@ -346,7 +346,10 @@ async fn seed_dispatch_fixture_for_target(
 /// Bind the fail-closed §5 default policy to Bob so the receive chain has an
 /// effective policy to evaluate.
 async fn bind_default_receive_policy(fixture: &DispatchFixture) {
-    let policy = InviteReceivePolicy::spec_default(fixture_actor_core_id(BOB));
+    let policy = InviteReceivePolicy::spec_default(arkret_wire::AccountId::new(
+        fixture_actor_core_id(BOB),
+        fixture.state.service_core_id().clone(),
+    ));
     let mut response = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header(
             "authorization",

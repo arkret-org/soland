@@ -10,8 +10,9 @@ use arkret_models_collaboration::governance::invite_addressing::{
     InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequestBody,
     InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
     InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
-    InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
-    PrincipalLocatorProofPurpose, SelfInviteDispatchRequestBody,
+    InviteLocatorStatus, InviteQuarantine, InviteQuarantineEntry, InviteQuarantineScope,
+    InviteQuarantineStatus, InviteReceivePolicy, InviteTrustTier, PrincipalLocator,
+    PrincipalLocatorProof, PrincipalLocatorProofPurpose, SelfInviteDispatchRequestBody,
 };
 use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::sync_frames::account_sync::{
@@ -62,7 +63,6 @@ const ACTIVE_LOCATOR_LIMIT: usize = 16;
 const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
-pub(crate) const INVITE_QUARANTINE_SCHEMA: &str = "ak.schema.invite_quarantine.v1";
 const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
 
 pub(crate) fn peer_router() -> Router {
@@ -253,9 +253,9 @@ async fn peer_invites_submit(
     })?;
 
     let destination_id = required_header(req, HEADER_DESTINATION_SERVICE_ID)?;
-    if destination_id != delivery.invite_address.recipient_id.as_str() {
+    if destination_id != delivery.invite_address.account_id.station_id.as_str() {
         return Err(super::events::peer::cross_domain_replay(
-            "Destination-Service-ID must equal invite_address.recipient_id",
+            "Destination-Service-ID must equal invite_address.account_id.station_id",
         ));
     }
     let source_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
@@ -348,7 +348,7 @@ async fn receive_private_invite_delivery(
         .signing_principal_id()
         .as_str()
         .to_owned();
-    let subject_id = delivery.invite_address.subject_id.clone();
+    let subject_id = delivery.invite_address.account_id.principal_id.clone();
     let subject = subject_id.as_str().to_owned();
 
     // Spec invite-addressing.md §5..§8 — resolve the subject's private
@@ -356,14 +356,14 @@ async fn receive_private_invite_delivery(
     // `consent_grant` to `explicit_address` when the grant cannot be
     // verified), then apply blocklist + allowlist + behavior to pick a
     // receive action and a graded-disclosure outcome.
-    let policy = resolve_core_invite_receive_policy(state, &subject_id);
+    let policy = resolve_core_invite_receive_policy(state, &delivery.invite_address.account_id);
     let decision = evaluate_invite_receive(
         state,
         &policy,
         &delivery.introduction_evidence,
         &inviter_id,
         &subject,
-        delivery.invite_address.recipient_id.as_str(),
+        delivery.invite_address.account_id.station_id.as_str(),
         source_id,
     );
 
@@ -388,8 +388,8 @@ async fn receive_private_invite_delivery(
             audit_operation,
             json!({
                 "idempotency_key": delivery.idempotency_key,
-                "invitee_id": delivery.invite_address.subject_id,
-                "recipient_id": delivery.invite_address.recipient_id,
+                "invitee_id": delivery.invite_address.account_id.principal_id,
+                "recipient_id": delivery.invite_address.account_id.station_id,
                 "introduction_kind": delivery.introduction_evidence.kind(),
                 "effective_kind": decision.effective_kind,
                 "trust_tier": decision.trust_tier.as_str(),
@@ -425,7 +425,7 @@ async fn receive_private_invite_delivery(
             })?;
             let duplicate = persist_private_invite_projection(
                 state,
-                delivery.invite_address.subject_id.as_str(),
+                delivery.invite_address.account_id.principal_id.as_str(),
                 body,
                 &validated,
             )
@@ -462,8 +462,8 @@ async fn receive_private_invite_delivery(
         json!({
             "idempotency_key": delivery.idempotency_key,
             "event_id": event_id,
-            "invitee_id": delivery.invite_address.subject_id,
-            "recipient_id": delivery.invite_address.recipient_id,
+            "invitee_id": delivery.invite_address.account_id.principal_id,
+            "recipient_id": delivery.invite_address.account_id.station_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "effective_kind": decision.effective_kind,
             "trust_tier": decision.trust_tier.as_str(),
@@ -534,7 +534,7 @@ async fn self_invites_dispatch(
     let delivery_body = serde_json::to_value(&delivery)
         .map_err(|error| AppError::internal(format!("invite delivery encoding failed: {error}")))?;
 
-    if delivery.invite_address.recipient_id.as_str() == state.service_id() {
+    if delivery.invite_address.account_id.station_id.as_str() == state.service_id() {
         // §7 — the local target runs the same steps 4-9 the peer ingress runs.
         return json_ok(
             receive_private_invite_delivery(
@@ -645,7 +645,7 @@ async fn enqueue_remote_invite_delivery(
     accepted: &AcceptedEvent,
 ) -> Result<InviteDeliveryOutcome, AppError> {
     validate_invite_delivery_event_binding(body, delivery)?;
-    let recipient_id = &delivery.invite_address.recipient_id;
+    let recipient_id = &delivery.invite_address.account_id.station_id;
     let resolver = state
         .service_route_resolver()
         .map_err(|error| AppError::internal(error.to_owned()))?;
@@ -699,8 +699,8 @@ async fn enqueue_remote_invite_delivery(
         json!({
             "idempotency_key": delivery.idempotency_key,
             "event_id": accepted.event_id,
-            "invitee_id": delivery.invite_address.subject_id,
-            "recipient_id": delivery.invite_address.recipient_id,
+            "invitee_id": delivery.invite_address.account_id.principal_id,
+            "recipient_id": delivery.invite_address.account_id.station_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "outbox_id": enqueued.id,
             "endpoint": PEER_INVITES_ENDPOINT,
@@ -1071,7 +1071,7 @@ async fn resolve_invite_locator(
     })?;
     let mut locator = PrincipalLocator {
         schema: arkret_wire::SchemaId::PRINCIPAL_LOCATOR_V1.to_owned(),
-        subject_id,
+        account_id: arkret_wire::AccountId::new(subject_id, recipient_id.clone()),
         service_resolution: ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url: format!(
                 "{}/_arkret/open/services/{recipient_id}/resolution",
@@ -1080,51 +1080,37 @@ async fn resolve_invite_locator(
             pinned_record_digest: None,
         },
         route_assistance: None,
-        recipient_id,
-        recipient_kind: None,
         issued_at,
         expires_at,
         locator_ref_digest,
-        delivery_modes: Vec::new(),
         display_hint,
         proofs: Vec::new(),
     };
-    let mut unsigned_locator = serde_json::to_value(&locator).map_err(|error| {
-        AppError::internal(format!("principal locator unsigned serialize: {error}"))
-    })?;
-    if let Value::Object(object) = &mut unsigned_locator {
-        object.remove("proofs");
-    }
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned_locator)
-        .map_err(|error| AppError::internal(format!("principal locator canonicalize: {error}")))?;
-    let payload_digest =
-        Hash::new(canonical::sha256_digest(&canonical_bytes)).map_err(|error| {
-            AppError::internal(format!("principal locator digest invalid: {error}"))
-        })?;
-    let jws = arkret_signatures::jws::sign_jws_ed25519(
-        &canonical_bytes,
+    let mut proof =
+        DetachedPayloadProof {
+            kind: "detached_jws".to_owned(),
+            verification_method: state.service_verification_method("notary-key").map_err(
+                |error| AppError::internal(format!("principal locator signing method: {error}")),
+            )?,
+            payload_digest: locator.payload_digest().map_err(|error| {
+                AppError::internal(format!("principal locator digest: {error}"))
+            })?,
+            created_at: now(),
+            domain: None,
+            audience: None,
+            jws: String::new(),
+        };
+    let signing_bytes = locator
+        .proof_signing_bytes(&proof)
+        .map_err(|error| AppError::internal(format!("principal locator transcript: {error}")))?;
+    proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &signing_bytes,
         state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(format!("principal locator sign: {error}")))?;
     locator.proofs = vec![PrincipalLocatorProof {
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
-        proof: DetachedPayloadProof {
-            kind: "detached_jws".to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#notary-key",
-                state.service_resolution_commitment().did
-            ))
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "service notary verification method is invalid: {error}"
-                ))
-            })?,
-            payload_digest,
-            created_at: now(),
-            domain: None,
-            audience: None,
-            jws,
-        },
+        proof,
     }];
     locator.validate_minimal().map_err(|error| {
         AppError::internal(format!("principal locator validation failed: {error}"))
@@ -1170,13 +1156,17 @@ async fn persist_invite_quarantine_entry(
     body: &Value,
     decision: &ReceiveDecision,
 ) -> Result<bool, AppError> {
+    let account_id = &delivery.invite_address.account_id;
+    if account_id.principal_id.as_str() != subject
+        || account_id.station_id != state.service_core_id()
+    {
+        return Err(AppError::capability_denied(
+            "invite quarantine holder mismatch",
+        ));
+    }
     let subject_exists = state
         .identities()
-        .account(&arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(subject.to_owned())
-                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
-            state.service_core_id().clone(),
-        ))
+        .account(account_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -1203,70 +1193,78 @@ async fn persist_invite_quarantine_entry(
         .pointer("/invite_event/event_id")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned);
+        .map(|value| arkret_wire::EventId::new(value.to_owned()))
+        .transpose()
+        .map_err(|error| AppError::param_invalid(format!("invalid invite event id: {error}")))?;
     let invite_event_digest =
         crate::util::canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
     let request_digest = crate::util::canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
-    let entry_digest = format!(
-        "sha256:{}",
-        sha256_hex(
-            format!(
-                "{subject}|{source_id}|{}|{invite_event_digest}",
-                delivery.idempotency_key
-            )
-            .as_bytes()
-        )
-    );
-    let entry = json!({
-        "entry_digest": entry_digest.clone(),
-        "status": "pending_review",
-        "subject_id": subject,
-        "source_peer_principal_id": inviter_id,
+    let entry_digest = crate::util::canonical_digest(&json!({
+        "account_id": account_id,
         "source_id": source_id,
-        "recipient_id": delivery.invite_address.recipient_id.as_str(),
-        "consent_scope": "invite",
-        "introduction_kind": delivery.introduction_evidence.kind(),
-        "effective_kind": decision.effective_kind,
-        "trust_tier": decision.trust_tier.as_str(),
-        "invite_event_id": invite_event_id.clone(),
-        "invite_event_digest": invite_event_digest.clone(),
-        "request_digest": request_digest,
-        "idempotency_key_digest": idempotency_key_digest,
-        "received_at": received_at,
-        "expires_at": expires_at,
-    });
+        "idempotency_key": delivery.idempotency_key,
+        "invite_event_digest": invite_event_digest,
+    }))?;
+    let parse_digest = |value: String| {
+        Hash::new(value)
+            .map_err(|error| AppError::internal(format!("invite quarantine digest: {error}")))
+    };
+    let entry = InviteQuarantineEntry {
+        entry_digest: parse_digest(entry_digest)?,
+        status: InviteQuarantineStatus::PendingReview,
+        account_id: account_id.clone(),
+        source_peer_principal_id: DidCoreId::new(inviter_id.to_owned())
+            .map_err(|error| AppError::param_invalid(format!("invalid inviter: {error}")))?,
+        source_id: DidCoreId::new(source_id.to_owned())
+            .map_err(|error| AppError::param_invalid(format!("invalid source: {error}")))?,
+        consent_scope: InviteQuarantineScope::Invite,
+        introduction_kind: serde_json::from_value(json!(delivery.introduction_evidence.kind()))
+            .map_err(|error| AppError::internal(format!("invalid introduction kind: {error}")))?,
+        effective_kind: serde_json::from_value(json!(decision.effective_kind))
+            .map_err(|error| AppError::internal(format!("invalid effective kind: {error}")))?,
+        trust_tier: match decision.trust_tier {
+            TrustTier::High => InviteTrustTier::High,
+            TrustTier::Discovery => InviteTrustTier::Discovery,
+            TrustTier::Low => InviteTrustTier::Low,
+        },
+        invite_event_id: invite_event_id.clone(),
+        invite_event_digest: parse_digest(invite_event_digest.clone())?,
+        request_digest: parse_digest(request_digest)?,
+        idempotency_key_digest: parse_digest(idempotency_key_digest)?,
+        received_at,
+        expires_at,
+    };
 
     let account_data = state.account_data();
     let existing = account_data
         .entry(subject, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut entries = existing
+    let mut quarantine = existing
         .as_ref()
-        .and_then(|record| record.payload.get("entries"))
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    entries.retain(|candidate| {
-        invite_quarantine_entry_active(candidate, received_at)
-            && candidate
-                .get("entry_digest")
-                .and_then(Value::as_str)
-                .is_none_or(|existing_digest| existing_digest != entry_digest.as_str())
+        .map(|record| serde_json::from_value::<InviteQuarantine>(record.payload.clone()))
+        .transpose()
+        .map_err(|error| AppError::internal(format!("invalid invite quarantine cell: {error}")))?
+        .unwrap_or_else(|| InviteQuarantine::new(received_at));
+    quarantine
+        .validate_holder(account_id)
+        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
+    quarantine.quarantine_entries.retain(|candidate| {
+        candidate.expires_at > received_at && candidate.entry_digest != entry.entry_digest
     });
-    entries.push(entry);
-    if entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
-        let excess = entries.len() - MAX_INVITE_QUARANTINE_ENTRIES;
-        entries.drain(0..excess);
+    quarantine.quarantine_entries.push(entry);
+    if quarantine.quarantine_entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
+        let excess = quarantine.quarantine_entries.len() - MAX_INVITE_QUARANTINE_ENTRIES;
+        quarantine.quarantine_entries.drain(0..excess);
     }
-
-    let payload = json!({
-        "schema": INVITE_QUARANTINE_SCHEMA,
-        "entries": entries,
-        "updated_at": received_at,
-    });
+    quarantine.updated_at = received_at;
+    quarantine
+        .validate_holder(account_id)
+        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
+    let payload = serde_json::to_value(&quarantine)
+        .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
     let record = AccountDataState {
         actor_id: subject.to_owned(),
         account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
@@ -1320,15 +1318,6 @@ async fn persist_invite_quarantine_entry(
     Ok(true)
 }
 
-fn invite_quarantine_entry_active(entry: &Value, at: chrono::DateTime<chrono::Utc>) -> bool {
-    entry
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc) > at)
-        .unwrap_or(false)
-}
-
 /// Effective trust tier of an introduction evidence kind, *after* any
 /// `consent_grant` verification downgrade has been resolved by the caller.
 fn trust_tier_for_kind(kind: &str) -> TrustTier {
@@ -1361,12 +1350,12 @@ pub(crate) struct ReceiveDecision {
 /// indistinguishable from an ordinary quarantine.
 fn resolve_core_invite_receive_policy(
     state: &AppState,
-    subject: &DidCoreId,
+    account_id: &arkret_wire::AccountId,
 ) -> InviteReceivePolicy {
     state
         .contacts()
-        .invite_policy(subject.as_str())
-        .unwrap_or_else(|| InviteReceivePolicy::spec_default(subject.clone()))
+        .invite_policy(account_id)
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(account_id.clone()))
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
@@ -1395,7 +1384,13 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
-    let policy = resolve_core_invite_receive_policy(state, &subject_id);
+    let Ok(station_id) = DidCoreId::new(recipient_id.to_owned()) else {
+        return false;
+    };
+    let policy = resolve_core_invite_receive_policy(
+        state,
+        &arkret_wire::AccountId::new(subject_id, station_id),
+    );
     let decision = match intent {
         Some(DirectoryIntent::ContactRequest) => {
             let evidence = ContactIntroductionEvidence::HandleClaim {
@@ -1475,10 +1470,7 @@ fn evaluate_invite_receive(
 
     let effective_kind: &'static str = match evidence {
         IntroductionEvidence::LocatorRef { principal_locator } => {
-            if principal_locator.validate_minimal().is_ok()
-                && principal_locator.subject_id.as_str() == subject
-                && principal_locator.recipient_id.as_str() == recipient_id
-                && principal_locator.expires_at > now
+            if verified_locator_for_recipient(state, principal_locator, subject, recipient_id, now)
             {
                 "locator_ref"
             } else {
@@ -1606,6 +1598,45 @@ fn evaluate_invite_receive(
     }
 }
 
+fn verified_locator_for_recipient(
+    state: &AppState,
+    locator: &PrincipalLocator,
+    subject: &str,
+    recipient_id: &str,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if locator.validate_minimal().is_err()
+        || locator.account_id.principal_id.as_str() != subject
+        || locator.account_id.station_id.as_str() != recipient_id
+        || locator.issued_at > at
+        || locator.expires_at <= at
+    {
+        return false;
+    }
+    locator.proofs.iter().any(|entry| {
+        let proof = &entry.proof;
+        if entry.proof_purpose != PrincipalLocatorProofPurpose::RecipientServiceAcceptance
+            || proof.kind != "detached_jws"
+            || proof.created_at < locator.issued_at
+            || proof.created_at > at
+            || proof.created_at >= locator.expires_at
+        {
+            return false;
+        }
+        let Ok(transcript) = locator.proof_signing_bytes(proof) else {
+            return false;
+        };
+        crate::jws_verify::verify_did_controlled_jws(
+            &transcript,
+            &proof.jws,
+            proof.verification_method.as_str(),
+            recipient_id,
+            state,
+        )
+        .is_ok()
+    })
+}
+
 pub(crate) fn evaluate_contact_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
@@ -1619,10 +1650,7 @@ pub(crate) fn evaluate_contact_receive(
     let constraints = constraints_for_surface(state, ReceivePolicySurface::ContactRequest);
     let effective_kind: &'static str = match evidence {
         ContactIntroductionEvidence::LocatorRef { principal_locator } => {
-            if principal_locator.validate_minimal().is_ok()
-                && principal_locator.subject_id.as_str() == subject
-                && principal_locator.recipient_id.as_str() == recipient_id
-                && principal_locator.expires_at > now
+            if verified_locator_for_recipient(state, principal_locator, subject, recipient_id, now)
             {
                 "locator_ref"
             } else {
@@ -2032,9 +2060,9 @@ fn validate_invite_delivery_consistency(
     delivery: &InviteDeliveryRequestBody,
     state: &AppState,
 ) -> Result<(), AppError> {
-    if delivery.invite_address.recipient_id.as_str() != state.service_id() {
+    if delivery.invite_address.account_id.station_id.as_str() != state.service_id() {
         return Err(super::events::peer::cross_domain_replay(
-            "invite_address.recipient_id does not match this service",
+            "invite_address.account_id.station_id does not match this service",
         ));
     }
     validate_invite_delivery_event_binding(body, delivery)
@@ -2064,8 +2092,8 @@ fn validate_invite_delivery_event_binding(
         .cloned()
         .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok());
     let expected = arkret_wire::AccountId::new(
-        delivery.invite_address.subject_id.clone(),
-        delivery.invite_address.recipient_id.clone(),
+        delivery.invite_address.account_id.principal_id.clone(),
+        delivery.invite_address.account_id.station_id.clone(),
     );
     if invitee.as_ref() != Some(&expected) {
         return Err(super::events::peer::schema_violation(
@@ -2124,6 +2152,89 @@ mod invite_locator_security_tests {
     const PRODUCTION_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-0000000000e2";
     const PRODUCTION_REALM: &str = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
     const PRODUCTION_INVITE_EVENT: &str = "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2";
+
+    #[tokio::test]
+    async fn locator_trust_requires_the_account_bound_recipient_signature() {
+        let state = production_holder_state().await;
+        let at = now();
+        let mut locator = PrincipalLocator {
+            schema: arkret_wire::SchemaId::PRINCIPAL_LOCATOR_V1.to_owned(),
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                state.service_core_id().clone(),
+            ),
+            service_resolution: ServiceResolutionCarrier::CurrentRecordUrl {
+                current_record_url: "https://soland.test/_arkret/open/services/resolution"
+                    .to_owned(),
+                pinned_record_digest: None,
+            },
+            route_assistance: None,
+            issued_at: at,
+            expires_at: at + Duration::minutes(5),
+            locator_ref_digest: Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            display_hint: None,
+            proofs: Vec::new(),
+        };
+        let mut proof = DetachedPayloadProof {
+            kind: "detached_jws".to_owned(),
+            verification_method: state.service_verification_method("notary-key").unwrap(),
+            payload_digest: locator.payload_digest().unwrap(),
+            created_at: at,
+            domain: None,
+            audience: None,
+            jws: String::new(),
+        };
+        proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+            &locator.proof_signing_bytes(&proof).unwrap(),
+            state.notary_signing_key().as_ref(),
+        )
+        .unwrap();
+        locator.proofs.push(PrincipalLocatorProof {
+            proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
+            proof,
+        });
+        assert!(verified_locator_for_recipient(
+            &state,
+            &locator,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            at
+        ));
+
+        let mut forged = locator.clone();
+        forged.account_id.principal_id = DidCoreId::new(PRODUCTION_INVITER.to_owned()).unwrap();
+        forged.proofs[0].proof.payload_digest = forged.payload_digest().unwrap();
+        assert!(!verified_locator_for_recipient(
+            &state,
+            &forged,
+            PRODUCTION_INVITER,
+            state.service_id(),
+            at
+        ));
+
+        let mut raw_payload_signature = locator.clone();
+        let mut payload = serde_json::to_value(&raw_payload_signature).unwrap();
+        payload.as_object_mut().unwrap().remove("proofs");
+        raw_payload_signature.proofs[0].proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+            &canonical::canonical_json_bytes(&payload).unwrap(),
+            state.notary_signing_key().as_ref(),
+        )
+        .unwrap();
+        assert!(!verified_locator_for_recipient(
+            &state,
+            &raw_payload_signature,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            at
+        ));
+        assert!(!verified_locator_for_recipient(
+            &state,
+            &locator,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            locator.expires_at
+        ));
+    }
 
     async fn production_holder_state() -> AppState {
         let state = AppState::new(
@@ -2477,8 +2588,13 @@ mod invite_locator_security_tests {
             .await
             .expect("invite quarantine cell")
             .expect("invite quarantine write");
-        assert_eq!(cell.payload["schema"], INVITE_QUARANTINE_SCHEMA);
-        let entry = &cell.payload["entries"][0];
+        assert_eq!(cell.payload["schema"], "ak.schema.invite_quarantine.v1");
+        assert!(cell.payload.get("entries").is_none());
+        let typed: InviteQuarantine = serde_json::from_value(cell.payload.clone()).unwrap();
+        typed
+            .validate_holder(&delivery.invite_address.account_id)
+            .unwrap();
+        let entry = &cell.payload["quarantine_entries"][0];
         assert!(
             entry["entry_digest"]
                 .as_str()
@@ -2488,6 +2604,9 @@ mod invite_locator_security_tests {
         assert!(entry.get("quarantine_id").is_none());
         assert!(entry.get("source_peer_id").is_none());
         assert!(entry.get("inviter_id").is_none());
+        assert!(entry.get("subject_id").is_none());
+        assert!(entry.get("recipient_id").is_none());
+        assert!(!entry.get("invite_event_id").is_some_and(Value::is_null));
         assert_service_account_data_fanout(
             &state,
             AccountDataKey::ACCOUNT_INVITE_QUARANTINE,

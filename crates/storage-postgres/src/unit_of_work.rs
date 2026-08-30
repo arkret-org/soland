@@ -225,11 +225,14 @@ async fn stage_agent_membership_cascade(
                 .filter(|request| request.event.event_id != controller_transition_event_id.as_str())
                 .map(|request| soland_storage::admitted_cascade_agent_id(&request.event))
                 .collect::<PersistenceResult<std::collections::BTreeSet<_>>>()?;
+            let expected_agent_count = expected_agent_ids.len();
             let expected_agent_ids = expected_agent_ids
                 .iter()
                 .cloned()
                 .collect::<std::collections::BTreeSet<_>>();
-            if submitted_agent_ids != expected_agent_ids {
+            if submitted_agent_ids != expected_agent_ids
+                || expected_agent_ids.len() != expected_agent_count
+            {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: atomic Agent cascade actor set mismatch".to_owned(),
                 ));
@@ -649,30 +652,7 @@ async fn commit_contact_projection(
         }
     }
     if let Some(policy) = invite_policy {
-        let subject_id = policy.subject_id.as_str().to_owned();
-        let payload = serde_json::to_value(&policy).map_err(|error| {
-            PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
-        })?;
-        let denied_subject_ids = policy
-            .denied_subject_ids
-            .iter()
-            .map(|did| did.as_str().to_owned())
-            .collect::<Vec<_>>();
-        sql_query(
-            "INSERT INTO invite_receive_policies \
-             (subject_id, policy_payload, denied_subject_ids, updated_at) \
-             VALUES ($1, $2, $3, NOW()) \
-             ON CONFLICT (subject_id) DO UPDATE SET \
-                policy_payload = EXCLUDED.policy_payload, \
-                denied_subject_ids = EXCLUDED.denied_subject_ids, \
-                updated_at = NOW()",
-        )
-        .bind::<Text, _>(&subject_id)
-        .bind::<Jsonb, _>(&payload)
-        .bind::<Array<Text>, _>(&denied_subject_ids)
-        .execute(conn)
-        .await
-        .map_err(PersistenceError::database)?;
+        crate::contacts::put_invite_receive_policy(conn, &policy).await?;
     }
     Ok(())
 }

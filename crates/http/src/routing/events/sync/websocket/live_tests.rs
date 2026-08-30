@@ -403,10 +403,10 @@ fn signal_record(realm_id_str: &str) -> soland_storage::SignalRelayRecord {
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
-        sender_actor_id: arkret_identifiers::DidCoreId::new(
-            "ak:did_core:web:bob.example".to_owned(),
-        )
-        .unwrap(),
+        sender_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:bob.example".to_owned()).unwrap(),
+            crate::test_event::station_id(),
+        )),
         sender_device_id: arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
@@ -446,7 +446,7 @@ fn signal_record(realm_id_str: &str) -> soland_storage::SignalRelayRecord {
     soland_storage::SignalRelayRecord {
         realm_id: realm_id_str.to_owned(),
         scope_ref: envelope.scope_ref.clone(),
-        sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+        sender_actor_id: envelope.sender_actor_id.to_string(),
         sender_device_id: envelope.sender_device_id.as_str().to_owned(),
         signal_class: envelope.signal_class,
         envelope_digest: envelope.envelope_digest().unwrap().as_str().to_owned(),

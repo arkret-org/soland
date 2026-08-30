@@ -503,10 +503,7 @@ pub trait InviteReceivePolicyPort: Send + Sync {
     async fn policies(
         &self,
     ) -> ServiceResult<
-        Vec<(
-            String,
-            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-        )>,
+        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     >;
 }
 
@@ -517,7 +514,7 @@ pub struct ContactService {
     runtime_invite_policies: Arc<
         Mutex<
             BTreeMap<
-                String,
+                arkret_wire::AccountId,
                 arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
             >,
         >,
@@ -583,28 +580,28 @@ impl ContactService {
         self.invite_policies.save_policy(policy.clone()).await?;
         self.runtime_invite_policies
             .lock()
-            .insert(policy.subject_id.to_string(), policy);
+            .insert(policy.account_id.clone(), policy);
         Ok(())
     }
 
     pub fn replace_runtime_invite_policies(
         &self,
         policies: impl IntoIterator<
-            Item = (
-                String,
-                arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-            ),
+            Item = arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
         >,
     ) {
-        *self.runtime_invite_policies.lock() = policies.into_iter().collect();
+        *self.runtime_invite_policies.lock() = policies
+            .into_iter()
+            .map(|policy| (policy.account_id.clone(), policy))
+            .collect();
     }
 
     pub fn invite_policy(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>
     {
-        self.runtime_invite_policies.lock().get(subject_id).cloned()
+        self.runtime_invite_policies.lock().get(account_id).cloned()
     }
 
     /// or_set add for one accepted `ak.direct_conversation.bound` Event.
@@ -1950,6 +1947,7 @@ pub struct AgentSessionState {
 #[derive(Clone, Debug)]
 pub struct SessionGrantAuthorizationState {
     pub grant_id: arkret_identifiers::SessionGrantId,
+    pub account_id: AccountId,
     pub issuer_id: arkret_identifiers::DidCoreId,
     /// Scopes the Account Authority bound into the presented grant. They are
     /// the only wire-visible statement about what the grant was authorized

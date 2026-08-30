@@ -59,11 +59,14 @@ fn stage_agent_membership_cascade(
                 .filter(|request| request.event.event_id != controller_transition_event_id.as_str())
                 .map(|request| soland_storage::admitted_cascade_agent_id(&request.event))
                 .collect::<PersistenceResult<std::collections::BTreeSet<_>>>()?;
+            let expected_agent_count = expected_agent_ids.len();
             let expected_agent_ids = expected_agent_ids
                 .iter()
                 .cloned()
                 .collect::<std::collections::BTreeSet<_>>();
-            if submitted_agent_ids != expected_agent_ids {
+            if submitted_agent_ids != expected_agent_ids
+                || expected_agent_ids.len() != expected_agent_count
+            {
                 return Err(PersistenceError::Conflict(
                     "duplicate_conflict: atomic Agent cascade actor set mismatch".to_owned(),
                 ));
@@ -771,7 +774,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             .as_ref()
             .and_then(|commit| commit.invite_policy.as_ref())
         {
-            staged_invite_policies.insert(policy.subject_id.to_string(), policy.clone());
+            staged_invite_policies.insert(policy.account_id.clone(), policy.clone());
         }
         let event_id = request.event.event_id.clone();
         stage_canonical_event(&mut staged_events, request.event)?;
@@ -1039,7 +1042,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 .as_ref()
                 .and_then(|commit| commit.invite_policy.as_ref())
             {
-                staged_invite_policies.insert(policy.subject_id.to_string(), policy.clone());
+                staged_invite_policies.insert(policy.account_id.clone(), policy.clone());
             }
             stage_canonical_event(&mut staged_events, event_request.event)?;
             event_inserted = true;
@@ -1799,7 +1802,7 @@ mod tests {
     fn cleanup_record(
         controller: &EventCommitRequest,
         realm_id: &str,
-        agent_ids: Vec<arkret_wire::DidCoreId>,
+        agent_ids: Vec<arkret_wire::ActorId>,
     ) -> arkret_models_collaboration::governance::agent_membership_cascade::AgentCleanupRecord {
         use arkret_models_collaboration::governance::agent_membership_cascade::{
             AgentCleanupRecord, AgentMembershipCascadeSchema,
@@ -2609,8 +2612,8 @@ mod tests {
                 controller_transition_event_id: controller_event_id.clone(),
                 agent_transition_event_ids: agent_event_ids.clone(),
                 expected_agent_ids: vec![
-                    arkret_wire::DidCoreId::new("ak:did_core:web:agent-a.example").unwrap(),
-                    arkret_wire::DidCoreId::new("ak:did_core:web:agent-b.example").unwrap(),
+                    soland_storage::admitted_cascade_agent_id(&agent_a.event).unwrap(),
+                    soland_storage::admitted_cascade_agent_id(&agent_b.event).unwrap(),
                 ],
             }),
         };
@@ -2629,6 +2632,27 @@ mod tests {
         );
 
         incomplete.events.push(agent_b.clone());
+        let mut duplicate_agent = incomplete.clone();
+        if let Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
+            expected_agent_ids, ..
+        }) = duplicate_agent.agent_membership_cascade.as_mut()
+        {
+            expected_agent_ids[1] = expected_agent_ids[0].clone();
+        }
+        assert!(matches!(store.commit_event_batch(duplicate_agent).await,
+            Err(PersistenceError::Conflict(reason)) if reason.contains("actor set mismatch")));
+        let mut wrong_station = incomplete.clone();
+        if let Some(AgentMembershipCascadeCommit::AtomicSelfLeave {
+            expected_agent_ids, ..
+        }) = wrong_station.agent_membership_cascade.as_mut()
+        {
+            expected_agent_ids[0] = arkret_wire::ActorId::hosted_principal(
+                expected_agent_ids[0].signing_principal_id().clone(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:wrong-station.example").unwrap(),
+            );
+        }
+        assert!(matches!(store.commit_event_batch(wrong_station).await,
+            Err(PersistenceError::Conflict(reason)) if reason.contains("actor set mismatch")));
         let committed = store.commit_event_batch(incomplete).await.unwrap();
         assert!(committed.event_inserted);
         assert!(
@@ -2643,8 +2667,14 @@ mod tests {
 
         let terminal = emergency_terminal_request(&realm_id);
         let expected_agent_ids = vec![
-            arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-a.example").unwrap(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-b.example").unwrap(),
+            arkret_wire::ActorId::hosted_principal(
+                arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-a.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
+            ),
+            arkret_wire::ActorId::hosted_principal(
+                arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-b.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
+            ),
         ];
         let record = cleanup_record(&terminal, &realm_id, expected_agent_ids.clone());
         let cleanup_digest = record.cleanup_intent_digest.clone();
@@ -2724,7 +2754,10 @@ mod tests {
         let expected = arkret_wire::DidCoreId::new("ak:did_core:web:agent-a.example").unwrap();
         assert_eq!(
             soland_storage::admitted_cascade_agent_id(&request.event).unwrap(),
-            expected
+            arkret_wire::ActorId::hosted_principal(
+                expected.clone(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
+            )
         );
         let original_actor = request.event.actor_id.clone();
         request.event.actor_id = arkret_wire::ActorId::hosted_principal(

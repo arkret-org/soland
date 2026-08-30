@@ -1696,7 +1696,8 @@ async fn events_frontier(
 ) -> soland_http::result::JsonResult<EventsFrontierState> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let session_actor = crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let query_body = req
         .parse_json::<arkret_models_collaboration::event_query::EventsFrontierRequestBody>()
         .await

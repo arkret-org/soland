@@ -2186,14 +2186,17 @@ pub(crate) fn signed_signal_envelope(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     let sent_at = chrono::DateTime::from_timestamp_millis(sent_at.timestamp_millis()).unwrap();
-    // `signal.md` §1 — the method is the directory lookup key and MUST equal
-    // `{sender_actor_id}#{sender_device_id}` verbatim.
+    // The DID URL selects the fixture principal's exact device method;
+    // the complete AccountId is independently bound into AAD and the proof.
     let verification_method = arkret_wire::DidUrl::new(format!("{sender_actor}#{sender_device}"))
         .expect("fixture verification method is a DID URL");
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
         scope_ref,
-        sender_actor_id: fixture_actor_core_id(sender_actor),
+        sender_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            fixture_actor_core_id(sender_actor),
+            soland_test_support::fixture_station_id(),
+        )),
         sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
         seal_ref: seal_ref.clone(),
         signal_class,

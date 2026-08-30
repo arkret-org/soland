@@ -227,7 +227,7 @@ const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
 /// relationship" and from "no such device".
 async fn attested_device_record(
     state: &AppState,
-    principal_id: &arkret_wire::DidCoreId,
+    account_id: &arkret_wire::AccountId,
     device_id: &arkret_wire::DeviceId,
     facet: crate::routing::identity::device_signing::DeviceSigningDirectoryFacet,
     algorithms: arkret_models_crypto::AlgorithmKeyRecords,
@@ -271,10 +271,7 @@ async fn attested_device_record(
         .map_err(AppError::internal)?;
     let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
         arkret_models_crypto::DeviceProjectionAttestationCore {
-            principal_id: principal_id.clone(),
-            station_id: arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(
-                |error| AppError::internal(format!("service id is not a did_core_id: {error}")),
-            )?,
+            account_id: account_id.clone(),
             device_id: device_id.clone(),
             device_signing_key_did: device_signing_key_did.clone(),
             hpke_key: hpke_key.clone(),
@@ -298,7 +295,7 @@ async fn attested_device_record(
         device_projection_attestation: attestation,
     };
     record
-        .validate_attestation_binding(principal_id, device_id)
+        .validate_attestation_binding(account_id, device_id)
         .map_err(|error| {
             AppError::internal(format!(
                 "device projection attestation does not bind its own row: {error}"
@@ -317,12 +314,20 @@ async fn keys_query(
 ) -> JsonResult<KeysQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let requester_account =
+        super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
 
     let body = body.into_inner();
-    let mut result = BTreeMap::new();
-    let mut device_generations = BTreeMap::new();
-    for (actor_core, devices) in body.device_keys {
-        if !keys_query_actor_visible_to_requester(state, &session.actor, actor_core.as_str()) {
+    let mut result = Vec::new();
+    let mut device_generations = Vec::new();
+    for selector in body.device_keys {
+        let account_id = selector.account_id;
+        if account_id.station_id.as_str() != state.service_id() {
+            continue;
+        }
+        let actor_core = &account_id.principal_id;
+        let devices = selector.device_ids;
+        if !keys_query_actor_visible_to_requester(state, &requester_account, &account_id) {
             continue;
         }
         if let Some(generation) =
@@ -333,9 +338,9 @@ async fn keys_query(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
         {
-            device_generations.insert(
-                actor_core.clone(),
-                arkret_models_crypto::keys::DeviceGenerationState {
+            device_generations.push(arkret_models_crypto::AccountDeviceGenerationEntry {
+                account_id: account_id.clone(),
+                generation_state: arkret_models_crypto::keys::DeviceGenerationState {
                     current_device_generation_ref: generation.current_ref,
                     device_generation_status: match generation.status {
                         crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
@@ -346,7 +351,7 @@ async fn keys_query(
                         }
                     },
                 },
-            );
+            });
         }
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
@@ -395,13 +400,16 @@ async fn keys_query(
             // leaks, and a caller can never mistake an incomplete row for a
             // usable one.
             let Some(record) =
-                attested_device_record(state, &actor_core, &device_id, facet, algorithms).await?
+                attested_device_record(state, &account_id, &device_id, facet, algorithms).await?
             else {
                 continue;
             };
             actor_keys.insert(device_id, record);
         }
-        result.insert(actor_core, actor_keys);
+        result.push(arkret_models_crypto::QueryAccountDeviceEntry {
+            account_id,
+            device_keys: actor_keys,
+        });
     }
     json_ok(KeysQueryOutcome {
         device_keys: result,
@@ -412,29 +420,25 @@ async fn keys_query(
 
 fn keys_query_actor_visible_to_requester(
     state: &AppState,
-    requester_id: &str,
-    actor: &str,
+    requester_account: &arkret_wire::AccountId,
+    account_id: &arkret_wire::AccountId,
 ) -> bool {
-    if requester_id == actor {
+    if requester_account == account_id {
         return true;
     }
-    let Ok(requester_actor_id) = arkret_identifiers::DidCoreId::new(requester_id.to_owned()) else {
-        return false;
-    };
-    let Ok(actor_id) = arkret_identifiers::DidCoreId::new(actor.to_owned()) else {
-        return false;
-    };
+    let requester_actor_id = arkret_wire::ActorId::account(requester_account.clone());
+    let actor_id = arkret_wire::ActorId::account(account_id.clone());
     let realms = state.realm_directory().snapshot();
     let projection = state.projections().snapshot();
-    realms.entries_iter().any(|(realm_id, entry)| {
-        if !entry.members.contains(&requester_actor_id) {
+    realms.entries_iter().any(|(realm_id, _)| {
+        if !projection
+            .member(realm_id.as_str(), &requester_actor_id.to_string())
+            .is_some_and(|membership| membership.state == "join")
+        {
             return false;
         }
-        if entry.members.contains(&actor_id) {
-            return true;
-        }
         projection
-            .member(realm_id.as_str(), actor)
+            .member(realm_id.as_str(), &actor_id.to_string())
             .is_some_and(|membership| matches!(membership.state.as_str(), "join" | "leave" | "ban"))
     })
 }
@@ -534,12 +538,21 @@ async fn keys_claim(
     req: &mut Request,
 ) -> JsonResult<KeysClaimOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let _ = aa.authenticated_session(state, req).await?;
+    let session = aa.authenticated_session(state, req).await?;
+    let requester_account =
+        super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
 
     let body = body.into_inner();
-    let mut claimed = BTreeMap::new();
-    for (actor, devices) in body.one_time_keys {
-        let actor_core = actor.clone();
+    let mut claimed = Vec::new();
+    for entry in body.one_time_keys {
+        let account_id = entry.account_id;
+        if account_id.station_id.as_str() != state.service_id()
+            || !keys_query_actor_visible_to_requester(state, &requester_account, &account_id)
+        {
+            continue;
+        }
+        let actor_core = &account_id.principal_id;
+        let devices = entry.device_algorithms;
         let mut device_map = BTreeMap::new();
         for (device_id, algorithm) in devices {
             let facet =
@@ -563,7 +576,10 @@ async fn keys_claim(
                 device_map.insert(device_id, BTreeMap::from([(algorithm, key)]));
             }
         }
-        claimed.insert(actor, device_map);
+        claimed.push(arkret_models_crypto::AccountDeviceKeyEntry {
+            account_id,
+            device_keys: device_map,
+        });
     }
     json_ok(KeysClaimOutcome {
         one_time_keys: claimed,

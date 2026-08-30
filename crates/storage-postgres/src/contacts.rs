@@ -561,42 +561,73 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
     }
 }
 // ── Pg-backed invite-receive policy store ────────────────────────────────
-// Durable backing for per-subject `invite_receive_policy` overrides. The full
-// `InviteReceivePolicy` is persisted as JSONB; `denied_subject_ids`
-// is duplicated into a TEXT[] column for cheap hard-block lookups.
+// Account ownership is normalized through accounts.pk. The shared wire policy
+// is the sole stored policy value; reads verify its binding against the owner.
 pub struct PgInviteReceivePolicyStore {
     pub pool: PgPool,
 }
 #[derive(QueryableByName)]
 struct InviteReceivePolicyRow {
     #[diesel(sql_type = Text)]
-    subject_id: String,
+    principal_id: DidCoreId,
+    #[diesel(sql_type = Text)]
+    station_id: DidCoreId,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
 }
 impl InviteReceivePolicyRow {
-    fn into_pair(
+    fn into_policy(
         self,
-    ) -> PersistenceResult<(
-        String,
+    ) -> PersistenceResult<
         arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    )> {
+    > {
         let policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy =
             serde_json::from_value(self.policy_payload)
             .map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "invite_receive_policy `{}` payload decode: {error}",
-                    self.subject_id
+                    "invite_receive_policy payload decode: {error}"
                 ))
             })?;
-        Ok((self.subject_id, policy))
+        if policy.account_id != arkret_wire::AccountId::new(self.principal_id, self.station_id) {
+            return Err(PersistenceError::Internal(
+                "invite_receive_policy account binding mismatch".to_owned(),
+            ));
+        }
+        Ok(policy)
     }
+}
+
+pub(crate) async fn put_invite_receive_policy(
+    conn: &mut diesel_async::AsyncPgConnection,
+    policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+) -> PersistenceResult<()> {
+    let payload = serde_json::to_value(policy).map_err(|error| {
+        PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
+    })?;
+    let written = sql_query(
+        "INSERT INTO invite_receive_policies (account_pk, policy_payload, updated_at) \
+         SELECT pk, $3, NOW() FROM accounts WHERE principal_id = $1 AND station_id = $2 \
+         ON CONFLICT (account_pk) DO UPDATE SET \
+         policy_payload = EXCLUDED.policy_payload, updated_at = NOW()",
+    )
+    .bind::<Text, _>(policy.account_id.principal_id.as_str())
+    .bind::<Text, _>(policy.account_id.station_id.as_str())
+    .bind::<Jsonb, _>(&payload)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
+    if written != 1 {
+        return Err(PersistenceError::Conflict(
+            "invite_receive_policy account does not exist".to_owned(),
+        ));
+    }
+    Ok(())
 }
 #[async_trait]
 impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     async fn get(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     > {
@@ -604,71 +635,86 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT subject_id, policy_payload FROM invite_receive_policies WHERE subject_id = $1",
+            "SELECT a.principal_id, a.station_id, p.policy_payload FROM invite_receive_policies p \
+             JOIN accounts a ON a.pk = p.account_pk \
+             WHERE a.principal_id = $1 AND a.station_id = $2",
         )
-        .bind::<Text, _>(subject_id)
+        .bind::<Text, _>(account_id.principal_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .get_result::<InviteReceivePolicyRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        row.map(|row| row.into_pair().map(|(_, policy)| policy))
-            .transpose()
+        row.map(InviteReceivePolicyRow::into_policy).transpose()
     }
 
     async fn put(
         &self,
         policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> PersistenceResult<()> {
-        let subject_id = policy.subject_id.as_str().to_owned();
-        let payload = serde_json::to_value(policy).map_err(|error| {
-            PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
-        })?;
-        let denied_subject_ids = policy
-            .denied_subject_ids
-            .iter()
-            .map(|did| did.as_str().to_owned())
-            .collect::<Vec<_>>();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO invite_receive_policies \
-             (subject_id, policy_payload, denied_subject_ids, updated_at) \
-             VALUES ($1, $2, $3, NOW()) \
-             ON CONFLICT (subject_id) DO UPDATE SET \
-                policy_payload = EXCLUDED.policy_payload, \
-                denied_subject_ids = EXCLUDED.denied_subject_ids, \
-                updated_at = NOW()",
-        )
-        .bind::<Text, _>(&subject_id)
-        .bind::<Jsonb, _>(&payload)
-        .bind::<Array<Text>, _>(&denied_subject_ids)
-        .execute(&mut *conn)
-        .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        put_invite_receive_policy(&mut conn, policy).await
     }
 
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<
-        Vec<(
-            String,
-            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-        )>,
+        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     > {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let rows = sql_query("SELECT subject_id, policy_payload FROM invite_receive_policies")
-            .get_results::<InviteReceivePolicyRow>(&mut *conn)
-            .await
-            .map_err(PersistenceError::database)?;
+        let rows = sql_query(
+            "SELECT a.principal_id, a.station_id, p.policy_payload FROM invite_receive_policies p \
+             JOIN accounts a ON a.pk = p.account_pk",
+        )
+        .get_results::<InviteReceivePolicyRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
         rows.into_iter()
-            .map(InviteReceivePolicyRow::into_pair)
+            .map(InviteReceivePolicyRow::into_policy)
             .collect()
     }
 }
+#[cfg(test)]
+mod invite_policy_tests {
+    use super::*;
+
+    #[test]
+    fn stored_policy_payload_must_match_normalized_account_owner() {
+        use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
+        let principal_id = DidCoreId::new("ak:did_core:web:holder.example".to_owned()).unwrap();
+        let station_id = DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap();
+        let policy = InviteReceivePolicy::spec_default(arkret_wire::AccountId::new(
+            principal_id.clone(),
+            station_id.clone(),
+        ));
+        let payload = serde_json::to_value(&policy).unwrap();
+        assert_eq!(
+            InviteReceivePolicyRow {
+                principal_id: principal_id.clone(),
+                station_id,
+                policy_payload: payload.clone(),
+            }
+            .into_policy()
+            .unwrap(),
+            policy
+        );
+        assert!(
+            InviteReceivePolicyRow {
+                principal_id,
+                station_id: DidCoreId::new("ak:did_core:web:other-station.example".to_owned())
+                    .unwrap(),
+                policy_payload: payload,
+            }
+            .into_policy()
+            .is_err()
+        );
+    }
+}
+
 // ── Pg-backed consent-cell store ─────────────────────────────────────────
 // Durable backing for the holder-private consent-cell projection, keyed by
 // (holder, cell_id) because `consent_id` is the cell subject. Column order

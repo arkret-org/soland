@@ -59,7 +59,7 @@ pub trait ContactStore: Send + Sync {
     async fn list_for_actor(&self, actor_id: &ActorId) -> PersistenceResult<Vec<ContactRecord>>;
     async fn delete(&self, requester_id: &ActorId, target_id: &ActorId) -> PersistenceResult<()>;
 }
-/// Durable backing for per-subject private `invite_receive_policy` overrides
+/// Durable backing for per-account private `invite_receive_policy` overrides
 /// (spec `sync/invite-addressing.md` §5). The in-memory
 /// `AppState::invite_receive_policies` map remains the working projection; this
 /// store hydrates it on boot and is written through on policy changes
@@ -69,7 +69,7 @@ pub trait ContactStore: Send + Sync {
 pub trait InviteReceivePolicyStore: Send + Sync {
     async fn get(
         &self,
-        subject_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<
         Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     >;
@@ -80,10 +80,7 @@ pub trait InviteReceivePolicyStore: Send + Sync {
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<
-        Vec<(
-            String,
-            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-        )>,
+        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     >;
 }
 /// Durable backing for the holder-private consent-cell projection (spec

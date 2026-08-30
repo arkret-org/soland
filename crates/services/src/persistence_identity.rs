@@ -518,10 +518,7 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
     async fn policies(
         &self,
     ) -> crate::ServiceResult<
-        Vec<(
-            String,
-            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-        )>,
+        Vec<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
     > {
         Ok(self.0.invite_receive_policies().snapshot_all().await?)
     }

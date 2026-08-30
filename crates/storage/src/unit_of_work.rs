@@ -9,18 +9,18 @@ use crate::{
     PersistenceResult, ProjectionEventRecord,
 };
 
-/// Project an already-admitted Agent cascade Event onto the frozen Agent DID
+/// Project an already-admitted Agent cascade Event onto the frozen Agent ActorId
 /// set. This is not admission authority: the full signed actor (including its
 /// hosting Station) must remain identical in the canonical record and payload.
 /// An adapter must never guess an Agent's Station from its controller.
 pub fn admitted_cascade_agent_id(
     record: &CanonicalEventRecord,
-) -> PersistenceResult<arkret_wire::DidCoreId> {
+) -> PersistenceResult<arkret_wire::ActorId> {
     let event: arkret_wire::Event =
         serde_json::from_value(record.envelope.clone()).map_err(|error| {
             PersistenceError::SchemaViolation(format!("invalid Agent cascade Event: {error}"))
         })?;
-    let arkret_wire::ActorId::HostedPrincipal { principal_id, .. } = &event.actor_id else {
+    let arkret_wire::ActorId::HostedPrincipal { .. } = &event.actor_id else {
         return Err(PersistenceError::Conflict(
             "Agent cascade requires a hosted principal actor".to_owned(),
         ));
@@ -38,7 +38,7 @@ pub fn admitted_cascade_agent_id(
             "Agent cascade canonical actor does not bind the full Event member".to_owned(),
         ));
     }
-    Ok(principal_id.clone())
+    Ok(event.actor_id)
 }
 
 /// One Contact projection mutation committed with its canonical Event and

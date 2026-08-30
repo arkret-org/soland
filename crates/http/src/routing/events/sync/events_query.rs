@@ -14,7 +14,7 @@ const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 /// streaming: each line is one frame, frame `kind` is one of
 /// `event` / `catchup_complete` / `heartbeat` / `dropped`.
 ///
-/// Selector: repeated `realms[]` query args (multi-value).
+/// Selectors: repeated `realm_ids` and percent-encoded JCS `actor_ids` values.
 ///
 /// Lifecycle:
 ///   1. Validate inputs (realms, accessibility).
@@ -36,13 +36,28 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         .get_typed::<AppState>()
         .expect("state injected")
         .clone();
-    let realms = super::super::query_param_all(req, "realms");
-    if realms.is_empty() {
+    let realms = super::super::query_param_all(req, "realm_ids");
+    let actors = super::super::query_param_all(req, "actor_ids");
+    if req.uri().query().is_some_and(|query| {
+        query.split('&').any(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            matches!(name, "realm_ids" | "actor_ids") && value.is_empty()
+        })
+    }) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "param_invalid",
+            "selectors must not contain empty values",
+        );
+        return;
+    }
+    if realms.is_empty() && actors.is_empty() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "param_missing",
-            "realms is required",
+            "realm_ids or actor_ids is required",
         );
         return;
     }
@@ -51,6 +66,13 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         Err(error) => {
             let message = error.to_string();
             render_error(res, StatusCode::BAD_REQUEST, "param_invalid", &message);
+            return;
+        }
+    };
+    let actor_filter = match canonical_actor_selectors(&actors) {
+        Ok(actors) => actors,
+        Err(error) => {
+            render_error(res, error.http_status(), error.wire_code(), &error.message);
             return;
         }
     };
@@ -67,13 +89,32 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         render_error(res, error.http_status(), error.wire_code(), &error.message);
         return;
     }
+    if realms.is_empty()
+        && let Err(error) =
+            authorize_actor_only_selectors(&state, session.as_ref(), &actor_filter).await
+    {
+        render_error(res, error.http_status(), error.wire_code(), &error.message);
+        return;
+    }
+    let requested_realms = realms.clone();
+    let realms = if realms.is_empty() {
+        state
+            .realm_directory()
+            .snapshot()
+            .entries_iter()
+            .map(|(realm_id, _)| realm_id.to_string())
+            .collect()
+    } else {
+        realms
+    };
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     for realm in realms {
         if realm_id_accessible(&state, &realm, session.as_ref()).await {
             accessible_realms.push(realm);
         }
     }
-    if accessible_realms.is_empty() {
+    let actor_only = requested_realms.is_empty();
+    if accessible_realms.is_empty() && !actor_only {
         render_error(res, StatusCode::NOT_FOUND, "not_found", "not found");
         return;
     }
@@ -102,7 +143,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     // `parse_and_validate_events_query_cursor`; both are bound to the SAME
     // realm-scope `filter_digest` so a token we issue round-trips as a valid
     // `after`.
-    let filter_digest = events_subscribe_filter_digest(&accessible_realms);
+    let filter_digest = events_subscribe_filter_digest(&requested_realms, &actor_filter);
     let resume_event_id = match &after_token {
         Some(after) => {
             match parse_and_validate_events_query_cursor(
@@ -124,7 +165,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         }
         None => None,
     };
-    let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &accessible_realms);
+    let subscribe_scope_key = events_subscribe_scope_key(req, session.as_ref(), &filter_digest);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
     }
@@ -148,8 +189,20 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     // miss events that land between history-end and subscribe-start.
     let mut rx = state.subscribe_event_notifications();
 
+    let actor_replay = if actor_only && catchup {
+        match actor_subscription_replay(&state, &actor_filter, resume_event_id.as_deref()).await {
+            Ok(replay) => replay,
+            Err(error) => {
+                render_error(res, error.http_status(), error.wire_code(), &error.message);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     let realm_filter = accessible_realms.iter().cloned().collect::<BTreeSet<_>>();
-    let replay_upper_bound = if catchup {
+    let replay_upper_bound = if catchup && !actor_only {
         match resume_event_id.as_deref() {
             Some(cursor) => {
                 match projected_event_replay_upper_bound(&state, &realm_filter, cursor).await {
@@ -192,6 +245,24 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         let mut replayed_event_ids = BTreeSet::new();
         let mut replay_cursor = None;
 
+        if let Some((events, has_more)) = actor_replay {
+            if has_more {
+                yield Ok::<Bytes, std::io::Error>(ndjson_line(&json!({"kind": "resync_required"})));
+                return;
+            }
+            for event in events {
+                let cursor = sync_token_for_events_query(&state, session_for_stream.as_ref(),
+                    &filter_digest_for_stream, event.event_id.as_str()).await;
+                replayed_event_ids.insert(event.event_id.to_string());
+                replay_cursor = Some(cursor.clone());
+                let Some(frame) = events_event_frame(event.realm_id.as_str(), &cursor, &event) else {
+                    yield Ok(ndjson_line(&json!({"kind": "resync_required"})));
+                    return;
+                };
+                yield Ok(ndjson_line(&frame));
+            }
+        }
+
         // 1. Replay incrementally through the upper bound captured after the
         // live receiver was installed. Queued notifications for replayed ids
         // are discarded below, creating one replay-to-live boundary.
@@ -233,6 +304,9 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     yield Ok(ndjson_line(&frame));
                     return;
                 };
+                if !actor_filter.is_empty() && !actor_filter.contains(&event_envelope.actor_id.to_string()) {
+                    continue;
+                }
                 let cursor = sync_token_for_events_query(
                     &state,
                     session_for_stream.as_ref(),
@@ -297,7 +371,9 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                 recv = rx.recv() => {
                     match recv {
                         Ok(notification) => {
-                            if !active_realms.contains(&notification.realm_id) {
+                            if !active_realms.contains(&notification.realm_id)
+                                && !(actor_only && matches!(&notification.kind, crate::state::EventNotificationKind::Event { .. }))
+                            {
                                 continue;
                             }
                             let realm_id = notification.realm_id.clone();
@@ -310,7 +386,7 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     if replayed_event_ids.contains(&cursor) {
                                         continue;
                                     }
-                                    if !projection_event_value_visible_to_session(
+                                    if !actor_only && !projection_event_value_visible_to_session(
                                         &state,
                                         &event_payload,
                                         session_for_stream.as_ref(),
@@ -343,6 +419,13 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         }
                                         continue;
                                     };
+                                    if !actor_filter.is_empty() && !actor_filter.contains(&event_envelope.actor_id.to_string()) {
+                                        continue;
+                                    }
+                                    if actor_only && authorize_actor_only_selectors(&state, session_for_stream.as_ref(), &actor_filter).await.is_err() {
+                                        yield Ok(ndjson_line(&json!({"kind": "unauthorized", "realm_id": realm_id})));
+                                        return;
+                                    }
                                     let Some(frame) = events_event_frame(&realm_id, &live_cursor, &event_envelope) else {
                                         continue;
                                     };
@@ -464,7 +547,10 @@ pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionIdentityS
 /// replayed against another (`cursor_integrity_invalid`). Distinct from the
 /// account stream's filter (different `operation_id`), keeping the two streams'
 /// cursors non-interchangeable per `encoding.md` §8.3.1.
-pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> String {
+pub(crate) fn events_subscribe_filter_digest(
+    accessible_realms: &[String],
+    actors: &BTreeSet<String>,
+) -> String {
     let realms = accessible_realms
         .iter()
         .cloned()
@@ -473,26 +559,110 @@ pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> St
         .collect::<Vec<_>>();
     sync_filter_digest(Some(&json!({
         "operation_id": arkret_wire::ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE_V1,
-        "realms": realms,
+        "realm_ids": realms,
+        "actor_ids": actors.iter().map(|actor| serde_json::from_str::<arkret_wire::ActorId>(actor)
+            .expect("actor selector was validated before cursor binding")).collect::<Vec<_>>(),
     })))
 }
 
 fn events_subscribe_scope_key(
     req: &Request,
     session: Option<&SessionIdentityState>,
-    accessible_realms: &[String],
+    filter_digest: &str,
 ) -> String {
-    let realms = accessible_realms
-        .iter()
-        .cloned()
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join(",");
     format!(
-        "ak.self.events.stream.subscribe.v1|{}|realms={realms}",
+        "ak.self.events.stream.subscribe.v1|{}|filter={filter_digest}",
         subscribe_subject(req, session)
     )
+}
+
+pub(crate) fn canonical_actor_selectors(
+    actors: &[String],
+) -> Result<BTreeSet<String>, soland_http::error::AppError> {
+    if actors.len() > 256 {
+        return Err(soland_http::error::AppError::param_invalid(
+            "actor_ids exceeds 256 entries",
+        ));
+    }
+    let mut selectors = BTreeSet::new();
+    for encoded in actors {
+        let actor: arkret_wire::ActorId = serde_json::from_str(encoded).map_err(|_| {
+            soland_http::error::AppError::param_invalid(
+                "actor_ids requires canonical JCS ActorId objects",
+            )
+        })?;
+        actor
+            .validate()
+            .map_err(|error| soland_http::error::AppError::param_invalid(error.to_string()))?;
+        if actor.to_string() != *encoded || !selectors.insert(encoded.clone()) {
+            return Err(soland_http::error::AppError::param_invalid(
+                "actor_ids must be canonical and unique",
+            ));
+        }
+    }
+    Ok(selectors)
+}
+
+pub(crate) async fn authorize_actor_only_selectors(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    actors: &BTreeSet<String>,
+) -> Result<(), soland_http::error::AppError> {
+    use soland_http::error::AppError;
+    let unauthorized = || {
+        AppError::new(
+            soland_http::error::ErrorCode::CapabilityDenied,
+            "actor-only selectors require an exact holder-owned ActorId",
+        )
+        .with_wire_code("unauthorized")
+    };
+    let session = session.ok_or_else(unauthorized)?;
+    let account_id =
+        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(state, session)
+            .await?;
+    let account = state
+        .identities()
+        .account(&account_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let account_pk = account.map(|account| account.pk);
+    let holder_actor = arkret_wire::ActorId::account(account_id).to_string();
+    for selector in actors {
+        if *selector == holder_actor {
+            continue;
+        }
+        let actor: arkret_wire::ActorId =
+            serde_json::from_str(selector).map_err(|_| unauthorized())?;
+        let arkret_wire::ActorId::HostedPrincipal {
+            principal_id,
+            station_id,
+        } = actor
+        else {
+            return Err(unauthorized());
+        };
+        let agent = state
+            .agent_pairings()
+            .agent(principal_id.as_str())
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .ok_or_else(unauthorized)?;
+        if account_pk.is_none()
+            || agent.controller_account_pk != account_pk
+            || agent.recipient_id.as_deref() != Some(station_id.as_str())
+            || agent.state
+                != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+        {
+            return Err(unauthorized());
+        }
+        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            state,
+            &agent,
+            Utc::now(),
+        )
+        .await
+        .map_err(|_| unauthorized())?;
+    }
+    Ok(())
 }
 
 pub(crate) fn reject_subscribe_reconnect(
@@ -743,13 +913,7 @@ async fn events_query_impl(
         ));
     }
     let realms = normalize_scope_selectors(parts.realms.clone())?;
-    for actor in &parts.actors {
-        if arkret_wire::DidCoreId::new(actor.clone()).is_err() {
-            return Err(soland_http::error::AppError::param_invalid(format!(
-                "invalid actor: {actor}"
-            )));
-        }
-    }
+    let actor_filter = canonical_actor_selectors(&parts.actors)?;
     let session = if realms.is_empty() {
         Some(
             authenticated_session(state, req)
@@ -781,6 +945,9 @@ async fn events_query_impl(
             session,
             arkret_wire::ServiceOperationId::SELF_EVENTS_READ_SCAN_V1,
         )?;
+    }
+    if realms.is_empty() {
+        authorize_actor_only_selectors(state, session.as_ref(), &actor_filter).await?;
     }
     let filter_digest =
         events_query_scope_digest(&realms, &parts.actors, parts.filters.as_ref(), &parts.order);
@@ -872,6 +1039,7 @@ async fn events_query_impl(
                         managed_agent_control,
                     )
                     .await
+                        && projection_matches_actor_selectors(state, event, &actor_filter).await?
                     {
                         last_visible_event_id = Some(event.event_id.clone());
                         events.push(projection_event_json(event));
@@ -985,7 +1153,9 @@ async fn events_query_impl(
     let mut page_events = Vec::new();
     for event in &page.items {
         let managed_agent_control = managed_agent_control_realms.contains(&event.realm_id);
-        if events_query_event_visible(state, event, session.as_ref(), managed_agent_control).await {
+        if events_query_event_visible(state, event, session.as_ref(), managed_agent_control).await
+            && projection_matches_actor_selectors(state, event, &actor_filter).await?
+        {
             page_events.push(projection_event_json(event));
         }
     }
@@ -1242,6 +1412,25 @@ async fn events_query_event_visible(
     projection_record_visible_to_session(state, event, session).await
 }
 
+async fn projection_matches_actor_selectors(
+    state: &AppState,
+    event: &soland_services::events::ProjectedEvent,
+    actors: &BTreeSet<String>,
+) -> Result<bool, soland_http::error::AppError> {
+    if actors.is_empty() {
+        return Ok(true);
+    }
+    let record = state
+        .event_queries()
+        .canonical_event(&event.event_id)
+        .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            soland_http::error::AppError::internal("actor filter requires the canonical Event")
+        })?;
+    Ok(actors.contains(&canonical_record_actor_key(&record)?))
+}
+
 /// Enrich visible projection rows to the spec's closed `EventReadRow` union.
 /// Canonical rows return the complete signed Event. Redacted Message rows keep
 /// their timeline slot as a `RedactedEventView`, binding the durable Event id
@@ -1371,6 +1560,63 @@ mod tests {
         let mut config = crate::config::AppConfig::test_default();
         config.seed_demo_data = false;
         AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    fn selector_at(station: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(TEST_ACTOR_CORE).unwrap(),
+            arkret_wire::DidCoreId::new(station).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn actor_selectors_require_unique_canonical_full_identity() {
+        let first = selector_at("ak:did_core:web:station-a.example").to_string();
+        let second = selector_at("ak:did_core:web:station-b.example").to_string();
+        assert_eq!(
+            canonical_actor_selectors(&[first.clone(), second])
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(canonical_actor_selectors(&[TEST_ACTOR_CORE.to_owned()]).is_err());
+        assert!(canonical_actor_selectors(&[first.clone(), first.clone()]).is_err());
+        assert!(canonical_actor_selectors(&[format!(" {first}")]).is_err());
+        let mut legacy =
+            serde_json::to_value(selector_at("ak:did_core:web:station-a.example")).unwrap();
+        legacy["principal_id"] = json!(TEST_ACTOR_CORE);
+        assert!(canonical_actor_selectors(&[legacy.to_string()]).is_err());
+        assert!(canonical_actor_selectors(&vec![first; 257]).is_err());
+    }
+
+    #[test]
+    fn subscribe_cursor_scope_binds_station_and_normalizes_selector_order() {
+        let first = selector_at("ak:did_core:web:station-a.example").to_string();
+        let second = selector_at("ak:did_core:web:station-b.example").to_string();
+        let realms = vec![TEST_REALM.to_owned()];
+        assert_ne!(
+            events_subscribe_filter_digest(&realms, &BTreeSet::from([first.clone()])),
+            events_subscribe_filter_digest(&realms, &BTreeSet::from([second.clone()])),
+        );
+        assert_eq!(
+            events_subscribe_filter_digest(
+                &realms,
+                &BTreeSet::from([first.clone(), second.clone()])
+            ),
+            events_subscribe_filter_digest(&realms, &BTreeSet::from([second, first])),
+        );
+    }
+
+    #[tokio::test]
+    async fn actor_only_selector_requires_authenticated_exact_holder() {
+        let error = authorize_actor_only_selectors(
+            &test_state(),
+            None,
+            &BTreeSet::from([selector_at("ak:did_core:web:station-a.example").to_string()]),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.wire_code(), "unauthorized");
     }
 
     #[test]
@@ -1613,6 +1859,28 @@ mod tests {
             created_at,
             received_at: created_at,
         };
+        assert!(
+            projection_matches_actor_selectors(
+                &state,
+                &row,
+                &BTreeSet::from([event.actor_id.to_string()])
+            )
+            .await
+            .unwrap()
+        );
+        let wrong_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            event.actor_id.signing_principal_id().clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:wrong-station.example").unwrap(),
+        ));
+        assert!(
+            !projection_matches_actor_selectors(
+                &state,
+                &row,
+                &BTreeSet::from([wrong_station.to_string()])
+            )
+            .await
+            .unwrap()
+        );
         let enriched = full_events_from_projection_json(&state, &[projection_event_json(&row)])
             .await
             .expect("projection row resolves to its canonical Event");
@@ -1722,11 +1990,7 @@ mod tests {
         let canonical_digest = event
             .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
             .expect("durable fixture digest");
-        let actor_id = envelope
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .unwrap_or(TEST_ACTOR)
-            .to_owned();
+        let actor_id = event.actor_id.to_string();
         let actor_seq = envelope
             .get("actor_seq")
             .and_then(Value::as_u64)
@@ -1753,6 +2017,59 @@ mod tests {
             })
             .await
             .expect("durable event stored");
+    }
+
+    #[tokio::test]
+    async fn actor_catchup_reads_canonical_control_history_without_projection_rows() {
+        let state = test_state();
+        let first_actor = selector_at("ak:did_core:web:station-a.example");
+        let other_actor = selector_at("ak:did_core:web:station-b.example");
+        let created_at: DateTime<Utc> = "2026-08-31T00:00:00.000Z".parse().unwrap();
+        let mut ids = Vec::new();
+        for (index, actor) in [first_actor.clone(), other_actor, first_actor.clone()]
+            .into_iter()
+            .enumerate()
+        {
+            let mut event = crate::test_event::raw_event_at(
+                arkret_wire::EventKind::ProfileUpdate.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: RealmId::new(TEST_REALM).unwrap(),
+                },
+                actor,
+                index as u64 + 1,
+                arkret_wire::Hlc::new(format!("019f00000000-000{index}-00000001")).unwrap(),
+                json!({"display_name": format!("profile {index}")}),
+                created_at + chrono::Duration::seconds(index as i64),
+            )
+            .unwrap();
+            crate::test_event::attach_fixture_producer_proof(
+                &mut event,
+                arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+            );
+            put_durable_event(
+                &state,
+                event.event_id.as_str(),
+                event.kind.as_str(),
+                serde_json::to_value(&event).unwrap(),
+                created_at + chrono::Duration::seconds(index as i64),
+            )
+            .await;
+            ids.push(event.event_id.to_string());
+        }
+        let actors = BTreeSet::from([first_actor.to_string()]);
+        let (events, has_more) = actor_subscription_replay(&state, &actors, Some(&ids[0]))
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!has_more);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_id.as_str(), ids[2]);
+        assert_eq!(events[0].actor_id, first_actor);
+        assert!(
+            actor_subscription_replay(&state, &actors, Some(&ids[1]))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1975,6 +2292,82 @@ mod tests {
     }
 }
 
+fn canonical_record_actor_key(
+    record: &soland_services::events::AcceptedEvent,
+) -> Result<String, soland_http::error::AppError> {
+    let actor: arkret_wire::ActorId = serde_json::from_value(
+        record
+            .envelope
+            .get("actor_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    )
+    .map_err(|error| {
+        soland_http::error::AppError::internal(format!("canonical Event actor is invalid: {error}"))
+    })?;
+    let key = actor.to_string();
+    if key != record.actor_id {
+        return Err(soland_http::error::AppError::internal(
+            "canonical Event actor index differs from its signed identity",
+        ));
+    }
+    Ok(key)
+}
+
+async fn canonical_events_for_actor_selectors(
+    state: &AppState,
+    actors: &BTreeSet<String>,
+) -> Result<Vec<soland_services::events::AcceptedEvent>, soland_http::error::AppError> {
+    let mut records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| {
+            soland_http::error::AppError::internal(format!("canonical Event scan failed: {error}"))
+        })?
+        .into_iter()
+        .filter(|record| actors.contains(&record.actor_id))
+        .collect::<Vec<_>>();
+    for record in &records {
+        canonical_record_actor_key(record)?;
+    }
+    records.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    Ok(records)
+}
+
+/// Capture durable actor history after the live receiver is installed. This
+/// snapshot is shared by HTTP and WebSocket; no projection row is required.
+pub(crate) async fn actor_subscription_replay(
+    state: &AppState,
+    actors: &BTreeSet<String>,
+    after: Option<&str>,
+) -> Result<Option<(Vec<arkret_wire::Event>, bool)>, soland_http::error::AppError> {
+    let Some(after) = after else {
+        return Ok(None);
+    };
+    let records = canonical_events_for_actor_selectors(state, actors).await?;
+    let start = records
+        .iter()
+        .position(|record| record.event_id == after)
+        .ok_or_else(|| {
+            soland_http::error::AppError::param_invalid("actor replay cursor is unavailable")
+                .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR)
+        })?
+        + 1;
+    let has_more = records.len().saturating_sub(start) > EVENTS_CATCHUP_LIMIT;
+    let events = records
+        .iter()
+        .skip(start)
+        .take(EVENTS_CATCHUP_LIMIT)
+        .map(|record| super::super::event_log::sdk_event_for_state(state, record))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Some((events, has_more)))
+}
+
 async fn durable_events_query_from_parts(
     state: &AppState,
     session: &SessionIdentityState,
@@ -1985,28 +2378,13 @@ async fn durable_events_query_from_parts(
     filter_digest: &str,
     cursor_token: Option<String>,
 ) -> Result<EventsQueryOutcome, soland_http::error::AppError> {
-    let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
-    let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
-    let all_records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| {
-            soland_http::error::AppError::internal(format!("canonical Event scan failed: {error}"))
-        })?;
+    let actors_set = parts.actors.iter().cloned().collect();
+    let all_records = canonical_events_for_actor_selectors(state, &actors_set).await?;
     let mut records = Vec::new();
     for record in all_records {
-        let actor_match = actors_set.contains(record.actor_id.as_str());
-        let realm_match = record
-            .realm_id
-            .as_deref()
-            .is_some_and(|realm| realms_set.contains(realm));
-        if !(actor_match || realm_match) {
-            continue;
-        }
-        if !super::super::event_log::event_visible_to_session(state, &record, session).await {
-            continue;
-        }
+        // The complete selector set was authorized against the credential's
+        // exact holder or current managed-Agent binding before this scan.
+        // Owner history must not be cropped through Realm projection state.
         super::super::event_log::sdk_event_for_state(state, &record).map_err(|error| {
             soland_http::error::AppError::internal(format!(
                 "canonical Event materialization failed for actor-scoped row {} ({}): {error}",
@@ -2018,11 +2396,6 @@ async fn durable_events_query_from_parts(
         // clients apply the holder's filter after sync.
         records.push(record);
     }
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
-            .then_with(|| left.event_id.cmp(&right.event_id))
-    });
     if backward {
         records.reverse();
     }
