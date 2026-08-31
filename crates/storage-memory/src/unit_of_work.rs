@@ -1516,18 +1516,18 @@ mod tests {
     fn membership_compensation_request() -> EventCommitRequest {
         let realm_id = realm_id();
         let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap();
-        let join_actor_id = arkret_wire::ActorId::hosted_principal(
+        let join_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:join-actor.example").unwrap(),
             station_id.clone(),
-        );
-        let member_id = arkret_wire::ActorId::hosted_principal(
+        ));
+        let member_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:join-subject.example").unwrap(),
             station_id.clone(),
-        );
-        let executor_id = arkret_wire::ActorId::hosted_principal(
+        ));
+        let executor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:executor.example").unwrap(),
             station_id,
-        );
+        ));
         let join_event_id =
             arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x41; 32]);
         let admission_id = arkret_wire::ProtocolOpaqueId::new("membership-admission-1").unwrap();
@@ -1736,10 +1736,10 @@ mod tests {
         let mut request = cascade_event_request(seed, realm_id, principal);
         let mut event: arkret_wire::Event =
             serde_json::from_value(request.event.envelope.clone()).unwrap();
-        event.actor_id = arkret_wire::ActorId::hosted_principal(
+        event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new(principal).unwrap(),
             arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
-        );
+        ));
         event.kind = arkret_wire::EventKind::MemberState;
         event.payload = serde_json::from_value(serde_json::json!({
             "member_id": event.actor_id,
@@ -2644,10 +2644,10 @@ mod tests {
             expected_agent_ids, ..
         }) = wrong_station.agent_membership_cascade.as_mut()
         {
-            expected_agent_ids[0] = arkret_wire::ActorId::hosted_principal(
+            expected_agent_ids[0] = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 expected_agent_ids[0].signing_principal_id().clone(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:wrong-station.example").unwrap(),
-            );
+            ));
         }
         assert!(matches!(store.commit_event_batch(wrong_station).await,
             Err(PersistenceError::Conflict(reason)) if reason.contains("actor set mismatch")));
@@ -2665,14 +2665,14 @@ mod tests {
 
         let terminal = emergency_terminal_request(&realm_id);
         let expected_agent_ids = vec![
-            arkret_wire::ActorId::hosted_principal(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-a.example").unwrap(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
-            ),
-            arkret_wire::ActorId::hosted_principal(
+            )),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 arkret_wire::DidCoreId::new("ak:did_core:web:emergency-agent-b.example").unwrap(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
-            ),
+            )),
         ];
         let record = cleanup_record(&terminal, &realm_id, expected_agent_ids.clone());
         let cleanup_digest = record.cleanup_intent_digest.clone();
@@ -2752,24 +2752,24 @@ mod tests {
         let expected = arkret_wire::DidCoreId::new("ak:did_core:web:agent-a.example").unwrap();
         assert_eq!(
             soland_storage::admitted_cascade_agent_id(&request.event).unwrap(),
-            arkret_wire::ActorId::hosted_principal(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 expected.clone(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:agent-station.example").unwrap(),
-            )
+            ))
         );
         let original_actor = request.event.actor_id.clone();
-        request.event.actor_id = arkret_wire::ActorId::hosted_principal(
+        request.event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             expected.clone(),
             arkret_wire::DidCoreId::new("ak:did_core:web:wrong-station.example").unwrap(),
-        )
+        ))
         .to_string();
         assert!(soland_storage::admitted_cascade_agent_id(&request.event).is_err());
         request.event.actor_id = original_actor;
         request.event.envelope["payload"]["member_id"] =
-            serde_json::to_value(arkret_wire::ActorId::hosted_principal(
+            serde_json::to_value(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 expected,
                 arkret_wire::DidCoreId::new("ak:did_core:web:wrong-station.example").unwrap(),
-            ))
+            )))
             .unwrap();
         assert!(soland_storage::admitted_cascade_agent_id(&request.event).is_err());
     }

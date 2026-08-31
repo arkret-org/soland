@@ -18,6 +18,30 @@ fn local_key_account(state: &AppState, principal: &DidCoreId) -> arkret_wire::Ac
     arkret_wire::AccountId::new(principal.clone(), state.service_core_id().clone())
 }
 
+async fn seed_local_key_account(state: &AppState, principal: &DidCoreId) {
+    let account_id = local_key_account(state, principal);
+    let persistence = state.test_persistence();
+    let accounts = persistence.accounts();
+    if accounts.get(&account_id).await.unwrap().is_none() {
+        accounts
+            .put(&soland_storage::AccountRecord {
+                pk: soland_storage::AccountPk(0),
+                principal_id: principal.clone(),
+                station_id: state.service_core_id().clone(),
+                localpart: format!(
+                    "keys-{}",
+                    &hex::encode(Sha256::digest(account_id.to_string().as_bytes()))[..16]
+                ),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+    }
+}
+
 fn keys_query_request(
     state: &AppState,
     selectors: &[(&DidCoreId, &[&str])],
@@ -851,6 +875,7 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     let alice_device_key = SigningKey::from_bytes(&[201u8; 32]);
     let alice_device_multibase = test_ed25519_multibase_public(&alice_device_key);
     let expected_principal_id_key = format!("did:key:{alice_device_multibase}");
+    seed_local_key_account(&state, &alice_core).await;
     seed_verified_device_with_public_key(&state, alice, alice_device, &alice_device_key).await;
 
     // Member B queries member A's (actor, device) directory entry.
@@ -945,11 +970,13 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
     let bob_device_key = SigningKey::from_bytes(&[204u8; 32]);
     let bob_device_multibase = test_ed25519_multibase_public(&bob_device_key);
     let expected_principal_id_key = format!("did:key:{bob_device_multibase}");
+    seed_local_key_account(&state, &bob_core).await;
     seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_key).await;
     let carol = "did:web:carol.example";
     let carol_core = core_principal(carol);
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
+    seed_local_key_account(&state, &carol_core).await;
     seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_key).await;
     // Complete login hydration before installing the historical membership fixture.
     let alice = dev_token(state.clone()).await;

@@ -142,7 +142,7 @@ pub(crate) fn demo_realm_id() -> &'static str {
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
-static DEMO_REALM_ACTOR_FRONTIER_EVENT_ID: OnceLock<String> = OnceLock::new();
+static DEMO_REALM_ACTOR_FRONTIER: OnceLock<(String, u64)> = OnceLock::new();
 static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
     let key = SigningKey::from_bytes(&[21_u8; 32]);
     format!(
@@ -2152,7 +2152,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
 /// [`test_realm_uncovered_basis_seal`].
 pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
     let seal_id = seed_test_realm_basis_seal(state, demo_realm_id(), "did:web:alice.example").await;
-    let frontier_event_id = state
+    let frontier = state
         .test_persistence()
         .events()
         .realm_events_newest_first(demo_realm_id())
@@ -2168,15 +2168,12 @@ pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::Seal
                 .to_string()
         })
         .max_by_key(|record| record.actor_seq)
-        .expect("demo Realm bootstrap has an Alice frontier Event")
-        .event_id;
-    if let Some(existing) = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.get() {
-        assert_eq!(
-            existing, &frontier_event_id,
-            "demo bootstrap frontier is stable"
-        );
+        .expect("demo Realm bootstrap has an Alice frontier Event");
+    let frontier = (frontier.event_id, frontier.actor_seq);
+    if let Some(existing) = DEMO_REALM_ACTOR_FRONTIER.get() {
+        assert_eq!(existing, &frontier, "demo bootstrap frontier is stable");
     } else {
-        let _ = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.set(frontier_event_id);
+        let _ = DEMO_REALM_ACTOR_FRONTIER.set(frontier);
     }
     seal_id
 }
@@ -2972,19 +2969,25 @@ pub(crate) fn signed_redaction_event(
 }
 
 /// Lifecycle/projection scenarios number their authoring operations from one,
-/// while the wire actor chain starts at sequence zero.
+/// after the actual accepted bootstrap frontier of this exact Account.
 fn fixture_actor_seq(authoring_step: u64) -> u64 {
     authoring_step
-        .checked_add(7)
+        .checked_add(
+            DEMO_REALM_ACTOR_FRONTIER
+                .get()
+                .expect("demo bootstrap frontier is seeded")
+                .1,
+        )
         .expect("HTTP fixture authoring sequence")
 }
 
 fn fixture_prev_refs(prev_refs: Vec<&str>) -> Vec<&str> {
     if prev_refs.is_empty() {
         vec![
-            DEMO_REALM_ACTOR_FRONTIER_EVENT_ID
+            DEMO_REALM_ACTOR_FRONTIER
                 .get()
                 .expect("seed_demo_realm_basis must run before authoring demo Realm Events")
+                .0
                 .as_str(),
         ]
     } else {

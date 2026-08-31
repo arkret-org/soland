@@ -31,7 +31,7 @@ pub(crate) fn session_actor_from_credential(
             "session must retain the signed grant's exact AccountId",
         ));
     }
-    let hosted = match session
+    match session
         .session_grant
         .as_ref()
         .map(|grant| &grant.holder_binding)
@@ -46,21 +46,27 @@ pub(crate) fn session_actor_from_credential(
                     "AgentRuntime holder does not match the session",
                 ));
             }
-            true
         }
         Some(_) if session.agent_session.is_some() => {
             return Err(AppError::unauthenticated(
                 "human credential cannot carry an Agent session",
             ));
         }
-        Some(_) => false,
-        None => session.agent_session.is_some(),
+        Some(_) | None => {}
     };
-    Ok(if hosted {
-        ActorId::hosted_principal(principal, station)
-    } else {
-        ActorId::account(AccountId::new(principal, station))
-    })
+    Ok(ActorId::account(AccountId::new(principal, station)))
+}
+
+/// Credential classification is independent of the shared AccountId shape.
+/// Callers have already authenticated the grant or stored Agent session.
+fn has_agent_credential(session: &SessionIdentityState) -> bool {
+    session.agent_session.is_some()
+        || session.session_grant.as_ref().is_some_and(|grant| {
+            matches!(
+                grant.holder_binding,
+                SessionGrantHolderBinding::AgentRuntime { .. }
+            )
+        })
 }
 
 /// Verify the exact stored Account binding without a principal-only lookup.
@@ -69,6 +75,11 @@ pub(crate) async fn validated_session_actor(
     session: &SessionIdentityState,
 ) -> Result<ActorId, AppError> {
     let actor = session_actor_from_credential(state, session)?;
+    // Agent provisioning and runtime grants are validated by the authentication
+    // boundary; they do not imply a human account-directory row.
+    if has_agent_credential(session) {
+        return Ok(actor);
+    }
     let Some(account_id) = actor.as_account_id() else {
         return Ok(actor);
     };
@@ -110,6 +121,7 @@ pub(crate) async fn bind_authenticated_session_account(
     let actor = session_actor_from_credential(state, session)?;
     if session.account_pk.is_none()
         && session.session_grant.is_some()
+        && !has_agent_credential(session)
         && let Some(account_id) = actor.as_account_id()
     {
         session.account_pk = state
@@ -167,8 +179,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn verified_agent_session_is_a_hosted_principal_not_an_account() {
+    #[tokio::test]
+    async fn verified_agent_session_uses_account_identity_without_a_human_account_row() {
         let state = state();
         let mut session = session(&state);
         session.agent_session = Some(soland_services::identity::AgentSessionState {
@@ -176,10 +188,18 @@ mod tests {
             scope_details: serde_json::json!({}),
             freshness_state: arkret_wire::FreshnessState::Fresh,
         });
-        assert!(matches!(
-            session_actor_from_credential(&state, &session).unwrap(),
-            ActorId::HostedPrincipal { .. }
-        ));
+        let actor = session_actor_from_credential(&state, &session).unwrap();
+        assert_eq!(
+            actor,
+            ActorId::account(AccountId::new(
+                DidCoreId::new(session.actor.clone()).unwrap(),
+                state.service_core_id(),
+            ))
+        );
+        assert_eq!(
+            validated_session_actor(&state, &session).await.unwrap(),
+            actor
+        );
     }
 
     #[tokio::test]

@@ -287,9 +287,12 @@ mod tests {
         let station = super::DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let account =
             super::ActorId::account(super::AccountId::new(principal.clone(), station.clone()));
-        let hosted = super::ActorId::hosted_principal(principal.clone(), station);
+        let foreign = super::ActorId::account(super::AccountId::new(
+            principal.clone(),
+            super::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+        ));
         let service = super::ActorId::service(principal);
-        for actor in [&account, &hosted, &service] {
+        for actor in [&account, &foreign, &service] {
             let parsed =
                 super::effective_grants_subject(Some(&actor.to_string()), false, &account).unwrap();
             assert_eq!(&parsed, actor);
@@ -299,14 +302,14 @@ mod tests {
             );
         }
         assert!(!super::effective_grants_subject_allowed(
-            &hosted, &account, false
+            &foreign, &account, false
         ));
         assert!(!super::effective_grants_subject_allowed(
             &service, &account, false
         ));
         assert!(super::effective_grants_subject(None, true, &account).is_err());
         assert!(
-            super::effective_grants_subject(Some(&hosted.to_string()), true, &account).is_err()
+            super::effective_grants_subject(Some(&foreign.to_string()), true, &account).is_err()
         );
         assert!(
             super::effective_grants_subject(
@@ -323,16 +326,13 @@ mod tests {
         let principal = super::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
         let station = super::DidCoreId::new("ak:did_core:web:station.example").unwrap();
         let other = super::DidCoreId::new("ak:did_core:web:other.example").unwrap();
-        for (local, foreign) in [
-            (
-                super::ActorId::account(super::AccountId::new(principal.clone(), station.clone())),
-                super::ActorId::account(super::AccountId::new(principal.clone(), other.clone())),
-            ),
-            (
-                super::ActorId::hosted_principal(principal.clone(), station),
-                super::ActorId::hosted_principal(principal, other),
-            ),
+        for principal in [
+            principal,
+            super::DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
         ] {
+            let local =
+                super::ActorId::account(super::AccountId::new(principal.clone(), station.clone()));
+            let foreign = super::ActorId::account(super::AccountId::new(principal, other.clone()));
             let parsed =
                 super::effective_grants_subject(Some(&foreign.to_string()), false, &local).unwrap();
             assert_eq!(parsed, foreign);
@@ -379,7 +379,7 @@ mod tests {
             super::invite_subject_account(
                 None,
                 None,
-                &super::ActorId::hosted_principal(account.principal_id, account.station_id)
+                &super::ActorId::service(account.principal_id)
             )
             .is_err()
         );

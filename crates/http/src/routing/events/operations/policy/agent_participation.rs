@@ -322,11 +322,11 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .object_id
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
-    let agent = arkret_wire::ActorId::hosted_principal(
+    let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(agent_id.to_owned())
             .map_err(|_| "agent_act_on_behalf_actor_id_invalid")?,
         operation.context.sender.route_service_id().clone(),
-    );
+    ));
     let grants = state
         .authorization()
         .grants_for_subject(&agent, operation.realm_id.as_str());
@@ -602,11 +602,11 @@ pub(super) fn validate_agent_context_authorization_ref(
         .object_id
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
-    let agent = arkret_wire::ActorId::hosted_principal(
+    let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(agent_id.to_owned())
             .map_err(|_| "agent_context_actor_id_invalid")?,
         operation.context.sender.route_service_id().clone(),
-    );
+    ));
     let grants = state
         .authorization()
         .grants_for_subject(&agent, operation.realm_id.as_str());

@@ -2417,14 +2417,14 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let contact_outbox_id = format!("contact-outbox:{namespace}:{event_uuid}");
     let contact_idempotency_key = format!("contact-commit:{namespace}:{event_uuid}");
     let contact_record = ContactRecord {
-        requester_id: arkret_wire::ActorId::hosted_principal(
+        requester_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new(principal_id.clone()).unwrap(),
             DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-        ),
-        target_id: arkret_wire::ActorId::hosted_principal(
+        )),
+        target_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example")).unwrap(),
             DidCoreId::new("ak:did_core:web:peer-principal.example").unwrap(),
-        ),
+        )),
         contact_round_id: None,
         version: None,
         granted_to_target_scopes: vec!["direct_conversation".to_owned()],

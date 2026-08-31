@@ -1463,6 +1463,11 @@ async fn blob_visible_to_session(
     session: &SessionRecord,
     requested_realm_id: Option<&str>,
 ) -> bool {
+    let Ok(actor) =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await
+    else {
+        return false;
+    };
     if blob.uploaded_by == session.actor {
         return blob.realm_id.as_deref().is_none_or(|realm_id| {
             requested_realm_id.is_none_or(|requested| requested == realm_id)
@@ -1475,7 +1480,7 @@ async fn blob_visible_to_session(
     if requested_realm_id.is_some_and(|requested| requested != realm_id) {
         return false;
     }
-    realm_has_member(state, realm_id, &session.actor).await
+    realm_has_member(state, realm_id, &actor.to_string()).await
 }
 
 async fn realm_presign_policy_block(
@@ -1734,6 +1739,8 @@ mod tests {
                 .await
                 .unwrap()
         );
+        let mut blob = blob_record("text/plain", None);
+        assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
         membership.member = arkret_wire::ActorId::account(account).to_string();
         state
             .test_projection()
@@ -1745,7 +1752,11 @@ mod tests {
                 .await
                 .unwrap()
         );
+        assert!(blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
         session.audience = foreign.route_service_id().to_string();
+        assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
+        blob.uploaded_by = session.actor.clone();
+        assert!(!blob_visible_to_session(&state, &blob, &session, Some(realm_id)).await);
         assert!(
             blob_session_has_realm_membership(&state, realm_id, &session)
                 .await

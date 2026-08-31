@@ -337,7 +337,7 @@ fn validate_managed_actor_unit(
         || provision.applet_id != record.applet_id
         || provision.service_id != authority_package.service_id
         || &provision.actor_id != actor_id
-        || !matches!(&provision.actor_id, ActorId::HostedPrincipal { .. })
+        || !matches!(&provision.actor_id, ActorId::Account { .. })
         || provision.actor_id.route_service_id() != station_id
         || &provision.registration_ref != authority_registration_ref
         || !authority_grant_refs.contains(&provision.applet_authority_ref)

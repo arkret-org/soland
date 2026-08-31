@@ -1624,7 +1624,7 @@ mod tests {
                     "introduction_kind": "explicit_address",
                     "effective_kind": "explicit_address",
                     "trust_tier": "low",
-                    "invite_event_id": "ak:event:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "invite_event_id": arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x42; 32]),
                     "request_digest": format!("sha256:{}", "c".repeat(64)),
                     "idempotency_key_digest": format!("sha256:{}", "d".repeat(64)),
                     "received_at": arkret_canonical::format_timestamp_canonical(updated_at),

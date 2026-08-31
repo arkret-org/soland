@@ -531,6 +531,14 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
     // config-driven service_id is covered by the /_arkret describe surfaces and
     // the signed ICE configuration below. Realm resolution intentionally
     // returns only the policy-limited Realm preview.
+    assert_eq!(
+        add_test_realm_member(
+            &state,
+            state.development_demo_realm_id(),
+            "did:web:alice.example"
+        )["ok"],
+        true
+    );
     let ice: Value = TestClient::post("http://server/_arkret/self/rtc/ice-config")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
@@ -551,7 +559,11 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
         .unwrap();
     // The SDK model owns the only canonical signature transcript. The wire
     // container carries only the signer, algorithm and detached signature.
-    assert_eq!(ice["signature"]["kid"], format!("{service_did}#notary-key"));
+    assert_eq!(
+        ice["signature"]["kid"],
+        format!("{service_did}#notary-key"),
+        "ICE response: {ice}"
+    );
     assert_eq!(ice["signature"]["signature_algorithm"], "Ed25519");
     assert_ne!(ice["signature"]["sig"], "placeholder");
     let typed: arkret_models_collaboration::objects::media::MediaIceConfigOutcome =

@@ -1850,10 +1850,10 @@ async fn validate_local_welcome_recipient_authorization(
             },
             MlsClaimTrustBinding::AgentKeyAuthorizeEventId(_),
         ) => {
-            let actor = arkret_wire::ActorId::hosted_principal(
+            let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 recipient_agent_id.clone(),
                 welcome.claim_receipt.destination_id.clone(),
-            );
+            ));
             if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
                 state, &actor,
             )
@@ -5056,6 +5056,7 @@ mod trust_binding_tests {
     fn signed_welcome_ledger_payload(
         state: &AppState,
         actor: arkret_wire::ActorId,
+        native_agent: bool,
     ) -> arkret_models_collaboration::events_payloads::MlsWelcomePayload {
         use arkret_models_collaboration::events_payloads::{
             MlsRequesterTrustBinding, MlsWelcomePayload,
@@ -5075,24 +5076,23 @@ mod trust_binding_tests {
         let authorization =
             arkret_wire::EventId::new("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
                 .unwrap();
-        welcome.claim_envelope.trust_binding =
-            if matches!(actor, arkret_wire::ActorId::HostedPrincipal { .. }) {
-                welcome.sender_device_id = None;
-                MlsRequesterTrustBinding::RequesterNativeAgent {
-                    requester_agent_id: actor.signing_principal_id().clone(),
-                    requester_agent_verification_method: arkret_wire::DidUrl::new(
-                        "did:web:requester.example#signing-key",
-                    )
-                    .unwrap(),
-                    requester_agent_key_authorize_event_id: authorization,
-                }
-            } else {
-                welcome.sender_device_id = Some(device.clone());
-                MlsRequesterTrustBinding::RequesterDevice {
-                    requester_device_id: device,
-                    requester_device_authorize_event_id: authorization,
-                }
-            };
+        welcome.claim_envelope.trust_binding = if native_agent {
+            welcome.sender_device_id = None;
+            MlsRequesterTrustBinding::RequesterNativeAgent {
+                requester_agent_id: actor.signing_principal_id().clone(),
+                requester_agent_verification_method: arkret_wire::DidUrl::new(
+                    "did:web:requester.example#signing-key",
+                )
+                .unwrap(),
+                requester_agent_key_authorize_event_id: authorization,
+            }
+        } else {
+            welcome.sender_device_id = Some(device.clone());
+            MlsRequesterTrustBinding::RequesterDevice {
+                requester_device_id: device,
+                requester_device_authorize_event_id: authorization,
+            }
+        };
         welcome.claim_envelope.requester_actor_id = actor.clone();
         welcome.claim_envelope.created_at = at;
         welcome.claim_envelope.signature.kid =
@@ -5148,16 +5148,12 @@ mod trust_binding_tests {
             } else {
                 state.service_core_id()
             };
-            for hosted in [false, true] {
-                let actor = if hosted {
-                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
-                } else {
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        principal.clone(),
-                        station.clone(),
-                    ))
-                };
-                let welcome = signed_welcome_ledger_payload(&state, actor.clone());
+            for native_agent in [false, true] {
+                let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    principal.clone(),
+                    station.clone(),
+                ));
+                let welcome = signed_welcome_ledger_payload(&state, actor.clone(), native_agent);
                 let payload = serde_json::to_value(&welcome).unwrap();
                 let realm = welcome.claim_envelope.intended_realm_id.as_str();
                 let result = if federated {
@@ -5175,20 +5171,13 @@ mod trust_binding_tests {
                 assert_eq!(
                     result,
                     Err("peer_claim_welcome_pending"),
-                    "a valid signed receipt must reach the missing ledger: federated={federated}, hosted={hosted}"
+                    "a valid signed receipt must reach the missing ledger: federated={federated}, native_agent={native_agent}"
                 );
                 let wrong_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     principal.clone(),
                     arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
                 ));
-                let wrong_branch = if hosted {
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        principal.clone(),
-                        station.clone(),
-                    ))
-                } else {
-                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
-                };
+                let wrong_branch = arkret_wire::ActorId::service(principal.clone());
                 for wrong_actor in [&wrong_station, &wrong_branch] {
                     let result = if federated {
                         validate_federated_welcome_peer_claim(
@@ -5350,18 +5339,29 @@ mod trust_binding_tests {
             principal.clone(),
             source.clone(),
         ));
-        let hosted = arkret_wire::ActorId::hosted_principal(principal.clone(), source.clone());
+        let other_principal =
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-requester.example").unwrap();
+        let other_account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            other_principal.clone(),
+            source.clone(),
+        ));
         assert!(welcome_requester_matches_receipt(
             &account, &account, &principal, &source
         ));
         assert!(welcome_requester_matches_receipt(
-            &hosted, &hosted, &principal, &source
+            &other_account,
+            &other_account,
+            &other_principal,
+            &source
         ));
         assert!(!welcome_requester_matches_receipt(
             &account, &account, &principal, &other
         ));
         assert!(!welcome_requester_matches_receipt(
-            &account, &hosted, &principal, &source
+            &account,
+            &other_account,
+            &principal,
+            &source
         ));
     }
 

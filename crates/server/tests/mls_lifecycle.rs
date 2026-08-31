@@ -1074,6 +1074,7 @@ async fn mls_lifecycle_end_to_end_body() {
         Some(realm_seal_basis.clone()),
     );
     advance_event_to_actor_frontier(&state, &mut welcome).await;
+    let welcome_event_id = welcome["event_id"].as_str().unwrap().to_owned();
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)

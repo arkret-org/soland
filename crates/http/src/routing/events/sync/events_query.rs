@@ -704,9 +704,12 @@ pub(crate) async fn authorize_actor_only_selectors(
         }
         let actor: arkret_wire::ActorId =
             serde_json::from_str(selector).map_err(|_| unauthorized())?;
-        let arkret_wire::ActorId::HostedPrincipal {
-            principal_id,
-            station_id,
+        let arkret_wire::ActorId::Account {
+            account_id:
+                arkret_wire::AccountId {
+                    principal_id,
+                    station_id,
+                },
         } = actor
         else {
             return Err(unauthorized());

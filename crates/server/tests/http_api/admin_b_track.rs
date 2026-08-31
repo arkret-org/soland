@@ -17,6 +17,8 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
     let token = dev_token(state.clone()).await;
 
     let alice = fixture_actor_core_id("did:web:alice.example");
+    let expected_account =
+        arkret_wire::AccountId::new(alice.clone(), state.service_core_id().clone());
     let actor: Value = TestClient::get(format!(
         "http://server/_soland/admin/actors/{}",
         alice.as_str()
@@ -31,9 +33,15 @@ async fn admin_actor_detail_includes_account_lifecycle_linkage_body() {
     // D14 — detail row is the typed production `AdminActor` projection.
     assert_eq!(actor["id"], alice.as_str());
     assert_eq!(actor["principal_id"], alice.as_str());
-    assert!(
-        serde_json::from_value::<arkret_wire::AccountId>(actor["account_id"].clone()).is_ok(),
-        "actor row must include the exact AccountId: {actor}"
+    assert_eq!(
+        serde_json::from_str::<arkret_wire::AccountId>(
+            actor["account_id"]
+                .as_str()
+                .expect("admin account identity string")
+        )
+        .expect("admin account identity contains the complete canonical AccountId"),
+        expected_account,
+        "actor row must preserve the exact local AccountId: {actor}"
     );
     assert!(
         actor["status"].as_str().is_some(),

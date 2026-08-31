@@ -1014,23 +1014,34 @@ async fn events_describe_and_single_event_submit_work_body() {
         .take_json()
         .await
         .unwrap();
-    // The stable principal selector returns the three Events authored by this
-    // test; bootstrap records without complete producer proof evidence are not
-    // part of the readable event page.
+    // The exact Account selector includes the complete accepted bootstrap as
+    // well as the three Events authored here. It must neither drop accepted
+    // founding records nor include another Station's same-principal chain.
     let listed_events = listed["events"].as_array().unwrap();
-    assert_eq!(listed_events.len(), 3);
-    assert_eq!(listed_events[0]["kind"], "ak.message.create");
+    let actor_key = fixture_account_actor(&state, "did:web:alice.example").to_string();
+    let expected_ids = state
+        .test_persistence()
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|event| event.actor_id == actor_key)
+        .map(|event| event.event_id)
+        .collect::<std::collections::BTreeSet<_>>();
+    let listed_ids = listed_events
+        .iter()
+        .map(|event| event["event_id"].as_str().unwrap().to_owned())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(listed_ids, expected_ids, "Account event page: {listed}");
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
-    assert_eq!(
-        listed_events.last().unwrap()["event_id"],
-        artifact_kind_event_id
-    );
+    assert!(listed_ids.contains(&artifact_kind_event_id));
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .json(&serde_json::json!({
-                "actor_id": fixture_actor_core_id("did:web:alice.example")
+                "actor_id": fixture_account_actor(&state, "did:web:alice.example")
             }))
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state.clone()))
@@ -1044,8 +1055,8 @@ async fn events_describe_and_single_event_submit_work_body() {
         panic!("actor-only selector must return non-authoring aggregate");
     };
     assert_eq!(
-        frontier.actor_id.signing_principal_id(),
-        &fixture_actor_core_id("did:web:alice.example")
+        frontier.actor_id,
+        fixture_account_actor(&state, "did:web:alice.example")
     );
     assert_eq!(frontier.frontiers.len(), 2);
     let demo_frontier = frontier
@@ -1053,7 +1064,10 @@ async fn events_describe_and_single_event_submit_work_body() {
         .iter()
         .find(|frontier| frontier.realm_id.as_str() == demo_realm_id())
         .expect("actor aggregate includes demo Realm frontier");
-    assert_eq!(demo_frontier.next_actor_seq, 11);
+    assert_eq!(
+        demo_frontier.next_actor_seq,
+        artifact_kind_event["actor_seq"].as_u64().unwrap() + 1
+    );
     assert_eq!(
         demo_frontier.frontier_event_ids[0].as_str(),
         artifact_kind_event_id

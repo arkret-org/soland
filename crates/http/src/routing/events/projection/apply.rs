@@ -1141,10 +1141,7 @@ mod tests {
         let foreign = arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
         for actor in [
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal.clone(), foreign)),
-            arkret_wire::ActorId::hosted_principal(
-                principal.clone(),
-                state.service_core_id().clone(),
-            ),
+            arkret_wire::ActorId::service(principal.clone()),
         ] {
             operation.context.sender = actor;
             operation.payload["device_public_key_did"] = json!("did:key:foreign-key");
@@ -1281,9 +1278,9 @@ mod tests {
             arkret_wire::EventKind::CircleMemberState,
             json!({
                 "circle_id": "ak:circle:Acz03N1u4b-3h3OIv0LXsw-CHe-rsMKeWw7ZvA-ohkgx",
-                "member_id": arkret_wire::ActorId::hosted_principal(
+                "member_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap(), crate::test_event::station_id(),
-                ),
+                )),
                 "membership": "join"
             }),
             chrono::Utc::now(),

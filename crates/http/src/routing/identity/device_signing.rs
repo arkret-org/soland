@@ -214,7 +214,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             requester_agent_key_authorize_event_id,
         } => {
             if sender_device_id.is_some()
-                || !matches!(envelope.requester_actor_id, arkret_wire::ActorId::HostedPrincipal { .. })
+                || !matches!(envelope.requester_actor_id, arkret_wire::ActorId::Account { .. })
                 || requester_agent_id != envelope.requester_actor_id.signing_principal_id()
                 || envelope.signature.kid.as_str()
                     != requester_agent_verification_method.as_str()
@@ -598,7 +598,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hosted_and_pairwise_welcome_signatures_preserve_their_exact_actor_branch() {
+    async fn agent_and_pairwise_welcome_signatures_preserve_their_exact_account() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -609,7 +609,10 @@ mod tests {
         let public = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
         let principal = DidCoreId::new("ak:did_core:web:agent.example").unwrap();
         let station = DidCoreId::new("ak:did_core:web:foreign.example").unwrap();
-        let actor = ActorId::hosted_principal(principal.clone(), station.clone());
+        let actor = ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            station.clone(),
+        ));
         let method = "did:web:agent.example#runtime";
         let (envelope, receipt) = signed_welcome_fixture(
             actor,
@@ -640,8 +643,7 @@ mod tests {
         .await
         .unwrap();
         let mut wrong_branch = envelope.clone();
-        wrong_branch.requester_actor_id =
-            ActorId::account(AccountId::new(principal, station.clone()));
+        wrong_branch.requester_actor_id = ActorId::service(principal);
         assert!(
             verify_mls_welcome_claim_envelope_signature(
                 &state,

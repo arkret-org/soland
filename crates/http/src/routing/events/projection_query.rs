@@ -32,7 +32,7 @@
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{DidCoreId, MorphId, RealmId, RelationId, SpaceId, StrandId};
+use arkret_identifiers::{MorphId, RealmId, RelationId, SpaceId, StrandId};
 use arkret_models_collaboration::http_bodies::{
     ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState,
     ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList,
@@ -294,10 +294,12 @@ fn document_projection_document(
 {
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
-    parse_projection_id::<DidCoreId>(&morph.created_by, "document.created_by")?;
-    if let Some(updated_by) = morph.updated_by.as_deref() {
-        parse_projection_id::<DidCoreId>(updated_by, "document.updated_by")?;
-    }
+    let created_by = parse_projection_actor(&morph.created_by, "document.created_by")?;
+    let updated_by = morph
+        .updated_by
+        .as_deref()
+        .map(|actor| parse_projection_actor(actor, "document.updated_by"))
+        .transpose()?;
 
     let mut document = serde_json::Map::new();
     document.insert("morph_id".to_owned(), Value::String(morph.morph_id.clone()));
@@ -331,18 +333,15 @@ fn document_projection_document(
         "facets".to_owned(),
         json!(morph.facets.keys().collect::<Vec<_>>()),
     );
-    document.insert(
-        "created_by".to_owned(),
-        Value::String(morph.created_by.clone()),
-    );
+    document.insert("created_by".to_owned(), json!(created_by));
     document.insert(
         "created_at".to_owned(),
         Value::String(arkret_canonical::format_timestamp_canonical(
             morph.created_at,
         )),
     );
-    if let Some(updated_by) = &morph.updated_by {
-        document.insert("updated_by".to_owned(), Value::String(updated_by.clone()));
+    if let Some(updated_by) = updated_by {
+        document.insert("updated_by".to_owned(), json!(updated_by));
     }
     if let Some(updated_at) = morph.updated_at {
         document.insert(
@@ -1287,7 +1286,49 @@ fn parse_relation_endpoint_query(value: &str) -> Result<RelationEndpoint, AppErr
 
 #[cfg(test)]
 mod relation_actor_endpoint_tests {
+    use arkret_identifiers::DidCoreId;
+
     use super::*;
+
+    #[test]
+    fn document_authorship_serializes_complete_station_accounts() {
+        let actor = |station: &str| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                DidCoreId::new(format!("ak:did_core:web:{station}.example")).unwrap(),
+            ))
+        };
+        let creator = actor("station-a");
+        let editor = actor("station-b");
+        let mut morph = MorphProjection {
+            morph_id: "ak:morph:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into(),
+            realm_id: "ak:realm:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into(),
+            scope_circle_id: None,
+            morph_kind: "document".into(),
+            title: None,
+            fields: BTreeMap::new(),
+            schema_refs: Vec::new(),
+            facets: BTreeMap::new(),
+            versions: Vec::new(),
+            content: None,
+            encrypted_content: None,
+            state: ObjectLifecycleState::Active,
+            state_changed_at: None,
+            created_by: creator.to_string(),
+            created_at: Utc::now(),
+            history_basis_seals: Vec::new(),
+            updated_by: Some(editor.to_string()),
+            updated_at: None,
+        };
+        let document = document_projection_document(&morph, json!({})).unwrap();
+        assert_eq!(document.created_by, Some(creator.clone()));
+        assert_eq!(document.updated_by, Some(editor.clone()));
+        let wire = serde_json::to_value(document).unwrap();
+        assert_eq!(wire["created_by"], json!(creator));
+        assert_eq!(wire["updated_by"], json!(editor));
+        morph.created_by = creator.signing_principal_id().to_string();
+        assert!(document_projection_document(&morph, json!({})).is_err());
+    }
 
     #[test]
     fn projection_history_and_authorship_do_not_cross_stations() {

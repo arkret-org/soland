@@ -823,9 +823,16 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
     assert_eq!(requested_scope_digest, expected_scope_digest);
+    let controller_actor = arkret_wire::ActorId::account(controller_authority.clone());
+    let actor_frontier_request =
+        arkret_models_collaboration::event_query::EventsFrontierRequestBody {
+            actor_id: controller_actor.clone(),
+            realm_id: Some(controller_realm_id.clone()),
+        };
     let actor_frontier_value: Value =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": controller_id, "realm_id": controller_realm_id}))
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&actor_frontier_request).unwrap())
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app)
             .await
@@ -842,10 +849,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         panic!("combined Realm+actor selector must return realm_actor frontier");
     };
     assert_eq!(actor_frontier.realm_id, controller_realm_id);
-    assert_eq!(
-        actor_frontier.actor_id.signing_principal_id(),
-        &controller_id
-    );
+    assert_eq!(actor_frontier.actor_id, controller_actor);
     let next_actor_seq = actor_frontier.next_actor_seq;
     let now =
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
@@ -883,7 +887,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     pcr_genesis.created_at = now;
     pcr_genesis.requirements.schema_profile_refs =
         vec![arkret_wire::ProfileRef::new(arkret_wire::SchemaId::REALM_V1).unwrap()];
-    pcr_genesis.executed_by = Some(arkret_wire::ActorId::service(controller_id.clone()));
+    pcr_genesis.executed_by = Some(controller_actor);
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
     pcr_genesis
@@ -904,7 +908,15 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let pcr_genesis = pcr_genesis.into_event();
     let principal_control_realm_id = pcr_genesis.realm_id.clone();
     let mut frontier_response = TestClient::query("http://server/_arkret/self/seals/frontier")
-        .json(&serde_json::json!({"realm_id": controller_realm_id}))
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(
+                &arkret_models_collaboration::event_query::SealFrontierRequestBody {
+                    realm_id: controller_realm_id.clone(),
+                },
+            )
+            .unwrap(),
+        )
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -931,10 +943,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_identity::handle::HandleVisibility::Private,
         None,
         arkret_bootstrap::AgentProvisionIntentOptions {
-            controller_station_id: arkret_identifiers::DidCoreId::new(
-                state.service_id().to_owned(),
-            )
-            .unwrap(),
+            controller_station_id: controller_authority.station_id.clone(),
             created_at: now,
             seal_basis: Some(frontier.seal_basis()),
         },

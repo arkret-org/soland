@@ -1709,7 +1709,9 @@ async fn events_frontier(
         })?;
     let selected_actor_id = query_body.actor_id.clone();
     let is_session_actor = selected_actor_id == session_actor;
-    let is_local_hosted_actor = matches!(&selected_actor_id, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id());
+    let is_local_account = selected_actor_id
+        .as_account_id()
+        .is_some_and(|account| account.station_id == state.service_core_id());
     let actor_id = query_body
         .actor_id
         .signing_principal_id()
@@ -1739,7 +1741,7 @@ async fn events_frontier(
             .await
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
             .is_some_and(|record| {
-                is_local_hosted_actor
+                is_local_account
                     && record.controller_id == session.actor
                     && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
@@ -1747,7 +1749,7 @@ async fn events_frontier(
         let applet_managed_access =
             applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
         let applet_managed_actor_pcr = applet_managed_access.as_ref().is_some_and(|access| {
-            is_local_hosted_actor && access.active && access.pcr_realm_id == realm_value
+            is_local_account && access.active && access.pcr_realm_id == realm_value
         });
         if applet_managed_access
             .as_ref()
@@ -1808,7 +1810,7 @@ async fn events_frontier(
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
         .filter(|record| {
-            is_local_hosted_actor
+            is_local_account
                 && record.controller_id == session.actor
                 && record.state != AgentLifecycleState::Deactivated
         })
@@ -1821,7 +1823,7 @@ async fn events_frontier(
         applet_managed_actor_pcr_access(state, actor_id.as_str(), &session.actor).await?;
     let applet_managed_actor_pcr = applet_managed_access
         .as_ref()
-        .filter(|access| is_local_hosted_actor && access.owned_by_session)
+        .filter(|access| is_local_account && access.owned_by_session)
         .map(|access| access.pcr_realm_id.as_str());
     let own_actor_pcr =
         if is_session_actor && let Some(session_account) = session_actor.as_account_id() {

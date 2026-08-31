@@ -365,7 +365,9 @@ async fn holder_peer(state: &AppState, session: &SessionRecord) -> Result<Contac
         let station_id = arkret_wire::DidCoreId::new(session.audience.clone())
             .map_err(|error| AppError::internal(format!("session audience invalid: {error}")))?;
         return Ok(ContactPeer::Agent {
-            actor_id: arkret_wire::ActorId::hosted_principal(holder_id, station_id),
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                holder_id, station_id,
+            )),
             controller_account_id: controller_account.account_id,
         });
     }

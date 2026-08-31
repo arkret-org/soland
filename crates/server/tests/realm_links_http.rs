@@ -163,10 +163,15 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
                 "Realm Seal {leaf} never covered accepted Realm Links: {required_link_digests:?}"
             );
         } else {
+            let diagnostics = if status != Some(StatusCode::SERVICE_UNAVAILABLE) {
+                realm_link_diagnostics(state, realm_id).await
+            } else {
+                Value::Null
+            };
             assert_eq!(
                 status,
                 Some(StatusCode::SERVICE_UNAVAILABLE),
-                "Realm Seal frontier failed with {status:?}: {body}"
+                "Realm Seal frontier failed with {status:?}: {body}; history: {diagnostics}"
             );
             assert!(
                 attempt < 49,
@@ -176,6 +181,48 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     unreachable!("bounded Realm Seal frontier retry returns or panics")
+}
+
+async fn realm_link_diagnostics(state: &AppState, realm_id: &str) -> Value {
+    let realm_id = RealmId::new(realm_id).unwrap();
+    let history = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .expect("read Realm Link failure history")
+        .into_iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmLink.as_str())
+        .map(|record| {
+            json!({
+                "event_id": record.event_id,
+                "digest": record.canonical_digest,
+                "actor_seq": record.actor_seq,
+                "received_at": record.received_at,
+                "payload": record.envelope["payload"],
+                "seal_basis": record.envelope["seal_basis"],
+                "prev_refs": record.envelope["prev_refs"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let batches = state
+        .test_projections()
+        .realm_cells(&realm_id)
+        .unwrap()
+        .into_iter()
+        .filter(|cell| {
+            cell.as_str()
+                .starts_with("ak:cell:ak.component.realm.link.v1:")
+        })
+        .map(|cell| {
+            let batches = state
+                .test_projections()
+                .sealed_op_batches_for_cell(&realm_id, &cell)
+                .unwrap();
+            json!({"cell": cell, "batches": format!("{batches:?}")})
+        })
+        .collect::<Vec<_>>();
+    json!({"events_newest_first": history, "persisted_batches": batches})
 }
 
 fn seal_covers_link_history(

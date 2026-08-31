@@ -427,7 +427,7 @@ pub(super) async fn validate_moderation_report_safety(
         state,
         realm_id,
         // MIMI's reported principal is provenance, not a verified Account or
-        // HostedPrincipal mapping. It cannot authorize a restricted Circle.
+        // managed-account mapping. It cannot authorize a restricted Circle.
         None,
         target_ref,
         effective_scope,
@@ -1489,11 +1489,8 @@ mod report_safety_tests {
             reporter.signing_principal_id().clone(),
             arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
         ));
-        let hosted = ActorId::hosted_principal(
-            reporter.signing_principal_id().clone(),
-            reporter.route_service_id().clone(),
-        );
-        for other in [&foreign, &hosted] {
+        let service = ActorId::service(reporter.signing_principal_id().clone());
+        for other in [&foreign, &service] {
             assert!(
                 moderation_target_effective_scope_value(&state, REALM, Some(other), TARGET)
                     .is_err()

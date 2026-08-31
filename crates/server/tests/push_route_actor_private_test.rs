@@ -123,15 +123,27 @@ fn push_route_rejects_wrong_recipient_and_closed_shape_violations() {
     let mut state = state();
     let hlc = ServerHlc::new("test");
     let mut wrong_recipient = active(0, TARGET_1);
-    wrong_recipient["recipient_id"] = json!(OTHER_SERVICE);
+    wrong_recipient["account_id"]["station_id"] = json!(OTHER_SERVICE);
     assert!(
         matches!(state.apply(&op(wrong_recipient), &hlc), ProjectionEffect::Rejected { ref reason } if reason == "recipient_id_mismatch")
     );
+    assert!(
+        state
+            .push_route_cell_value(&subject(SERVICE, ROUTE))
+            .is_none()
+    );
+    assert!(
+        state
+            .push_route_cell_value(&subject(OTHER_SERVICE, ROUTE))
+            .is_none()
+    );
 
+    let mut revoked_with_target = revoked(0);
+    revoked_with_target["push_target_id"] = json!(TARGET_1);
     let invalid = [
         json!({"recipient_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "push_target_id": TARGET_1, "push_gateway_did": GATEWAY, "encryption_key": "key", "capabilities": []}),
-        json!({"recipient_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "revoked": true, "push_target_id": TARGET_1}),
-        json!({"recipient_id": SERVICE, "principal_id": PRINCIPAL, "device_id": DEVICE, "push_route": ROUTE, "expected_revision": 0, "push_target_id": "ak:pseudonym:push:short", "push_gateway_id": GATEWAY, "encryption_key": "key", "capabilities": []}),
+        revoked_with_target,
+        active(0, "ak:pseudonym:push:short"),
     ];
     for payload in invalid {
         assert!(

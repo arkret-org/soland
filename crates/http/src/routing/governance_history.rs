@@ -4472,12 +4472,12 @@ async fn exact_session_actor_id(
             .ok_or_else(|| AppError::unauthenticated("session account no longer exists"))?;
         return Ok(arkret_wire::ActorId::account(account.account_id));
     }
-    Ok(arkret_wire::ActorId::hosted_principal(
+    Ok(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(session.actor.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
         arkret_wire::DidCoreId::new(session.audience.clone())
             .map_err(|error| AppError::internal(error.to_string()))?,
-    ))
+    )))
 }
 
 #[salvo::oapi::endpoint(

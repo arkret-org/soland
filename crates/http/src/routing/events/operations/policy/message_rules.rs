@@ -583,10 +583,10 @@ mod managed_agent_actor_tests {
     #[test]
     fn genesis_profile_and_control_selectors_preserve_full_actor() {
         let principal = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
-        let actor = arkret_wire::ActorId::hosted_principal(
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             principal.clone(),
             arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        );
+        ));
         assert_eq!(
             managed_agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
             actor

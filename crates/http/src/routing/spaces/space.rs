@@ -500,7 +500,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
             return false;
         }
     }
-    if matches!(&actor_typed, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id())
+    if matches!(&actor_typed, arkret_wire::ActorId::Account { account_id: arkret_wire::AccountId { station_id, .. } } if *station_id == state.service_core_id())
         && let Ok(Some(agent)) = state
             .agent_pairings()
             .agent(actor_typed.signing_principal_id().as_str())
@@ -1089,10 +1089,10 @@ mod tests {
     #[tokio::test]
     async fn joined_agent_cannot_bypass_an_ineffective_controller_binding() {
         let state = test_state();
-        let actor = arkret_wire::ActorId::hosted_principal(
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             DidCoreId::new("ak:did_core:web:agent.example").unwrap(),
             state.service_core_id(),
-        );
+        ));
         let actor_key = actor.to_string();
         let now = chrono::Utc::now();
         state.test_projection().lock().members.insert(
