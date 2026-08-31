@@ -590,14 +590,7 @@ impl ProjectionState {
             .to_owned();
         let key = (realm_id.clone(), member.clone());
         let previous = self.members.get(&key);
-        let invited_at = match new_state.as_str() {
-            "invite" => previous.and_then(|m| m.invited_at).or(Some(now)),
-            "join" => previous.and_then(|m| {
-                m.invited_at
-                    .or_else(|| (m.state == "invite").then_some(m.updated_at))
-            }),
-            _ => previous.and_then(|m| m.invited_at),
-        };
+        let invited_at = previous.and_then(|member| member.invited_at);
         let joined_at = match (new_state.as_str(), previous) {
             ("join", Some(previous)) if previous.state == "join" => previous.joined_at,
             ("join", _) => now,

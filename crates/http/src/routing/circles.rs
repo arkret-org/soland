@@ -506,7 +506,7 @@ async fn post_circle_member(
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
             .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
-        actor_id: target.actor_id,
+        member_id: target.actor_id,
         membership: target.membership,
     })
 }
@@ -635,7 +635,7 @@ async fn delete_circle_member(
     json_ok(CircleMembershipOutcome {
         circle_id: CircleId::new(circle_id)
             .map_err(|e| AppError::param_invalid(format!("circle_id: {e}")))?,
-        actor_id: target.actor_id,
+        member_id: target.actor_id,
         membership: target.membership,
     })
 }

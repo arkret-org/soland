@@ -772,13 +772,12 @@ pub(super) fn direct_conversation_member_state_guard(
         {
             return None;
         }
-        return matches!(membership, "invite" | "join")
-            .then_some("direct_conversation_member_count_invalid");
+        return (membership == "join").then_some("direct_conversation_member_count_invalid");
     };
     if binding.participants_unordered.len() != 2 {
         return Some("direct_conversation_member_count_invalid");
     }
-    if !matches!(membership, "invite" | "join") {
+    if membership != "join" {
         return None;
     }
     let target = membership_target(operation)?;

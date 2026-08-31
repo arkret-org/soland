@@ -1461,7 +1461,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
         arkret_wire::EventKind::MemberState,
         json!({
             "member_id": fixture_actor("ak:did_core:web:charlie.example"),
-            "membership": "invite",
+            "membership": "join",
             "sender": "ak:did_core:web:alice.example"
         }),
     );

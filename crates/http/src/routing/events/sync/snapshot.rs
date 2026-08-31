@@ -759,7 +759,7 @@ fn roster_membership_states_for_realm(
 }
 
 fn roster_membership_is_visible(membership: &str) -> bool {
-    matches!(membership, "join" | "invite" | "knock")
+    matches!(membership, "join" | "knock")
 }
 
 struct RosterDisclosureContext<'a> {

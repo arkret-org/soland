@@ -61,11 +61,14 @@ pub(crate) async fn federation_actor_origin_acceptable(
             return true;
         }
         let projection = state.projections().snapshot();
-        return membership_authority_pair_acceptable(
+        if membership_authority_pair_acceptable(
             projection.member(binding_realm, &actor_key),
             station_id,
-            event_kind,
-        );
+        ) {
+            return true;
+        }
+        return event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
+            && actor_has_pending_invite(state, binding_realm, actor).await;
     }
     if did_deployment_authority(principal).is_some()
         && did_deployment_authority(principal) == did_deployment_authority(source_id)
@@ -76,9 +79,7 @@ pub(crate) async fn federation_actor_origin_acceptable(
         return true;
     }
     event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
-        && state
-            .projections()
-            .invite_member_is_invited(binding_realm, &actor_key)
+        && actor_has_pending_invite(state, binding_realm, actor).await
 }
 
 fn event_origin_matches_source(source_id: &str, station_id: &str) -> bool {
@@ -88,16 +89,34 @@ fn event_origin_matches_source(source_id: &str, station_id: &str) -> bool {
 fn membership_authority_pair_acceptable(
     membership: Option<&soland_domain::reducer::SolandMembershipState>,
     station_id: &str,
-    event_kind: Option<&str>,
 ) -> bool {
     membership.is_some_and(|membership| {
-        let acceptable_state = membership.state == "join"
-            || (event_kind == Some(arkret_wire::EventKind::InviteAccept.as_str())
-                && membership.state == "invite");
-        acceptable_state
+        membership.state == "join"
             && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
                 .is_ok_and(|actor| actor.route_service_id().as_str() == station_id)
     })
+}
+
+async fn actor_has_pending_invite(
+    state: &AppState,
+    realm_id: &str,
+    actor: &arkret_wire::ActorId,
+) -> bool {
+    let Some(account_id) = actor.as_account_id() else {
+        return false;
+    };
+    let account_id = account_id.to_string();
+    state
+        .realm_invites()
+        .snapshot_all()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .any(|invite| {
+            invite.realm_id == realm_id
+                && invite.invitee_id.as_deref() == Some(account_id.as_str())
+                && matches!(invite.status.as_str(), "pending" | "claimed")
+        })
 }
 
 fn did_deployment_authority(did: &str) -> Option<String> {
@@ -168,31 +187,17 @@ mod tests {
     }
 
     #[test]
-    fn membership_and_invite_authorization_are_bound_to_the_exact_station() {
+    fn membership_authorization_is_bound_to_join_and_the_exact_station() {
         let source = "ak:did_core:web:remote.example";
         let other = "ak:did_core:web:other.example";
         let joined = membership("join", source);
-        assert!(membership_authority_pair_acceptable(
-            Some(&joined),
-            source,
-            None
-        ));
-        assert!(!membership_authority_pair_acceptable(
-            Some(&joined),
-            other,
-            None
-        ));
+        assert!(membership_authority_pair_acceptable(Some(&joined), source));
+        assert!(!membership_authority_pair_acceptable(Some(&joined), other));
 
         let invited = membership("invite", source);
-        assert!(membership_authority_pair_acceptable(
-            Some(&invited),
-            source,
-            Some(arkret_wire::EventKind::InviteAccept.as_str())
-        ));
         assert!(!membership_authority_pair_acceptable(
             Some(&invited),
-            source,
-            Some(arkret_wire::EventKind::MessageCreate.as_str())
+            source
         ));
     }
 

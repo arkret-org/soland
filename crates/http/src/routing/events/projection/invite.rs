@@ -76,17 +76,6 @@ pub(super) async fn project_invite_accept_operation(state: &AppState, operation:
         tracing::warn!(invite_id = %invite_id, "ak.invite.accept on expired invite; ignored");
         return;
     }
-    if !state
-        .projections()
-        .invite_member_can_accept(record.realm_id.as_str(), &member)
-    {
-        tracing::warn!(
-            invite_id = %invite_id,
-            invitee_id = %accepter,
-            "ak.invite.accept requires the invited-or-atomically-joined member state"
-        );
-        return;
-    }
     record.status = "accepted".to_owned();
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
@@ -392,18 +381,6 @@ async fn project_invite_terminal_operation(
     if direct_invitee.is_some() && direct_member.is_none() {
         return;
     }
-    if let Some(invitee_id) = direct_member.as_deref()
-        && !state
-            .projections()
-            .invite_member_is_invited(record.realm_id.as_str(), invitee_id)
-    {
-        tracing::warn!(
-            invite_id = %invite_id,
-            invitee_id = %invitee_id,
-            "direct invite terminal event requires member state invite"
-        );
-        return;
-    }
     record.status = terminal_status.to_owned();
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
@@ -414,24 +391,6 @@ async fn project_invite_terminal_operation(
     let realm_id = record.realm_id.clone();
     match invites.put(record).await {
         Ok(()) => {
-            if let Some(invitee_id) = direct_member.as_deref()
-                && !state.projections().project_invite_termination(
-                    operation,
-                    invitee_id,
-                    operation
-                        .payload
-                        .get("reason_code")
-                        .or_else(|| operation.payload.get("reason"))
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned),
-                )
-            {
-                tracing::warn!(
-                    invite_id = %invite_id,
-                    invitee_id = %invitee_id,
-                    "validated invite terminal projection unexpectedly lost its invite membership"
-                );
-            }
             touch_realm(state, &realm_id).await;
             tracing::info!(
                 invite_id = %invite_id,
@@ -683,25 +642,13 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
                 && existing.expires_at == expires_at
                 && existing.created_at == operation.created_at;
             if reconciles_private_delivery {
-                if !state
-                    .projections()
-                    .invite_member_is_invited(operation.realm_id.as_str(), &invitee_actor)
-                {
-                    project_invite_creation(state, operation, &invitee_actor);
-                    touch_realm(state, operation.realm_id.as_str()).await;
-                    tracing::info!(
-                        invite_id = %invite_id,
-                        invitee_id = %invitee_id.as_str(),
-                        realm_id = %operation.realm_id,
-                        "reconciled shared ak.invite.create after private invite delivery"
-                    );
-                } else {
-                    tracing::debug!(
-                        invite_id = %invite_id,
-                        status = %existing.status,
-                        "ak.invite.create projection replay skipped"
-                    );
-                }
+                touch_realm(state, operation.realm_id.as_str()).await;
+                tracing::info!(
+                    invite_id = %invite_id,
+                    invitee_id = %invitee_id.as_str(),
+                    realm_id = %operation.realm_id,
+                    "reconciled shared ak.invite.create after private invite delivery"
+                );
             } else {
                 tracing::warn!(
                     invite_id = %invite_id,
@@ -769,10 +716,9 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
     };
     match invites.put(record).await {
         Ok(()) => {
-            // Invite creation advances only the membership lifecycle
-            // `leave -> invite`. The invite's exact AccountId does not grant
-            // membership or participate in Realm fanout until an accepted join.
-            project_invite_creation(state, operation, &invitee_actor);
+            // Invite lifecycle is independent from `ak.member.state`. Create
+            // records only the pending Invite; accept performs the registered
+            // atomic lifecycle + member `leave -> join` transition.
             tracing::info!(
                 invite_id = %invite_id,
                 invitee_id = %invitee_id.as_str(),
@@ -783,12 +729,6 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
         }
         Err(error) => tracing::warn!(%error, invite_id = %invite_id, "failed to project invite"),
     }
-}
-
-fn project_invite_creation(state: &AppState, operation: &Operation, invitee_id: &str) {
-    state
-        .projections()
-        .project_invite_creation(operation, invitee_id);
 }
 
 /// `invite` is an Event-derived kind, so its only legitimate identity is the
@@ -1110,21 +1050,7 @@ mod tests {
             .unwrap(),
             json!("pending"),
         );
-        if !third_party {
-            let mut create = arkret_event_draft::test_support::raw_projected_operation(
-                arkret_identifiers::OperationId::new(
-                    "ak:operation:01904100-0000-7000-8000-000000000524",
-                )
-                .unwrap(),
-                RealmId::new(CANCEL_REALM).unwrap(),
-                arkret_wire::EventKind::InviteCreate.as_str(),
-                json!({"invitee_account_id": fixture_account(CANCEL_INVITEE)}),
-            );
-            create.created_at = created_at;
-            state
-                .projections()
-                .project_invite_creation(&create, &fixture_actor(CANCEL_INVITEE));
-        }
+        let _ = third_party;
     }
 
     async fn assert_cancel_state_unchanged(state: &AppState, expected_invitee: Option<&str>) {
@@ -1163,18 +1089,22 @@ mod tests {
                 state
                     .projections()
                     .cell_value(&invite_member_cell(&fixture_account(invitee_id)).unwrap()),
-                Some(json!("invite"))
+                None,
+                "Invite lifecycle must not synthesize an ak.member.state cell"
             );
             assert!(
                 state
                     .projections()
-                    .invite_member_is_invited(CANCEL_REALM, &fixture_actor(invitee_id))
+                    .snapshot()
+                    .member(CANCEL_REALM, &fixture_actor(invitee_id))
+                    .is_none(),
+                "Invite lifecycle must not synthesize a member projection"
             );
         }
     }
 
     #[tokio::test]
-    async fn direct_invite_cancel_uses_one_frozen_lifecycle_and_member_pre_state() {
+    async fn direct_invite_cancel_uses_only_the_frozen_invite_lifecycle() {
         let state = invite_test_state();
         seed_cancel_invite(&state, false).await;
         let event = cancel_event(Some(CANCEL_INVITEE));
@@ -1330,9 +1260,11 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            !state
+            state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), &member)
+                .snapshot()
+                .member(realm_id.as_str(), &member)
+                .is_none()
         );
 
         let mut event = crate::test_event::raw_event_at(
@@ -1371,7 +1303,10 @@ mod tests {
         assert!(
             state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), &member)
+                .snapshot()
+                .member(realm_id.as_str(), &member)
+                .is_none(),
+            "reconciling private delivery must not create membership"
         );
         let retained = state.realm_invites().get(invite_id).await.unwrap().unwrap();
         assert_eq!(
@@ -1432,9 +1367,11 @@ mod tests {
         project_invite_create_operation(&state, &operation).await;
 
         assert!(
-            !state
+            state
                 .projections()
-                .invite_member_is_invited(realm_id.as_str(), &member)
+                .snapshot()
+                .member(realm_id.as_str(), &member)
+                .is_none()
         );
     }
 }

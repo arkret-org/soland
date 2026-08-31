@@ -522,10 +522,9 @@ impl ProjectionState {
                         Some((circle.realm_id.clone(), circle.mls_group_ref.clone()));
                 }
             }
-            "invite" | "knock" => {
-                // Invited members are not yet active; no projection-side
-                // membership change. Wire effect is still emitted so the
-                // notification dispatcher can react.
+            "knock" => {
+                // Knock is a non-active membership proposal; no active-set
+                // change is projected until a signed join transition.
             }
             _ => {
                 return ProjectionEffect::Rejected {
@@ -671,19 +670,8 @@ impl ProjectionState {
     ) {
         let key = (circle_id.to_owned(), actor.to_owned());
         let previous = self.circle_memberships.get(&key).cloned();
-        let state = previous
-            .as_ref()
-            .filter(|m| target_state == "invite" && m.state.as_str() == "join")
-            .map(|m| m.state.clone())
-            .unwrap_or_else(|| target_state.to_owned());
-        let invited_at = match state.as_str() {
-            "invite" => previous.as_ref().and_then(|m| m.invited_at).or(Some(now)),
-            "join" => previous.as_ref().and_then(|m| {
-                m.invited_at
-                    .or_else(|| (m.state == "invite").then_some(m.updated_at))
-            }),
-            _ => previous.as_ref().and_then(|m| m.invited_at),
-        };
+        let state = target_state.to_owned();
+        let invited_at = previous.as_ref().and_then(|member| member.invited_at);
         let joined_at = match (state.as_str(), previous.as_ref()) {
             ("join", Some(previous)) if previous.state == "join" => previous.joined_at,
             ("join", _) => now,

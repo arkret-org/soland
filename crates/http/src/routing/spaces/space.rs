@@ -811,7 +811,7 @@ pub async fn realm_member_invited_or_joined_at_for_id(
             if let Some(invited_at) = member.invited_at {
                 return Some(invited_at);
             }
-            if matches!(member.state.as_str(), "invite" | "join") {
+            if member.state == "join" {
                 return Some(member.updated_at);
             }
         }

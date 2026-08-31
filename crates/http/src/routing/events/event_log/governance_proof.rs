@@ -890,7 +890,7 @@ pub(in crate::routing) async fn materialize_governance_frontier(
     // the outcome against its own RFC 9420 current or pending group state.
     let leaves = request.local_mls_leaves.clone();
     let checkpoint = load_governance_checkpoint(state, request).await?;
-    let group_genesis_binding = group_genesis_binding(state, &checkpoint.realm_id)?;
+    let group_genesis_binding = group_genesis_binding(state, request)?;
     arkret::materialize_mls_governance_frontier(
         request,
         &checkpoint,
@@ -1218,33 +1218,81 @@ fn insert_checkpoint_dependency(
 
 fn group_genesis_binding(
     state: &AppState,
-    realm_id: &RealmId,
+    request: &MlsGovernanceProofRequestBody,
 ) -> Result<MlsGroupGenesisBinding, AppError> {
     let projection = state.projections().snapshot();
-    let content_scheme = match projection
-        .realm_content_scheme(realm_id.as_str())
-        .as_deref()
-    {
-        None | Some("mls_rfc9420") => ContentScheme::MlsRfc9420,
-        Some("mls_exporter_aead_v1") => ContentScheme::MlsExporterAeadV1,
-        Some(_) => {
-            return Err(AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "Realm content scheme is not registered",
-            ));
+    let accepted = projection.mls_commit_epochs.values().find(|epoch| {
+        epoch.group_id == request.mls_group_id.as_str()
+            && serde_json::from_value::<GovernanceScope>(epoch.effective_scope.clone())
+                .is_ok_and(|scope| scope == request.effective_scope)
+    });
+    let binding = match accepted {
+        Some(epoch) => {
+            if request.proposed_group_genesis_binding.is_some() {
+                return Err(AppError::new(
+                    ErrorCode::MlsGenesisBindingProposalMismatch,
+                    "accepted MLS Genesis exists; retry 0 -> 0 without a proposal",
+                ));
+            }
+            let content_scheme = serde_json::from_value::<ContentScheme>(
+                epoch
+                    .governance_binding
+                    .get("content_scheme")
+                    .cloned()
+                    .ok_or_else(|| {
+                        AppError::new(
+                            ErrorCode::FrontierUnavailable,
+                            "accepted MLS Genesis omits content_scheme",
+                        )
+                    })?,
+            )
+            .map_err(|_| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "accepted MLS Genesis content_scheme is not registered",
+                )
+            })?;
+            let durability_policy = epoch
+                .governance_binding
+                .get("durability_policy")
+                .filter(|value| !value.is_null())
+                .cloned()
+                .map(serde_json::from_value::<DurabilityPolicy>)
+                .transpose()
+                .map_err(|_| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        "accepted MLS Genesis durability_policy is not registered",
+                    )
+                })?;
+            MlsGroupGenesisBinding {
+                content_scheme,
+                durability_policy,
+            }
         }
-    };
-    let durability_policy = match content_scheme {
-        ContentScheme::MlsRfc9420 => None,
-        ContentScheme::MlsExporterAeadV1 => Some(
-            projection
-                .realm_durability_policy(realm_id.as_str())
-                .unwrap_or(DurabilityPolicy::None),
-        ),
-    };
-    let binding = MlsGroupGenesisBinding {
-        content_scheme,
-        durability_policy,
+        None => {
+            if request.previous_epoch != 0 || request.next_epoch != 0 {
+                return Err(AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    "MLS governance successor has no accepted Genesis binding",
+                ));
+            }
+            let proposal = request
+                .proposed_group_genesis_binding
+                .as_ref()
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::MlsGenesisBindingProposalRequired,
+                        "pre-Genesis 0 -> 0 query requires proposed_group_genesis_binding",
+                    )
+                })?;
+            MlsGroupGenesisBinding::from_proposal(proposal).map_err(|error| {
+                AppError::new(
+                    ErrorCode::MlsGenesisBindingProposalMismatch,
+                    error.to_string(),
+                )
+            })?
+        }
     };
     binding
         .validate()

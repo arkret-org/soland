@@ -17,7 +17,7 @@ const FOCUS_ID: &str = "arkret_native_green";
 const ACTOR_ID: &str = "ak:did_core:webvh:z6mkalice";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
-const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const PARTICIPANT_ID: &str = "ak:rtc_participant:01904100-0000-7000-8000-aaaaaaaaaaaa";
 
 fn participant_actor(principal: &str) -> arkret_wire::ActorId {
     arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -90,7 +90,7 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
         "focus_id": FOCUS_ID,
         "actor_id": participant_actor(ACTOR_ID),
         "device_id": DEVICE_ID,
-        "participant_id": PARTICIPANT_IDENTITY,
+        "participant_id": PARTICIPANT_ID,
         "issued_at": issued_at,
         "expires_at": expires_at,
         "sig": "",
@@ -116,7 +116,7 @@ fn call_state_op(binding: Value) -> Operation {
                 "participant": {
                     "actor_id": participant_actor(ACTOR_ID),
                     "device_id": DEVICE_ID,
-                    "participant_id": PARTICIPANT_IDENTITY,
+                    "participant_id": PARTICIPANT_ID,
                     "participant_binding": binding,
                 }
             },
@@ -267,7 +267,7 @@ fn signing_input_matches_spec_construction() {
     let expected_json = format!(
         "{{\"actor_id\":{actor_json},\"call_id\":\"{CALL_ID}\",\
          \"device_id\":\"{DEVICE_ID}\",\"expires_at\":\"2026-06-15T00:05:00.000Z\",\
-         \"focus_id\":\"{FOCUS_ID}\",\"participant_id\":\"{PARTICIPANT_IDENTITY}\",\
+         \"focus_id\":\"{FOCUS_ID}\",\"participant_id\":\"{PARTICIPANT_ID}\",\
          \"realm_id\":\"{REALM_ID}\"}}"
     );
     expected.extend_from_slice(expected_json.as_bytes());

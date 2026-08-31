@@ -82,7 +82,7 @@ the realm's `ak.realm.media_service.foci[]` set, returning `focus_mismatch`.
   "focus_id": "livekit_eu-west-1",
   "actor_id": "ak:did_core:webvh:...",
   "device_id": "ak:device:...",
-  "participant_identity": "ak:participant:<realm>:<actor>:<device>:<call>",
+  "participant_id": "ak:participant:<realm>:<actor>:<device>:<call>",
   "expires_at": "2026-05-27T12:34:56.789Z",
   "sig": "<base64url>"
 }
@@ -103,7 +103,7 @@ canonical bytes round-trip differs from the bytes its signer just signed —
 this is the canonical defense against serializer drift between SDK and
 soland.
 
-`participant_identity` is its own canonical string:
+`participant_id` is its own canonical string:
 
 ```text
 ak:participant:<realm_short>:<actor_short>:<device_short>:<call_short>
@@ -171,7 +171,7 @@ Procedure:
 | `unknown_focus_type` | Realm config / client profile | client's profile set; realm's advertised backend |
 | `token_issuer_unauthorised` | Deployment | `issuer_kid` ↔ realm binding |
 | `participant_binding_invalid` | Issuer or transport | round-trip canonical bytes against issuer log |
-| `participant_identity_unrecognised` | Client | canonical identity-string composition |
+| `participant_id_unrecognised` | Client | canonical identity-string composition |
 | `session_focus_already_committed` | Client | call already bound to another focus |
 | `e2ee_key_source_unauthorised` | Backend | escalate to inkson; SFrame key derivation |
 | `recording_artifact_pipeline_bypassed` | floria recording hook | canonical pipeline |

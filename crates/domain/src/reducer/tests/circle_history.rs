@@ -79,21 +79,21 @@ fn circle_lifecycle_reads_canonical_target_ref() {
 #[test]
 fn circle_history_uses_current_join_boundary() {
     let (mut state, hlc, base) = seed_state("since_join");
-    let invite_at = base + Duration::minutes(10);
+    let knock_at = base + Duration::minutes(10);
     let join_at = base + Duration::minutes(20);
-    let mut invite = make_operation(
+    let mut knock = make_operation(
         arkret_wire::EventKind::CircleMemberState,
         REALM,
         serde_json::json!({
             "circle_id": CIRCLE,
             "member_id": account_actor(BOB),
-            "membership": "invite",
+            "membership": "knock",
             "sender": ALICE,
         }),
     );
-    invite.created_at = invite_at;
+    knock.created_at = knock_at;
     assert!(matches!(
-        state.apply(&invite, &hlc),
+        state.apply(&knock, &hlc),
         ProjectionEffect::CircleMemberStateChanged { .. }
     ));
 

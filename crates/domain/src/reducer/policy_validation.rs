@@ -275,7 +275,7 @@ pub(crate) fn validate_parent_membership_gate(
         }
     }
     match gate.get("require_min_membership").and_then(Value::as_str) {
-        Some("invite" | "join") => Ok(()),
+        Some("join") => Ok(()),
         _ => Err("parent_membership_min_membership_invalid"),
     }
 }
@@ -510,7 +510,6 @@ pub(crate) fn did_list_contains(
 pub(crate) fn membership_state_satisfies_minimum(state: &str, required: &str) -> bool {
     match required {
         "join" => state == "join",
-        "invite" => matches!(state, "invite" | "join"),
         _ => false,
     }
 }
