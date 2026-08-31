@@ -4320,10 +4320,7 @@ pub async fn assert_account_status_replica_decision_table_contract(
 ) {
     let account_label = format!("account-{namespace}");
     let genesis = account_status_record(&account_label, 1, None, 2, AccountStatus::Active, 1);
-    let account_id = genesis
-        .account_id
-        .canonical_key()
-        .expect("canonical AccountId storage key");
+    let account_id = genesis.account_id.clone();
     let authority = genesis.account_authority_id.as_str().to_owned();
     let second = account_status_record(
         &account_label,
@@ -4526,6 +4523,32 @@ pub async fn assert_account_status_replica_decision_table_contract(
             .await
             .expect("advance to the third record"),
         AccountStatusReplicaAppend::Accepted(third_receipt)
+    );
+    let other_station_account = arkret_wire::AccountId::new(
+        account_id.principal_id.clone(),
+        DidCoreId::new("ak:did_core:web:other-station.example").expect("other Station"),
+    );
+    assert_eq!(
+        store
+            .current(&authority, &other_station_account)
+            .await
+            .expect("read another Station account"),
+        None,
+        "the same principal at another Station must not share the replica head"
+    );
+    assert!(
+        store
+            .resolve(&authority, &other_station_account, 1, 16)
+            .await
+            .expect("resolve another Station account")
+            .is_empty()
+    );
+    assert_eq!(
+        store
+            .receipt(&authority, &other_station_account, 1)
+            .await
+            .expect("read another Station receipt"),
+        None
     );
     assert_eq!(
         store

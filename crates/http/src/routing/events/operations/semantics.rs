@@ -64,7 +64,7 @@ fn validate_key_backup_active_series_transition(
         .typed_payload::<arkret_wire::event_spec::KeyBackupActiveSeries>()
         .map_err(|_| "key_backup_active_series_schema_violation")?;
     let key = (
-        record.actor_id.signing_principal_id().as_str().to_owned(),
+        record.actor_id.to_string(),
         record.backup_kind.as_str().to_owned(),
     );
     let current = heads.get(&key).cloned().or_else(|| {
@@ -424,6 +424,66 @@ mod tests {
     use super::*;
 
     const REALM_ID: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+
+    #[test]
+    fn active_series_admission_uses_full_actor_and_rejects_existing_pointer_fork() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal =
+            arkret_wire::DidCoreId::new("ak:did_core:web:backup-author.example").unwrap();
+        let actor = |station: &str| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal.clone(),
+                arkret_wire::DidCoreId::new(station).unwrap(),
+            ))
+        };
+        let payload = serde_json::json!({
+            "schema": "ak.schema.key_backup_active_series.v1",
+            "actor_id": actor("ak:did_core:web:station-a.example"),
+            "backup_kind": "secret_storage",
+            "active_series_id": "ak:backup_series:01964137-1000-7000-8000-000000000000",
+            "series_pointer_version": 1,
+            "previous_series_ids": [],
+            "frontier_ref": {
+                "frontier_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+                "seal_ref": "ak:seal:sha256:4444444444444444444444444444444444444444444444444444444444444444",
+                "device_generation_ref": 2
+            },
+            "issued_at": "2026-04-27T00:00:00.000Z",
+            "auth_data": {
+                "verification_method": "did:web:backup-author.example#device",
+                "signature_algorithm": "Ed25519",
+                "signature": "signature-base64url-placeholder",
+                "device_authorize_event_id": "ak:event:ATyaOl1JkDDCC-6ZytsgoAKvlQJ6s6NJuDC_bmWKARBa"
+            }
+        });
+        let accepted = operation(
+            arkret_wire::EventKind::KeyBackupActiveSeries,
+            payload.clone(),
+        );
+        state.projections().apply(&accepted, state.hlc());
+        let mut heads = BTreeMap::new();
+        validate_key_backup_active_series_transition(&state, &accepted, &mut heads).unwrap();
+        let mut fork = payload.clone();
+        fork["issued_at"] = serde_json::json!("2026-04-27T00:00:01.000Z");
+        let fork = operation(arkret_wire::EventKind::KeyBackupActiveSeries, fork);
+        assert_eq!(
+            validate_key_backup_active_series_transition(&state, &fork, &mut BTreeMap::new()),
+            Err("key_backup_active_series_pointer_version_fork"),
+        );
+        let mut other = payload;
+        other["actor_id"] =
+            serde_json::to_value(actor("ak:did_core:web:station-b.example")).unwrap();
+        let other = operation(arkret_wire::EventKind::KeyBackupActiveSeries, other);
+        validate_key_backup_active_series_transition(&state, &other, &mut heads).unwrap();
+        assert_eq!(
+            heads.len(),
+            2,
+            "the same principal at two Stations has independent pointers"
+        );
+    }
 
     fn operation(kind: impl AsRef<str>, payload: Value) -> Operation {
         arkret_event_draft::test_support::raw_projected_operation(

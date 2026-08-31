@@ -1079,8 +1079,9 @@ async fn resolve_invite_locator(
         account_id: arkret_wire::AccountId::new(subject_id, recipient_id.clone()),
         service_resolution: ServiceResolutionCarrier::CurrentRecordUrl {
             current_record_url: format!(
-                "{}/_arkret/open/services/{recipient_id}/resolution",
-                state.config().public_base_url.trim_end_matches('/')
+                "{}{}",
+                state.config().public_base_url.trim_end_matches('/'),
+                arkret_models_identity::canonical_service_current_record_path(&recipient_id)
             ),
             pinned_record_digest: None,
         },

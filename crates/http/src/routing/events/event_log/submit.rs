@@ -1234,7 +1234,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     if let Some(stored) = state
         .event_queries()
         .direct_conversation_founding_slot(
-            founder_id.signing_principal_id().as_str(),
+            &founder_id.to_string(),
             trust_domain_id.as_str(),
             pair_key.as_str(),
         )
@@ -1476,7 +1476,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
     let stored = state
         .event_queries()
         .direct_conversation_founding_slot(
-            founder_id.signing_principal_id().as_str(),
+            &founder_id.to_string(),
             trust_domain_id.as_str(),
             pair_key.as_str(),
         )

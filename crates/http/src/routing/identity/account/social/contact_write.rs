@@ -630,6 +630,40 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
+    // A fresh prepare must reject a stale cursor before persisting a reservation.
+    // Exact idempotent replays above retain their original outcome; commit also
+    // rechecks the lineage to close the prepare/commit race.
+    match &branch {
+        ContactReservationBranch::ScopeUpdate {
+            contact_round_id,
+            version,
+            predecessor_event_ref,
+            ..
+        }
+        | ContactReservationBranch::Tombstone {
+            contact_round_id,
+            version,
+            predecessor_event_ref,
+            ..
+        } => {
+            let holder_actor = holder.contact_actor_id();
+            let peer_actor = branch.peer().contact_actor_id();
+            let record = contact_record_for_lineage(state, &holder_actor, &peer_actor)
+                .await?
+                .ok_or_else(|| {
+                    AppError::conflict("Contact lineage is no longer current")
+                        .with_wire_code("contact_lineage_conflict")
+                })?;
+            validate_lineage_head(
+                &record,
+                &holder_actor,
+                contact_round_id,
+                *version,
+                predecessor_event_ref,
+            )?;
+        }
+        _ => {}
+    }
     // The authenticated device (or Agent allocation) selects one exact
     // `(principal_id, station_id)` pair and its local lifetime PCR
     // lineage. Never resolve account state from the principal core alone.
@@ -2097,7 +2131,8 @@ fn validate_lineage_head(
         || record.version.and_then(|current| current.checked_add(1)) != Some(version)
         || holder_head(record, holder) != Some(predecessor)
     {
-        return Err(AppError::conflict("Contact lineage CAS mismatch"));
+        return Err(AppError::conflict("Contact lineage CAS mismatch")
+            .with_wire_code("contact_lineage_conflict"));
     }
     let bundle = record.contact_round_evidence.as_ref().ok_or_else(|| {
         AppError::conflict("Contact round evidence is not yet authoritative")

@@ -322,12 +322,34 @@ async fn verifying_key_for_service_id(
         let expected_method = crate::routing::federation::federation_service_signature_key_id(
             state.service_did().as_str(),
         );
-        if verification_method != expected_method {
-            return Err(signature_error(
-                "local service signature method is not the active federation key",
-            ));
+        if verification_method == expected_method {
+            return Ok(state.notary_signing_key().verifying_key());
         }
-        return Ok(state.notary_signing_key().verifying_key());
+        // A split Account Authority signs as this Station using a method
+        // delegated by its verified, durable DID history. A request-supplied
+        // key or the equality of Source-Service-ID alone is never authority.
+        let stored = state.stored_service_identity().await.map_err(|error| {
+            signature_error(format!("local service identity unavailable: {error}"))
+        })?;
+        let document = &stored.did_document;
+        let method = document
+            .verification_method
+            .iter()
+            .find(|method| {
+                method.id == verification_method
+                    && method.controller == state.service_did()
+                    && document.assertion_method.contains(&method.id)
+            })
+            .ok_or_else(|| {
+                signature_error("local service signature method is not an active assertion key")
+            })?;
+        let bytes =
+            arkret_canonical::multibase::decode_ed25519_multibase(&method.public_key_multibase)
+                .map_err(|error| {
+                    signature_error(format!("local assertion key is invalid: {error}"))
+                })?;
+        return VerifyingKey::from_bytes(&bytes)
+            .map_err(|error| signature_error(format!("local assertion key is invalid: {error}")));
     }
     if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
         return Ok(key);

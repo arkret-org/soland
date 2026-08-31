@@ -877,18 +877,6 @@ fn submit_event_authenticated<'a>(
         // canonical body is a `duplicate_conflict`. Event-ID idempotency below
         // still applies independently (a write with no header relies on it).
         if let Some(key) = idempotency_key.as_deref() {
-            let principal_id = match arkret_wire::DidCoreId::new(session.actor.clone()) {
-                Ok(principal_id) => principal_id,
-                Err(error) => {
-                    render_error(
-                        res,
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        &format!("authenticated session actor is invalid: {error}"),
-                    );
-                    return;
-                }
-            };
             let request_hash = match arkret_canonical::canonical_sha256(&submit) {
                 Ok(hash) => hash,
                 Err(error) => {
@@ -901,15 +889,21 @@ fn submit_event_authenticated<'a>(
                     return;
                 }
             };
-            let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                principal_id.clone(),
-                state.service_core_id(),
-            ));
+            let authenticated_actor =
+                match crate::routing::identity::session_actor::session_actor_from_credential(
+                    state, session,
+                ) {
+                    Ok(actor) => actor,
+                    Err(error) => {
+                        render_error(res, error.http_status(), error.wire_code(), &error.message);
+                        return;
+                    }
+                };
             match state
                 .jobs()
                 .scoped_idempotency_record(
                     &authenticated_actor,
-                    "ak.self.events.command.submit",
+                    "ak.self.events.command.submit.v1",
                     key,
                 )
                 .await
@@ -951,8 +945,8 @@ fn submit_event_authenticated<'a>(
                         session,
                         envelope,
                         EventCommitIdempotency {
-                            authenticated_actor,
-                            operation_id: "ak.self.events.command.submit".to_owned(),
+                            authenticated_actor: authenticated_actor.clone(),
+                            operation_id: "ak.self.events.command.submit.v1".to_owned(),
                             key: key.to_owned(),
                             request_hash: request_hash.clone(),
                         },
@@ -990,7 +984,7 @@ fn submit_event_authenticated<'a>(
             if !status.is_server_error() && !idempotency_committed {
                 persist_idempotency_first_response(
                     state,
-                    &session.actor,
+                    &authenticated_actor,
                     key,
                     &request_hash,
                     status,
@@ -1145,23 +1139,16 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
 /// (it re-executes, and Event-ID idempotency still de-duplicates the work).
 async fn persist_idempotency_first_response(
     state: &AppState,
-    principal_id: &str,
+    authenticated_actor: &arkret_wire::ActorId,
     idempotency_key: &str,
     request_hash: &str,
     status: StatusCode,
     body: &Value,
 ) {
     let created_at = now();
-    let principal_id = match arkret_wire::DidCoreId::new(principal_id.to_owned()) {
-        Ok(principal_id) => principal_id,
-        Err(error) => {
-            tracing::warn!(%error, idempotency_key, "idempotency principal id invalid");
-            return;
-        }
-    };
     let record = soland_services::jobs::IdempotencyState {
-        authenticated_actor: arkret_wire::ActorId::service(principal_id),
-        operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: "ak.self.events.command.submit.v1".to_owned(),
         idempotency_key: idempotency_key.to_owned(),
         request_hash: request_hash.to_owned(),
         response_status: status.as_u16() as i32,
@@ -2019,6 +2006,58 @@ async fn applet_managed_actor_pcr_access(
 )]
 mod applet_managed_actor_pcr_access_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn submit_idempotency_first_response_uses_exact_actor_and_operation_scope() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let local = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let first = serde_json::json!({"status": "accepted", "cursor": "opaque-first-response"});
+        persist_idempotency_first_response(
+            &state,
+            &local,
+            "test-key",
+            "test-request-hash",
+            StatusCode::OK,
+            &first,
+        )
+        .await;
+        let record = state
+            .jobs()
+            .scoped_idempotency_record(&local, "ak.self.events.command.submit.v1", "test-key")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.response_body, first);
+        assert!(
+            state
+                .jobs()
+                .scoped_idempotency_record(&foreign, "ak.self.events.command.submit.v1", "test-key")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for other_operation in ["other.operation.v1", "ak.self.events.command.submit"] {
+            assert!(
+                state
+                    .jobs()
+                    .scoped_idempotency_record(&local, other_operation, "test-key")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
 
     #[tokio::test]
     async fn canonical_frontier_keeps_same_principal_station_sequences_independent() {

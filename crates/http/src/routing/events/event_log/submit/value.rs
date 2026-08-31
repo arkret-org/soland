@@ -248,6 +248,66 @@ pub(super) async fn derive_submit_cell_writes(
     Ok((projected, frozen_pre_state))
 }
 
+// Sections 5, 6.3.1 and 9.3.1 require the Event's frozen Seal basis, never
+// the receiver's latest projection or a concurrent Move's writes.
+fn validate_cas_write_guards(
+    state: &AppState,
+    operation: &Operation,
+    writes: &[arkret_wire::cba::ProjectedCellWrite],
+    frozen: &std::collections::BTreeMap<arkret_wire::CellRef, arkret_state::lattice::CellState>,
+) -> Result<(), SubmitOneError> {
+    use arkret_wire::cba::{LatticeOpType, PredicateOp, ProjectedOp};
+    for write in writes {
+        let produces_set = match &write.op {
+            ProjectedOp::Direct(op) => op.op_type == LatticeOpType::Set,
+            ProjectedOp::ApplyPatch { .. } => true,
+            _ => false,
+        };
+        if !produces_set {
+            continue;
+        }
+        let binding = state
+            .projections()
+            .resolve_cell(&operation.realm_id, &write.cell_id)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "unsupported_profile",
+                    error.to_string(),
+                )
+            })?;
+        if binding.lattice.kind() != arkret_state::lattice::LatticeKind::CasRegister {
+            continue;
+        }
+        let initial = binding.lattice.initial_state().unwrap_or(Value::Null);
+        let observed = match frozen.get(&write.cell_id) {
+            Some(arkret_state::lattice::CellState::Value(value)) => value,
+            Some(arkret_state::lattice::CellState::Bottom(_)) => {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_bottom",
+                    "CAS target is in Bottom",
+                ));
+            }
+            None => &initial,
+        };
+        if observed != &initial
+            && !operation.context.preconditions.iter().any(|pre| {
+                pre.cell_id == write.cell_id
+                    && pre.predicate.op == PredicateOp::HeadEq
+                    && pre.predicate.value.as_ref() == Some(observed)
+            })
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "non-initial cas_register write requires whole-value head_eq",
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn validate_active_series_authority_before_commit(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
@@ -2578,6 +2638,19 @@ pub(super) async fn submit_event_value_with_context(
         if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
             return Err(SubmitOneError::semantic_schema_violation(message));
         }
+        if let Some(basis) = &submitted_event.seal_basis {
+            let frozen = state
+                .projections()
+                .effective_state_at(&basis.leaves, &operation.realm_id)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        format!("Control Move frozen Seal basis unavailable: {error}"),
+                    )
+                })?;
+            validate_cas_write_guards(state, operation, &projected_cell_writes, &frozen)?;
+        }
         preflight_moderation_dismiss(state, operation).await?;
         preflight_account_data_cas(state, operation).await?;
         // Holder-private consent is admission state, not a post-acceptance
@@ -4104,6 +4177,135 @@ async fn preflight_account_data_cas(
         "expected_revision does not match current account data revision",
     )
     .with_details(details))
+}
+
+#[cfg(test)]
+mod cas_write_guard_tests {
+    use super::*;
+
+    #[test]
+    fn cas_admission_rejects_missing_or_partial_basis_without_mutation() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+        let cell = "ak:cell:ak.component.realm.policy_bundle.v1:null";
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
+                .unwrap(),
+            arkret_wire::RealmId::new(realm).unwrap(),
+            arkret_wire::EventKind::RealmPolicyBundle.as_str(),
+            json!({"policy_revision": 2, "federation_policy": "restricted"}),
+        );
+        let mut op = arkret_wire::cba::LatticeOp::empty();
+        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        op.value = Some(operation.payload.clone());
+        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+            cell_id: arkret_wire::CellRef::new(cell).unwrap(),
+            op: arkret_wire::cba::ProjectedOp::Direct(op),
+        }];
+        let mut frozen = std::collections::BTreeMap::new();
+        assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
+        let current = json!({"policy_revision": 1, "federation_policy": "restricted"});
+        frozen.insert(
+            writes[0].cell_id.clone(),
+            arkret_state::lattice::CellState::Value(current.clone()),
+        );
+        let mut snapshot = state.projections().snapshot();
+        snapshot.realm_policy_bundle_cells.insert(
+            realm.to_owned(),
+            arkret_state::lattice::CellState::Value(current.clone()),
+        );
+        state.projections().install_snapshot(snapshot);
+        assert_eq!(
+            validate_cas_write_guards(&state, &operation, &writes, &frozen)
+                .unwrap_err()
+                .code,
+            "failed_precondition"
+        );
+        operation.context.preconditions = serde_json::from_value(json!([{
+            "cell_id": cell, "predicate": {"op": "head_eq", "value": {"policy_revision": 1}}
+        }]))
+        .unwrap();
+        assert_eq!(
+            validate_cas_write_guards(&state, &operation, &writes, &frozen)
+                .unwrap_err()
+                .code,
+            "failed_precondition"
+        );
+        operation.context.preconditions[0].predicate.value = Some(current.clone());
+        assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
+        assert_eq!(
+            state
+                .projections()
+                .snapshot()
+                .realm_policy_bundle_cell_value(realm),
+            Some(&current)
+        );
+        // A concurrent accepted view must not replace this Event's basis.
+        let mut latest = state.projections().snapshot();
+        latest.realm_policy_bundle_cells.insert(
+            realm.to_owned(),
+            arkret_state::lattice::CellState::Value(json!({
+                "policy_revision": 9, "federation_policy": "restricted"
+            })),
+        );
+        state.projections().install_snapshot(latest);
+        assert!(validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok());
+    }
+
+    #[test]
+    fn cas_admission_keeps_same_non_null_cell_in_distinct_realms_separate() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let source =
+            arkret_wire::RealmId::new("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb")
+                .unwrap();
+        let child =
+            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap();
+        let cell = arkret_wire::CellRef::new(format!(
+            "ak:cell:ak.component.realm.inheritance_policy.v1:{source}"
+        ))
+        .unwrap();
+        let operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
+                .unwrap(),
+            child.clone(),
+            arkret_wire::EventKind::RealmInheritancePolicy.as_str(),
+            json!({"source_realm_id": source, "inherits": {}, "mode": "narrow_only", "max_depth": 1}),
+        );
+        let mut op = arkret_wire::cba::LatticeOp::empty();
+        op.op_type = arkret_wire::cba::LatticeOpType::Set;
+        op.value = Some(operation.payload.clone());
+        let writes = vec![arkret_wire::cba::ProjectedCellWrite {
+            cell_id: cell.clone(),
+            op: arkret_wire::cba::ProjectedOp::Direct(op),
+        }];
+        let mut frozen = std::collections::BTreeMap::new();
+        let value = arkret_state::lattice::CellState::Value(operation.payload.clone());
+        let mut snapshot = state.projections().snapshot();
+        snapshot.install_reloaded_cells(&source, [(cell.clone(), value.clone())]);
+        state.projections().install_snapshot(snapshot);
+        assert!(
+            validate_cas_write_guards(&state, &operation, &writes, &frozen).is_ok(),
+            "source Realm's same-named cell must not require a child Realm predecessor"
+        );
+        let mut snapshot = state.projections().snapshot();
+        snapshot.install_reloaded_cells(&child, [(cell.clone(), value.clone())]);
+        frozen.insert(cell.clone(), value);
+        state.projections().install_snapshot(snapshot);
+        assert_eq!(
+            validate_cas_write_guards(&state, &operation, &writes, &frozen)
+                .unwrap_err()
+                .code,
+            "failed_precondition",
+            "a real child predecessor still requires whole-value CAS"
+        );
+    }
 }
 
 #[cfg(test)]

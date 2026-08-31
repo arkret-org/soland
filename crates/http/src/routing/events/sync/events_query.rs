@@ -1067,6 +1067,20 @@ async fn events_query_impl(
     if accessible_realms.is_empty() {
         return Err(soland_http::error::AppError::not_found("not found"));
     }
+    // A projection row is published only after its immutable canonical Event.
+    // Read the dependent index first: reading canonical Events first lets a
+    // concurrent accepted append appear only in the later index snapshot and
+    // falsely look like corruption. Genuine orphan/mismatched rows still fail
+    // below; candidates continue to come exclusively from canonical Events.
+    let mut indexed_rows = Vec::new();
+    for realm in &accessible_realms {
+        let rows = state
+            .event_queries()
+            .projected_events_for_realm(realm)
+            .await
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+        indexed_rows.extend(rows.into_iter().map(|row| (realm.clone(), row)));
+    }
     let records = state
         .event_queries()
         .canonical_events()
@@ -1077,25 +1091,17 @@ async fn events_query_impl(
         .map(|record| (record.event_id.as_str(), record))
         .collect();
     let realm_set: BTreeSet<_> = accessible_realms.iter().cloned().collect();
-    // A stale extra index row is an integrity error, never another candidate.
-    for realm in &accessible_realms {
-        for row in state
-            .event_queries()
-            .projected_events_for_realm(realm)
-            .await
-            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
+    for (realm, row) in indexed_rows {
+        let record = by_id.get(row.event_id.as_str()).ok_or_else(|| {
+            soland_http::error::AppError::internal("projection row has no canonical Event")
+        })?;
+        if super::super::event_log::canonical_realm_id_for_record(record).as_deref()
+            != Some(realm.as_str())
+            || record.kind != row.event_kind.as_str()
         {
-            let record = by_id.get(row.event_id.as_str()).ok_or_else(|| {
-                soland_http::error::AppError::internal("projection row has no canonical Event")
-            })?;
-            if super::super::event_log::canonical_realm_id_for_record(record).as_deref()
-                != Some(realm)
-                || record.kind != row.event_kind.as_str()
-            {
-                return Err(soland_http::error::AppError::internal(
-                    "projection index differs from canonical Event",
-                ));
-            }
+            return Err(soland_http::error::AppError::internal(
+                "projection index differs from canonical Event",
+            ));
         }
     }
     let mut candidates = Vec::new();

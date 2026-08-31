@@ -285,7 +285,7 @@ pub(super) async fn mimi_room_message(
         },
         "mimi_provenance": {
             "provenance": "mimi_facade",
-            "source_provider": source_provider,
+            "source_provider_id": source_provider,
             "attributed_sender_actor_id": body.sender_actor_id,
             "attributed_sender_device_id": body.device_id,
             "source_envelope_digest": original_hash,

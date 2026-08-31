@@ -3124,3 +3124,46 @@ mod control_move_ingress_negatives {
         cleanup_control_schedule_test_actor(&pool, &fixture.event.actor_id.to_string()).await;
     }
 }
+
+#[tokio::test]
+async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
+    use arkret_wire::{AccountId, ActorId, DidCoreId};
+    use soland_storage::{RetentionPolicyRecord, RetentionPolicyStore};
+    use soland_storage_postgres::PgRetentionPolicyStore;
+    let pool = test_pool()
+        .await
+        .expect("retention regression requires real PostgreSQL");
+    let _guard = DB_GUARD.lock().await;
+    let store = PgRetentionPolicyStore { pool: pool.clone() };
+    let principal = DidCoreId::new("ak:did_core:web:retention-author.example").unwrap();
+    let realm = format!("retention-roundtrip-{}", uuid::Uuid::now_v7());
+    for station in [
+        "ak:did_core:web:station-a.example",
+        "ak:did_core:web:station-b.example",
+    ] {
+        let author = ActorId::account(AccountId::new(
+            principal.clone(),
+            DidCoreId::new(station).unwrap(),
+        ));
+        let record = RetentionPolicyRecord {
+            realm_id: realm.clone(),
+            ttl_seconds: 86_400,
+            updated_by: author.clone(),
+            updated_at: chrono::Utc::now(),
+        };
+        store.put(&record).await.unwrap();
+        let reopened = PgRetentionPolicyStore { pool: pool.clone() };
+        let loaded = reopened.get(&realm).await.unwrap().unwrap();
+        assert_eq!(loaded.updated_by, author);
+        assert_eq!(loaded.ttl_seconds, 86_400);
+        let snapshot = reopened.snapshot_all().await.unwrap();
+        assert_eq!(
+            snapshot
+                .iter()
+                .find(|r| r.realm_id == realm)
+                .unwrap()
+                .updated_by,
+            author
+        );
+    }
+}

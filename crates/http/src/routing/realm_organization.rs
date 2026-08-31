@@ -88,7 +88,14 @@ async fn list_realm_organizations_impl(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    if !crate::routing::realm_has_member(state, &realm_id, &session.actor).await {
+    if !crate::routing::realm_has_member(
+        state,
+        &realm_id,
+        &crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?
+            .to_string(),
+    )
+    .await
+    {
         return Err(AppError::not_found("realm not found"));
     }
     let now = chrono::Utc::now();

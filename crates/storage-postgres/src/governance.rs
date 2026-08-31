@@ -93,7 +93,7 @@ impl RetentionPolicyStore for PgRetentionPolicyStore {
         )
         .bind::<Text, _>(&record.realm_id)
         .bind::<BigInt, _>(record.ttl_seconds)
-        .bind::<Text, _>(record.updated_by.as_str())
+        .bind::<Jsonb, _>(&record.updated_by)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -121,8 +121,8 @@ struct RetentionPolicyRow {
     realm_id: String,
     #[diesel(sql_type = BigInt)]
     ttl_seconds: i64,
-    #[diesel(sql_type = Text)]
-    updated_by: arkret_wire::DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    updated_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }

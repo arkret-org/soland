@@ -896,6 +896,25 @@ async fn validate_stored_service_identity(
         load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
     validate_service_signing_binding(stored, &signing_seed)?;
 
+    if let Some(public_key) = &config.account_authority_public_key_multibase {
+        let method_id = format!("{}#account-authority", stored.identity.did);
+        if !stored.did_document.assertion_method.contains(&method_id)
+            || !stored
+                .did_document
+                .verification_method
+                .iter()
+                .any(|method| {
+                    method.id == method_id
+                        && method.controller == stored.identity.did
+                        && &method.public_key_multibase == public_key
+                })
+        {
+            anyhow::bail!(
+                "service_identity_key_mismatch: Account Authority key is not authorized by the stored Station DID history"
+            );
+        }
+    }
+
     let log = persistence
         .webvh_history(stored.identity.did.as_str())
         .await
@@ -1014,8 +1033,13 @@ async fn mint_local_service_identity(
         soland_http::state::getrandom_seed(&mut seed);
         seed
     });
+    let assertion_keys = config
+        .account_authority_public_key_multibase
+        .as_deref()
+        .map(|key| vec![("account-authority", key)])
+        .unwrap_or_default();
     let prepared =
-        arkret_signatures::webvh::prepare_service_registration_inception_with_did_key_seed(
+        arkret_signatures::webvh::prepare_service_registration_inception_with_assertion_keys(
             &mut rng,
             &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
                 provider_endpoint: &provider_endpoint,
@@ -1025,6 +1049,7 @@ async fn mint_local_service_identity(
                 did_key_fragment: Some("notary-key"),
             },
             &service_signing_seed,
+            &assertion_keys,
         )
         .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
     let service_did = Did::new(prepared.did.clone())

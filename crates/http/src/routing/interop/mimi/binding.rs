@@ -153,12 +153,12 @@ pub(super) fn enforce_mimi_submit_binding(
 pub(super) fn validate_mimi_room_binding_payload(binding: &Value) -> Result<(), AppError> {
     let payload = mimi_room_binding_security_payload(binding);
     if payload
-        .get("hub_provider")
+        .get("hub_provider_id")
         .and_then(Value::as_str)
         .is_none_or(|value| value.trim().is_empty())
     {
         return Err(
-            AppError::param_invalid("MIMI room binding requires hub_provider")
+            AppError::param_invalid("MIMI room binding requires hub_provider_id")
                 .with_wire_code(arkret_wire::ReasonCode::MIMI_ROOM_STATE_INCOMPATIBLE),
         );
     }
@@ -283,7 +283,7 @@ pub(super) async fn admit_mimi_room_binding_event(
             )
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING)
         })?;
-    validate_mimi_room_binding_payload(binding)?;
+
     let expected_room_uri = mimi_room_uri(state, room_id)?;
     let event = &submission.event;
     let sender_actor_id = update_body
@@ -309,6 +309,8 @@ pub(super) async fn admit_mimi_room_binding_event(
         )
         .with_wire_code("mimi_room_binding_event_invalid"));
     }
+    // Reject all cross-bound request/Event identities before domain-state validation.
+    validate_mimi_room_binding_payload(binding)?;
     let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let device_id = event
         .proofs
@@ -366,6 +368,32 @@ fn local_mimi_sender_account(
 #[cfg(test)]
 mod local_sender_tests {
     use super::*;
+
+    #[test]
+    fn room_binding_accepts_the_registered_hub_provider_id_and_rejects_the_retired_field() {
+        let payload = json!({
+            "profile": "ak.profile.mimi_interop.v1",
+            "mimi_room_uri": "mimi://example.com/rooms/fixture",
+            "binding_scope": {
+                "realm_id": "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb",
+                "strand_id": "ak:strand:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb"
+            },
+            "hub_provider_id": "ak:did_core:web:provider.example",
+            "local_provider_role": "hub",
+            "status": "accepted"
+        });
+        let typed: arkret_models_collaboration::events_payloads::MimiRoomBindingPayload =
+            serde_json::from_value(payload.clone()).unwrap();
+        assert!(validate_mimi_room_binding_payload(&serde_json::to_value(typed).unwrap()).is_ok());
+        let mut retired = payload;
+        let provider = retired
+            .as_object_mut()
+            .unwrap()
+            .remove("hub_provider_id")
+            .unwrap();
+        retired["hub_provider"] = provider;
+        assert!(validate_mimi_room_binding_payload(&retired).is_err());
+    }
 
     #[test]
     fn room_binding_never_relabels_a_foreign_or_service_sender_as_a_local_account() {

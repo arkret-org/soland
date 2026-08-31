@@ -55,7 +55,7 @@ impl PersistenceHandle {
     pub async fn resolve_account_status_records(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         from_status_seq: u64,
         limit: u16,
     ) -> crate::ServiceResult<
@@ -71,7 +71,7 @@ impl PersistenceHandle {
     pub async fn current_account_status_record(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<
         Option<arkret_models_collaboration::account_lifecycle::AccountStatusRecord>,
     > {
@@ -98,7 +98,7 @@ impl PersistenceHandle {
     pub async fn account_status_receipt(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> crate::ServiceResult<
         Option<arkret_models_collaboration::account_lifecycle::AccountStatusReceipt>,

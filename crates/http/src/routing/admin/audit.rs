@@ -121,7 +121,16 @@ async fn audit_events(
     let limit = limit.into_inner().unwrap_or(100).clamp(1, 500);
     let cursor = query_param(req, "cursor").or_else(|| cursor.into_inner());
     let mut events = if let Some(realm_id) = realm_id_filter.as_deref() {
-        if !realm_has_member(state, realm_id, &session.actor).await {
+        if !realm_has_member(
+            state,
+            realm_id,
+            &crate::routing::identity::session_actor::session_actor_from_credential(
+                state, &session,
+            )?
+            .to_string(),
+        )
+        .await
+        {
             return Err(AppError::not_found("audit realm not found"));
         }
         state

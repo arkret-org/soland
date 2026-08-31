@@ -1792,7 +1792,7 @@ impl FederationDispatcher {
                     .persistence()
                     .resolve_account_status_records(
                         submitted.account_authority_id.as_str(),
-                        &submitted.account_id.to_string(),
+                        &submitted.account_id,
                         next_seq,
                         1,
                     )
@@ -1808,7 +1808,7 @@ impl FederationDispatcher {
                     .persistence()
                     .account_status_receipt(
                         submitted.account_authority_id.as_str(),
-                        &submitted.account_id.to_string(),
+                        &submitted.account_id,
                         next_seq,
                     )
                     .await
@@ -1854,7 +1854,7 @@ impl FederationDispatcher {
             .persistence()
             .resolve_account_status_records(
                 submitted.account_authority_id.as_str(),
-                &submitted.account_id.to_string(),
+                &submitted.account_id,
                 required,
                 1,
             )
@@ -1868,7 +1868,7 @@ impl FederationDispatcher {
             .persistence()
             .account_status_receipt(
                 submitted.account_authority_id.as_str(),
-                &submitted.account_id.to_string(),
+                &submitted.account_id,
                 required,
             )
             .await

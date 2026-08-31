@@ -260,6 +260,9 @@ pub struct AppConfig {
     /// Deployment-private, fail-closed Account Authority signer identity pin.
     /// It is never discovered or registered as an Arkret service role.
     pub account_authority_id: Option<String>,
+    /// Public assertion key delegated in this Station's signed DID inception.
+    /// Changing this pin requires an authorized DID history update.
+    pub account_authority_public_key_multibase: Option<String>,
     /// OAuth/OIDC `client_id` this soland deployment is registered as at the
     /// Authentication Method Provider, advertised to browser clients in
     /// `/_arkret/describe.auth_metadata.methods[].oidc.client_id`. The web
@@ -866,6 +869,7 @@ impl AppConfig {
             cors_allow_origin: None,
             account_authority_url: None,
             account_authority_id: None,
+            account_authority_public_key_multibase: None,
             oidc_client_id: None,
             development_mode: false,
             failpoints: crate::failpoints::FailpointRegistry::disabled(),
@@ -962,6 +966,13 @@ impl AppConfig {
         let media = load_media_issuer_config(values);
         let account_authority_url = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_URL");
         let account_authority_id = env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID");
+        let account_authority_public_key_multibase =
+            env_non_empty(values, "SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE");
+        if let Some(key) = &account_authority_public_key_multibase {
+            arkret_canonical::multibase::decode_ed25519_multibase(key).map_err(|error| {
+                anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE is invalid: {error}")
+            })?;
+        }
         if account_authority_url.is_none() != account_authority_id.is_none() {
             anyhow::bail!(
                 "SOLAND_ACCOUNT_AUTHORITY_URL and SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID must be configured together"
@@ -1241,6 +1252,7 @@ impl AppConfig {
             cors_allow_origin,
             account_authority_url,
             account_authority_id,
+            account_authority_public_key_multibase,
             oidc_client_id,
             development_mode,
             failpoints,

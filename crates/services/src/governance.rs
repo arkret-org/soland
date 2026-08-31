@@ -68,7 +68,7 @@ pub struct OrganizationPolicyRecord {
 pub struct RetentionPolicyRecord {
     pub realm_id: String,
     pub ttl_seconds: i64,
-    pub updated_by: arkret_identifiers::DidCoreId,
+    pub updated_by: arkret_wire::ActorId,
     pub updated_at: DateTime<Utc>,
 }
 

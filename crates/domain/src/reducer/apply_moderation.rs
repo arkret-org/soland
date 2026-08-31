@@ -252,6 +252,9 @@ impl ProjectionState {
     /// projected here (causal / backfill tolerance — separation-of-duties is
     /// only enforced when we can observe the original decision's issuer).
     pub(crate) fn moderation_decision_issuer(&self, decision_id: &str) -> Option<String> {
+        if let Some(decision) = self.moderation_decisions.get(decision_id) {
+            return Some(decision.issuer_id.to_string());
+        }
         let items = self.moderation_items_for_decision(decision_id);
         items.iter().rev().find_map(|item| {
             let value = item.get("value").unwrap_or(item);
@@ -264,30 +267,20 @@ impl ProjectionState {
     }
 
     /// The current FSM state value for an appeal cell (`None` when the cell
-    /// is absent / Bottom / not a state object).
+    /// is absent / Bottom / not a canonical state string).
     pub(crate) fn moderation_appeal_state(&self, appeal_id: &str) -> Option<String> {
         let cell_ref = Self::moderation_appeal_cell_ref(appeal_id)?;
         match self.cells.get(&cell_ref) {
-            Some(CellState::Value(value)) => value
-                .get("state")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
+            Some(CellState::Value(Value::String(state))) => Some(state.clone()),
             _ => None,
         }
     }
 
-    /// The `appellant` anchored on the appeal cell at submit time. Used by
-    /// the capability gate (policy.rs) to authorize the appellant-withdrawal
-    /// close path (`closer == appellant`).
+    /// The appellant in the accepted submit Event, retained across Seal reloads.
     pub fn moderation_appeal_appellant(&self, appeal_id: &str) -> Option<String> {
-        let cell_ref = Self::moderation_appeal_cell_ref(appeal_id)?;
-        match self.cells.get(&cell_ref) {
-            Some(CellState::Value(value)) => value
-                .get("appellant_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            _ => None,
-        }
+        self.moderation_appeal_submissions
+            .get(appeal_id)
+            .map(|submit| submit.appellant_id.to_string())
     }
 
     /// P2 — project `ak.moderation.decision` as an or_set add on the
@@ -332,6 +325,15 @@ impl ProjectionState {
                     reason: "moderation_dismiss_requires_report_event".to_owned(),
                 };
             }
+            let Ok(decision) =
+                operation.typed_payload::<arkret_wire::event_spec::ModerationDecision>()
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_decision_payload_invalid".to_owned(),
+                };
+            };
+            self.moderation_decisions
+                .insert(decision_id.clone(), decision);
             return ProjectionEffect::ModerationDecisionProjected {
                 decision_id,
                 realm_id,
@@ -349,6 +351,14 @@ impl ProjectionState {
                 reason: "moderation_decision_add_dot_unresolved".to_owned(),
             };
         };
+        let Ok(decision) = operation.typed_payload::<arkret_wire::event_spec::ModerationDecision>()
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "moderation_decision_payload_invalid".to_owned(),
+            };
+        };
+        self.moderation_decisions
+            .insert(decision_id.clone(), decision);
         let mut value = operation.payload.clone();
         if let Value::Object(map) = &mut value {
             map.insert("decision_id".to_owned(), Value::String(decision_id.clone()));
@@ -543,40 +553,23 @@ impl ProjectionState {
             };
         }
 
-        // Build / patch the fsm cell value. Carry forward submit-time
-        // identity fields (appellant_id / decision_ref) needed by later
-        // transitions' constraint checks.
-        let mut value = match self.cells.get(&cell_ref) {
-            Some(CellState::Value(Value::Object(map))) => Value::Object(map.clone()),
-            _ => Value::Object(serde_json::Map::new()),
-        };
-        if let Value::Object(map) = &mut value {
-            map.insert("appeal_id".to_owned(), Value::String(appeal_id.clone()));
-            map.insert("realm_id".to_owned(), Value::String(realm_id.clone()));
-            map.insert("state".to_owned(), Value::String(target_state.to_owned()));
-            // On submit, anchor the identity fields used by SoD / atomicity.
-            if target_state == "submitted" {
-                if let Some(appellant_id) = payload_str(operation, "appellant_id") {
-                    map.insert("appellant_id".to_owned(), Value::String(appellant_id));
-                }
-                if let Some(decision_ref) = payload_str(operation, "decision_ref") {
-                    map.insert("decision_ref".to_owned(), Value::String(decision_ref));
-                }
-                if let Some(target_ref) = payload_str(operation, "target_ref") {
-                    map.insert("target_ref".to_owned(), Value::String(target_ref));
-                }
-            }
-            if target_state == "decided"
-                && let Ok(verdict) = appeal_verdict(operation)
-            {
-                map.insert(
-                    "decision".to_owned(),
-                    serde_json::to_value(verdict)
-                        .expect("AppealDecision serialization cannot fail"),
-                );
-            }
+        if target_state == "submitted" {
+            let Ok(submit) =
+                operation.typed_payload::<arkret_wire::event_spec::ModerationAppealSubmit>()
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_appeal_submit_payload_invalid".to_owned(),
+                };
+            };
+            self.moderation_appeal_submissions
+                .insert(appeal_id.clone(), submit);
         }
-        self.cells.insert(cell_ref, CellState::Value(value));
+        // event-kind-registry defines a string FSM, not an object containing
+        // authorization metadata. The accepted submit index holds that metadata.
+        self.cells.insert(
+            cell_ref,
+            CellState::Value(Value::String(target_state.to_owned())),
+        );
 
         ProjectionEffect::ModerationAppealProjected {
             appeal_id,
@@ -667,39 +660,25 @@ impl ProjectionState {
         let Some(appellant_id) = payload_str(operation, "appellant_id") else {
             return Ok(());
         };
-        for cell in self.cells.values() {
-            let Some(value) = (match cell {
-                CellState::Value(Value::Object(value)) => Some(value),
-                _ => None,
-            }) else {
-                continue;
-            };
-            if value.get("appeal_id").and_then(Value::as_str) == Some(appeal_id) {
-                continue;
-            }
-            if value.get("decision_ref").and_then(Value::as_str) != Some(decision_ref.as_str())
-                || value.get("appellant_id").and_then(Value::as_str) != Some(appellant_id.as_str())
+        for (existing_id, submit) in &self.moderation_appeal_submissions {
+            if existing_id == appeal_id
+                || submit.decision_ref.as_str() != decision_ref
+                || submit.appellant_id.as_str() != appellant_id
             {
                 continue;
             }
-            if value.get("state").and_then(Value::as_str) != Some("closed") {
+            if self.moderation_appeal_state(existing_id).as_deref() != Some("closed") {
                 return Err("moderation_appeal_duplicate_active");
             }
         }
         Ok(())
     }
 
-    /// Read the `decision_ref` anchored on the appeal cell at submit time.
+    /// Read the decision reference in the accepted submit Event.
     fn moderation_appeal_decision_ref(&self, appeal_id: &str) -> Option<String> {
-        let cell_ref = Self::moderation_appeal_cell_ref(appeal_id)?;
-        match self.cells.get(&cell_ref) {
-            Some(CellState::Value(value)) => value
-                .get("decision_ref")
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-                .map(ToOwned::to_owned),
-            _ => None,
-        }
+        self.moderation_appeal_submissions
+            .get(appeal_id)
+            .map(|submit| submit.decision_ref.to_string())
     }
 
     /// separation-of-duties: the review/decision `reviewer_id` MUST NOT equal the

@@ -35,6 +35,12 @@ fn decode_receipt(row: &RecordRow) -> PersistenceResult<AccountStatusReceipt> {
     })
 }
 
+fn encode_account_id(account: &arkret_wire::AccountId) -> PersistenceResult<serde_json::Value> {
+    serde_json::to_value(account).map_err(|error| {
+        PersistenceError::Internal(format!("account identity cannot be encoded: {error}"))
+    })
+}
+
 #[async_trait]
 impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
     async fn append(
@@ -52,8 +58,8 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
         let receipt = receipt.clone();
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let authority = record.account_authority_id.to_string();
-            let account = record.account_id.to_string();
-            let lock_key = format!("account-status:{authority}:{account}");
+            let account = encode_account_id(&record.account_id)?;
+            let lock_key = format!("account-status:{authority}:{}", record.account_id);
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&lock_key)
                 .execute(&mut *conn)
@@ -66,7 +72,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
                  ORDER BY status_seq DESC LIMIT 1",
             )
             .bind::<Text, _>(&authority)
-            .bind::<Text, _>(&account)
+            .bind::<Jsonb, _>(&account)
             .get_result::<RecordRow>(&mut *conn)
             .await
             .optional()
@@ -86,7 +92,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
                  VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind::<Text, _>(&authority)
-            .bind::<Text, _>(&account)
+            .bind::<Jsonb, _>(&account)
             .bind::<BigInt, _>(i64::try_from(record.status_seq).map_err(|_| {
                 PersistenceError::SchemaViolation(
                     "account-status sequence exceeds PostgreSQL bigint".to_owned(),
@@ -115,7 +121,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
     async fn current(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<AccountStatusRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(
@@ -124,7 +130,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
              ORDER BY status_seq DESC LIMIT 1",
         )
         .bind::<Text, _>(account_authority_id)
-        .bind::<Text, _>(account_id)
+        .bind::<Jsonb, _>(encode_account_id(account_id)?)
         .get_result::<RecordRow>(&mut *conn)
         .await
         .optional()
@@ -136,7 +142,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
     async fn resolve(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         from_status_seq: u64,
         limit: u16,
     ) -> PersistenceResult<Vec<AccountStatusRecord>> {
@@ -147,7 +153,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
              ORDER BY status_seq ASC LIMIT $4",
         )
         .bind::<Text, _>(account_authority_id)
-        .bind::<Text, _>(account_id)
+        .bind::<Jsonb, _>(encode_account_id(account_id)?)
         .bind::<BigInt, _>(i64::try_from(from_status_seq).map_err(|_| {
             PersistenceError::SchemaViolation(
                 "account-status sequence exceeds PostgreSQL bigint".to_owned(),
@@ -177,7 +183,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
     async fn receipt(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> PersistenceResult<Option<AccountStatusReceipt>> {
         let mut conn = pg_conn(&self.pool).await?;
@@ -186,7 +192,7 @@ impl AccountStatusReplicaStore for PgAccountStatusReplicaStore {
              WHERE account_authority_id = $1 AND account_id = $2 AND status_seq = $3",
         )
         .bind::<Text, _>(account_authority_id)
-        .bind::<Text, _>(account_id)
+        .bind::<Jsonb, _>(encode_account_id(account_id)?)
         .bind::<BigInt, _>(i64::try_from(status_seq).map_err(|_| {
             PersistenceError::SchemaViolation(
                 "account-status sequence exceeds PostgreSQL bigint".to_owned(),

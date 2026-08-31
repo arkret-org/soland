@@ -215,6 +215,40 @@ fn moderation_appeal_fsm_submitted_under_review_decided() {
         Some("submitted")
     );
 
+    // A real Seal reload replaces the inline FSM value with the SDK's string.
+    // Authorization must retain the accepted submit's appellant and decision.
+    let realm = arkret_wire::RealmId::new(MOD_REALM).unwrap();
+    let cell = CellRef::new(format!(
+        "ak:cell:ak.component.moderation.appeal.v1:{MOD_APPEAL_ID}"
+    ))
+    .unwrap();
+    state.install_reloaded_cells(
+        &realm,
+        [(cell, CellState::Value(serde_json::json!("submitted")))],
+    );
+    assert_eq!(
+        state.moderation_appeal_appellant(MOD_APPEAL_ID).as_deref(),
+        Some("ak:did_core:web:appellant.example")
+    );
+
+    let forbidden_review = make_operation(
+        arkret_wire::EventKind::ModerationAppealReview,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer_id": "ak:did_core:web:mod.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
+        }),
+    );
+    assert!(
+        matches!(state.apply(&forbidden_review, &hlc), ProjectionEffect::Rejected { ref reason } if reason == "appeal_self_review_forbidden")
+    );
+    assert_eq!(
+        state.moderation_appeal_state(MOD_APPEAL_ID).as_deref(),
+        Some("submitted")
+    );
+
     let review = make_operation(
         arkret_wire::EventKind::ModerationAppealReview,
         MOD_REALM,
@@ -364,6 +398,41 @@ fn moderation_appeal_self_review_forbidden() {
         ProjectionEffect::Rejected { ref reason }
             if reason == "appeal_self_review_forbidden"
     ));
+}
+
+#[test]
+fn moderation_appeal_self_review_remains_forbidden_after_seal_reload() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
+    let realm = arkret_identifiers::RealmId::new(MOD_REALM).unwrap();
+    // Canonical OR-Set values are exactly payload, without decision_id.
+    let canonical_add = serde_json::json!([{
+        "tag": MOD_DECISION_DOT,
+        "value": moderation_decision_operation("ak:did_core:web:mod.example").payload,
+    }]);
+    for canonical in [canonical_add, serde_json::json!([])] {
+        state.install_reloaded_cells(
+            &realm,
+            [(mod_decision_cell_ref(), CellState::Value(canonical))],
+        );
+        let review = make_operation(
+            arkret_wire::EventKind::ModerationAppealReview,
+            MOD_REALM,
+            serde_json::json!({
+                "appeal_id": MOD_APPEAL_ID, "realm_id": MOD_REALM,
+                "reviewer_id": "ak:did_core:web:mod.example",
+                "reviewed_at": "2026-06-20T00:00:00.000Z",
+            }),
+        );
+        assert!(matches!(state.apply(&review, &hlc),
+            ProjectionEffect::Rejected { reason } if reason == "appeal_self_review_forbidden"));
+        let mut independent = review.clone();
+        independent.payload["reviewer_id"] = serde_json::json!("ak:did_core:web:reviewer.example");
+        assert!(matches!(state.clone().apply(&independent, &hlc),
+            ProjectionEffect::ModerationAppealProjected { new_state, .. } if new_state == "under_review"));
+    }
 }
 
 #[test]

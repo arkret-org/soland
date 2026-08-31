@@ -3976,10 +3976,9 @@ async fn build_history_recipient_authority_views(
                 "recipient account is unavailable",
             )
         })?;
-    let account_id_key = account.account_id.to_string();
     let status = state
         .persistence()
-        .current_account_status_record(local_service_id.as_str(), &account_id_key)
+        .current_account_status_record(local_service_id.as_str(), &account.account_id)
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| {

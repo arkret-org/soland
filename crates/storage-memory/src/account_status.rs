@@ -51,19 +51,19 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
     async fn current(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<AccountStatusRecord>> {
         Ok(current(
             &self.records.lock(),
             account_authority_id,
-            account_id,
+            &account_id.to_string(),
         ))
     }
 
     async fn resolve(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         from_status_seq: u64,
         limit: u16,
     ) -> PersistenceResult<Vec<AccountStatusRecord>> {
@@ -73,12 +73,12 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
             .range(
                 (
                     account_authority_id.to_owned(),
-                    account_id.to_owned(),
+                    account_id.to_string(),
                     from_status_seq,
                 )
                     ..=(
                         account_authority_id.to_owned(),
-                        account_id.to_owned(),
+                        account_id.to_string(),
                         u64::MAX,
                     ),
             )
@@ -102,7 +102,7 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
     async fn receipt(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> PersistenceResult<Option<AccountStatusReceipt>> {
         Ok(self
@@ -110,7 +110,7 @@ impl AccountStatusReplicaStore for MemoryAccountStatusReplicaStore {
             .lock()
             .get(&(
                 account_authority_id.to_owned(),
-                account_id.to_owned(),
+                account_id.to_string(),
                 status_seq,
             ))
             .map(|(_, receipt)| receipt.clone()))
@@ -248,7 +248,7 @@ mod tests {
                 ..
             }
         ));
-        let account_key = genesis.account_id.to_string();
+        let account_key = genesis.account_id.clone();
         assert_eq!(
             store
                 .current(genesis.account_authority_id.as_str(), &account_key)
@@ -335,7 +335,7 @@ mod tests {
             store.append(&genesis, &receipt(&other, 21)).await,
             Err(PersistenceError::SchemaViolation(_))
         ));
-        let account_key = genesis.account_id.to_string();
+        let account_key = genesis.account_id.clone();
         assert!(
             store
                 .current(genesis.account_authority_id.as_str(), &account_key)

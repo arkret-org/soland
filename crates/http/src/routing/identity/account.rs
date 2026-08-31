@@ -1614,7 +1614,15 @@ async fn resolve_actor_profiles(
         .map_err(|error| AppError::internal(format!("classify Actor Profile selector: {error}")))?
         .is_some();
     let caller_joined = !selector_is_pcr
-        && crate::routing::realm_has_member(state, body.realm_id.as_str(), &session.actor).await;
+        && crate::routing::realm_has_member(
+            state,
+            body.realm_id.as_str(),
+            &crate::routing::identity::session_actor::session_actor_from_credential(
+                state, &session,
+            )?
+            .to_string(),
+        )
+        .await;
 
     let mut profiles = Vec::new();
     let mut failures = Vec::new();

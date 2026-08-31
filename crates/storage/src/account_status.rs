@@ -39,13 +39,13 @@ pub trait AccountStatusReplicaStore: Send + Sync {
     async fn current(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<AccountStatusRecord>>;
 
     async fn resolve(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         from_status_seq: u64,
         limit: u16,
     ) -> PersistenceResult<Vec<AccountStatusRecord>>;
@@ -55,7 +55,7 @@ pub trait AccountStatusReplicaStore: Send + Sync {
     async fn receipt(
         &self,
         account_authority_id: &str,
-        account_id: &str,
+        account_id: &arkret_wire::AccountId,
         status_seq: u64,
     ) -> PersistenceResult<Option<AccountStatusReceipt>>;
 }

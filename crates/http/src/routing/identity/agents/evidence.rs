@@ -47,7 +47,14 @@ pub(super) async fn query_agent_signer_evidence(
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if !crate::routing::realm_has_member(state, body.realm_id.as_str(), &session.actor).await {
+    if !crate::routing::realm_has_member(
+        state,
+        body.realm_id.as_str(),
+        &crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?
+            .to_string(),
+    )
+    .await
+    {
         return Err(AppError::not_found("Agent signer evidence is unavailable"));
     }
     let request = body.clone();
@@ -152,14 +159,9 @@ async fn current_authenticated_agent_signer_evidence(
         &local_service_evidence,
     )
     .await?;
-    let account_authority_evidence = fetch_service_signer_evidence(
-        state,
-        &gate.authority_id,
-        state.config().account_authority_url.as_deref(),
-        None,
-        chrono::Utc::now(),
-    )
-    .await?;
+    let account_authority_evidence =
+        fetch_service_signer_evidence(state, &gate.authority_id, None, None, chrono::Utc::now())
+            .await?;
     let receiver_evidence =
         if current_observation.verifier_id == *local_service_evidence.signer_id() {
             local_service_evidence.clone()
@@ -347,39 +349,59 @@ pub(crate) async fn fetch_service_signer_evidence(
     verification_method: Option<&arkret_wire::DidUrl>,
     at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentSignerEvidenceQueryFailureReason> {
-    let base_url = base_url
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let path = arkret_models_identity::canonical_service_current_record_path(service_id);
-    let target = format!("{}{}", base_url.trim_end_matches('/'), path);
-    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
-        &target,
-        "Agent signer evidence service resolution",
-        state.config().development_mode,
-        Duration::from_secs(10),
-    )
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let response = client
-        .get(url)
-        .header(
-            "arkret-operation",
-            arkret_wire::ServiceOperationId::OPEN_SERVICE_READ_RESOLUTION_V1,
+    // A private Account Authority shares its owning Station's service history.
+    // Its gate-account origin is not a public service-resolution endpoint.
+    let resolution = if service_id == &state.service_core_id() {
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+    } else {
+        let resolved_base;
+        let base_url = match base_url.filter(|value| !value.trim().is_empty()) {
+            Some(base_url) => base_url,
+            None => {
+                resolved_base = crate::routing::federation::federation::resolved_peer_base_url(
+                    state,
+                    service_id.as_str(),
+                    arkret_wire::ServiceKind::Station.as_str(),
+                    false,
+                )
+                .await
+                .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+                &resolved_base
+            }
+        };
+        let path = arkret_models_identity::canonical_service_current_record_path(service_id);
+        let target = format!("{}{}", base_url.trim_end_matches('/'), path);
+        let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+            &target,
+            "Agent signer evidence service resolution",
+            state.config().development_mode,
+            Duration::from_secs(10),
         )
-        .send()
-        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if !response.status().is_success() {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if body.len() > 1024 * 1024 {
-        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
-    }
-    let resolution = serde_json::from_slice(&body)
-        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        let response = client
+            .get(url)
+            .header(
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::OPEN_SERVICE_READ_RESOLUTION_V1,
+            )
+            .send()
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        if !response.status().is_success() {
+            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+        }
+        let body = response
+            .bytes()
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        if body.len() > 1024 * 1024 {
+            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+        }
+        serde_json::from_slice(&body)
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+    };
     match verification_method {
         Some(method) => {
             arkret_identity::service_signer_evidence_for_method_from_authenticated_resolution(

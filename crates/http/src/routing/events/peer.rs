@@ -20,7 +20,7 @@ use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
 };
 use arkret_models_identity::service_identity::CanonicalServiceUrl;
-use arkret_wire::{ServiceKind, SignalRelayOutcome, SignalRelayRequest};
+use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -564,32 +564,18 @@ async fn historical_account_status_service_key(
             "account-status {label} verification method invalid: {error}"
         ))
     })?;
-    let base_url = if let Some(pinned_base_url) = pinned_base_url {
+    if let Some(pinned_base_url) = pinned_base_url {
         let (configured_id, configured_base_url) = trusted_account_authority_binding(state).await?;
         if configured_id != *service_id || configured_base_url != *pinned_base_url {
             return Err(AppError::capability_denied(format!(
                 "account-status {label} identity does not match the deployment-private Account Authority pin"
             )));
         }
-        pinned_base_url.as_str().to_owned()
-    } else {
-        crate::routing::federation::federation::resolved_peer_base_url(
-            state,
-            service_id.as_str(),
-            ServiceKind::Station.as_str(),
-            false,
-        )
-        .await
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "account-status {label} authenticated route resolution failed: {error}"
-            ))
-        })?
-    };
+    }
     let evidence = crate::routing::identity::agents::evidence::fetch_service_signer_evidence(
         state,
         service_id,
-        Some(&base_url),
+        None,
         Some(&method),
         at,
     )
