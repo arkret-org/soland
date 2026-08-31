@@ -599,7 +599,7 @@ impl AppletRecord {
         };
         let expected_constraint = GrantConstraint::applet_authority(
             self.applet_id.clone(),
-            self.package.service_id.clone(),
+            arkret_wire::ActorId::service(self.package.service_id.clone()),
             self.package.registration_epoch.clone(),
         );
         let requested_actions = self

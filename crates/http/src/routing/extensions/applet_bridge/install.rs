@@ -248,7 +248,8 @@ pub(super) fn validate_admin_install_events(
                     && constraint.constraint_subkind
                         == Some(GrantConstraintSubkind::AppletAuthority)
                     && constraint.applet_id.as_ref() == Some(&expected_applet_id)
-                    && constraint.executed_by.as_ref() == Some(&package.service_id)
+                    && constraint.executed_by.as_ref()
+                        == Some(&arkret_wire::ActorId::service(package.service_id.clone()))
                     && constraint.registration_epoch.as_ref() == Some(&package.registration_epoch)
             })
             .count();
@@ -1022,7 +1023,7 @@ fn install_execution_steps(
             Some(json!({
                 "applet_id": record.applet_id.as_str(),
                 "grant_id": grant_id.as_str(),
-                "executed_by": package.service_id.to_string(),
+                "executed_by": arkret_wire::ActorId::service(package.service_id.clone()),
                 "registration_epoch": package.registration_epoch.to_string(),
             })),
         ));

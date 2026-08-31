@@ -195,7 +195,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
         package,
         grant,
         &applet_id,
-        executed_by_actor.signing_principal_id().as_str(),
+        &executed_by_actor,
     )
     .await?;
     Ok(())
@@ -380,7 +380,7 @@ pub(super) async fn validate_applet_managed_actor_liveness(
             crate::authz::validate_applet_authority_binding(
                 grant,
                 record.applet_id.as_str(),
-                record.package.service_id.as_str(),
+                &arkret_wire::ActorId::service(record.package.service_id.clone()),
                 record.package.registration_epoch.as_str(),
             )
             .map_err(|error| {
@@ -511,7 +511,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     package: &arkret_models_integration::AppletPackage,
     grant: &crate::authz::Grant,
     applet_id: &str,
-    executed_by: &str,
+    executed_by: &arkret_wire::ActorId,
 ) -> Result<(), EventValidationError> {
     crate::authz::validate_applet_authority_binding(
         grant,
@@ -557,7 +557,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
             )
         })?;
 
-    if executed_by == package.service_id.as_str()
+    if executed_by == &arkret_wire::ActorId::service(package.service_id.clone())
         && let Some(verification_method) = first_event_proof_verification_method(object)
         && !evidence.contains_signing_key(&verification_method)
     {

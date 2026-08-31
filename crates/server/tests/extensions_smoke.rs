@@ -2666,7 +2666,7 @@ async fn signed_install_events(
             constraints: vec![
                 GrantConstraint::applet_authority(
                     package.applet_id.clone(),
-                    package.service_id.clone(),
+                    arkret_wire::ActorId::service(package.service_id.clone()),
                     package.registration_epoch.clone(),
                 ),
                 {
