@@ -5434,6 +5434,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "parking_lot",
  "rand 0.10.2",
+ "rand_core 0.6.4",
  "reqwest",
  "rustls",
  "salvo",

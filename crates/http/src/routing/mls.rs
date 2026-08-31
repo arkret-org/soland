@@ -1492,7 +1492,7 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     state: &AppState,
     source_id: &str,
     realm_id: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     payload: &Value,
 ) -> Result<(), &'static str> {
     validate_welcome_peer_claim_ledger(
@@ -1509,7 +1509,7 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
 pub(in crate::routing) async fn validate_local_welcome_peer_claim(
     state: &AppState,
     realm_id: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     payload: &Value,
 ) -> Result<(), &'static str> {
     validate_welcome_peer_claim_ledger(state, state.service_id(), None, realm_id, actor_id, payload)
@@ -1521,7 +1521,7 @@ async fn validate_welcome_peer_claim_ledger(
     source_id: &str,
     required_destination_service_id: Option<&str>,
     realm_id: &str,
-    actor_id: &str,
+    actor_id: &arkret_wire::ActorId,
     payload: &Value,
 ) -> Result<(), &'static str> {
     revoke_expired_peer_claims(state)
@@ -1531,8 +1531,6 @@ async fn validate_welcome_peer_claim_ledger(
         arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     >(payload.clone())
     .map_err(|_| "peer_claim_welcome_invalid")?;
-    let actor = serde_json::from_str::<arkret_wire::ActorId>(actor_id)
-        .map_err(|_| "peer_claim_welcome_invalid")?;
     let recipient_actor_id = match &welcome.recipient {
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device { .. } => {
             let principal = welcome
@@ -1579,7 +1577,7 @@ async fn validate_welcome_peer_claim_ledger(
         || required_destination_service_id
             .is_some_and(|expected| receipt.destination_id.as_str() != expected)
         || !welcome_requester_matches_receipt(
-            &actor,
+            actor_id,
             &welcome.claim_envelope.requester_actor_id,
             &request.requester_id,
             &receipt.source_id,
@@ -4875,6 +4873,276 @@ mod trust_binding_tests {
     use serde_json::json;
 
     use super::*;
+
+    fn welcome_ledger_test_state() -> AppState {
+        use arkret_identity::service_identity::{
+            DidCoreIdentityKeyRef, DidCoreIdentityState, LocalDidCoreIdentity,
+            StoredDidCoreIdentity,
+        };
+        use arkret_models_identity::service_identity::{
+            CanonicalServiceUrl, ServiceRegistrationKey, ServiceRegistrationReceipt,
+        };
+
+        let config = crate::config::AppConfig {
+            public_base_url: "https://welcome-destination.example/".to_owned(),
+            seed_demo_data: false,
+            ..crate::config::AppConfig::test_default()
+        };
+        let at = arkret_canonical::normalize_timestamp_canonical(now());
+        let inception_at = at - chrono::Duration::hours(1);
+        let seed = [84; 32];
+        let endpoint = CanonicalServiceUrl::new(&config.public_base_url).unwrap();
+        let prepared = arkret_signatures::webvh::prepare_service_inception_with_did_key_seed(
+            &mut rand_core::OsRng,
+            &arkret_signatures::webvh::ServiceInceptionInput {
+                principal_endpoint: &endpoint.as_url(),
+                local_id: "service",
+                also_known_as: &[],
+                version_time: inception_at,
+                did_key_fragment: Some("notary-key"),
+            },
+            &seed,
+        )
+        .unwrap();
+        let did = arkret_wire::Did::new(prepared.did.clone()).unwrap();
+        let service_id = arkret_wire::project_did_to_core_id(&did).unwrap();
+        let registration_key =
+            ServiceRegistrationKey::new(arkret_wire::ServiceKind::Station, endpoint).unwrap();
+        let key_ref = DidCoreIdentityKeyRef::new("fixture:welcome:signing-key").unwrap();
+        let identity = LocalDidCoreIdentity {
+            service_id: service_id.clone(),
+            did: did.clone(),
+            registration_key: registration_key.clone(),
+            provider: None,
+            signing_key_refs: vec![key_ref.clone()],
+            active_signing_key_ref: key_ref,
+            control_key_ref: DidCoreIdentityKeyRef::new("fixture:welcome:control-key").unwrap(),
+            version_id: prepared.version_id.clone(),
+            last_verified_at: at,
+        };
+        let history_digest = arkret_canonical::canonical_sha256(&prepared.log_entry).unwrap();
+        let mut registration_receipt = ServiceRegistrationReceipt {
+            registration_receipt_id: arkret_wire::ServiceRegistrationReceiptId::new(format!(
+                "ak:service_registration_receipt:{}",
+                "a".repeat(64),
+            ))
+            .unwrap(),
+            registration_key,
+            service_id,
+            did: did.clone(),
+            version_id: prepared.version_id.clone(),
+            log_head_digest: history_digest.clone(),
+            control_key_digest: format!("sha256:{}", "1".repeat(64)),
+            issued_at: at,
+            provider_id: arkret_wire::DidCoreId::new("ak:did_core:web:provider.example").unwrap(),
+            proof: arkret_wire::PayloadProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:provider.example#service-key",
+                )
+                .unwrap(),
+                payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                created_at: at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: format!(
+                    "eyJhbGciOiJFZDI1NTE5In0..{}",
+                    URL_SAFE_NO_PAD.encode([0_u8; 64])
+                ),
+            },
+        };
+        registration_receipt.registration_receipt_id = registration_receipt
+            .expected_registration_receipt_id()
+            .unwrap();
+        registration_receipt.proof.payload_digest =
+            registration_receipt.expected_payload_digest().unwrap();
+        let stored = StoredDidCoreIdentity {
+            identity: identity.clone(),
+            did_document: serde_json::from_value(prepared.log_entry["state"].clone()).unwrap(),
+            registration_receipt,
+            stored_at: at,
+        };
+        stored.validate().unwrap();
+        let persistence =
+            std::sync::Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new());
+        persistence.seed_service_identity(stored);
+        persistence.seed_webvh_log_event(soland_storage::WebvhLogRecord {
+            event_digest: history_digest.clone(),
+            did: prepared.did.clone(),
+            seq: 1,
+            operation: prepared.log_entry.clone(),
+            created_at: inception_at,
+        });
+        AppState::new_with_service_identity(
+            config,
+            soland_storage_postgres::Db { pool: None },
+            persistence,
+            DidCoreIdentityState::Ready { identity },
+            arkret_models_identity::ResolutionCommitment {
+                did,
+                method_history_head: history_digest,
+                version_id: prepared.version_id.clone(),
+            },
+            seed,
+        )
+    }
+
+    fn signed_welcome_ledger_payload(
+        state: &AppState,
+        actor: arkret_wire::ActorId,
+    ) -> arkret_models_collaboration::events_payloads::MlsWelcomePayload {
+        use arkret_models_collaboration::events_payloads::{
+            MlsRequesterTrustBinding, MlsWelcomePayload,
+        };
+
+        let fixture = arkret_schema::embedded_json_artifact(
+            "fixtures/keypackage-pairwise-welcome-fixture.json",
+        )
+        .unwrap();
+        let mut welcome: MlsWelcomePayload =
+            serde_json::from_value(fixture["schema_validation_cases"][0]["instance"].clone())
+                .unwrap();
+        let at = arkret_canonical::normalize_timestamp_canonical(now());
+        let expires_at = at + chrono::Duration::minutes(5);
+        let device =
+            arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-000000000001").unwrap();
+        let authorization =
+            arkret_wire::EventId::new("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
+                .unwrap();
+        welcome.claim_envelope.trust_binding =
+            if matches!(actor, arkret_wire::ActorId::HostedPrincipal { .. }) {
+                welcome.sender_device_id = None;
+                MlsRequesterTrustBinding::RequesterNativeAgent {
+                    requester_agent_id: actor.signing_principal_id().clone(),
+                    requester_agent_verification_method: arkret_wire::DidUrl::new(
+                        "did:web:requester.example#signing-key",
+                    )
+                    .unwrap(),
+                    requester_agent_key_authorize_event_id: authorization,
+                }
+            } else {
+                welcome.sender_device_id = Some(device.clone());
+                MlsRequesterTrustBinding::RequesterDevice {
+                    requester_device_id: device,
+                    requester_device_authorize_event_id: authorization,
+                }
+            };
+        welcome.claim_envelope.requester_actor_id = actor.clone();
+        welcome.claim_envelope.created_at = at;
+        welcome.claim_envelope.signature.kid =
+            arkret_wire::NonEmptyString::new("did:web:requester.example#signing-key").unwrap();
+        welcome.claim_receipt.source_id = actor.route_service_id().clone();
+        welcome.claim_receipt.destination_id = state.service_core_id();
+        welcome.claim_receipt.request.requester_id = actor.signing_principal_id().clone();
+        welcome.claim_receipt.request.expires_at = expires_at;
+        welcome.claim_receipt.claimed_at = at;
+        welcome.claim_receipt.expires_at = expires_at;
+        welcome.expires_at = expires_at;
+        welcome.claim_receipt.signature.kid =
+            arkret_wire::NonEmptyString::new(format!("{}#notary-key", state.service_did(),))
+                .unwrap();
+        welcome.claim_receipt.signature.sig = arkret_wire::Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(
+                state
+                    .notary_signing_key()
+                    .sign(
+                        &peer_keypackage_claim_receipt_signing_bytes(&welcome.claim_receipt)
+                            .unwrap(),
+                    )
+                    .to_bytes(),
+            ),
+        )
+        .unwrap();
+        let requester_key = ed25519_dalek::SigningKey::from_bytes(&[85; 32]);
+        welcome.claim_envelope.signature.sig = arkret_wire::Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(
+                requester_key
+                    .sign(
+                        &welcome
+                            .claim_envelope
+                            .canonical_signing_bytes(&welcome.claim_receipt)
+                            .unwrap(),
+                    )
+                    .to_bytes(),
+            ),
+        )
+        .unwrap();
+        welcome
+    }
+
+    #[tokio::test]
+    async fn welcome_local_and_federated_entrypoints_preserve_the_complete_actor() {
+        let state = welcome_ledger_test_state();
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:requester.example").unwrap();
+        let foreign_station =
+            arkret_wire::DidCoreId::new("ak:did_core:web:origin.example").unwrap();
+        for federated in [false, true] {
+            let station = if federated {
+                foreign_station.clone()
+            } else {
+                state.service_core_id()
+            };
+            for hosted in [false, true] {
+                let actor = if hosted {
+                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
+                } else {
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        principal.clone(),
+                        station.clone(),
+                    ))
+                };
+                let welcome = signed_welcome_ledger_payload(&state, actor.clone());
+                let payload = serde_json::to_value(&welcome).unwrap();
+                let realm = welcome.claim_envelope.intended_realm_id.as_str();
+                let result = if federated {
+                    validate_federated_welcome_peer_claim(
+                        &state,
+                        station.as_str(),
+                        realm,
+                        &actor,
+                        &payload,
+                    )
+                    .await
+                } else {
+                    validate_local_welcome_peer_claim(&state, realm, &actor, &payload).await
+                };
+                assert_eq!(
+                    result,
+                    Err("peer_claim_welcome_pending"),
+                    "a valid signed receipt must reach the missing ledger: federated={federated}, hosted={hosted}"
+                );
+                let wrong_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    principal.clone(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
+                ));
+                let wrong_branch = if hosted {
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        principal.clone(),
+                        station.clone(),
+                    ))
+                } else {
+                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
+                };
+                for wrong_actor in [&wrong_station, &wrong_branch] {
+                    let result = if federated {
+                        validate_federated_welcome_peer_claim(
+                            &state,
+                            station.as_str(),
+                            realm,
+                            wrong_actor,
+                            &payload,
+                        )
+                        .await
+                    } else {
+                        validate_local_welcome_peer_claim(&state, realm, wrong_actor, &payload)
+                            .await
+                    };
+                    assert_eq!(result, Err("peer_claim_welcome_invalid"));
+                }
+            }
+        }
+    }
 
     #[test]
     fn welcome_receipt_requester_preserves_account_station_and_hosted_branch() {
