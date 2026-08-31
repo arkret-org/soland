@@ -802,8 +802,28 @@ pub(crate) async fn seed_test_realm(
     invitees: &[&str],
 ) -> Value {
     let realm_id =
-        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
-            .await;
+        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event_with_visibility(
+            state,
+            owner,
+            title,
+            arkret_wire::HistoryAccess::SinceJoin,
+            serde_json::from_value(serde_json::json!(discoverability))
+                .expect("fixture Realm discoverability"),
+        )
+        .await;
+    assert_eq!(
+        state
+            .test_projection()
+            .lock()
+            .realm_null_subject_cell_value(
+                &realm_id,
+                arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
+            )
+            .and_then(|value| value.get("value").and_then(Value::as_str).or_else(|| value.as_str()))
+            .map(ToOwned::to_owned),
+        Some(discoverability.to_owned()),
+        "accepted bootstrap discovery must match the fixture's requested visibility"
+    );
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did =
         arkret_wire::project_did_to_core_id(&Did::new(owner.to_owned()).unwrap()).unwrap();
