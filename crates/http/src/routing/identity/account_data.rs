@@ -321,6 +321,9 @@ async fn admit_caller_signed_account_data_set(
     expect_tombstone: bool,
 ) -> Result<u64, AppError> {
     let event = &set_event.event;
+    let session_actor = super::session_actor::session_actor_from_credential(state, session)?;
+    validate_account_data_holder(event, &session_actor)?;
+    let account_key = session_actor.to_string();
     if event.kind != arkret_wire::EventKind::AccountDataSet {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
@@ -329,15 +332,6 @@ async fn admit_caller_signed_account_data_set(
                 arkret_wire::EventKind::AccountDataSet
             ),
         ));
-    }
-    // The subject is the actor, so a mismatch here is what the whole change exists
-    // to prevent: it would write another principal's cell.
-    if event.actor_id.signing_principal_id().as_str() != session.actor {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
-            "set_event.event.actor_id must be the authenticated holder",
-        )
-        .with_status(StatusCode::FORBIDDEN));
     }
     let payload_str = |field: &str| -> Option<String> {
         event
@@ -350,16 +344,6 @@ async fn admit_caller_signed_account_data_set(
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
             "set_event payload.key must equal the path account_data_key",
-        ));
-    }
-    // `holder_id` is optional and redundant with `actor_id`; when present it MUST
-    // agree (`zh/discovery/client-preferences.md` §3.5).
-    if let Some(holder_id) = payload_str("holder_id")
-        && holder_id != session.actor
-    {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "set_event payload.holder_id must equal the Event actor_id",
         ));
     }
     let has_tombstone = event
@@ -389,7 +373,7 @@ async fn admit_caller_signed_account_data_set(
 
     let current = state
         .account_data()
-        .entry(&session.actor, account_data_key)
+        .entry(&account_key, account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let current_revision = current.as_ref().map_or(0, |record| record.revision);
@@ -406,12 +390,6 @@ async fn admit_caller_signed_account_data_set(
         )
     })?;
     let realm_id = event.realm_id.clone();
-    let session_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(session.actor.clone())
-            .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?,
-        arkret_wire::DidCoreId::new(state.service_id().clone())
-            .map_err(|error| AppError::internal(format!("Station id is invalid: {error}")))?,
-    ));
     if !state
         .projections()
         .snapshot()
@@ -433,7 +411,7 @@ async fn admit_caller_signed_account_data_set(
         session,
         envelope,
         realm_id.as_str(),
-        &session.actor,
+        &session_actor,
         account_data_key,
     )
     .await
@@ -446,6 +424,30 @@ async fn admit_caller_signed_account_data_set(
         .with_wire_code(error.code)
     })?;
     Ok(revision)
+}
+
+fn validate_account_data_holder(
+    event: &arkret_wire::Event,
+    authenticated_actor: &arkret_wire::ActorId,
+) -> Result<(), AppError> {
+    if event.actor_id != *authenticated_actor {
+        return Err(AppError::new(
+            ErrorCode::PolicyViolation,
+            "set_event.event.actor_id must be the authenticated Account Actor",
+        )
+        .with_status(StatusCode::FORBIDDEN));
+    }
+    // The optional wire field is a redundant principal projection, never the
+    // account-data storage key or an authority to select another Account.
+    if let Some(holder_id) = event.payload.get("holder_id")
+        && holder_id.as_str() != Some(authenticated_actor.signing_principal_id().as_str())
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "set_event payload.holder_id must equal the Event signing principal",
+        ));
+    }
+    Ok(())
 }
 
 #[endpoint(
@@ -486,6 +488,9 @@ async fn put_account_data(
     }
 
     let body = body.into_inner();
+    let account_actor = super::session_actor::session_actor_from_credential(state, &session)?;
+    validate_account_data_holder(&body.set_event.event, &account_actor)?;
+    let account_key = account_actor.to_string();
     let content = body
         .set_event
         .event
@@ -499,12 +504,6 @@ async fn put_account_data(
                 "set_event payload must carry body or encrypted_payload",
             )
         })?;
-    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-            AppError::capability_denied(format!("invalid account principal: {error}"))
-        })?,
-        state.service_core_id(),
-    ));
     validate_private_account_data_content_for_actor(&account_actor, &account_data_key, &content)?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
@@ -522,7 +521,7 @@ async fn put_account_data(
 
     let existed = state
         .account_data()
-        .entry(&session.actor, &account_data_key)
+        .entry(&account_key, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some_and(|record| !record.tombstone);
@@ -531,7 +530,7 @@ async fn put_account_data(
         .await?;
     let record = state
         .account_data()
-        .entry(&session.actor, &account_data_key)
+        .entry(&account_key, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("account_data Event projection is missing"))?;
@@ -564,6 +563,8 @@ async fn get_account_data(
 ) -> JsonResult<AccountDataRow> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let account_key =
+        super::session_actor::session_actor_from_credential(state, &session)?.to_string();
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
     if is_service_internal_account_data_key(&account_data_key) {
@@ -582,7 +583,7 @@ async fn get_account_data(
 
     match state
         .account_data()
-        .entry(&session.actor, &account_data_key)
+        .entry(&account_key, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -604,12 +605,14 @@ async fn list_account_data(
 ) -> JsonResult<AccountDataList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let account_key =
+        super::session_actor::session_actor_from_credential(state, &session)?.to_string();
     // Same predicate as put/delete: agent grant marker OR native agent
     // principal (non-disclosure list filtering).
     let agent_context = session_is_agent_context(state, &session).await?;
     let entries = state
         .account_data()
-        .entries_for_actor(&session.actor)
+        .entries_for_actor(&account_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
@@ -709,6 +712,51 @@ mod tests {
     use soland_storage::AccountPk;
 
     use super::*;
+
+    #[test]
+    fn account_data_holder_requires_the_exact_station_account() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::AccountDataSet.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(
+                    "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
+                )
+                .unwrap(),
+            },
+            actor.clone(),
+            0,
+            arkret_wire::Hlc::new("019f00000000-0000-00000000").unwrap(),
+            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
+            chrono::Utc::now(),
+        )
+        .unwrap();
+        validate_account_data_holder(&event, &actor).unwrap();
+        event.payload["holder_id"] = json!(principal);
+        validate_account_data_holder(&event, &actor).unwrap();
+        event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert_eq!(
+            validate_account_data_holder(&event, &actor)
+                .unwrap_err()
+                .wire_code(),
+            "policy_violation"
+        );
+        event.actor_id = actor.clone();
+        event.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        assert_eq!(
+            validate_account_data_holder(&event, &actor)
+                .unwrap_err()
+                .wire_code(),
+            "schema_violation"
+        );
+    }
 
     struct NoAccounts;
     struct NoDevices;

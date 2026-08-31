@@ -425,7 +425,7 @@ async fn receive_private_invite_delivery(
             })?;
             let duplicate = persist_private_invite_projection(
                 state,
-                delivery.invite_address.account_id.principal_id.as_str(),
+                &delivery.invite_address.account_id,
                 body,
                 &validated,
             )
@@ -734,10 +734,13 @@ async fn enqueue_remote_invite_delivery(
 
 async fn persist_private_invite_projection(
     state: &AppState,
-    subject: &str,
+    account_id: &arkret_wire::AccountId,
     body: &Value,
     validated: &super::events::event_log::ValidatedEventEnvelope,
 ) -> Result<bool, AppError> {
+    if account_id.station_id != state.service_core_id() {
+        return Err(AppError::capability_denied("private invite holder belongs to another Station"));
+    }
     let event = body
         .get("invite_event")
         .and_then(Value::as_object)
@@ -746,14 +749,7 @@ async fn persist_private_invite_projection(
         .get("payload")
         .and_then(Value::as_object)
         .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
-    let invite_id = payload
-        .get("invite_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            super::events::peer::schema_violation("invite_event.payload.invite_id is required")
-        })?
-        .to_owned();
+    let invite_id = arkret_wire::InviteId::from_event_id(&validated.event_id).to_string();
     let created_at = event
         .get("created_at")
         .and_then(Value::as_str)
@@ -792,21 +788,13 @@ async fn persist_private_invite_projection(
                 super::events::peer::schema_violation("invite author must be an account")
             })?
             .to_string(),
-        invitee_id: Some(
-            arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new(subject.to_owned()).map_err(|_| {
-                    super::events::peer::schema_violation("invite subject must be a DID")
-                })?,
-                state.service_core_id().clone(),
-            )
-            .to_string(),
-        ),
+        invitee_id: Some(account_id.to_string()),
         introduction_evidence_digest,
         third_party_invite: None,
         invite_token: crate::routing::generate_invite_token(
             &invite_id,
             validated.realm_id.as_str(),
-            subject,
+            &account_id.to_string(),
         ),
         status: "pending".to_owned(),
         claim_nonces: std::collections::BTreeMap::new(),
@@ -1251,8 +1239,9 @@ async fn persist_invite_quarantine_entry(
     };
 
     let account_data = state.account_data();
+    let subject_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let existing = account_data
-        .entry(subject, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+        .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut quarantine = existing
@@ -1279,7 +1268,7 @@ async fn persist_invite_quarantine_entry(
     let payload = serde_json::to_value(&quarantine)
         .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
     let record = AccountDataState {
-        actor_id: subject.to_owned(),
+        actor_id: subject_actor,
         account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
         revision: existing.as_ref().map_or(1, |record| record.revision + 1),
         payload,
@@ -2634,7 +2623,7 @@ mod invite_locator_security_tests {
         );
         let cell = state
             .account_data()
-            .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .entry(&arkret_wire::ActorId::account(delivery.invite_address.account_id.clone()).to_string(), AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
             .await
             .expect("invite quarantine cell")
             .expect("invite quarantine write");
@@ -2664,6 +2653,11 @@ mod invite_locator_security_tests {
             &cell.payload,
         )
         .await;
+        assert!(state.account_data().entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE).await.unwrap().is_none());
+        let mut foreign_delivery = delivery.clone();
+        foreign_delivery.invite_address.account_id.station_id = DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+        assert!(persist_invite_quarantine_entry(&state, PRODUCTION_HOLDER, state.service_id(), PRODUCTION_INVITER, &foreign_delivery, &body, &decision).await.is_err());
+        assert!(state.account_data().entry(&arkret_wire::ActorId::account(foreign_delivery.invite_address.account_id).to_string(), AccountDataKey::ACCOUNT_INVITE_QUARANTINE).await.unwrap().is_none());
     }
 
     #[tokio::test]
@@ -2723,13 +2717,12 @@ mod invite_locator_security_tests {
             soland_storage_postgres::Db { pool: None },
         );
         let realm_id = "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W";
-        let invite_id = "ak:invite:AZYDg8DDhw3K_txXc2FaKw9baWMbenl1vvUcRFfpjp3K";
         let subject = "ak:did_core:web:bob.example";
+        let account_id = arkret_wire::AccountId::new(DidCoreId::new(subject).unwrap(), state.service_core_id());
         let body = json!({
             "invite_event": {
                 "created_at": "2026-07-29T10:00:00.000Z",
                 "payload": {
-                    "invite_id": invite_id,
                     "introduction_evidence_digest":
                         format!("sha256:{}", "a".repeat(64)),
                     "expires_at": "2026-08-05T10:00:00.000Z"
@@ -2766,25 +2759,23 @@ mod invite_locator_security_tests {
             canonical_bytes: Vec::new(),
             producer_signing_key: None,
         };
+        let invite_id = arkret_wire::InviteId::from_event_id(&validated.event_id).to_string();
 
         assert!(
-            !persist_private_invite_projection(&state, subject, &body, &validated)
+            !persist_private_invite_projection(&state, &account_id, &body, &validated)
                 .await
                 .expect("first private projection")
         );
         assert!(
-            persist_private_invite_projection(&state, subject, &body, &validated)
+            persist_private_invite_projection(&state, &account_id, &body, &validated)
                 .await
                 .expect("exact replay")
         );
-        assert!(
-            state
-                .realm_invites()
-                .get(invite_id)
-                .await
-                .expect("private invite lookup")
-                .is_some()
-        );
+        let invite = state.realm_invites().get(&invite_id).await.unwrap().expect("private invite lookup");
+        assert_eq!(invite.invitee_id.as_deref(), Some(account_id.to_string().as_str()));
+        assert_eq!(invite.invite_token, crate::routing::generate_invite_token(&invite_id, realm_id, &account_id.to_string()));
+        let foreign_account = arkret_wire::AccountId::new(account_id.principal_id.clone(), DidCoreId::new("ak:did_core:web:other-station.example").unwrap());
+        assert!(persist_private_invite_projection(&state, &foreign_account, &body, &validated).await.is_err());
         assert!(
             state
                 .event_queries()

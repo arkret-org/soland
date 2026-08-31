@@ -208,7 +208,6 @@ async fn signed_account_data_submission(
     let mut payload = json!({
         "key": account_data_key,
         "expected_revision": expected_revision,
-        "holder_id": actor_core,
         "updated_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     });
     if let Some(content) = content {
@@ -606,6 +605,132 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
         assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
         assert_eq!(second["content"], second_value);
 
+        let account_actor = local_account_actor(&state, actor_core.clone());
+        let account_key = account_actor.to_string();
+        let get: Value = TestClient::get(format!(
+            "http://server/_arkret/self/account_data/{account_data_key}"
+        ))
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_GET_V1,
+            true,
+        )
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+        assert_eq!(get["revision"], second["revision"]);
+        assert_eq!(get["content"], second_value);
+        let list: Value = TestClient::get("http://server/_arkret/self/account_data")
+            .add_header("authorization", format!("Bearer {desktop}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_READ_LIST_V1,
+                true,
+            )
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+        assert!(
+            list["account_data_entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["account_data_key"] == account_data_key
+                    && row["revision"] == second["revision"])
+        );
+        assert!(
+            state
+                .test_persistence()
+                .account_data()
+                .get(actor_core.as_str(), account_data_key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let mut foreign_submission = signed_account_data_submission(
+            state.clone(),
+            &desktop,
+            &actor,
+            "ak:device:01904100-0000-7000-8000-a11ce0000011",
+            account_data_key,
+            second["revision"].as_u64().unwrap(),
+            Some(second_value.clone()),
+            false,
+        )
+        .await;
+        let foreign_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor_core.clone(),
+            DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+        ));
+        foreign_submission.event.actor_id = foreign_actor.clone();
+        foreign_submission.event.proofs.clear();
+        let verification_method = arkret_wire::DidUrl::new(format!(
+            "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000011"
+        ))
+        .unwrap();
+        let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+            arkret_signatures::development_signing_key_seed(verification_method.as_str()),
+            Did::new(actor.clone()).unwrap(),
+            verification_method.clone(),
+        );
+        let mut foreign_event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            foreign_submission.event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        arkret_signatures::sign_event(
+            &mut foreign_event,
+            &signer,
+            &verification_method,
+            arkret_signatures::SignEventOptions::new(),
+        )
+        .unwrap();
+        foreign_submission.event = foreign_event.into_event();
+        let mut rejected = TestClient::put(format!(
+            "http://server/_arkret/self/account_data/{account_data_key}"
+        ))
+        .add_header("authorization", format!("Bearer {desktop}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_ACCOUNT_DATA_RESOURCE_REPLACE_V1,
+            true,
+        )
+        .json(&json!({"set_event": foreign_submission}))
+        .send(&app_from_state(state.clone()))
+        .await;
+        assert_eq!(rejected.status_code, Some(StatusCode::FORBIDDEN));
+        let rejected: Value = rejected.take_json().await.unwrap();
+        assert_eq!(
+            rejected["type"],
+            "https://arkret.org/problems/policy_violation"
+        );
+        assert!(
+            state
+                .test_persistence()
+                .account_data()
+                .get(&foreign_actor.to_string(), account_data_key)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            state
+                .test_persistence()
+                .account_data()
+                .get(&account_key, account_data_key)
+                .await
+                .unwrap()
+                .unwrap()
+                .revision,
+            second["revision"].as_u64().unwrap()
+        );
+
         let (stale_status, stale) = put_account_data(
             state.clone(),
             &desktop,
@@ -823,7 +948,7 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
         let stored_account_data = state
             .test_persistence()
             .account_data()
-            .list_for_actor(alice_actor_core.as_str())
+            .list_for_actor(&local_account_actor(&state, alice_actor_core.clone()).to_string())
             .await
             .unwrap();
         assert!(
@@ -862,7 +987,10 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
         let current = state
             .test_persistence()
             .account_data()
-            .get(alice_actor_core.as_str(), "ak.account.blocklist")
+            .get(
+                &local_account_actor(&state, alice_actor_core.clone()).to_string(),
+                "ak.account.blocklist",
+            )
             .await
             .unwrap()
             .unwrap();

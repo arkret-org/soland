@@ -157,17 +157,25 @@ pub(super) async fn project_account_data_set(
     else {
         return;
     };
-    let owner = operation
+    let Some(account_id) = operation.context.sender.as_account_id() else {
+        return;
+    };
+    // This projection and its device fanout belong to the local Account. A
+    // foreign accepted Event cannot borrow a same-principal local directory.
+    if account_id.station_id != state.service_core_id() {
+        return;
+    }
+    let owner = operation.context.sender.to_string();
+    if operation
         .payload
         .get("holder_id")
-        .and_then(Value::as_str)
-        .unwrap_or(origin);
-    if owner != origin && origin != state.service_id() {
+        .is_some_and(|holder| holder.as_str() != Some(account_id.principal_id.as_str()))
+    {
         tracing::warn!(
             owner,
             origin,
             account_data_key,
-            "ak.account_data.set holder_id does not match accepted operation origin"
+            "ak.account_data.set holder_id does not match the accepted Account principal"
         );
         return;
     }
@@ -234,7 +242,7 @@ pub(super) async fn project_account_data_set(
             return;
         }
     };
-    if !source_device_id.is_empty() {
+    if !source_device_id.is_empty() && origin == account_id.principal_id.as_str() {
         let Ok(sender_device_id) = arkret_identifiers::DeviceId::new(source_device_id.to_owned())
         else {
             tracing::warn!(
@@ -269,7 +277,7 @@ pub(super) async fn project_account_data_set(
                 created_at: applied.updated_at,
             }
         };
-        fanout_actor_private_update(state, owner, update).await;
+        fanout_actor_private_update(state, account_id.principal_id.as_str(), update).await;
     }
 }
 
@@ -306,4 +314,112 @@ pub(super) async fn fanout_projection_effect_private_update(
         },
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn account_data_projection_uses_the_exact_local_actor_cas_key() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let actor_key = actor.to_string();
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
+                .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
+            arkret_wire::EventKind::AccountDataSet.as_str(),
+            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "body": {"opaque": "first"}}),
+        );
+        operation.context.sender = actor.clone();
+        project_account_data_set(&state, principal.as_str(), "", &operation).await;
+        let first = state
+            .account_data()
+            .entry(&actor_key, "ak.dnd_schedule")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.revision, 1);
+        assert!(
+            state
+                .account_data()
+                .entry(principal.as_str(), "ak.dnd_schedule")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        operation.payload["expected_revision"] = json!(1);
+        operation.payload["body"] = json!({"opaque": "foreign"});
+        operation.context.sender = foreign.clone();
+        project_account_data_set(&state, principal.as_str(), "", &operation).await;
+        assert!(
+            state
+                .account_data()
+                .entry(&foreign.to_string(), "ak.dnd_schedule")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        operation.context.sender = actor;
+        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        project_account_data_set(&state, state.service_id(), "", &operation).await;
+        assert_eq!(
+            state
+                .account_data()
+                .entry(&actor_key, "ak.dnd_schedule")
+                .await
+                .unwrap()
+                .unwrap()
+                .payload,
+            first.payload
+        );
+
+        operation.payload["holder_id"] = json!(principal);
+        operation.payload["body"] = json!({"opaque": "second"});
+        project_account_data_set(&state, principal.as_str(), "", &operation).await;
+        let second = state
+            .account_data()
+            .entry(&actor_key, "ak.dnd_schedule")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.revision, 2);
+        operation.payload["body"] = json!({"opaque": "stale"});
+        project_account_data_set(&state, principal.as_str(), "", &operation).await;
+        assert_eq!(
+            state
+                .account_data()
+                .entry(&actor_key, "ak.dnd_schedule")
+                .await
+                .unwrap()
+                .unwrap()
+                .payload,
+            second.payload
+        );
+        assert_eq!(
+            state
+                .account_data()
+                .entries_for_actor(&actor_key)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }

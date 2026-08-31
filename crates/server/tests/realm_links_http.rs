@@ -499,6 +499,9 @@ async fn realm_link_tombstone_recomputes_effective_policy() {
     );
     assert_eq!(delete_body["status"], "accepted");
 
+    let settled_seal = accepted_seal_id(&state, &token, &realm_d).await;
+    assert_link_moves_are_sealed_once(&state, &realm_d, &settled_seal).await;
+
     let allowed2 = allowed_policies(&effective_policy(&state, &token, &realm_d).await);
     assert!(
         !allowed2.iter().any(|policy| policy == "b.policy"),
@@ -521,6 +524,65 @@ async fn realm_link_tombstone_recomputes_effective_policy() {
         "https://arkret.org/problems/failed_precondition"
     );
     assert_eq!(body["reason_code"], "realm_link_invalid_transition");
+}
+
+async fn assert_link_moves_are_sealed_once(state: &AppState, realm_id: &str, leaf: &SealId) {
+    let realm_id = RealmId::new(realm_id).unwrap();
+    let accepted_links = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmLink.as_str())
+        .map(|record| arkret_wire::Hash::new(record.canonical_digest).unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        accepted_links.len(),
+        2,
+        "active and tombstone were accepted"
+    );
+
+    let pending = state
+        .test_projections()
+        .pending_control_events_for_notary(&realm_id, None, 100)
+        .unwrap();
+    for event in pending {
+        let digest = arkret_wire::Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            !accepted_links.contains(&digest),
+            "a covered Realm Link Move must not remain pending: {digest}"
+        );
+    }
+
+    let mut seals = vec![leaf.clone()];
+    let mut visited = std::collections::BTreeSet::new();
+    let mut counts = std::collections::BTreeMap::<arkret_wire::Hash, usize>::new();
+    while let Some(seal_id) = seals.pop() {
+        if !visited.insert(seal_id.clone()) {
+            continue;
+        }
+        let seal = state.test_seal(&seal_id).unwrap().unwrap();
+        for digest in seal.delta {
+            if accepted_links.contains(&digest) {
+                *counts.entry(digest).or_default() += 1;
+            }
+        }
+        seals.extend(seal.predecessor_refs);
+    }
+    for digest in accepted_links {
+        assert_eq!(
+            counts.get(&digest),
+            Some(&1),
+            "each accepted Realm Link Move must occur in exactly one Seal delta: {digest}"
+        );
+    }
 }
 
 /// G3.S5 — self-link is rejected as a schema violation with HTTP 422.

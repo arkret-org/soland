@@ -122,23 +122,21 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
 }
 
 pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result<(), &'static str> {
-    let key = operation
-        .payload
-        .get("key")
-        .and_then(Value::as_str)
-        .ok_or("account_data.set requires key")?;
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::AccountDataSet>()
+        .map_err(|_| "account_data.set payload violates SDK artifact schema")?;
+    let key = payload.key.as_str();
     crate::routing::account_data_encryption::validate_encrypted_account_data_key(key)
         .map_err(|error| error.message())?;
-    if operation.payload.get("tombstone").is_some() {
-        return Ok(());
-    }
-    let owner = operation
-        .payload
-        .get("holder_id")
-        .and_then(Value::as_str)
-        .ok_or("account_data.set requires holder_id")?;
-    if owner != operation.context.sender.signing_principal_id().as_str() {
+    if payload
+        .holder_id
+        .as_ref()
+        .is_some_and(|owner| owner != operation.context.sender.signing_principal_id())
+    {
         return Err("account_data.set holder_id must match the authenticated actor");
+    }
+    if payload.tombstone {
+        return Ok(());
     }
     crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
         key,
@@ -571,6 +569,26 @@ mod tests {
     use serde_json::json;
 
     use super::validate_encrypted_payload_envelope;
+
+    #[test]
+    fn account_data_optional_holder_is_checked_even_for_tombstones() {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
+                .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
+            arkret_wire::EventKind::AccountDataSet.as_str(),
+            json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
+        );
+        assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
+        operation.payload["holder_id"] = json!(operation.context.sender.signing_principal_id());
+        assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
+        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        assert_eq!(
+            super::validate_account_data_set_payload(&operation),
+            Err("account_data.set holder_id must match the authenticated actor")
+        );
+    }
 
     #[test]
     fn encrypted_payload_envelope_accepts_only_the_minimal_closed_wire() {
