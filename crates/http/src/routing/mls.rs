@@ -291,10 +291,10 @@ async fn upload_keypackage(
         AppError::capability_denied("KeyPackage upload requires an account-bound session")
     })?;
     // `account_pk` belongs to the credential issuer (normally the
-    // Account Authority process), whereas KeyPackage rows are owned by this Principal
-    // Server's local account id. Resolve that local id through the stable
-    // principal carried by the authenticated session; never reinterpret one
-    // service's local account id in another service's account namespace.
+    // Account Authority process), whereas KeyPackage rows are owned by this Station's local account
+    // id. Resolve that local id through the stable principal carried by the authenticated
+    // session; never reinterpret one service's local account id in another service's account
+    // namespace.
     let owner_account_pk = local_keypackage_owner_account_pk(state, &session.actor).await?;
 
     let body = body.into_inner();

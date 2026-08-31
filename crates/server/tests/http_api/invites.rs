@@ -187,7 +187,7 @@ impl DispatchFixture {
             .test_persistence()
             .account_data()
             .get(
-                fixture_actor_core_id(BOB).as_str(),
+                &fixture_account_actor(&self.state, BOB).to_string(),
                 arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
             )
             .await

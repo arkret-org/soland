@@ -1060,10 +1060,10 @@ pub(super) async fn identical_historical_retry(
                         format!("stored identity anchor is not canonical Event wire: {error}"),
                     )
                 })?;
-                // The durable canonical envelope includes the Principal
-                // Server's admission proof, while the pending control index
-                // stores the producer Event and binds admission through the
-                // separate Ack. Recovery must restore that original shape.
+                // The durable canonical envelope includes the Station's admission proof, while the
+                // pending control index stores the producer Event and binds
+                // admission through the separate Ack. Recovery must restore that
+                // original shape.
                 if matches!(
                     event.proofs.as_slice(),
                     [

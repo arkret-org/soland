@@ -409,7 +409,9 @@ async fn plan_consent_revoke(
 
     let quarantine = plan_invite_quarantine_invalidation(
         state,
-        holder.as_str(),
+        event.actor_id.as_account_id().ok_or_else(|| {
+            ConsentRejection::schema("consent quarantine holder must be an Account Actor")
+        })?,
         cell.peer_principal_id.as_str(),
         &cell.consent_scope,
         revoked_at,
@@ -1069,7 +1071,7 @@ fn consent_response(
 /// cannot invalidate is never accepted.
 async fn plan_invite_quarantine_invalidation(
     state: &AppState,
-    holder: &str,
+    account_id: &arkret_wire::AccountId,
     peer: &str,
     consent_scope: &str,
     revoked_at: DateTime<Utc>,
@@ -1077,9 +1079,15 @@ async fn plan_invite_quarantine_invalidation(
     if !matches!(consent_scope, "invite" | "any") {
         return Ok(None);
     }
+    if account_id.station_id != state.service_core_id() {
+        return Err(ConsentRejection::schema(
+            "consent quarantine holder must belong to this Station",
+        ));
+    }
+    let holder = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let existing = state
         .account_data()
-        .entry(holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+        .entry(&holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
         .await
         .map_err(|error| {
             ConsentRejection::internal(format!("invite quarantine cell is unavailable: {error}"))
@@ -1087,17 +1095,11 @@ async fn plan_invite_quarantine_invalidation(
     let Some(existing) = existing else {
         return Ok(None);
     };
-    let account_id = arkret_wire::AccountId::new(
-        DidCoreId::new(holder.to_owned()).map_err(|error| {
-            ConsentRejection::internal(format!("invalid quarantine holder: {error}"))
-        })?,
-        state.service_core_id().clone(),
-    );
     let mut quarantine: InviteQuarantine = serde_json::from_value(existing.payload.clone())
         .map_err(|error| {
             ConsentRejection::internal(format!("invalid invite quarantine cell: {error}"))
         })?;
-    quarantine.validate_holder(&account_id).map_err(|error| {
+    quarantine.validate_holder(account_id).map_err(|error| {
         ConsentRejection::internal(format!("invite quarantine binding: {error}"))
     })?;
     let mut removed = 0usize;
@@ -1125,7 +1127,7 @@ async fn plan_invite_quarantine_invalidation(
         revoked_at,
         removed_entries: removed as u64,
     });
-    quarantine.validate_holder(&account_id).map_err(|error| {
+    quarantine.validate_holder(account_id).map_err(|error| {
         ConsentRejection::internal(format!("invite quarantine binding: {error}"))
     })?;
     let record = AccountDataState {
@@ -1587,6 +1589,9 @@ mod tests {
     #[tokio::test]
     async fn quarantine_invalidation_is_planned_before_acceptance_and_fanned_out_after() {
         let state = AppState::new(production_test_config(), Db { pool: None });
+        let holder_account =
+            arkret_wire::AccountId::new(DidCoreId::new(HOLDER).unwrap(), state.service_core_id());
+        let holder_actor = arkret_wire::ActorId::account(holder_account.clone()).to_string();
         let device_id = "ak:device:01904100-0000-7000-8000-0000000000f1";
         let updated_at = arkret_canonical::canonical::normalize_timestamp_canonical(now());
         state
@@ -1609,7 +1614,7 @@ mod tests {
             .await
             .expect("holder device");
         let initial = AccountDataState {
-            actor_id: HOLDER.to_owned(),
+            actor_id: holder_actor.clone(),
             account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
             revision: 1,
             payload: json!({
@@ -1645,11 +1650,23 @@ mod tests {
         ));
 
         let revoked_at = updated_at + chrono::Duration::seconds(1);
-        let (cas, removed) =
-            plan_invite_quarantine_invalidation(&state, HOLDER, PEER, "invite", revoked_at)
-                .await
-                .expect("quarantine invalidation plan")
-                .expect("one pending entry matches the revoked peer");
+        let foreign_holder = arkret_wire::AccountId::new(
+            holder_account.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        plan_invite_quarantine_invalidation(&state, &foreign_holder, PEER, "invite", revoked_at)
+            .await
+            .expect_err("the same principal at another Station cannot revoke this quarantine");
+        let (cas, removed) = plan_invite_quarantine_invalidation(
+            &state,
+            &holder_account,
+            PEER,
+            "invite",
+            revoked_at,
+        )
+        .await
+        .expect("quarantine invalidation plan")
+        .expect("one pending entry matches the revoked peer");
         assert_eq!(removed, 1);
         assert_eq!(cas.expected_revision, 1);
         assert_eq!(cas.record.revision, 2);
@@ -1659,7 +1676,7 @@ mod tests {
         assert_eq!(
             state
                 .account_data()
-                .entry(HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
                 .await
                 .expect("quarantine cell")
                 .expect("seeded cell")

@@ -442,7 +442,6 @@ enum InternalEventBinding {
         binding_ref: String,
     },
     AccountData {
-        owner: String,
         key: String,
     },
     MimiModerationReport {
@@ -503,7 +502,6 @@ impl InternalEventAdmission {
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
         device_id: impl Into<String>,
-        owner: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
         Self {
@@ -512,10 +510,7 @@ impl InternalEventAdmission {
             actor_id,
             kind: arkret_wire::EventKind::AccountDataSet.as_str().to_owned(),
             device_id: device_id.into(),
-            binding: InternalEventBinding::AccountData {
-                owner: owner.into(),
-                key: key.into(),
-            },
+            binding: InternalEventBinding::AccountData { key: key.into() },
         }
     }
 
@@ -691,10 +686,11 @@ impl InternalEventAdmission {
                         .and_then(Value::as_str)
                         == Some(binding_ref.as_str())
                 }
-                InternalEventBinding::AccountData { owner, key } => {
+                InternalEventBinding::AccountData { key } => {
                     object.get("payload").is_some_and(|payload| {
-                        payload.get("holder_id").and_then(Value::as_str) == Some(owner.as_str())
-                            && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
+                        payload.get("holder_id").is_none_or(|holder| {
+                            holder.as_str() == Some(self.actor_id.signing_principal_id().as_str())
+                        }) && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
                 InternalEventBinding::MimiModerationReport {

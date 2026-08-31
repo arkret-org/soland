@@ -679,7 +679,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
         .account_data()
         .compare_and_set(
             &soland_storage::AccountDataRecord {
-                actor: fixture_actor_core_id(ALICE).to_string(),
+                actor: fixture_account_actor(&state, ALICE).to_string(),
                 account_data_key: "ak.presence.visibility".to_owned(),
                 revision: 1,
                 payload: serde_json::json!({

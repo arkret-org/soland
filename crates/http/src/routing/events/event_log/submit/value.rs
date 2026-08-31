@@ -105,8 +105,8 @@ pub(super) enum SubmitMode<'a> {
     PrepareInternal(&'a mut Option<soland_services::events::CommitAcceptedEventCommand>),
 }
 
-/// Classify a failed origin-selector derivation on the origin Principal
-/// Server's own `/_arkret/self/*` write path.
+/// Classify a failed origin-selector derivation on the origin Station's own `/_arkret/self/*` write
+/// path.
 ///
 /// The derivation-domain section of `device-lifecycle.md` separates this surface from
 /// the peer gate: locally the write MUST fail closed with `device_unauthorized`
@@ -746,7 +746,7 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     session: &SessionRecord,
     envelope: Value,
     realm_id: &str,
-    owner: &str,
+    owner: &arkret_wire::ActorId,
     key: &str,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     // The admission actor is the holder, not this service. `ak.account_data.set`'s
@@ -757,18 +757,8 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     // check; schema, proof, actor-lock and reducer admission all still run.
     let admission = InternalEventAdmission::account_data(
         realm_id,
-        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(owner).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "param_invalid",
-                    format!("account owner: {error}"),
-                )
-            })?,
-            state.service_core_id().clone(),
-        )),
+        owner.clone(),
         session.device_id.as_str(),
-        owner,
         key,
     );
     submit_event_value_with_context(
@@ -2129,13 +2119,8 @@ pub(super) async fn submit_event_value_with_context(
             envelope
                 .get("payload")
                 .and_then(Value::as_object)
-                .and_then(|payload| {
-                    Some((
-                        payload.get("holder_id")?.as_str()?,
-                        payload.get("key")?.as_str()?,
-                    ))
-                })
-                .map(|(owner, key)| account_data_submit_lock(owner, key))
+                .and_then(|payload| payload.get("key")?.as_str())
+                .map(|key| account_data_submit_lock(&actor_key, key))
         } else {
             None
         };
@@ -3954,16 +3939,16 @@ async fn preflight_account_data_cas(
             "account_data payload must be an object",
         )
     })?;
-    let owner = payload
-        .get("holder_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "account_data payload is missing holder_id",
-            )
-        })?;
+    let owner = operation.context.sender.to_string();
+    if payload.get("holder_id").is_some_and(|holder| {
+        holder.as_str() != Some(operation.context.sender.signing_principal_id().as_str())
+    }) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "account_data holder_id does not match the Event signing principal",
+        ));
+    }
     let key = payload.get("key").and_then(Value::as_str).ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -3983,7 +3968,7 @@ async fn preflight_account_data_cas(
         })?;
     let current = state
         .account_data()
-        .entry(owner, key)
+        .entry(&owner, key)
         .await
         .map_err(|error| {
             SubmitOneError::new(
@@ -4015,6 +4000,75 @@ async fn preflight_account_data_cas(
         "expected_revision does not match current account data revision",
     )
     .with_details(details))
+}
+
+#[cfg(test)]
+mod account_data_cas_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn account_data_cas_preflight_keeps_same_principal_stations_separate() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap();
+        let local = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        state
+            .account_data()
+            .compare_and_set(
+                soland_services::identity::AccountDataState {
+                    actor_id: local.to_string(),
+                    account_data_key: "ak.dnd_schedule".into(),
+                    revision: 1,
+                    payload: json!({"opaque": "local"}),
+                    tombstone: false,
+                    updated_at: chrono::Utc::now(),
+                },
+                0,
+            )
+            .await
+            .unwrap();
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
+                .unwrap(),
+            arkret_wire::RealmId::new("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K")
+                .unwrap(),
+            arkret_wire::EventKind::AccountDataSet.as_str(),
+            json!({"key": "ak.dnd_schedule", "expected_revision": 1, "tombstone": true}),
+        );
+        operation.context.sender = local;
+        preflight_account_data_cas(&state, &operation)
+            .await
+            .unwrap();
+        operation.context.sender = foreign;
+        assert_eq!(
+            preflight_account_data_cas(&state, &operation)
+                .await
+                .unwrap_err()
+                .code,
+            "cas_conflict"
+        );
+        operation.payload["expected_revision"] = json!(0);
+        preflight_account_data_cas(&state, &operation)
+            .await
+            .unwrap();
+        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        assert_eq!(
+            preflight_account_data_cas(&state, &operation)
+                .await
+                .unwrap_err()
+                .code,
+            "schema_violation"
+        );
+    }
 }
 
 #[cfg(test)]

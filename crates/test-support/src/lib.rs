@@ -229,6 +229,7 @@ pub fn app_state_with_identity(
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         cell_registry: cell_registry.clone(),
+        control_event_store: control_event_store.clone(),
     });
     let serving_identity = service_identity
         .identity()
@@ -685,6 +686,7 @@ struct MemoryEventSealCommitter {
     seal_store: Arc<MemorySealStore>,
     cell_store: Arc<MemoryCellStore>,
     cell_registry: Arc<dyn CellRegistry>,
+    control_event_store: Arc<dyn ControlEventStore>,
 }
 
 impl EventSealCommitPort for MemoryEventSealCommitter {
@@ -761,6 +763,11 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
                 self.data_event_leaf_manifests
                     .lock()
                     .insert(seal.id.clone(), data_event_leaf_manifest.clone());
+                // Match the production memory commit boundary: a sealed Move
+                // must leave the pending queue before another signing pass.
+                for digest in &seal.delta {
+                    self.control_event_store.mark_sealed(digest, seal)?;
+                }
                 Ok(true)
             }
             Ok(false) => {
