@@ -10,7 +10,6 @@ use soland_services::federation::FEDERATION_FRONTIER_STATUS_PEER_STALE;
 use super::frontier_reduction::{self, ReductionPlan};
 use crate::state::AppState;
 
-const EXCHANGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
@@ -31,7 +30,9 @@ impl FrontierExchangeWorker {
 
     pub fn spawn(self) -> Arc<tokio::task::JoinHandle<()>> {
         let task = tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(EXCHANGE_INTERVAL);
+            let mut ticker = tokio::time::interval(Duration::from_secs(
+                self.state.config().federation_frontier_interval_seconds,
+            ));
             ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 ticker.tick().await;

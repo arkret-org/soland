@@ -382,6 +382,10 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
+    /// Proactive federation frontier exchange cadence in seconds. The
+    /// high-assurance profile requires a value no greater than one hour.
+    /// Env: `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` (default `3600`).
+    pub federation_frontier_interval_seconds: u64,
     /// Default page size for `GET /_soland/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
@@ -887,6 +891,7 @@ impl AppConfig {
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
             federation_outbound_enabled: false,
+            federation_frontier_interval_seconds: 3_600,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_ids: Vec::new(),
@@ -1059,6 +1064,12 @@ impl AppConfig {
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
         let federation_outbound_enabled =
             env_bool(values, "SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
+        let federation_frontier_interval_seconds =
+            lookup(values, "SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS")
+                .ok()
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .filter(|seconds| (1..=3_600).contains(seconds))
+                .unwrap_or(3_600);
         let admin_default_page_limit = lookup(values, "SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
@@ -1251,6 +1262,7 @@ impl AppConfig {
             federation_fanout_topology,
             federation_peers,
             federation_outbound_enabled,
+            federation_frontier_interval_seconds,
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_ids,
