@@ -338,186 +338,156 @@ pub(crate) async fn event_view_for_state(
             AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
         })?;
     json_ok(EventView {
-        event: sdk_event_for_state(state, record)?.into(),
+        event: canonical_event_read_row(state, record).await?,
         visibility: Some(event_visibility_metadata(state, record)),
         receipts,
     })
+}
+
+/// Strict accepted-envelope materialization for canonical scans. Privacy views
+/// are applied by the caller; signed payloads must never be rewritten in place.
+pub(crate) fn canonical_event_for_read(record: &AcceptedEvent) -> Result<Event, AppError> {
+    let event: Event = serde_json::from_value(record.envelope.clone())
+        .map_err(|error| AppError::internal(format!("invalid canonical Event: {error}")))?;
+    if event.event_id.as_str() != record.event_id
+        || event
+            .derive_event_id_with_digest_suite(record.digest_suite)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != event.event_id
+        || event.kind.as_str() != record.kind
+        || event.actor_id.to_string() != record.actor_id
+        || event.actor_seq != record.actor_seq
+        || record
+            .realm_id
+            .as_deref()
+            .is_some_and(|realm| realm != event.realm_id.as_str())
+        || event
+            .event_digest_with_digest_suite(record.digest_suite)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            != record.canonical_digest
+    {
+        return Err(AppError::internal(
+            "canonical Event index or digest mismatch",
+        ));
+    }
+    Ok(event)
 }
 
 pub(crate) fn sdk_event_for_state(
     state: &AppState,
     record: &AcceptedEvent,
 ) -> Result<Event, AppError> {
-    let realm_id = canonical_realm_id_for_record(record);
-    let actor_erased = record.kind != arkret_wire::EventKind::AuditErasureReceipt.as_str()
-        && realm_id.as_deref().is_some_and(|realm_id| {
-            actor_erased_in_realm(&state.projections().snapshot(), &record.actor_id, realm_id)
-        });
-    sdk_event_from_record(
-        record,
-        retention_tombstone_for_event(state, &record.event_id),
-        actor_erased,
-    )
-}
-
-fn sdk_event_from_record(
-    record: &AcceptedEvent,
-    tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,
-    actor_erased: bool,
-) -> Result<Event, AppError> {
-    let preserves_signed_content = tombstone.is_none() && !actor_erased;
-    let object = record
-        .envelope
-        .as_object()
-        .ok_or_else(|| AppError::internal("stored event envelope is not an object"))?;
-    let realm_id = canonical_realm_id_for_record(record)
-        .ok_or_else(|| AppError::internal("stored event missing realm_id"))?;
-    let realm_id = RealmId::new(realm_id).map_err(|error| AppError::internal(error.to_string()))?;
-    let event_id = EventId::new(record.event_id.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let actor_id = object
-        .get("actor_id")
-        .cloned()
-        .ok_or_else(|| AppError::internal("stored event missing actor_id"))
-        .and_then(|value| {
-            serde_json::from_value::<arkret_wire::ActorId>(value)
-                .map_err(|error| AppError::internal(error.to_string()))
-        })?;
-    let created_at = object
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
-        .unwrap_or(record.received_at);
-    let hlc = object
-        .get("hlc")
-        .and_then(Value::as_str)
-        .and_then(|value| Hlc::new(value.to_owned()).ok());
-    let mut payload = object.get("payload").cloned().unwrap_or_else(|| json!({}));
-    let mut unsigned: BTreeMap<String, Value> = object
-        .get("unsigned")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default();
-    if actor_erased {
-        payload = erasure_tombstone_payload_value(&payload);
-        unsigned.insert("erasure_tombstone".to_owned(), json!(true));
-    }
-    if let Some(tombstone) = tombstone {
-        payload = retention_tombstone_payload_value(&payload, &tombstone);
-        unsigned.insert("retention_tombstone".to_owned(), json!(true));
-        unsigned.insert("retention_state".to_owned(), json!("tombstoned"));
-        unsigned.insert(
-            "retention_reason".to_owned(),
-            json!(tombstone.reason.as_str()),
-        );
-        unsigned.insert(
-            "retention_expired_at".to_owned(),
-            json!(arkret_canonical::format_timestamp_canonical(
-                tombstone.expired_at
-            )),
-        );
-        unsigned.insert(
-            "retention_tombstoned_at".to_owned(),
-            json!(arkret_canonical::format_timestamp_canonical(
-                tombstone.tombstoned_at
-            )),
-        );
-        unsigned.insert(
-            "retention_seal_preserved".to_owned(),
-            json!(tombstone.sealed),
-        );
-        unsigned.insert("physical_delete".to_owned(), json!(false));
-        unsigned.insert(
-            "retention_risk_ui".to_owned(),
-            json!(retention_risk_ui_flag(&tombstone)),
-        );
-        unsigned.insert(
-            "retention_risk_audit".to_owned(),
-            json!(retention_risk_audit_flag(&tombstone)),
-        );
-        unsigned.insert(
-            "retention_risk_reason".to_owned(),
-            json!(retention_risk_reason(&tombstone)),
-        );
-    }
-    let event = Event {
-        event_id,
-        kind: record.kind.clone().into(),
-        realm_id: realm_id.clone(),
-        actor_id,
-        actor_seq: record.actor_seq,
-        created_at,
-        // `hlc` is a producer-signed optional field. A read path must preserve
-        // its absence; synthesizing one from `received_at` changes the Event
-        // digest and makes a client-built successor Seal name a digest the
-        // canonical store has never accepted.
-        hlc,
-        prev_refs: event_id_list(object.get("prev_refs"))?,
-        scope_ref: sdk_scope_ref(record, &realm_id),
-        refs: event_refs(object.get("refs")),
-        causal_refs: hash_list(object.get("causal_refs"))?,
-        preconditions: json_array_field(object, "preconditions"),
-        seal_ref: object
-            .get("seal_ref")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::SealId::new(value.to_owned()).ok()),
-        auth_context: object
-            .get("auth_context")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        seal_basis: object
-            .get("seal_basis")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        requirements: object
-            .get("requirements")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default(),
-        payload: serde_json::from_value(payload).map_err(|error| {
-            AppError::internal(format!("stored event payload must be an object: {error}"))
-        })?,
-        executed_by: object
-            .get("executed_by")
-            .cloned()
-            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok()),
-        authorization_ref: object
-            .get("authorization_ref")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_wire::AuthorizationRef::new(value.to_owned()).ok()),
-        applet_id: object
-            .get("applet_id")
-            .and_then(Value::as_str)
-            .and_then(|value| arkret_identifiers::AppletId::new(value.to_owned()).ok()),
-        external_ref: object
-            .get("external_ref")
-            .filter(|value| !value.is_null())
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        actor_kind: object
-            .get("actor_kind")
-            .cloned()
-            .and_then(|value| serde_json::from_value(value).ok()),
-        unsigned,
-        proofs: sdk_event_proofs(record, object, created_at)?,
-    };
-    if preserves_signed_content {
-        let reconstructed_digest = event
-            .event_digest_with_digest_suite(record.digest_suite)
-            .map_err(|error| {
-                AppError::internal(format!(
-                    "stored Event digest reconstruction failed: {error}"
-                ))
-            })?;
-        if reconstructed_digest != record.canonical_digest {
-            return Err(AppError::internal(format!(
-                "stored Event read reconstruction changed canonical digest: expected {}, got {}",
-                record.canonical_digest, reconstructed_digest
-            )));
-        }
+    let event = canonical_event_for_read(record)?;
+    if retention_tombstone_for_event(state, &record.event_id).is_some()
+        || (event.kind != arkret_wire::EventKind::AuditErasureReceipt
+            && actor_erased_in_realm(
+                &state.projections().snapshot(),
+                &record.actor_id,
+                event.realm_id.as_str(),
+            ))
+    {
+        return Err(AppError::internal(
+            "Event-only surface cannot materialize a privacy-redacted Event",
+        ));
     }
     Ok(event)
+}
+
+/// Read surfaces with an EventReadRow union keep the slot without rewriting
+/// signed bytes. Derive Message redaction from accepted history even when no
+/// independent projection row exists.
+pub(crate) async fn canonical_event_read_row(
+    state: &AppState,
+    record: &AcceptedEvent,
+) -> Result<arkret_models_collaboration::http_bodies::EventReadRow, AppError> {
+    use arkret_models_collaboration::http_bodies::EventRedactionReason;
+    let event = canonical_event_for_read(record)?;
+    let reason = if retention_tombstone_for_event(state, &record.event_id).is_some() {
+        Some(EventRedactionReason::RetentionPruned)
+    } else if event.kind != arkret_wire::EventKind::AuditErasureReceipt
+        && actor_erased_in_realm(
+            &state.projections().snapshot(),
+            &record.actor_id,
+            event.realm_id.as_str(),
+        )
+    {
+        Some(EventRedactionReason::PolicyHidden)
+    } else if matches!(
+        event.kind,
+        arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
+    ) {
+        let message_id = if event.kind == arkret_wire::EventKind::MessageCreate {
+            record.event_id.replacen("ak:event:", "ak:message:", 1)
+        } else {
+            event
+                .payload
+                .get("message_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| AppError::internal("revision has no canonical message target"))?
+                .to_owned()
+        };
+        let records = state
+            .event_queries()
+            .canonical_events()
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let mut redacted = false;
+        for candidate in records {
+            let Some(kind) = arkret_wire::EventKind::try_new(&candidate.kind) else {
+                continue;
+            };
+            if !arkret_wire::events::kinds::is_redaction_kind(&kind)
+                || canonical_realm_id_for_record(&candidate).as_deref()
+                    != Some(event.realm_id.as_str())
+            {
+                continue;
+            }
+            let target = soland_domain::reducer::message_redaction_target_ref(
+                &candidate.envelope["payload"],
+            );
+            if target.as_deref().is_some_and(|target| {
+                target == message_id || target == message_id.replacen("ak:message:", "ak:event:", 1)
+            }) {
+                canonical_event_for_read(&candidate)?;
+                redacted = true;
+            }
+        }
+        redacted.then_some(EventRedactionReason::Redacted)
+    } else {
+        None
+    };
+    Ok(match reason {
+        Some(reason) => redacted_event_read_row(event, reason),
+        None => event.into(),
+    })
+}
+
+pub(crate) fn redacted_event_read_row(
+    event: Event,
+    reason: arkret_models_collaboration::http_bodies::EventRedactionReason,
+) -> arkret_models_collaboration::http_bodies::EventReadRow {
+    use arkret_models_collaboration::http_bodies::{
+        EventReadRow, HiddenEventField, HiddenEventFields, RedactedEventView,
+        RedactedEventViewKind, ReducerInputFalse,
+    };
+    EventReadRow::Redacted(RedactedEventView {
+        view_kind: RedactedEventViewKind::RedactedEventView,
+        event_id: event.event_id,
+        kind: event.kind,
+        realm_id: event.realm_id,
+        created_at: Some(event.created_at),
+        payload_digest: None,
+        redaction_reason: reason,
+        hidden_fields: HiddenEventFields::new(
+            ["payload", "proofs", "unsigned"]
+                .into_iter()
+                .map(|field| HiddenEventField::new(field).expect("registered hidden field"))
+                .collect(),
+        )
+        .expect("unique hidden fields"),
+        inclusion_proof: None,
+        reducer_input: ReducerInputFalse,
+    })
 }
 
 fn event_visibility_metadata(
@@ -558,137 +528,6 @@ fn event_visibility_metadata(
         .iter()
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect()
-}
-
-fn event_id_list(value: Option<&Value>) -> Result<Vec<EventId>, AppError> {
-    let Some(values) = value.and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    values
-        .iter()
-        .filter_map(Value::as_str)
-        .map(|value| {
-            EventId::new(value.to_owned()).map_err(|error| AppError::internal(error.to_string()))
-        })
-        .collect()
-}
-
-fn hash_list(value: Option<&Value>) -> Result<Vec<Hash>, AppError> {
-    let Some(values) = value.and_then(Value::as_array) else {
-        return Ok(Vec::new());
-    };
-    values
-        .iter()
-        .filter_map(Value::as_str)
-        .map(|value| {
-            Hash::new(value.to_owned())
-                .map_err(|error| AppError::internal(format!("stored hash: {error}")))
-        })
-        .collect()
-}
-
-fn event_refs(value: Option<&Value>) -> Vec<EventRef> {
-    value
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
-}
-
-fn json_array_field<T>(object: &serde_json::Map<String, Value>, field: &str) -> Vec<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    object
-        .get(field)
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_default()
-}
-
-/// The Event's signed security scope.
-fn sdk_scope_ref(record: &AcceptedEvent, realm_id: &RealmId) -> arkret_wire::ScopeRef {
-    record
-        .envelope
-        .get("scope_ref")
-        .cloned()
-        .and_then(|value| serde_json::from_value(value).ok())
-        .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        })
-}
-
-fn sdk_event_proofs(
-    record: &AcceptedEvent,
-    object: &serde_json::Map<String, Value>,
-    created_at: DateTime<Utc>,
-) -> Result<Vec<arkret_wire::EventProof>, AppError> {
-    if let Some(proofs) = object
-        .get("proofs")
-        .cloned()
-        .and_then(|value| serde_json::from_value::<Vec<arkret_wire::EventProof>>(value).ok())
-        .filter(|proofs| !proofs.is_empty())
-    {
-        return Ok(proofs);
-    }
-    let proof = object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .and_then(|proofs| proofs.first())
-        .and_then(Value::as_object);
-    let verification_method = proof
-        .and_then(|proof| proof.get("verification_method"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("projected proof is missing verification_method"))?;
-    let verification_method =
-        arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
-            AppError::internal(format!(
-                "projected proof verification_method is invalid: {error}"
-            ))
-        })?;
-    let domain = proof
-        .and_then(|proof| proof.get("domain"))
-        .or_else(|| object.get("domain"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
-    let audience = proof
-        .and_then(|proof| proof.get("audience"))
-        .or_else(|| object.get("audience"))
-        .and_then(sdk_audience);
-    let event_digest = Hash::new(record.canonical_digest.clone())
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok(vec![arkret_wire::EventProof::Producer(
-        ProducerEventProof {
-            kind: proof_kind::DETACHED_JWS.to_owned(),
-            proof_purpose: None,
-            verification_method,
-            event_digest,
-            signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
-            created_at,
-            domain,
-            audience,
-            jws: proof
-                .and_then(|proof| proof.get("jws").or_else(|| proof.get("detached_jws")))
-                .and_then(Value::as_str)
-                .unwrap_or("ZGV2..c2ln")
-                .to_owned(),
-        },
-    )])
-}
-
-fn sdk_audience(value: &Value) -> Option<Audience> {
-    if let Some(single) = value.as_str() {
-        return Some(Audience::Single(single.to_owned()));
-    }
-    value.as_array().map(|items| {
-        Audience::Multiple(
-            items
-                .iter()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned)
-                .collect(),
-        )
-    })
 }
 
 /// SPEC-SOL-003 — pre-acceptance validation for the durable
@@ -738,6 +577,12 @@ pub(in crate::routing) fn validate_device_revoke_submission(
 }
 
 pub(crate) fn canonical_realm_id_for_record(record: &AcceptedEvent) -> Option<String> {
+    if record.kind == arkret_wire::EventKind::RealmCreate.as_str() {
+        return record
+            .event_id
+            .strip_prefix("ak:event:")
+            .map(|token| format!("ak:realm:{token}"));
+    }
     record
         .envelope
         .get("realm_id")
@@ -803,7 +648,7 @@ async fn is_validated_realm_bootstrap_member(state: &AppState, record: &Accepted
         let mut events = records
             .iter()
             .filter(|candidate| delta.contains(candidate.canonical_digest.as_str()))
-            .filter_map(|candidate| sdk_event_from_record(candidate, None, false).ok())
+            .filter_map(|candidate| canonical_event_for_read(candidate).ok())
             .collect::<Vec<_>>();
         if events.len() != delta.len() {
             return false;

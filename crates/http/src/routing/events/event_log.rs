@@ -42,8 +42,8 @@ use arkret_models_collaboration::http_bodies::{
     EventsResolveRequestBody, EventsSubmitOutcome, EventsSubmitStatus,
 };
 use arkret_wire::{
-    Audience, Event, EventRef, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,
-    MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH, NotarySig, ProducerEventProof, Seal, proof_kind,
+    Event, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
+    MAX_EVENT_SUBMIT_BATCH, NotarySig, Seal, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -60,9 +60,8 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
 
 use super::projection::{
-    actor_erased_in_realm, erasure_tombstone_payload_value, retention_risk_audit_flag,
-    retention_risk_reason, retention_risk_ui_flag, retention_tombstone_for_event,
-    retention_tombstone_payload_value,
+    actor_erased_in_realm, retention_risk_audit_flag, retention_risk_reason,
+    retention_risk_ui_flag, retention_tombstone_for_event,
 };
 use super::{
     append_audit_log, auth_or_render, now, realm_allows_plaintext_service_for_data_class,

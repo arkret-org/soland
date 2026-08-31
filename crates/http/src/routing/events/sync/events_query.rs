@@ -1,5 +1,5 @@
 //! Multi-Realm / multi-actor event stream (`ak.self.events.stream.subscribe.v1`),
-//! projection-aware events read (`ak.self.events.read.scan.v1`),
+//! canonical durable events read (`ak.self.events.read.scan.v1`),
 //! signed snapshot-manifest head, plus the NDJSON framing and reconnect-gate
 //! helpers shared by both subscribe surfaces.
 
@@ -923,21 +923,6 @@ fn events_query_cursor_and_stop(
     (cursor, stop, backward)
 }
 
-fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>) -> Vec<Value> {
-    let Some(stop_cursor) = stop_cursor else {
-        return events;
-    };
-    if let Some(index) = events.iter().position(|event| {
-        event
-            .get("event_id")
-            .and_then(Value::as_str)
-            .is_some_and(|event_id| event_id == stop_cursor)
-    }) {
-        events.truncate(index);
-    }
-    events
-}
-
 #[endpoint(operation_id = "ak.self.events.read.scan")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.read.scan.v1"))]
 pub(crate) async fn events_read_body(
@@ -1052,7 +1037,6 @@ async fn events_query_impl(
             stop_cursor.as_deref(),
             backward,
             &filter_digest,
-            cursor_token.clone(),
         )
         .await?;
         return soland_http::result::json_ok(response);
@@ -1083,202 +1067,233 @@ async fn events_query_impl(
     if accessible_realms.is_empty() {
         return Err(soland_http::error::AppError::not_found("not found"));
     }
-    let limit = parts.limit;
-
-    // Single-Realm fast path: paginate + apply visibility over the projection
-    // store, then enrich the final page to typed EventReadRow values. Ordinary
-    // rows carry their complete canonical Event; redacted slots carry only the
-    // closed projection view and its durable digest commitment.
-    if accessible_realms.len() == 1 {
-        let realm_id = &accessible_realms[0];
-        let managed_agent_control = managed_agent_control_realms.contains(realm_id);
-        let realm_ids = std::collections::BTreeSet::from([realm_id.clone()]);
-        match projected_event_page_for_realms_in_direction(
-            state,
-            &realm_ids,
-            cursor.as_deref(),
-            limit,
-            backward,
-        )
+    let records = state
+        .event_queries()
+        .canonical_events()
         .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let by_id: BTreeMap<_, _> = records
+        .iter()
+        .map(|record| (record.event_id.as_str(), record))
+        .collect();
+    let realm_set: BTreeSet<_> = accessible_realms.iter().cloned().collect();
+    // A stale extra index row is an integrity error, never another candidate.
+    for realm in &accessible_realms {
+        for row in state
+            .event_queries()
+            .projected_events_for_realm(realm)
+            .await
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
         {
-            Ok(Some(page)) => {
-                let mut events: Vec<Value> = Vec::new();
-                let mut last_visible_event_id = None;
-                for event in &page.items {
-                    if events_query_event_visible(
-                        state,
-                        event,
-                        session.as_ref(),
-                        managed_agent_control,
+            let record = by_id.get(row.event_id.as_str()).ok_or_else(|| {
+                soland_http::error::AppError::internal("projection row has no canonical Event")
+            })?;
+            if super::super::event_log::canonical_realm_id_for_record(record).as_deref()
+                != Some(realm)
+                || record.kind != row.event_kind.as_str()
+            {
+                return Err(soland_http::error::AppError::internal(
+                    "projection index differs from canonical Event",
+                ));
+            }
+        }
+    }
+    let mut candidates = Vec::new();
+    let mut views = Vec::new();
+    for record in &records {
+        let Some(realm) = super::super::event_log::canonical_realm_id_for_record(record) else {
+            continue;
+        };
+        if !realm_set.contains(&realm) {
+            continue;
+        }
+        let actor = canonical_record_actor_key(record)?;
+        let event = super::super::event_log::canonical_event_for_read(record)
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+        if record.event_id != event.event_id.as_str()
+            || record.kind != event.kind.as_str()
+            || record.actor_seq != event.actor_seq
+        {
+            return Err(soland_http::error::AppError::internal(
+                "canonical Event index differs from signed envelope",
+            ));
+        }
+        // These transient views are derived from EVERY accepted Event, not from
+        // persisted projection row presence. They are never emitted as Events.
+        let view = ProjectedEvent {
+            event_id: record.event_id.clone(),
+            realm_id: realm.clone(),
+            event_kind: event.kind.clone(),
+            operation_kind: String::new(),
+            operation_id: None,
+            sender: Some(actor.clone()),
+            payload: serde_json::to_value(&event.payload)
+                .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
+            created_at: event.created_at,
+            received_at: record.received_at,
+        };
+        views.push(view.clone());
+        if !actor_filter.is_empty() && !actor_filter.contains(&actor) {
+            continue;
+        }
+        let managed = managed_agent_control_realms.contains(&realm);
+        if !managed {
+            if !projection_record_visible_to_session(state, &view, session.as_ref()).await {
+                continue;
+            }
+            if let arkret_wire::ScopeRef::Sidecar { sidecar_id, .. } = &event.scope_ref {
+                let projection = state.projections().snapshot();
+                let holder = session.as_ref().and_then(|session| {
+                    crate::routing::identity::session_actor::session_actor_from_credential(
+                        state, session,
                     )
-                    .await
-                        && projection_matches_actor_selectors(state, event, &actor_filter).await?
-                    {
-                        last_visible_event_id = Some(event.event_id.clone());
-                        events.push(projection_event_json(event));
-                    }
-                }
-                let events = truncate_before_stop_cursor(events, stop_cursor.as_deref());
-                let first_visible_event_id =
-                    events.first().and_then(|event| event["event_id"].as_str());
-                let directional_continuation = page
-                    .next_cursor
-                    .as_deref()
-                    .or(last_visible_event_id.as_deref());
-                let older_event_id = backward.then_some(page.next_cursor.as_deref()).flatten();
-                let newer_event_id = if backward {
-                    first_visible_event_id
-                } else {
-                    directional_continuation
-                };
-                let prev_cursor = match older_event_id {
-                    Some(event_id) => Some(
-                        sync_token_for_events_query(
-                            state,
-                            session.as_ref(),
-                            &filter_digest,
-                            event_id,
-                        )
-                        .await,
-                    ),
-                    None => None,
-                };
-                let next_cursor = match newer_event_id {
-                    Some(event_id) => Some(
-                        sync_token_for_events_query(
-                            state,
-                            session.as_ref(),
-                            &filter_digest,
-                            event_id,
-                        )
-                        .await,
-                    ),
-                    None => None,
-                };
-                let events = full_events_from_projection_json(state, &events).await?;
-                return soland_http::result::json_ok(EventsQueryOutcome {
-                    events,
-                    snapshot_bootstrap: None,
-                    prev_cursor: if backward {
-                        prev_cursor
-                    } else {
-                        cursor_token.clone()
-                    },
-                    next_cursor,
-                    has_more: if backward {
-                        page.has_more
-                    } else {
-                        cursor_token.is_some()
-                    },
-                    range_completeness: range_completeness.clone(),
+                    .ok()
                 });
-            }
-            Ok(None) => {}
-            Err(error) => {
-                if error.to_string().contains("invalid_cursor") {
-                    return Err(
-                        soland_http::error::AppError::param_invalid("cursor not found")
-                            .with_wire_code("invalid_cursor"),
-                    );
+                if !projection
+                    .sidecars
+                    .get(sidecar_id.as_str())
+                    .is_some_and(|sidecar| {
+                        holder
+                            .as_ref()
+                            .is_some_and(|actor| sidecar.controller_id == actor.to_string())
+                    })
+                {
+                    continue;
                 }
-                return Err(soland_http::error::AppError::internal(error.to_string()));
+            }
+            let circle = super::super::event_log::effective_scope_for_envelope(&record.envelope)
+                .filter(|scope| scope.starts_with("ak:circle:"));
+            if !circle_scope_visible_to_session(
+                state,
+                &state.projections().snapshot(),
+                circle.as_deref(),
+                record.received_at,
+                session.as_ref(),
+                Some(&actor),
+            ) {
+                continue;
             }
         }
-        return soland_http::result::json_ok(EventsQueryOutcome {
-            events: Vec::new(),
-            snapshot_bootstrap: None,
-            prev_cursor: cursor_token.clone(),
-            next_cursor: None,
-            has_more: false,
-            range_completeness,
-        });
+        candidates.push((record, event, view));
     }
-
-    // The cursor names one position in the globally ordered union. Splitting
-    // this read per Realm would make that cursor absent from every other Realm.
-    let realm_ids = accessible_realms.iter().cloned().collect();
-    let page = projected_event_page_for_realms_in_direction(
-        state,
-        &realm_ids,
-        cursor.as_deref(),
-        limit,
-        backward,
-    )
-    .await
-    .map_err(|error| {
-        if error.to_string().contains("invalid_cursor") {
-            soland_http::error::AppError::param_invalid("cursor not found")
-                .with_wire_code("invalid_cursor")
-        } else {
-            soland_http::error::AppError::internal(error.to_string())
-        }
-    })?;
-    let Some(page) = page else {
-        return soland_http::result::json_ok(EventsQueryOutcome {
-            events: Vec::new(),
-            snapshot_bootstrap: None,
-            prev_cursor: cursor_token,
-            next_cursor: None,
-            has_more: false,
-            range_completeness,
-        });
-    };
-    let mut page_events = Vec::new();
-    for event in &page.items {
-        let managed_agent_control = managed_agent_control_realms.contains(&event.realm_id);
-        if events_query_event_visible(state, event, session.as_ref(), managed_agent_control).await
-            && projection_matches_actor_selectors(state, event, &actor_filter).await?
-        {
-            page_events.push(projection_event_json(event));
-        }
-    }
-    let page_events = truncate_before_stop_cursor(page_events, stop_cursor.as_deref());
-    let directional_continuation = page.next_cursor.as_deref().or_else(|| {
-        page_events
-            .last()
-            .and_then(|event| event["event_id"].as_str())
+    let roots = candidates
+        .iter()
+        .map(|(record, ..)| record.event_id.clone())
+        .collect();
+    let depths = soland_services::events::canonical_event_depths(&records, &roots)
+        .map_err(soland_http::error::AppError::internal)?;
+    candidates.sort_by(|(left, le, _), (right, re, _)| {
+        depths[&left.event_id]
+            .cmp(&depths[&right.event_id])
+            .then_with(|| le.hlc.is_none().cmp(&re.hlc.is_none()))
+            .then_with(|| le.hlc.cmp(&re.hlc))
+            .then_with(|| left.actor_id.cmp(&right.actor_id))
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
+            .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    let first_visible_event_id = page_events
-        .first()
-        .and_then(|event| event["event_id"].as_str());
-    let older_event_id = backward.then_some(page.next_cursor.as_deref()).flatten();
-    let newer_event_id = if backward {
-        first_visible_event_id
+    let after = if backward {
+        stop_cursor.as_deref()
     } else {
-        directional_continuation
+        cursor.as_deref()
     };
-    let prev_cursor = match older_event_id {
-        Some(event_id) => Some(
-            sync_token_for_events_query(state, session.as_ref(), &filter_digest, event_id).await,
-        ),
+    let before = if parts.before.is_some() {
+        if backward {
+            cursor.as_deref()
+        } else {
+            stop_cursor.as_deref()
+        }
+    } else {
+        None
+    };
+    let ids: Vec<_> = candidates
+        .iter()
+        .map(|(record, ..)| record.event_id.as_str())
+        .collect();
+    let (indices, has_more) = canonical_query_page(&ids, after, before, backward, parts.limit)?;
+    let mut page_rows = Vec::new();
+    {
+        use soland_services::projection::tombstone::*;
+        let projection = state.projections().snapshot();
+        let redactions = message_redactions_from_events(&views, &projection);
+        for index in &indices {
+            let (record, _, view) = &candidates[*index];
+            let mut view = view.clone();
+            tombstone_projection_event_for_erased_actor(&projection, &mut view);
+            tombstone_projection_event_for_message_redaction(&projection, &redactions, &mut view);
+            if let Some(tombstone) =
+                super::super::projection::retention_tombstone_for_event(state, &record.event_id)
+            {
+                tombstone_projection_event_for_retention(&mut view, &tombstone);
+            }
+            page_rows.push(projection_event_json(&view));
+        }
+    }
+    // Materialize all rows before issuing any successful continuation token.
+    let events = full_events_from_projection_json(state, &page_rows).await?;
+    let older = indices.iter().min().map(|index| ids[*index]);
+    let newer = indices.iter().max().map(|index| ids[*index]).or(after);
+    let prev_cursor = if has_more {
+        match older.or(after) {
+            Some(id) => {
+                Some(sync_token_for_events_query(state, session.as_ref(), &filter_digest, id).await)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let next_cursor = match newer {
+        Some(id) => {
+            Some(sync_token_for_events_query(state, session.as_ref(), &filter_digest, id).await)
+        }
         None => None,
     };
-    let next_cursor = match newer_event_id {
-        Some(event_id) => Some(
-            sync_token_for_events_query(state, session.as_ref(), &filter_digest, event_id).await,
-        ),
-        None => None,
-    };
-    let events = full_events_from_projection_json(state, &page_events).await?;
     soland_http::result::json_ok(EventsQueryOutcome {
         events,
         snapshot_bootstrap: None,
-        prev_cursor: if backward {
-            prev_cursor
-        } else {
-            cursor_token.clone()
-        },
+        prev_cursor,
         next_cursor,
-        has_more: if backward {
-            page.has_more
-        } else {
-            cursor_token.is_some()
-        },
+        has_more,
         range_completeness,
     })
 }
 
+/// Bounds are absolute canonical positions; order controls presentation only.
+fn canonical_query_page(
+    ids: &[&str],
+    after: Option<&str>,
+    before: Option<&str>,
+    backward: bool,
+    limit: usize,
+) -> Result<(Vec<usize>, bool), soland_http::error::AppError> {
+    let position = |id: &str| {
+        ids.iter().position(|value| *value == id).ok_or_else(|| {
+            soland_http::error::AppError::param_invalid("cursor position unavailable")
+                .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR)
+        })
+    };
+    let start = after
+        .map(position)
+        .transpose()?
+        .map_or(0, |index| index + 1);
+    let end = before.map(position).transpose()?.unwrap_or(ids.len());
+    if end < start {
+        return Err(
+            soland_http::error::AppError::param_invalid("cursor bounds are reversed")
+                .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
+        );
+    }
+    let indices: Vec<_> = if backward {
+        (start..end).rev().take(limit).collect()
+    } else {
+        (start..end).take(limit).collect()
+    };
+    let has_more = indices
+        .iter()
+        .min()
+        .map_or(after.is_some() && start > 1, |index| *index > 0);
+    Ok((indices, has_more))
+}
 async fn range_completeness_for_query(
     state: &AppState,
     session: Option<&SessionIdentityState>,
@@ -1474,19 +1489,7 @@ async fn range_completeness_for_query(
     ))
 }
 
-/// Per-event visibility for `events.read`. Organization Recovery holders use
-/// the dedicated archive surface and never gain timeline scan authority here.
-async fn events_query_event_visible(
-    state: &AppState,
-    event: &soland_services::events::ProjectedEvent,
-    session: Option<&soland_services::identity::SessionIdentityState>,
-    managed_agent_control: bool,
-) -> bool {
-    if managed_agent_control {
-        return true;
-    }
-    projection_record_visible_to_session(state, event, session).await
-}
+#[cfg(test)]
 
 async fn projection_matches_actor_selectors(
     state: &AppState,
@@ -1531,10 +1534,7 @@ async fn event_read_row_from_projection_json(
     state: &AppState,
     row: &Value,
 ) -> Result<arkret_models_collaboration::http_bodies::EventReadRow, soland_http::error::AppError> {
-    use arkret_models_collaboration::http_bodies::{
-        EventReadRow, EventRedactionReason, HiddenEventField, HiddenEventFields, RedactedEventView,
-        RedactedEventViewKind, ReducerInputFalse,
-    };
+    use arkret_models_collaboration::http_bodies::EventRedactionReason;
 
     let event_id = row.get("event_id").and_then(Value::as_str).ok_or_else(|| {
         soland_http::error::AppError::internal(
@@ -1555,33 +1555,27 @@ async fn event_read_row_from_projection_json(
                 "projected Event row {event_id} has no canonical Event record"
             ))
         })?;
-    let event = super::super::event_log::sdk_event_for_state(state, &record).map_err(|error| {
+    let event = super::super::event_log::canonical_event_for_read(&record).map_err(|error| {
         soland_http::error::AppError::internal(format!(
             "canonical Event materialization failed for projected row {event_id}: {error}"
         ))
     })?;
-    if !projection_row_is_redacted_message_tombstone(row) {
+    let retained = row["payload"]["retention_tombstone"].as_bool() == Some(true);
+    let erased = row["sender"].as_str()
+        == Some(soland_services::projection::tombstone::ERASED_USER_PLACEHOLDER);
+    if !projection_row_is_redacted_message_tombstone(row) && !retained && !erased {
         return Ok(event.into());
     }
-    let hidden_fields = HiddenEventFields::new(
-        ["payload", "proofs", "unsigned"]
-            .into_iter()
-            .map(|field| HiddenEventField::new(field).expect("static hidden Event field"))
-            .collect(),
-    )
-    .expect("static hidden Event fields are unique");
-    Ok(EventReadRow::Redacted(RedactedEventView {
-        view_kind: RedactedEventViewKind::RedactedEventView,
-        event_id: event.event_id,
-        kind: event.kind,
-        realm_id: event.realm_id,
-        created_at: Some(event.created_at),
-        payload_digest: None,
-        redaction_reason: EventRedactionReason::Redacted,
-        hidden_fields,
-        inclusion_proof: None,
-        reducer_input: ReducerInputFalse,
-    }))
+    Ok(super::super::event_log::redacted_event_read_row(
+        event,
+        if retained {
+            EventRedactionReason::RetentionPruned
+        } else if erased {
+            EventRedactionReason::PolicyHidden
+        } else {
+            EventRedactionReason::Redacted
+        },
+    ))
 }
 
 /// Materialize the full Event envelope required by an `event` subscribe
@@ -1631,6 +1625,33 @@ mod tests {
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_ACTOR_CORE: &str = "ak:did_core:web:alice.example";
+
+    #[test]
+    fn canonical_page_bounds_are_independent_of_presentation_direction() {
+        let ids = ["a", "b", "c", "d"];
+        assert_eq!(
+            canonical_query_page(&ids, None, None, true, 2).unwrap(),
+            (vec![3, 2], true)
+        );
+        assert_eq!(
+            canonical_query_page(&ids, Some("b"), None, true, 2).unwrap(),
+            (vec![3, 2], true)
+        );
+        assert_eq!(
+            canonical_query_page(&ids, None, Some("d"), true, 2).unwrap(),
+            (vec![2, 1], true)
+        );
+        assert_eq!(
+            canonical_query_page(&ids, Some("a"), Some("d"), false, 1).unwrap(),
+            (vec![1], true)
+        );
+        assert_eq!(
+            canonical_query_page(&ids, Some("d"), None, false, 2).unwrap(),
+            (vec![], true)
+        );
+        assert!(canonical_query_page(&ids, Some("missing"), None, false, 2).is_err());
+        assert!(canonical_query_page(&ids, Some("d"), Some("b"), true, 2).is_err());
+    }
 
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
@@ -1911,137 +1932,6 @@ mod tests {
 
         assert_eq!(error.code, soland_http::error::ErrorCode::InternalError);
         assert!(error.message.contains("has no canonical Event record"));
-    }
-
-    async fn append_query_test_event(state: &AppState, realm_id: &str, second: u32) -> String {
-        let canonical_bytes = format!("{{\"second\":{second}}}").into_bytes();
-        let digest =
-            arkret_canonical::digest_bytes(arkret_canonical::DigestSuite::Sha256, &canonical_bytes);
-        let event_id =
-            arkret_identifiers::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, digest)
-                .to_string();
-        let received_at =
-            DateTime::parse_from_rfc3339(&format!("2026-08-26T01:00:{second:02}.000Z"))
-                .unwrap()
-                .with_timezone(&Utc);
-        state
-            .event_queries()
-            .store_canonical_event(AcceptedEvent {
-                event_id: event_id.clone(),
-                actor_id: TEST_ACTOR_CORE.to_owned(),
-                actor_seq: u64::from(second),
-                realm_id: Some(realm_id.to_owned()),
-                kind: arkret_wire::EventKind::MessageCreate.to_string(),
-                schema_id: "ak.schema.event.v1".to_owned(),
-                digest_suite: arkret_canonical::DigestSuite::Sha256,
-                canonical_digest: arkret_canonical::digest(
-                    arkret_canonical::DigestSuite::Sha256,
-                    &canonical_bytes,
-                ),
-                canonical_bytes,
-                envelope: json!({}),
-                received_at,
-            })
-            .await
-            .unwrap();
-        crate::routing::events::projection::append_projection_event(
-            state,
-            soland_services::events::ProjectedEvent {
-                event_id: event_id.clone(),
-                realm_id: realm_id.to_owned(),
-                event_kind: arkret_wire::EventKind::MessageCreate,
-                operation_kind: "event".to_owned(),
-                operation_id: None,
-                sender: Some(TEST_ACTOR_CORE.to_owned()),
-                payload: json!({}),
-                created_at: received_at,
-                received_at,
-            },
-        )
-        .await
-        .unwrap();
-        event_id
-    }
-
-    #[tokio::test]
-    async fn multi_realm_cursor_resumes_the_globally_ordered_union() {
-        let state = test_state();
-        let realms = BTreeSet::from(["realm-a".to_owned(), "realm-b".to_owned()]);
-        let mut event_ids = Vec::new();
-        for (realm, second) in [
-            ("realm-a", 1),
-            ("realm-b", 2),
-            ("realm-a", 3),
-            ("realm-b", 4),
-        ] {
-            event_ids.push(append_query_test_event(&state, realm, second).await);
-        }
-
-        let first = projected_event_page_for_realms_in_direction(&state, &realms, None, 2, false)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            first
-                .items
-                .iter()
-                .map(|event| event.event_id.as_str())
-                .collect::<Vec<_>>(),
-            [event_ids[0].as_str(), event_ids[1].as_str()]
-        );
-        let second = projected_event_page_for_realms_in_direction(
-            &state,
-            &realms,
-            first.next_cursor.as_deref(),
-            2,
-            false,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            second
-                .items
-                .iter()
-                .map(|event| event.event_id.as_str())
-                .collect::<Vec<_>>(),
-            [event_ids[2].as_str(), event_ids[3].as_str()]
-        );
-    }
-
-    #[tokio::test]
-    async fn before_cursor_reads_older_events_in_descending_order() {
-        let state = test_state();
-        let realms = BTreeSet::from(["realm-a".to_owned(), "realm-b".to_owned()]);
-        let mut event_ids = Vec::new();
-        for (realm, second) in [
-            ("realm-a", 1),
-            ("realm-b", 2),
-            ("realm-a", 3),
-            ("realm-b", 4),
-        ] {
-            event_ids.push(append_query_test_event(&state, realm, second).await);
-        }
-
-        let page = projected_event_page_for_realms_in_direction(
-            &state,
-            &realms,
-            Some(event_ids[3].as_str()),
-            2,
-            true,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            page.items
-                .iter()
-                .map(|event| event.event_id.as_str())
-                .collect::<Vec<_>>(),
-            [event_ids[2].as_str(), event_ids[1].as_str()]
-        );
-        assert!(page.has_more);
-        assert_eq!(page.next_cursor.as_deref(), Some(event_ids[1].as_str()));
     }
 
     #[test]
@@ -2472,12 +2362,12 @@ mod tests {
         )
         .await;
 
-        let page = projected_event_page_for_realms_in_direction(
+        let page = crate::routing::events::projection::projected_event_page_for_realms_through(
             &state,
             &BTreeSet::from([TEST_REALM.to_owned()]),
             None,
+            None,
             100,
-            false,
         )
         .await
         .expect("projected page")
@@ -2573,25 +2463,38 @@ async fn canonical_events_for_actor_selectors(
     state: &AppState,
     actors: &BTreeSet<String>,
 ) -> Result<Vec<soland_services::events::AcceptedEvent>, soland_http::error::AppError> {
-    let mut records = state
+    let all_records = state
         .event_queries()
         .canonical_events()
         .await
         .map_err(|error| {
             soland_http::error::AppError::internal(format!("canonical Event scan failed: {error}"))
-        })?
-        .into_iter()
+        })?;
+    let roots = all_records
+        .iter()
         .filter(|record| actors.contains(&record.actor_id))
-        .collect::<Vec<_>>();
-    for record in &records {
-        canonical_record_actor_key(record)?;
+        .map(|record| record.event_id.clone())
+        .collect();
+    let depths = soland_services::events::canonical_event_depths(&all_records, &roots)
+        .map_err(soland_http::error::AppError::internal)?;
+    let mut records = Vec::new();
+    for record in all_records {
+        if !actors.contains(&record.actor_id) {
+            continue;
+        }
+        let event = super::super::event_log::canonical_event_for_read(&record)?;
+        records.push((record, event.hlc));
     }
-    records.sort_by(|left, right| {
-        left.received_at
-            .cmp(&right.received_at)
+    records.sort_by(|(left, lh), (right, rh)| {
+        depths[&left.event_id]
+            .cmp(&depths[&right.event_id])
+            .then_with(|| lh.is_none().cmp(&rh.is_none()))
+            .then_with(|| lh.cmp(rh))
+            .then_with(|| left.actor_id.cmp(&right.actor_id))
+            .then_with(|| left.actor_seq.cmp(&right.actor_seq))
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    Ok(records)
+    Ok(records.into_iter().map(|(record, _)| record).collect())
 }
 
 /// Capture durable actor history after the live receiver is installed. This
@@ -2631,95 +2534,51 @@ async fn durable_events_query_from_parts(
     stop_cursor: Option<&str>,
     backward: bool,
     filter_digest: &str,
-    cursor_token: Option<String>,
 ) -> Result<EventsQueryOutcome, soland_http::error::AppError> {
     let actors_set = parts.actors.iter().cloned().collect();
-    let all_records = canonical_events_for_actor_selectors(state, &actors_set).await?;
-    let mut records = Vec::new();
-    for record in all_records {
-        // The complete selector set was authorized against the credential's
-        // exact holder or current managed-Agent binding before this scan.
-        // Owner history must not be cropped through Realm projection state.
-        super::super::event_log::sdk_event_for_state(state, &record).map_err(|error| {
-            soland_http::error::AppError::internal(format!(
-                "canonical Event materialization failed for actor-scoped row {} ({}): {error}",
-                record.event_id, record.kind
-            ))
-        })?;
-        // Personal blocklists are encrypted actor-private presentation state.
-        // They must not remove accepted Operations from the canonical query;
-        // clients apply the holder's filter after sync.
-        records.push(record);
-    }
-    if backward {
-        records.reverse();
-    }
-    let start = cursor
-        .and_then(|cursor| records.iter().position(|record| record.event_id == cursor))
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    let mut page = records
-        .into_iter()
-        .skip(start)
-        .take(parts.limit + 1)
-        .collect::<Vec<_>>();
-    if let Some(stop_cursor) = stop_cursor
-        && let Some(index) = page
-            .iter()
-            .position(|record| record.event_id == stop_cursor)
-    {
-        page.truncate(index);
-    }
-    let has_more = page.len() > parts.limit;
-    if has_more {
-        page.truncate(parts.limit);
-    }
-    let first_cursor = match page.first() {
-        Some(record) => Some(
-            sync_token_for_events_query(state, Some(session), filter_digest, &record.event_id)
-                .await,
-        ),
-        None => None,
+    // Exact holder/managed-Agent authority was checked before this call.
+    // Personal blocklists are presentation state, not canonical-log filters.
+    let records = canonical_events_for_actor_selectors(state, &actors_set).await?;
+    let after = if backward { stop_cursor } else { cursor };
+    let before = if parts.before.is_some() {
+        if backward { cursor } else { stop_cursor }
+    } else {
+        None
     };
-    let last_cursor = match page.last() {
-        Some(record) => Some(
-            sync_token_for_events_query(state, Some(session), filter_digest, &record.event_id)
-                .await,
-        ),
-        None => None,
-    };
-    let events = page
+    let ids: Vec<_> = records
         .iter()
-        .map(|record| {
-            super::super::event_log::sdk_event_for_state(state, record).map_err(|error| {
-                soland_http::error::AppError::internal(format!(
-                    "canonical Event materialization failed for actor-scoped row {} ({}): {error}",
-                    record.event_id, record.kind
-                ))
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(Into::into)
+        .map(|record| record.event_id.as_str())
         .collect();
+    let (indices, has_more) = canonical_query_page(&ids, after, before, backward, parts.limit)?;
+    let page: Vec<_> = indices.iter().map(|index| &records[*index]).collect();
+    let mut events = Vec::with_capacity(page.len());
+    for record in &page {
+        events.push(super::super::event_log::canonical_event_read_row(state, record).await?);
+    }
+    let older = indices.iter().min().map(|index| ids[*index]);
+    let newer = indices.iter().max().map(|index| ids[*index]).or(after);
+    let prev_cursor = if has_more {
+        match older.or(after) {
+            Some(id) => {
+                Some(sync_token_for_events_query(state, Some(session), filter_digest, id).await)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
+    let next_cursor = match newer {
+        Some(id) => {
+            Some(sync_token_for_events_query(state, Some(session), filter_digest, id).await)
+        }
+        None => None,
+    };
     Ok(EventsQueryOutcome {
         events,
         snapshot_bootstrap: None,
-        next_cursor: if backward {
-            first_cursor
-        } else {
-            last_cursor.clone()
-        },
-        prev_cursor: if backward {
-            has_more.then_some(last_cursor).flatten()
-        } else {
-            cursor_token.clone()
-        },
-        has_more: if backward {
-            has_more
-        } else {
-            cursor_token.is_some()
-        },
+        next_cursor,
+        prev_cursor,
+        has_more,
         range_completeness: None,
     })
 }

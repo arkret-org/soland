@@ -89,7 +89,24 @@ pub fn message_redactions_from_events(
             matched = true;
         }
         if !matched && target_ref.starts_with("ak:message:") {
-            redactions.insert(target_ref.replacen("ak:message:", "ak:event:", 1), marker);
+            redactions.insert(
+                target_ref.replacen("ak:message:", "ak:event:", 1),
+                marker.clone(),
+            );
+        }
+        // Canonical scans may have no persisted message projection at all.
+        // Every accepted revision of the target keeps a redacted history slot.
+        for event in events {
+            if matches!(
+                event.event_kind,
+                arkret_wire::EventKind::MessageCreate | arkret_wire::EventKind::MessageRevise
+            ) && (event.event_id == target_ref
+                || event.event_id == target_ref.replacen("ak:message:", "ak:event:", 1)
+                || event.payload.get("message_id").and_then(Value::as_str)
+                    == Some(target_message_id))
+            {
+                redactions.insert(event.event_id.clone(), marker.clone());
+            }
         }
     }
     redactions

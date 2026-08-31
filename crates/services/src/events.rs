@@ -479,6 +479,65 @@ pub fn read_cursor_causal_relation(
     }
 }
 
+/// Resolve final causal depths for a selected Event closure. Unrelated missing
+/// history does not block a scan; missing predecessors or cycles in this closure
+/// do. No receive-time or provisional-order fallback is permitted.
+pub fn canonical_event_depths(
+    records: &[AcceptedEvent],
+    roots: &BTreeSet<String>,
+) -> Result<BTreeMap<String, u64>, String> {
+    let graph = CanonicalCausalGraph::new(records);
+    let mut pending: Vec<_> = roots.iter().cloned().collect();
+    let mut dependencies = BTreeMap::new();
+    let mut dependents: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    while let Some(id) = pending.pop() {
+        if dependencies.contains_key(&id) {
+            continue;
+        }
+        let record = graph
+            .by_event_id
+            .get(id.as_str())
+            .ok_or_else(|| format!("canonical predecessor unavailable: {id}"))?;
+        let (predecessors, complete) = graph.predecessors(record);
+        if !complete {
+            return Err(format!("canonical predecessor closure incomplete: {id}"));
+        }
+        for predecessor in &predecessors {
+            dependents
+                .entry(predecessor.clone())
+                .or_default()
+                .push(id.clone());
+            pending.push(predecessor.clone());
+        }
+        dependencies.insert(id, predecessors.len());
+    }
+    let mut ready: Vec<_> = dependencies
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let mut depths = BTreeMap::new();
+    let mut resolved = 0;
+    while let Some(id) = ready.pop() {
+        let depth = *depths.entry(id.clone()).or_insert(0_u64);
+        resolved += 1;
+        for dependent in dependents.get(&id).into_iter().flatten() {
+            let next_depth = depth.checked_add(1).ok_or("causal depth overflow")?;
+            let current = depths.entry(dependent.clone()).or_default();
+            *current = (*current).max(next_depth);
+            let remaining = dependencies.get_mut(dependent).expect("indexed dependent");
+            *remaining -= 1;
+            if *remaining == 0 {
+                ready.push(dependent.clone());
+            }
+        }
+    }
+    if resolved != dependencies.len() {
+        return Err("canonical predecessor closure contains a cycle".to_owned());
+    }
+    Ok(depths)
+}
+
 struct CanonicalCausalGraph<'a> {
     by_event_id: BTreeMap<&'a str, &'a AcceptedEvent>,
     event_id_by_digest: BTreeMap<&'a str, &'a str>,
@@ -589,6 +648,9 @@ impl<'a> CanonicalCausalGraph<'a> {
                 }
             }
         }
+        if predecessors.contains(&record.event_id) {
+            complete = false;
+        }
         if let Some(payload) = record.envelope.get("payload") {
             self.collect_materialized_payload_edges(payload, &mut predecessors, &mut complete);
         }
@@ -610,7 +672,7 @@ impl<'a> CanonicalCausalGraph<'a> {
                 field.as_str(),
                 // Registered Message-target carriers: `message_redact_payload`
                 // and `message_revise_payload` both spell it `message_id`.
-                "message_id"
+                "message_id" | "reply_to_id"
             ) || (field == "target_ref"
                 && field_value
                     .as_str()
@@ -2476,6 +2538,35 @@ mod tests {
             ),
             ReadCursorCausalRelation::CurrentDominatesCandidate
         );
+    }
+
+    #[test]
+    fn canonical_depths_cover_selected_closure_and_reject_missing_or_cyclic_edges() {
+        let root = causal_record(1, 1, &[], &[], serde_json::json!({}));
+        let root_message = root.event_id.replacen("ak:event:", "ak:message:", 1);
+        let reply = causal_record(
+            2,
+            2,
+            &[],
+            &[],
+            serde_json::json!({"reply_to_id": root_message}),
+        );
+        let child = causal_record(3, 3, &[2], &[], serde_json::json!({}));
+        let irrelevant_missing = causal_record(4, 4, &[99], &[], serde_json::json!({}));
+        let roots = BTreeSet::from([child.event_id.clone()]);
+        let records = vec![
+            root.clone(),
+            reply.clone(),
+            child.clone(),
+            irrelevant_missing,
+        ];
+        let depths = canonical_event_depths(&records, &roots).unwrap();
+        assert_eq!(depths[&root.event_id], 0);
+        assert_eq!(depths[&reply.event_id], 1);
+        assert_eq!(depths[&child.event_id], 2);
+        assert!(canonical_event_depths(&records[1..], &roots).is_err());
+        let cycle = vec![causal_record(1, 1, &[2], &[], serde_json::json!({})), reply];
+        assert!(canonical_event_depths(&cycle, &BTreeSet::from([root.event_id])).is_err());
     }
 
     #[test]
