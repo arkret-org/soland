@@ -1,9 +1,9 @@
 //! Owner-scoped policy document CRUD on the Soland product surface.
 //!
 //! `/_soland/self/...` stores deployment-local policy documents
-//! CRUD is deployment-local management, NOT a v1 protocol operation
-//! (`service-http-binding.md` §1007 keeps policy_document storage out of the
-//! core operation surface). It is therefore served off the protocol root and
+//! CRUD is deployment-local document management, not a v1 protocol operation.
+//! These documents do not participate in protocol authorization decisions.
+//! This product surface is served off the protocol root and
 //! uses reverse-domain `org.arkret.soland.policy_document.*` operation ids
 //! rather than the `ak.*` protocol namespace:
 //! - `GET    /_soland/self/policies`            list owner-scoped policies
@@ -12,7 +12,7 @@
 //! - `DELETE /_soland/self/policies/{id}`       remove one policy document
 //!
 //! `policy_document_to_response`, `is_valid_generated_or_custom_id`, and the
-//! supported-effect/scope/type validators are `pub` so admin / authz handlers
+//! supported-effect/scope/type validators are `pub` so product handlers
 //! can reuse them via the `crate::routing::*` re-exports.
 use arkret_identifiers::{Did, DidCoreId, RealmId, project_did_to_core_id};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};

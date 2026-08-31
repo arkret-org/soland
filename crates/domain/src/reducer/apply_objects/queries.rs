@@ -876,10 +876,10 @@ impl ProjectionState {
             .and_then(|suite| arkret_state::compute_state_root(&cells, suite).ok())
     }
 
-    /// Actor-scoped membership/role filtered state root used by policy-check
-    /// decisions. Only non-bottom canonical cells that name the actor are
+    /// Actor-scoped membership/role filtered state root used by peer authority
+    /// frontiers. Only non-bottom canonical cells that name the actor are
     /// included; this prevents a Realm-wide member-list hash from standing in
-    /// for the actor-specific frontier required by the policy protocol.
+    /// for the actor-specific accepted membership frontier.
     pub fn realm_membership_frontier_digest(
         &self,
         realm_id: &str,

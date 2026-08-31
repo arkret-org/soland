@@ -26,17 +26,11 @@ fn mod_decision_cell_ref() -> CellRef {
     .unwrap()
 }
 
-fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
-    let op = make_operation(
+fn moderation_decision_operation(issuer: &str) -> Operation {
+    let mut operation = make_operation(
         arkret_wire::EventKind::ModerationDecision,
         MOD_REALM,
         serde_json::json!({
-            // A decision's `decision_id` is its own Event id, and the add dot
-            // is derived from that Event — the submit path injects `event_id`
-            // the same way (`sdk_projection::projection_operation_from_event`).
-            "event_id": MOD_DECISION_ID,
-            "decision_id": MOD_DECISION_ID,
-            "realm_id": MOD_REALM,
             "issuer_id": issuer,
             "target_ref": MOD_TARGET_REF,
             "decision": "quarantine",
@@ -44,11 +38,95 @@ fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
             "request_canonical_digest": MOD_REQUEST_DIGEST,
         }),
     );
+    let event_id = arkret_identifiers::EventId::new(MOD_DECISION_ID).unwrap();
+    operation.context.event_id = event_id.clone();
+    operation.context.accepted_event_id = event_id;
+    operation
+}
+
+fn seed_decision(state: &mut ProjectionState, hlc: &ServerHlc, issuer: &str) {
+    let op = moderation_decision_operation(issuer);
     let effect = state.apply(&op, hlc);
     assert!(
         matches!(effect, ProjectionEffect::ModerationDecisionProjected { .. }),
         "decision should project, got {effect:?}"
     );
+}
+
+#[test]
+fn moderation_decision_identity_uses_accepted_event_context() {
+    let operation = moderation_decision_operation("ak:did_core:web:mod.example");
+    assert!(operation.payload.get("decision_id").is_none());
+    assert!(operation.payload.get("event_id").is_none());
+    let mut replay = operation.clone();
+    replay.operation_id =
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap();
+    assert_ne!(operation.operation_id, replay.operation_id);
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    let mut original_state = ProjectionState::new();
+    let mut replay_state = ProjectionState::new();
+    for (state, input) in [
+        (&mut original_state, &operation),
+        (&mut replay_state, &replay),
+    ] {
+        assert!(matches!(
+            state.apply(input, &hlc),
+            ProjectionEffect::ModerationDecisionProjected { decision_id, .. }
+                if decision_id == MOD_DECISION_ID
+        ));
+        assert!(state.moderation_decision_is_live(MOD_DECISION_ID));
+    }
+    assert_eq!(
+        original_state.cells.get(&mod_decision_cell_ref()),
+        replay_state.cells.get(&mod_decision_cell_ref())
+    );
+}
+
+#[test]
+fn moderation_decision_rejects_legacy_action_and_wrapped_targets() {
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    let base = moderation_decision_operation("ak:did_core:web:mod.example");
+    let mut action_only = base.clone();
+    action_only
+        .payload
+        .as_object_mut()
+        .unwrap()
+        .remove("decision");
+    action_only.payload["action"] = serde_json::json!("require_review");
+    assert!(matches!(
+        ProjectionState::new().apply(&action_only, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "moderation_decision_kind_missing"
+    ));
+    for target in [
+        serde_json::json!({"id": MOD_TARGET_REF}),
+        serde_json::json!({"object_ref": MOD_TARGET_REF}),
+    ] {
+        let mut operation = base.clone();
+        operation.payload["target_ref"] = target;
+        assert!(matches!(
+            ProjectionState::new().apply(&operation, &hlc),
+            ProjectionEffect::Rejected { reason } if reason == "moderation_decision_target_ref_missing"
+        ));
+    }
+}
+
+#[test]
+fn moderation_lift_rejects_legacy_decision_id_alias() {
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    let operation = make_operation(
+        arkret_wire::EventKind::ModerationDecisionLift,
+        MOD_REALM,
+        serde_json::json!({
+            "target_ref": MOD_TARGET_REF,
+            "decision_id": MOD_DECISION_ID,
+            "observed_dot_ids": [MOD_DECISION_DOT],
+        }),
+    );
+    assert!(matches!(
+        ProjectionState::new().apply(&operation, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "moderation_lift_decision_ref_missing"
+    ));
 }
 
 fn submit_appeal(state: &mut ProjectionState, hlc: &ServerHlc, appellant: &str) {
