@@ -1695,7 +1695,7 @@ async fn resolve_actor_endpoint(
         if record.bot_actor_id.signing_principal_id() == &actor_id {
             return json_ok(AppletActorView {
                 exists: true,
-                actor_id: Some(actor_id),
+                actor_id: Some(record.bot_actor_id.clone()),
                 display_name: Some(record.package.package_id.clone()),
                 external_ref: None,
             });
@@ -1707,7 +1707,7 @@ async fn resolve_actor_endpoint(
         {
             return json_ok(AppletActorView {
                 exists: true,
-                actor_id: Some(actor_id),
+                actor_id: Some(ghost.ghost_actor_id.clone()),
                 display_name: ghost.display_name.clone(),
                 external_ref: None,
             });
@@ -1855,7 +1855,7 @@ async fn third_party_users_endpoint(
                 && ghost.external_ref.instance_id == instance_id
                 && ghost.external_ref.external_id == external_id
         }) {
-            let actor_id = ghost.ghost_actor_id.signing_principal_id().clone();
+            let actor_id = ghost.ghost_actor_id.clone();
             return json_ok(AppletActorView {
                 exists: true,
                 actor_id: Some(actor_id),
@@ -1957,10 +1957,11 @@ mod revoke_saga_tests {
             )
             .unwrap(),
         };
-        let event = arkret_wire::Event::new(
+        let event = arkret_wire::test_support::raw_event(
             EventKind::MemberState.as_str(),
             scope.clone(),
-            actor.clone(),
+            actor.signing_principal_id().clone(),
+            actor.route_service_id().clone(),
             1,
             arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
             json!({"member_id": member, "membership": "leave", "reason": "requested_by_admin"}),

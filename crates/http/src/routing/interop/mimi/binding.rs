@@ -288,7 +288,8 @@ pub(super) async fn admit_mimi_room_binding_event(
     let event = &submission.event;
     let sender_actor_id = update_body
         .get("sender_actor_id")
-        .and_then(Value::as_str)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
         .ok_or_else(|| {
             AppError::param_invalid("room binding update requires sender_actor_id")
                 .with_wire_code("mimi_room_binding_event_invalid")
@@ -297,7 +298,7 @@ pub(super) async fn admit_mimi_room_binding_event(
     let update_group_id = update_body.get("mls_group_id").and_then(Value::as_str);
     if event.kind != arkret_wire::EventKind::MimiRoomBinding
         || event.realm_id.as_str() != realm_id
-        || event.actor_id.signing_principal_id().as_str() != sender_actor_id
+        || event.actor_id != sender_actor_id
         || serde_json::to_value(&event.payload).ok().as_ref() != Some(binding)
         || binding.get("mimi_room_uri").and_then(Value::as_str) != Some(expected_room_uri.as_str())
         || binding_group_id.is_none()
@@ -308,6 +309,7 @@ pub(super) async fn admit_mimi_room_binding_event(
         )
         .with_wire_code("mimi_room_binding_event_invalid"));
     }
+    let sender_account = local_mimi_sender_account(&sender_actor_id, &state.service_core_id())?;
     let device_id = event
         .proofs
         .first()
@@ -322,9 +324,9 @@ pub(super) async fn admit_mimi_room_binding_event(
     let session = soland_services::identity::SessionIdentityState {
         account_pk: None,
         token_hash: format!("mimi-room-binding:{}", event.event_id),
-        actor: event.actor_id.to_string(),
+        actor: sender_account.principal_id.to_string(),
         device_id,
-        audience: state.service_id().to_string(),
+        audience: sender_account.station_id.to_string(),
         session_public_key: None,
         agent_session: None,
         session_grant: None,
@@ -344,6 +346,47 @@ pub(super) async fn admit_mimi_room_binding_event(
             )
         })?;
     Ok(event_id)
+}
+
+// This local submit path has no accepted foreign-account authority bridge.
+// Do not manufacture one from a provider signature or from a bare principal.
+fn local_mimi_sender_account(
+    actor: &arkret_wire::ActorId,
+    local_station: &arkret_wire::DidCoreId,
+) -> Result<arkret_wire::AccountId, AppError> {
+    actor
+        .as_account_id()
+        .filter(|account| &account.station_id == local_station)
+        .cloned()
+        .ok_or_else(|| {
+            AppError::capability_denied("MIMI room binding requires a proven local Account sender")
+        })
+}
+
+#[cfg(test)]
+mod local_sender_tests {
+    use super::*;
+
+    #[test]
+    fn room_binding_never_relabels_a_foreign_or_service_sender_as_a_local_account() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:sender.example").unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let account = arkret_wire::AccountId::new(principal.clone(), station.clone());
+        assert_eq!(
+            local_mimi_sender_account(&arkret_wire::ActorId::account(account.clone()), &station)
+                .unwrap(),
+            account,
+        );
+        for rejected in [
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal.clone(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+            )),
+            arkret_wire::ActorId::service(principal),
+        ] {
+            assert!(local_mimi_sender_account(&rejected, &station).is_err());
+        }
+    }
 }
 
 pub(super) fn unsupported_mimi_draft(body: &Value) -> Option<&'static str> {

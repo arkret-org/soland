@@ -47,7 +47,7 @@ pub(super) fn validate_audit_accessed_payload(
         .get("actor_id")
         .cloned()
         .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
-    if !writer.is_some_and(|writer| writer.signing_principal_id() == &payload.writer_actor_id) {
+    if writer.as_ref() != Some(&payload.writer_actor_id) {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
@@ -194,12 +194,12 @@ pub(in crate::routing) fn validate_watch_set_others_audit_pairs(
             .iter()
             .filter(|(audit, audit_payload)| {
                 matches!(audit_payload.access_kind, AuditAccessedKind::WatchSetOthers)
-                    && &audit_payload.writer_actor_id == actor_id.signing_principal_id()
+                    && audit_payload.writer_actor_id == actor_id
                     && audit.get("actor_id").cloned().and_then(|value| {
                         serde_json::from_value::<arkret_wire::ActorId>(value).ok()
                     }).as_ref() == Some(&actor_id)
                     && audit_payload.target_actor_id.as_ref()
-                        == Some(payload.watcher_actor_id.signing_principal_id())
+                        == Some(&payload.watcher_actor_id)
                     && audit_payload.target_ref == payload.strand_id.as_str()
                     && audit_payload.target_cell_id.as_ref() == Some(&target_cell_id)
                     && audit_payload
@@ -369,8 +369,8 @@ mod tests {
             "refs": [{"id": WRITE_ID, "role": "audit_pair", "critical": true}],
             "payload": {
                 "access_kind": "watch_set_others",
-                "writer_actor_id": WRITER,
-                "target_actor_id": TARGET,
+                "writer_actor_id": actor(WRITER),
+                "target_actor_id": actor(TARGET),
                 "target_ref": STRAND,
                 "target_cell_id": watch_cell_id(),
                 "paired_event_id": WRITE_ID,
@@ -398,9 +398,34 @@ mod tests {
         assert_eq!(alone.status, StatusCode::PRECONDITION_FAILED);
 
         let mut wrong_target = paired_audit();
-        wrong_target["payload"]["target_actor_id"] = json!("ak:did_core:web:carol.example");
+        wrong_target["payload"]["target_actor_id"] = json!(actor("ak:did_core:web:carol.example"));
         check(&[others_watch_write(), wrong_target])
             .expect_err("an audit for another target does not pair");
+    }
+
+    #[test]
+    fn audit_pair_requires_the_exact_writer_and_target_accounts() {
+        for (field, principal) in [("writer_actor_id", WRITER), ("target_actor_id", TARGET)] {
+            let mut wrong_station = paired_audit();
+            wrong_station["payload"][field]["account_id"]["station_id"] =
+                json!("ak:did_core:web:other-station.example");
+            check(&[others_watch_write(), wrong_station])
+                .expect_err("an account at another Station cannot satisfy the audit pair");
+            let mut wrong_kind = paired_audit();
+            wrong_kind["payload"][field] = json!(arkret_wire::ActorId::service(
+                DidCoreId::new(principal).unwrap(),
+            ));
+            check(&[others_watch_write(), wrong_kind])
+                .expect_err("a Service cannot substitute for an Account with the same principal");
+        }
+        let mut forged_writer = paired_audit();
+        forged_writer["payload"]["writer_actor_id"]["account_id"]["station_id"] =
+            json!("ak:did_core:web:other-station.example");
+        validate_audit_accessed_payload(
+            arkret_wire::event_kind_str::AUDIT_ACCESSED,
+            forged_writer.as_object().unwrap(),
+        )
+        .expect_err("declared audit writer must equal the complete Event Actor");
     }
 
     #[test]

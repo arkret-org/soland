@@ -1115,6 +1115,23 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn self_principal_pcr_device_query(
+    state: &AppState,
+    actor: &arkret_wire::ActorId,
+    device_id: String,
+) -> Option<soland_services::identity::FindDeviceQuery> {
+    let account = actor.as_account_id()?;
+    if account.station_id != state.service_core_id() {
+        return None;
+    }
+    // The inventory is Station-private and keyed by signing principal. Only
+    // project after checking the complete Account at this local boundary.
+    Some(soland_services::identity::FindDeviceQuery {
+        actor_id: account.principal_id.to_string(),
+        device_id,
+    })
+}
+
 /// Select the one proof that can author an Ack-less self-PCR Control Move.
 ///
 /// A freshly submitted Event contains only this producer proof. Once admitted,
@@ -1156,6 +1173,15 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
     if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
         return Ok(SelfPrincipalPcrAuthority::Rejected(reason));
     }
+    let device_id = self_principal_pcr_device_id(event)
+        .expect("the persistence-side shape guard requires a device producer proof");
+    let Some(device_query) =
+        self_principal_pcr_device_query(state, &event.actor_id, device_id.clone())
+    else {
+        return Ok(SelfPrincipalPcrAuthority::Rejected(
+            "event actor is not an Account at this Station",
+        ));
+    };
     let snapshot = state.projections().snapshot();
     if !snapshot
         .realm_is_principal_control_for_actor(event.realm_id.as_str(), &event.actor_id.to_string())
@@ -1202,17 +1228,9 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         ));
     }
 
-    let Some(device_id) = self_principal_pcr_device_id(event) else {
-        return Ok(SelfPrincipalPcrAuthority::Rejected(
-            "event proof device id is malformed",
-        ));
-    };
     let Some(device) = state
         .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: event.actor_id.to_string(),
-            device_id: device_id.clone(),
-        })
+        .find_device(device_query)
         .await
         .map_err(|error| format!("self-principal PCR device lookup failed: {error}"))?
     else {
@@ -1313,6 +1331,11 @@ pub(in crate::routing::events::event_log) async fn replay_ackless_self_principal
     if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
         return Ok(Some(reason));
     }
+    let Some(device_query) =
+        self_principal_pcr_device_query(state, &event.actor_id, class.device_id.clone())
+    else {
+        return Ok(Some("event actor is not an Account at this Station"));
+    };
     if self_principal_pcr_device_id(event).as_deref() != Some(class.device_id.as_str()) {
         return Ok(Some(
             "event proof device does not match the stored ingress classification",
@@ -1341,10 +1364,7 @@ pub(in crate::routing::events::event_log) async fn replay_ackless_self_principal
     }
     let Some(device) = state
         .identities()
-        .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: event.actor_id.to_string(),
-            device_id: class.device_id.clone(),
-        })
+        .find_device(device_query)
         .await
         .map_err(|error| format!("Ack-less ingress device lookup failed: {error}"))?
     else {
@@ -4076,6 +4096,120 @@ mod local_device_authorization_tests {
     use soland_services::ServiceError;
 
     use super::*;
+
+    #[tokio::test]
+    async fn self_pcr_device_query_uses_only_the_exact_station_private_inventory() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:holder.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            state.service_core_id(),
+        ));
+        let device_id = "ak:device:01904100-0000-7000-8000-000000000001";
+        let now = chrono::Utc::now();
+        state
+            .identities()
+            .save_device_if_absent(soland_services::identity::DeviceIdentity {
+                actor_id: principal.to_string(),
+                device_id: device_id.to_owned(),
+                display_name: None,
+                verification_state: "verified".to_owned(),
+                payload: json!({"authorized_generation_ref": 1}),
+                created_at: now,
+                updated_at: now,
+                revoked_at: None,
+            })
+            .await
+            .unwrap();
+        let query = self_principal_pcr_device_query(&state, &actor, device_id.to_owned()).unwrap();
+        assert_eq!(query.actor_id, principal.as_str());
+        let device = state
+            .identities()
+            .find_device(query)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(device.actor_id, principal.as_str());
+        assert_eq!(device.verification_state, "verified");
+
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+        ));
+        for other in [foreign, arkret_wire::ActorId::service(principal)] {
+            assert!(
+                self_principal_pcr_device_query(&state, &other, device_id.to_owned()).is_none()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn self_pcr_ingress_and_replay_reject_nonlocal_or_service_actors() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let proof = producer_proof();
+        let (did, device_id) = proof.verification_method.as_str().rsplit_once('#').unwrap();
+        let principal =
+            arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(did.to_owned()).unwrap())
+                .unwrap();
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+        ));
+        let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::DeviceAuthorize.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_wire::RealmId::new(
+                    "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
+                )
+                .unwrap(),
+            },
+            foreign.clone(),
+            1,
+            arkret_wire::Hlc::new("019041000000-0000-00000000").unwrap(),
+            json!({}),
+            proof.created_at,
+        )
+        .unwrap();
+        event.seal_basis = Some(arkret_wire::SealBasis {
+            leaves: vec![
+                arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
+            ],
+        });
+        let class = AcklessSelfPrincipalIngress {
+            device_id: device_id.to_owned(),
+            device_authorize_event_id: event.event_id.to_string(),
+            device_generation_ref: 1,
+            seal_basis_digest: arkret_wire::canonical::canonical_sha256(
+                event.seal_basis.as_ref().unwrap(),
+            )
+            .unwrap(),
+        };
+        event.proofs = vec![arkret_wire::EventProof::Producer(proof)];
+        for actor in [foreign, arkret_wire::ActorId::service(principal)] {
+            event.actor_id = actor;
+            assert!(self_principal_pcr_control_shape_rejection(&event).is_none());
+            assert!(matches!(
+                self_principal_pcr_control_authority(&state, &event)
+                    .await
+                    .unwrap(),
+                SelfPrincipalPcrAuthority::Rejected(
+                    "event actor is not an Account at this Station"
+                )
+            ));
+            assert_eq!(
+                replay_ackless_self_principal_ingress(&state, &event, &class)
+                    .await
+                    .unwrap(),
+                Some("event actor is not an Account at this Station")
+            );
+        }
+    }
 
     fn producer_proof() -> arkret_wire::ProducerEventProof {
         arkret_wire::ProducerEventProof {

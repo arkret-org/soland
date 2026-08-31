@@ -221,7 +221,7 @@ async fn mimi_room_update_body(
     json!({
         "mls_group_id": group_id,
         "epoch": 1,
-        "sender_actor_id": MIMI_SOURCE_SERVICE_ID,
+        "sender_actor_id": submission.event.actor_id,
         "room_binding_event": submission,
         "update": {
             "kind": "ak.mimi.room_binding",
@@ -230,11 +230,18 @@ async fn mimi_room_update_body(
     })
 }
 
+fn mimi_source_station_account(principal: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(principal),
+        arkret_wire::DidCoreId::new(MIMI_SOURCE_SERVICE_ID).unwrap(),
+    ))
+}
+
 fn mimi_submit_body(
     realm_id: &str,
     group_id: &str,
     epoch: u64,
-    sender: &str,
+    sender: arkret_wire::ActorId,
     mut message: Value,
 ) -> Value {
     let governance_binding = mimi_governance_binding(realm_id, group_id, epoch);
@@ -464,7 +471,7 @@ async fn mimi_provider_facade_contracts_work_body() {
         demo_realm_id(),
         group_id,
         1,
-        "did:web:alice.example",
+        mimi_source_station_account("did:web:alice.example"),
         text_mimi_message("mimi-msg-contract-001", "hello from MIMI"),
     );
     let mapped: Value = signed_mimi_post!(
@@ -613,7 +620,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             demo_realm,
             group_id,
             1,
-            "did:web:remote.example",
+            mimi_source_station_account("did:web:remote.example"),
             text_mimi_message("mimi-msg-p4-001", "hello from MIMI P4"),
         ),
         Some(room_uri.as_str())
@@ -782,7 +789,7 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
             custom_realm,
             custom_group_id,
             1,
-            "did:web:remote.example",
+            mimi_source_station_account("did:web:remote.example"),
             text_mimi_message("mimi-msg-p4-002", "second message"),
         ),
         Some(room_uri.as_str())
@@ -920,7 +927,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            "did:web:mimi.example",
+            mimi_source_station_account("did:web:mimi.example"),
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -946,7 +953,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            "did:web:mimi.example",
+            mimi_source_station_account("did:web:mimi.example"),
             json!({
                 "source_format": "application/mimi-content",
                 "e2ee": true,
@@ -977,7 +984,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            "did:web:mimi.example",
+            mimi_source_station_account("did:web:mimi.example"),
             json!({
                 "source_format": "application/mimi-content",
                 "encrypted": true,
@@ -1011,7 +1018,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content_body
             realm_id,
             group_id,
             1,
-            "did:web:mimi.example",
+            mimi_source_station_account("did:web:mimi.example"),
             json!({
                 "source_format": "application/mimi-content",
                 "content_kind": "m.location.share.live",

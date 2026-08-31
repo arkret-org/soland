@@ -122,7 +122,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         .unwrap();
     assert_eq!(
         actors["actors"][0]["actor_id"],
-        fixture_actor_core_id("did:web:alice.example").as_str(),
+        serde_json::to_value(arkret_wire::ActorId::account(directory_account(
+            "did:web:alice.example",
+            soland_test_support::fixture_station_id(),
+        )))
+        .unwrap(),
         "search actors response: {actors}"
     );
     assert!(actors["actors"][0].get("preview").is_none());

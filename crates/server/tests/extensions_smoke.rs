@@ -1197,10 +1197,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
 
     let bot_view = extension_actor_view(&app, bot_actor_id.signing_principal_id().as_str()).await;
     assert_eq!(bot_view["exists"], json!(true));
-    assert_eq!(
-        bot_view["actor_id"],
-        json!(bot_actor_id.signing_principal_id())
-    );
+    assert_eq!(bot_view["actor_id"], json!(bot_actor_id));
 }
 
 /// Run the two closed-aggregate scenarios on a realistic server-sized stack.
@@ -2197,7 +2194,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
 
     let ghost_view = extension_actor_view(&app, &ghost_actor_id).await;
     assert_eq!(ghost_view["exists"], json!(true));
-    assert_eq!(ghost_view["actor_id"], json!(ghost_actor_id));
+    assert_eq!(ghost_view["actor_id"], json!(ghost_account_actor));
     assert_eq!(ghost_view["display_name"], json!("External X"));
     let stored_applet = state
         .test_persistence()
