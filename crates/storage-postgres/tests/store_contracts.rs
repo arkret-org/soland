@@ -42,6 +42,194 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configu
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
 
+#[tokio::test]
+async fn postgres_structured_projection_and_invite_identities_round_trip_when_configured() {
+    use arkret_wire::{AccountId, ActorId, DidCoreId};
+    use soland_storage::{
+        CircleProjectionStore, MorphProjectionStore, RealmInviteStore,
+        SpaceContainerProjectionStore, StrandProjectionStore,
+    };
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let principal = DidCoreId::new("ak:did_core:web:projection-alice.example").unwrap();
+    let account = AccountId::new(
+        principal.clone(),
+        DidCoreId::new("ak:did_core:web:station-a.example").unwrap(),
+    );
+    let other_account = AccountId::new(
+        principal,
+        DidCoreId::new("ak:did_core:web:station-b.example").unwrap(),
+    );
+    let author = ActorId::account(account.clone()).to_string();
+    let other_author = ActorId::account(other_account.clone()).to_string();
+    let service =
+        ActorId::service(DidCoreId::new("ak:did_core:web:notary.example").unwrap()).to_string();
+    let realm_id = "ak:realm:AV0aa7N4-6SpEMTq2vRgjNbMjn0vCIqfM5PxnJ-qQpPP";
+    let now = chrono::DateTime::parse_from_rfc3339("2026-08-31T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    // New adapters read only PostgreSQL; there is no in-memory projection cache.
+    macro_rules! round_trip {
+        ($adapter:ident, $record:expr, $id:ident) => {{
+            let mut record = $record;
+            soland_storage_postgres::$adapter { pool: pool.clone() }
+                .put(&record)
+                .await
+                .unwrap();
+            let reopened = soland_storage_postgres::$adapter { pool: pool.clone() };
+            assert_eq!(reopened.get(&record.$id).await.unwrap().unwrap(), record);
+            assert!(
+                reopened
+                    .list_for_realm(realm_id)
+                    .await
+                    .unwrap()
+                    .contains(&record)
+            );
+            for updated_by in [Some(other_author.clone()), Some(service.clone()), None] {
+                record.updated_by = updated_by;
+                reopened.put(&record).await.unwrap();
+                assert_eq!(reopened.get(&record.$id).await.unwrap().unwrap(), record);
+                assert!(reopened.snapshot_all().await.unwrap().contains(&record));
+            }
+            record.created_by = "ak:did_core:web:legacy.example".into();
+            assert!(
+                reopened.put(&record).await.is_err(),
+                "scalar bylines must fail closed"
+            );
+        }};
+    }
+    round_trip!(
+        PgSpaceContainerProjectionStore,
+        soland_storage::SpaceContainerProjectionRecord {
+            container_space_id: "ak:space:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
+            kind: "navigation".into(),
+            title: "identity persistence".into(),
+            fields: Default::default(),
+            scope_circle_id: None,
+            child_scope_policy: None,
+            child_scope_policy_scope_circle_id: None,
+            parent_ref: None,
+            rank: None,
+            history_basis_seals: vec![],
+            realm_id: realm_id.into(),
+            state: "active".into(),
+            state_changed_at: None,
+            created_by: author.clone(),
+            created_at: now,
+            updated_by: None,
+            updated_at: Some(now),
+        },
+        container_space_id
+    );
+    round_trip!(
+        PgStrandProjectionStore,
+        soland_storage::StrandProjectionRecord {
+            strand_id: "ak:strand:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
+            tracks: Default::default(),
+            title: "identity persistence".into(),
+            summary: None,
+            content: Some(serde_json::json!({"text":"test"})),
+            encrypted_content: None,
+            scope_circle_id: None,
+            history_basis_seals: vec![],
+            realm_id: realm_id.into(),
+            state: "active".into(),
+            state_changed_at: None,
+            created_by: author.clone(),
+            created_at: now,
+            updated_by: None,
+            updated_at: Some(now),
+        },
+        strand_id
+    );
+    round_trip!(
+        PgMorphProjectionStore,
+        soland_storage::MorphProjectionRecord {
+            morph_id: "ak:morph:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
+            scope_circle_id: None,
+            morph_kind: "document".into(),
+            title: None,
+            fields: serde_json::json!({}),
+            schema_refs: serde_json::json!([]),
+            facets: serde_json::json!({}),
+            versions: serde_json::json!([]),
+            content: Some(serde_json::json!({"text":"test"})),
+            encrypted_content: None,
+            history_basis_seals: vec![],
+            realm_id: realm_id.into(),
+            state: "active".into(),
+            state_changed_at: None,
+            created_by: author.clone(),
+            created_at: now,
+            updated_by: None,
+            updated_at: Some(now),
+        },
+        morph_id
+    );
+    round_trip!(
+        PgCircleProjectionStore,
+        soland_storage::CircleProjectionRecord {
+            circle_id: "ak:circle:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
+            profile_ref: None,
+            title: "identity persistence".into(),
+            summary: None,
+            display: serde_json::json!({}),
+            directory_visibility: "members".into(),
+            join_rule: "invite".into(),
+            history_access: "since_join".into(),
+            content_encryption_floor: None,
+            metadata_encryption_floor: None,
+            encryption_profile: "none".into(),
+            content_scheme: None,
+            mls_group_ref: None,
+            durability_policy: None,
+            realm_id: realm_id.into(),
+            state: "active".into(),
+            state_changed_at: None,
+            created_by: author.clone(),
+            created_at: now,
+            updated_by: None,
+            updated_at: Some(now),
+        },
+        circle_id
+    );
+
+    let invites = soland_storage_postgres::PgRealmInviteStore { pool: pool.clone() };
+    let record = soland_storage::RealmInviteRecord {
+        invite_id: "ak:invite:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim".into(),
+        realm_id: realm_id.into(),
+        inviter_id: account.to_string(),
+        invitee_id: Some(other_account.to_string()),
+        introduction_evidence_digest: None,
+        third_party_invite: None,
+        invite_token: String::new(),
+        status: "pending".into(),
+        claim_nonces: Default::default(),
+        expires_at: None,
+        created_at: now,
+        updated_at: None,
+    };
+    invites.put(record.clone()).await.unwrap();
+    let reopened = soland_storage_postgres::PgRealmInviteStore { pool };
+    let found = reopened.get(&record.invite_id).await.unwrap().unwrap();
+    assert_eq!(found.inviter_id, record.inviter_id);
+    assert_eq!(found.invitee_id, record.invitee_id);
+    assert_ne!(Some(&found.inviter_id), found.invitee_id.as_ref());
+    assert!(
+        reopened
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .any(|invite| invite.invite_id == record.invite_id)
+    );
+    let mut invalid = record;
+    invalid.inviter_id = "ak:did_core:web:legacy.example".into();
+    assert!(reopened.put(invalid).await.is_err());
+}
+
 /// These contracts share one database and several of them exercise
 /// row/advisory locking (`lock_organization`, the event-commit unit of work).
 /// Running them concurrently against a single pool intermittently starves a

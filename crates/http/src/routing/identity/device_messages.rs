@@ -530,8 +530,8 @@ pub(crate) async fn fanout_actor_private_update(
         match state.identities().account(&account_id).await {
             Ok(Some(account)) => {
                 let _ = state.publish_event_notification(crate::state::EventNotification::account(
-                    account.account_id.to_string(),
-                    state.service_id().clone(),
+                    account.account_id,
+                    state.service_core_id().clone(),
                 ));
             }
             Ok(None) => {

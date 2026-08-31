@@ -15,9 +15,9 @@ struct RealmInviteRow {
     #[diesel(sql_type = Text)]
     realm_id: String,
     #[diesel(sql_type = Text)]
-    inviter_id: arkret_wire::DidCoreId,
+    inviter_id: arkret_wire::AccountId,
     #[diesel(sql_type = Nullable<Text>)]
-    invitee_id: Option<String>,
+    invitee_id: Option<arkret_wire::AccountId>,
     #[diesel(sql_type = Nullable<Text>)]
     introduction_evidence_digest: Option<String>,
     #[diesel(sql_type = Nullable<Jsonb>)]
@@ -61,7 +61,7 @@ impl RealmInviteRow {
             },
             realm_id: self.realm_id,
             inviter_id: self.inviter_id.to_string(),
-            invitee_id: self.invitee_id,
+            invitee_id: self.invitee_id.map(|account| account.to_string()),
             introduction_evidence_digest: self.introduction_evidence_digest,
             third_party_invite,
             invite_token: self.invite_token,
@@ -95,6 +95,12 @@ impl RealmInviteStore for PgRealmInviteStore {
     }
 
     async fn put(&self, record: RealmInviteRecord) -> PersistenceResult<()> {
+        let inviter_id = stored_account(&record.inviter_id)?;
+        let invitee_id = record
+            .invitee_id
+            .as_deref()
+            .map(stored_account)
+            .transpose()?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -129,8 +135,8 @@ impl RealmInviteStore for PgRealmInviteStore {
         )
         .bind::<Binary, _>(invite_id_token)
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Text, _>(&record.inviter_id)
-        .bind::<Nullable<Text>, _>(&record.invitee_id)
+        .bind::<Text, _>(&inviter_id)
+        .bind::<Nullable<Text>, _>(&invitee_id)
         .bind::<Nullable<Text>, _>(&record.introduction_evidence_digest)
         .bind::<Nullable<Jsonb>, _>(&third_party_invite)
         .bind::<Text, _>(&record.invite_token)
@@ -211,6 +217,12 @@ impl RealmInviteStore for PgRealmInviteStore {
     }
 }
 
+fn stored_account(value: &str) -> PersistenceResult<arkret_wire::AccountId> {
+    serde_json::from_str(value).map_err(|_| {
+        PersistenceError::Database("realm_invites identity is not a valid AccountId".to_owned())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInviteOobKind;
@@ -221,7 +233,10 @@ mod tests {
         RealmInviteRow {
             id: vec![0u8; ids::EVENT_ID_BYTES],
             realm_id: "ak:realm:test".to_owned(),
-            inviter_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            inviter_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+            ),
             invitee_id: None,
             introduction_evidence_digest: None,
             third_party_invite,

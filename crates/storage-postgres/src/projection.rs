@@ -22,6 +22,11 @@ fn token_string(kind: &str, bytes: &[u8]) -> String {
         .expect("stored Event-derived id must be 33 bytes");
     ids::format_event_token(kind, &token)
 }
+fn stored_actor(value: &str) -> PersistenceResult<arkret_wire::ActorId> {
+    serde_json::from_str(value).map_err(|_| {
+        PersistenceError::Database("projection byline is not a valid ActorId".to_owned())
+    })
+}
 pub struct PgSpaceContainerProjectionStore {
     pub pool: PgPool,
 }
@@ -51,14 +56,14 @@ struct SpaceContainerProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Text)]
-    created_by: String,
+    #[diesel(sql_type = Jsonb)]
+    created_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    updated_by: Option<arkret_wire::ActorId>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -173,10 +178,10 @@ impl SpaceContainerProjectionStore for PgSpaceContainerProjectionStore {
         .bind::<Nullable<Text>, _>(&record.rank)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
-        .bind::<Text, _>(&record.created_by)
+        .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
-        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Jsonb>, _>(record.updated_by.as_deref().map(stored_actor).transpose()?)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -260,14 +265,14 @@ struct StrandProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Text)]
-    created_by: String,
+    #[diesel(sql_type = Jsonb)]
+    created_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    updated_by: Option<arkret_wire::ActorId>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -356,10 +361,10 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
-        .bind::<Text, _>(&record.created_by)
+        .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
-        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Jsonb>, _>(record.updated_by.as_deref().map(stored_actor).transpose()?)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
         .await
@@ -441,14 +446,14 @@ struct MorphProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Text)]
-    created_by: String,
+    #[diesel(sql_type = Jsonb)]
+    created_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Jsonb)]
     history_basis_seals: Value,
-    #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<String>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    updated_by: Option<arkret_wire::ActorId>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -507,9 +512,9 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (id, realm_id, scope_circle_id, morph_kind, title, fields, schema_refs, facets, versions, \
+             (id, realm_id, scope_circle_id, morph_kind, title, fields, schema_refs, facets, versions, content, encrypted_content, \
               state, state_changed_at, created_by, created_at, updated_by, history_basis_seals, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -519,6 +524,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 schema_refs = EXCLUDED.schema_refs, \
                 facets = EXCLUDED.facets, \
                 versions = EXCLUDED.versions, \
+                content = EXCLUDED.content, \
+                encrypted_content = EXCLUDED.encrypted_content, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
                 updated_by = EXCLUDED.updated_by, \
@@ -539,11 +546,13 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Jsonb, _>(&record.schema_refs)
         .bind::<Jsonb, _>(&record.facets)
         .bind::<Jsonb, _>(&record.versions)
+        .bind::<Nullable<Jsonb>, _>(&record.content)
+        .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
-        .bind::<Text, _>(&record.created_by)
+        .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
         .bind::<Timestamptz, _>(record.created_at)
-        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Nullable<Jsonb>, _>(record.updated_by.as_deref().map(stored_actor).transpose()?)
         .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)
@@ -912,10 +921,10 @@ struct CircleProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Text)]
-    created_by: String,
-    #[diesel(sql_type = Nullable<Text>)]
-    updated_by: Option<String>,
+    #[diesel(sql_type = Jsonb)]
+    created_by: arkret_wire::ActorId,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    updated_by: Option<arkret_wire::ActorId>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -1052,8 +1061,8 @@ impl CircleProjectionStore for PgCircleProjectionStore {
         .bind::<Nullable<Text>, _>(&record.durability_policy)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
-        .bind::<Text, _>(&record.created_by)
-        .bind::<Nullable<Text>, _>(&record.updated_by)
+        .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
+        .bind::<Nullable<Jsonb>, _>(record.updated_by.as_deref().map(stored_actor).transpose()?)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Timestamptz>, _>(record.updated_at)
         .execute(&mut *conn)

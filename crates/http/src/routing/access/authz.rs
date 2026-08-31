@@ -926,7 +926,7 @@ async fn invites(
         .realm_invites()
         .snapshot_all()
         .await
-        .unwrap_or_default()
+        .map_err(|error| AppError::internal(format!("invite projection read failed: {error}")))?
         .into_iter()
     {
         if !matches!(invite.status.as_str(), "pending" | "claimed")

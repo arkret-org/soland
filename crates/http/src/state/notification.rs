@@ -79,8 +79,8 @@ pub enum EventNotificationKind {
     /// Durable account-private projection changed. The IDs are server-derived
     /// account context, never caller-supplied wire data.
     Account {
-        account_id: String,
-        recipient_id: String,
+        account_id: arkret_wire::AccountId,
+        recipient_id: arkret_wire::DidCoreId,
     },
 }
 
@@ -132,7 +132,10 @@ impl EventBroadcast {
 }
 
 impl EventNotification {
-    pub fn account(account_id: String, recipient_id: String) -> Self {
+    pub fn account(
+        account_id: arkret_wire::AccountId,
+        recipient_id: arkret_wire::DidCoreId,
+    ) -> Self {
         Self {
             realm_id: String::new(),
             kind: EventNotificationKind::Account {

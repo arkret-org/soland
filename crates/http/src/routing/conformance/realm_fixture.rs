@@ -92,8 +92,7 @@ pub async fn install(
         let event_digest = event
             .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::param_invalid(error.to_string()))?;
-        if event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none()
-        {
+        if event.kind.is_control_plane() {
             let proposal_digest = arkret_wire::Hash::new(event_digest.clone())
                 .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let ack = ack_by_digest.get(&proposal_digest).ok_or_else(|| {

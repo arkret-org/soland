@@ -272,8 +272,8 @@ pub(super) async fn submit_agent_runtime_key_request(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        account.account_id.to_string(),
-        state.service_id().clone(),
+        account.account_id,
+        state.service_core_id().clone(),
     ));
     json_ok(AgentRuntimeApprovalOutcome {
         approval_request_id,
@@ -1309,6 +1309,13 @@ pub(super) async fn persist_terminal_account_notification(
     context: AccountNotificationContext,
     reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason,
 ) -> Result<(), AppError> {
+    let account_id = context
+        .recipient_actor_id
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| {
+            AppError::internal("terminal approval notification requires an Account Actor")
+        })?;
     let delta =
         arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
             context.notification_id,
@@ -1344,8 +1351,8 @@ pub(super) async fn persist_terminal_account_notification(
             ))
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
-        context.controller_account_pk.0.to_string(),
-        context.recipient_id.to_string(),
+        account_id,
+        context.recipient_id,
     ));
     Ok(())
 }

@@ -426,7 +426,7 @@ pub(crate) async fn account_subscribe_notification_should_wake(
         let Some(session) = session else {
             return false;
         };
-        if recipient_id != state.service_id() {
+        if recipient_id != &state.service_core_id() {
             return false;
         }
         let Ok(principal_id) = arkret_wire::DidCoreId::new(session.actor.clone()) else {
@@ -440,7 +440,7 @@ pub(crate) async fn account_subscribe_notification_should_wake(
             .await
             .ok()
             .flatten()
-            .is_some_and(|account| account.pk.0.to_string() == *account_id);
+            .is_some_and(|account| account.account_id == *account_id);
     }
     if realm_id_accessible(state, &notification.realm_id, session).await {
         return true;
