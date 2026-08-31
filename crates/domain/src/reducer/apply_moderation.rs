@@ -60,33 +60,9 @@ fn appeal_verdict(operation: &Operation) -> Result<AppealDecision, &'static str>
         .map_err(|_| "schema_violation")
 }
 
-fn payload_ref(operation: &Operation, field: &str) -> Option<String> {
-    let value = operation.payload.get(field)?;
-    value
-        .as_str()
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            value
-                .get("id")
-                .or_else(|| value.get("object_ref"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-        })
-}
-
-/// The issuer of a moderation decision. The wire payload may name it
-/// Canonical stable issuer identifier.
-/// so a decision projected by either path reverse-resolves consistently.
+/// The canonical issuer named by the accepted moderation decision payload.
 fn decision_issuer(operation: &Operation) -> Option<String> {
     payload_str(operation, "issuer_id")
-}
-
-fn moderation_decision_id(operation: &Operation) -> String {
-    payload_str(operation, "decision_id")
-        .or_else(|| payload_str(operation, "event_id"))
-        .unwrap_or_else(|| operation.operation_id.to_string())
 }
 
 fn moderation_request_canonical_digest(operation: &Operation) -> Option<String> {
@@ -317,15 +293,13 @@ impl ProjectionState {
     /// P2 — project `ak.moderation.decision` as an or_set add on the
     /// moderation_state cell keyed by `payload.target_ref`.
     pub(crate) fn apply_moderation_decision(&mut self, operation: &Operation) -> ProjectionEffect {
-        let decision_id = moderation_decision_id(operation);
-        let Some(target_ref) = payload_ref(operation, "target_ref") else {
+        let decision_id = operation.context.event_id.to_string();
+        let Some(target_ref) = payload_str(operation, "target_ref") else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_target_ref_missing".to_owned(),
             };
         };
-        let Some(decision_kind) =
-            payload_str(operation, "decision").or_else(|| payload_str(operation, "action"))
-        else {
+        let Some(decision_kind) = payload_str(operation, "decision") else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_kind_missing".to_owned(),
             };
@@ -417,14 +391,12 @@ impl ProjectionState {
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
-        let Some(decision_id) = payload_str(operation, "decision_ref")
-            .or_else(|| payload_str(operation, "decision_id"))
-        else {
+        let Some(decision_id) = payload_str(operation, "decision_ref") else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_lift_decision_ref_missing".to_owned(),
             };
         };
-        let Some(target_ref) = payload_ref(operation, "target_ref") else {
+        let Some(target_ref) = payload_str(operation, "target_ref") else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_lift_target_ref_missing".to_owned(),
             };

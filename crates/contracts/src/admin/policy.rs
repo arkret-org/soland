@@ -47,7 +47,7 @@ pub struct AdminPolicyPayload {
     /// Permanently opaque operator data; see [`AdminPolicyPayload::resource`].
     #[serde(default)]
     pub resource: Value,
-    /// Operator-authored obligations, evaluated by the authz path.
+    /// Stored operator-authored obligations; not evaluated by authorization.
     #[cfg_attr(feature = "openapi", salvo(schema(value_type = serde_json::Value)))]
     #[serde(default)]
     pub obligations: Vec<Value>,
