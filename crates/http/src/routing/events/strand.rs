@@ -78,10 +78,12 @@ pub async fn strand_projection_for_realm(
 ) -> Option<serde_json::Value> {
     let strand_id = strand_id_from_realm_id(realm_id)?;
     let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
-    let owner = meta
-        .as_ref()
-        .map(|meta| meta.owner.clone())
-        .unwrap_or_else(|| state.service_id().clone());
+    let owner = match meta.as_ref() {
+        Some(meta) => serde_json::from_str::<arkret_wire::ActorId>(&meta.owner).ok()?,
+        None => arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new(state.service_id().clone()).ok()?,
+        ),
+    };
     let created_at = meta
         .as_ref()
         .map(|meta| meta.created_at)

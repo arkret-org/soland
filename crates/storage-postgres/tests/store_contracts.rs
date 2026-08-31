@@ -230,6 +230,71 @@ async fn postgres_structured_projection_and_invite_identities_round_trip_when_co
     assert!(reopened.put(invalid).await.is_err());
 }
 
+#[tokio::test]
+async fn postgres_key_backup_identity_and_series_round_trip_when_configured() {
+    use arkret_wire::{AccountId, ActorId, DidCoreId};
+    use soland_storage::{KeyBackupStore, PersistenceError};
+    use soland_storage_postgres::PgKeyBackupStore;
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let principal = DidCoreId::new("ak:did_core:web:backup-alice.example").unwrap();
+    let actor = |station| {
+        ActorId::account(AccountId::new(
+            principal.clone(),
+            DidCoreId::new(station).unwrap(),
+        ))
+    };
+    let actor_a = actor("ak:did_core:web:station-a.example");
+    let actor_b = actor("ak:did_core:web:station-b.example");
+    let series_id = format!("ak:backup_series:{}", uuid::Uuid::now_v7());
+    let mut records = Vec::new();
+    for actor_id in [&actor_a, &actor_b] {
+        let backup_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
+        let payload = serde_json::json!({
+            "backup_id": backup_id,
+            "actor_id": actor_id,
+            "series_id": series_id,
+            "series_seq": 1,
+        });
+        PgKeyBackupStore { pool: pool.clone() }
+            .put(backup_id.clone(), payload.clone())
+            .await
+            .unwrap();
+        records.push((backup_id, payload));
+    }
+    let reopened = PgKeyBackupStore { pool };
+    for ((backup_id, payload), actor_id) in records.iter().zip([&actor_a, &actor_b]) {
+        assert_eq!(
+            reopened.get(backup_id).await.unwrap().as_ref(),
+            Some(payload)
+        );
+        assert_eq!(
+            reopened
+                .list_for_actor(&actor_id.to_string())
+                .await
+                .unwrap(),
+            vec![payload.clone()]
+        );
+    }
+    let duplicate_id = format!("ak:backup:{}", uuid::Uuid::now_v7());
+    let mut duplicate = records[0].1.clone();
+    duplicate["backup_id"] = duplicate_id.clone().into();
+    assert!(matches!(
+        reopened.put(duplicate_id, duplicate).await,
+        Err(PersistenceError::Conflict(_))
+    ));
+    let mut invalid = records[0].1.clone();
+    invalid["actor_id"] = principal.to_string().into();
+    assert!(reopened.put(records[0].0.clone(), invalid).await.is_err());
+    assert!(reopened.list_for_actor(principal.as_str()).await.is_err());
+    assert_eq!(
+        reopened.get(&records[0].0).await.unwrap().as_ref(),
+        Some(&records[0].1)
+    );
+}
+
 /// These contracts share one database and several of them exercise
 /// row/advisory locking (`lock_organization`, the event-commit unit of work).
 /// Running them concurrently against a single pool intermittently starves a

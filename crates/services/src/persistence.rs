@@ -626,7 +626,11 @@ impl PersistenceHandle {
             .put(
                 "ak:realm:AezgkQb6OtCT0VrUyihcuY6ih8wmyafofZG6EmHBpM7e",
                 &soland_storage::RealmMetaRecord {
-                    owner: account.principal_id.into_string(),
+                    owner: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        account.principal_id,
+                        account.station_id,
+                    ))
+                    .to_string(),
                     deleted: false,
                     discoverability: "public".to_owned(),
                     history_access: "all_history_for_current_members".to_owned(),

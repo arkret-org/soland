@@ -89,7 +89,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 .as_ref()
                 .and_then(canonical_value_digest);
             let record = RealmMetaRecord {
-                owner: origin.to_owned(),
+                owner: operation.context.sender.to_string(),
                 deleted: false,
                 discoverability: operation_realm_discoverability(operation)
                     .filter(|value| is_valid_discoverability(value))

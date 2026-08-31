@@ -330,8 +330,10 @@ async fn admin_realm_item_value(
         member_count: realm.members.len(),
         members: realm.members.iter().map(ToString::to_string).collect(),
         created_by: realm_meta.as_ref().map(|meta| {
-            DidCoreId::new(meta.owner.clone())
-                .expect("RealmMetaRecord owner must be a validated DID core id")
+            serde_json::from_str::<arkret_wire::ActorId>(&meta.owner)
+                .expect("RealmMetaRecord owner must be a validated complete ActorId")
+                .signing_principal_id()
+                .clone()
         }),
         history_access: realm_meta.as_ref().map(|meta| meta.history_access.clone()),
         is_encrypted: realm_meta

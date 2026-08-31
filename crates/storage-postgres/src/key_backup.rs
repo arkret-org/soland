@@ -74,11 +74,15 @@ impl KeyBackupStore for PgKeyBackupStore {
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         };
-        let account_id = payload
+        let actor_id = payload
             .get("actor_id")
             .cloned()
-            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
-            .map(|actor_id| actor_id.to_string());
+            .ok_or_else(|| PersistenceError::database("key backup actor_id is missing"))
+            .and_then(|value| {
+                serde_json::from_value::<arkret_wire::ActorId>(value)
+                    .map_err(|_| PersistenceError::database("key backup actor_id is invalid"))
+            })?
+            .to_string();
         let device_id = extract_str("device_id");
         let scheme = extract_str("scheme").or_else(|| extract_str("algorithm"));
         let version: i32 = payload
@@ -99,10 +103,10 @@ impl KeyBackupStore for PgKeyBackupStore {
             });
         sql_query(
             "INSERT INTO key_backups \
-             (id, account_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
+             (id, actor_id, device_id, scheme, version, key_material_encrypted, payload, created_at, last_accessed_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NULL) \
              ON CONFLICT (id) DO UPDATE SET \
-                account_id = EXCLUDED.account_id, \
+                actor_id = EXCLUDED.actor_id, \
                 device_id = EXCLUDED.device_id, \
                 scheme = EXCLUDED.scheme, \
                 version = EXCLUDED.version, \
@@ -110,7 +114,7 @@ impl KeyBackupStore for PgKeyBackupStore {
                 payload = EXCLUDED.payload",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&backup_id))
-        .bind::<Nullable<Text>, _>(&account_id)
+        .bind::<Text, _>(&actor_id)
         .bind::<Nullable<Text>, _>(&device_id)
         .bind::<Nullable<Text>, _>(&scheme)
         .bind::<Integer, _>(version)
@@ -164,11 +168,14 @@ impl KeyBackupStore for PgKeyBackupStore {
     }
 
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>> {
+        let actor_id = serde_json::from_str::<arkret_wire::ActorId>(actor_id)
+            .map_err(|_| PersistenceError::database("key backup actor selector is invalid"))?
+            .to_string();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT payload FROM key_backups WHERE account_id = $1 ORDER BY created_at ASC, id ASC",
+            "SELECT payload FROM key_backups WHERE actor_id = $1 ORDER BY created_at ASC, id ASC",
         )
         .bind::<Text, _>(actor_id)
         .load::<JsonPayloadRow>(&mut *conn)

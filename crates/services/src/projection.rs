@@ -1170,7 +1170,7 @@ impl ProjectionService {
     /// has already succeeded.
     ///
     /// `ak.invite.cancel` is the only active contract with
-    /// `pre_state_requirements`. Its signed `payload.invitee_id` is not
+    /// `pre_state_requirements`. Its signed `payload.invitee_account_id` is not
     /// authoritative during admission, but after the lock-protected frozen
     /// check and durable commit it is safe for downstream live reduction and
     /// control-Seal construction to reuse that verified binding. Callers MUST
@@ -1199,18 +1199,24 @@ impl ProjectionService {
             .get("invite_id")
             .and_then(Value::as_str)
             .ok_or_else(|| "accepted ak.invite.cancel is missing invite_id".to_owned())?;
-        let invitee_id = event
+        let invitee_account_id = event
             .payload
-            .get("invitee_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "accepted ak.invite.cancel is missing verified invitee_id".to_owned())?;
+            .get("invitee_account_id")
+            .cloned()
+            .ok_or_else(|| {
+                "accepted ak.invite.cancel is missing verified invitee_account_id".to_owned()
+            })?;
+        let invitee_account_id =
+            serde_json::from_value::<arkret_wire::AccountId>(invitee_account_id).map_err(|_| {
+                "accepted ak.invite.cancel has invalid invitee_account_id".to_owned()
+            })?;
         let lifecycle_cell = CellRef::new(format!(
             "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
         ))
         .map_err(|error| error.to_string())?;
         let frozen_pre_state = arkret_schema::FrozenPreState::from([(
             lifecycle_cell,
-            serde_json::json!({"invitee_id": invitee_id}),
+            serde_json::json!({"invitee_account_id": invitee_account_id}),
         )]);
         let projection = self.state.lock();
         arkret_schema::project_registered_cell_writes_with_pre_state_and_authority_resolver(
@@ -3430,6 +3436,52 @@ mod control_governance_health_tests {
             device_generation_ref: 1,
             seal_basis_digest: "sha256:fixture".to_owned(),
         }
+    }
+
+    #[test]
+    fn accepted_invite_cancel_reprojects_complete_account_identity() {
+        let service = service();
+        let realm = RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq").unwrap();
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:service.example").unwrap();
+        let make_event = |payload| {
+            arkret_wire::test_support::raw_event_at(
+                "ak.invite.cancel",
+                ScopeRef::Realm {
+                    realm_id: realm.clone(),
+                },
+                principal.clone(),
+                station.clone(),
+                1,
+                Hlc::new("019f00000000-0000-00000001").unwrap(),
+                payload,
+                Utc::now(),
+            )
+            .unwrap()
+        };
+        let invite_id = "ak:invite:AVcbARXDOZuMaYlp1-g60cl4c6Y5NzY10J6VMsgtrakA";
+        for station in [
+            "ak:did_core:web:station-a.example",
+            "ak:did_core:web:station-b.example",
+        ] {
+            let event = make_event(serde_json::json!({
+                "invite_id": invite_id,
+                "invitee_account_id": arkret_wire::AccountId::new(
+                    principal.clone(), arkret_wire::DidCoreId::new(station).unwrap(),
+                ),
+                "target_state": "revoked",
+            }));
+            let writes = service.project_accepted_cell_writes(&event).unwrap();
+            assert_eq!(writes.len(), 1);
+            assert_eq!(
+                writes[0].cell_id.as_str(),
+                format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
+            );
+        }
+        let legacy = make_event(serde_json::json!({
+            "invite_id": invite_id, "invitee_id": principal, "target_state": "revoked",
+        }));
+        assert!(service.project_accepted_cell_writes(&legacy).is_err());
     }
 
     #[test]

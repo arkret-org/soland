@@ -121,16 +121,20 @@ async fn current_membership_evidence(
     Ok((membership_ref, membership_digest))
 }
 
-fn is_current_realm_member(
+fn has_ordinary_governance_read_access(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     actor_id: &arkret_wire::ActorId,
 ) -> bool {
-    state
-        .projections()
-        .snapshot()
-        .member(realm_id.as_str(), &actor_id.to_string())
-        .is_some_and(|member| member.state == "join")
+    let snapshot = state.projections().snapshot();
+    let actor_key = actor_id.to_string();
+    // PCR genesis does not create membership. Its exact Account Actor can
+    // still resolve its own accepted control closure; this grants no
+    // cross-principal or cross-Station visibility.
+    snapshot.realm_is_principal_control_for_actor(realm_id.as_str(), &actor_key)
+        || snapshot
+            .member(realm_id.as_str(), &actor_key)
+            .is_some_and(|member| member.state == "join")
 }
 
 /// Reconcile durable request-replica obligations after startup and membership
@@ -407,7 +411,7 @@ async fn resolve_self_seals(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        is_current_realm_member(state, &request.realm_id, &caller)
+        has_ordinary_governance_read_access(state, &request.realm_id, &caller)
     } else {
         false
     };
@@ -539,7 +543,7 @@ async fn resolve_self_dependencies(
     let request = body.into_inner();
     let caller = exact_session_actor_id(state, &session).await?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        is_current_realm_member(state, &request.realm_id, &caller)
+        has_ordinary_governance_read_access(state, &request.realm_id, &caller)
     } else {
         false
     };
