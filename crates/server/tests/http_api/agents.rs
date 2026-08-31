@@ -155,6 +155,50 @@ fn attach_fixture_service_admission(
         .unwrap();
 }
 
+fn principal_control_notary(
+    account_id: arkret_wire::AccountId,
+    principal_did: &str,
+) -> arkret_wire::NotaryValue {
+    let mut notary = soland_test_support::cba_basis::test_single_signer_notary(principal_did);
+    let arkret_wire::NotaryValue::SingleSigner { signer, .. } = &mut notary else {
+        unreachable!("single-signer fixture")
+    };
+    // A PCR is owned by this exact Account, not by a Service that happens to
+    // use the same signing principal. Preserve the fixture's frozen key.
+    signer.actor_id = arkret_wire::ActorId::account(account_id);
+    notary.validate().expect("account-owned PCR notary");
+    notary
+}
+
+#[test]
+fn principal_control_notary_keeps_the_exact_station_account() {
+    let principal_did = "did:web:controller.example";
+    let principal =
+        arkret_wire::project_did_to_core_id(&arkret_identifiers::Did::new(principal_did).unwrap())
+            .unwrap();
+    let account = arkret_wire::AccountId::new(
+        principal.clone(),
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+    );
+    let arkret_wire::NotaryValue::SingleSigner { signer, .. } =
+        principal_control_notary(account.clone(), principal_did)
+    else {
+        unreachable!()
+    };
+    assert_eq!(signer.actor_id, arkret_wire::ActorId::account(account));
+    assert_ne!(
+        signer.actor_id,
+        arkret_wire::ActorId::service(principal.clone())
+    );
+    assert_ne!(
+        signer.actor_id,
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            arkret_identifiers::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ))
+    );
+}
+
 pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor: &str) {
     let now = chrono::Utc::now();
     let principal_id = arkret_wire::project_did_to_core_id(
@@ -289,7 +333,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             principal_id: controller_id.clone(),
             principal_did: actor.clone(),
             station_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
-            notary: soland_test_support::cba_basis::test_single_signer_notary(actor.as_str()),
+            notary: principal_control_notary(account_id.clone(), actor.as_str()),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -865,7 +909,10 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
         arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
-            notary: soland_test_support::cba_basis::test_single_signer_notary(did.as_str()),
+            notary: principal_control_notary(
+                arkret_wire::AccountId::new(agent_id.clone(), state.service_core_id()),
+                did.as_str(),
+            ),
             initial_resolution: initial_resolution.clone(),
             controller_id: controller_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),

@@ -602,10 +602,15 @@ async fn validate_active_agent_accountability(
                 arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
             )
         })?;
+    let controller_account_id = managed_agent_controller_account(state, agent_record).await?;
     let query = ActiveAgentAccountabilityQuery {
         accountability_event_id: accountability_event_id.to_owned(),
-        controller_id: managed_controller_core_id(&agent_record.controller_id)?.to_string(),
-        agent_id: agent_record.id.clone(),
+        agent_account_id: AccountId::new(
+            DidCoreId::new(agent_record.id.clone())
+                .map_err(|_| schema_error("stored Agent principal is invalid"))?,
+            controller_account_id.station_id.clone(),
+        ),
+        controller_account_id,
         accepted_at,
     };
     let active = state

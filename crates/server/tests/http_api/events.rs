@@ -1090,6 +1090,15 @@ async fn events_describe_and_single_event_submit_work_body() {
         arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
     );
     state.test_realms().lock().upsert(projection_only_entry);
+    assert_eq!(
+        add_test_realm_member(
+            &state,
+            projection_only_realm.as_str(),
+            "did:web:alice.example",
+        )["ok"],
+        true,
+        "the projection-only Realm must have an exact Account member",
+    );
     let mut seal_view_response = TestClient::query("http://server/_arkret/self/seals/frontier")
         .json(&serde_json::json!({"realm_id": projection_only_realm}))
         .add_header("authorization", format!("Bearer {token}"), true)

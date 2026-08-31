@@ -208,9 +208,14 @@ fn key_authorize_envelope(
     json!({
         "event_id": "ak:event:AaWlxNyGs0FzlOCJpyhjSRcmOcoYvk0qQ4X91NlGuKSZ",
         "kind": "ak.agent.key.authorize",
-        "actor_id": agent_id,
-        "station_id": service_id,
-        "executed_by": controller,
+        "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(agent_id).unwrap(),
+            arkret_wire::DidCoreId::new(service_id).unwrap(),
+        )),
+        "executed_by": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(controller).unwrap(),
+            arkret_wire::DidCoreId::new(service_id).unwrap(),
+        )),
         "authorization_ref": record.controller_authorization_ref.as_str(),
         "realm_id": record.principal_control_realm_id.as_str(),
         "payload": {
@@ -630,6 +635,33 @@ fn key_authorize_event_binds_pairing_transcript_and_scope() {
         service_id,
     )
     .expect("matching authorize_event should pass");
+
+    for (field, principal) in [("actor_id", agent), ("executed_by", controller)] {
+        let mut wrong_station = envelope.clone();
+        wrong_station[field]["account_id"]["station_id"] =
+            json!("ak:did_core:web:other-station.example");
+        let mut service_kind = envelope.clone();
+        service_kind[field] = json!(arkret_wire::ActorId::service(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+        ));
+        let mut scalar_principal = envelope.clone();
+        scalar_principal[field] = json!(principal);
+        for rejected in [wrong_station, service_kind, scalar_principal] {
+            assert!(
+                ensure_key_authorize_event_matches_request(
+                    &rejected,
+                    controller,
+                    &record,
+                    agent,
+                    verification_method,
+                    public_key_digest,
+                    service_id,
+                )
+                .is_err(),
+                "{field} must retain its exact Account authority: {rejected}",
+            );
+        }
+    }
 }
 
 #[test]

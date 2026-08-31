@@ -1378,12 +1378,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     != mutation.applet_id.as_str()
                     || soland_storage::applet_id_from_record(&mutation.identity.record)?
                         != mutation.applet_id.as_str()
-                    || mutation
-                        .identity
-                        .record
-                        .get("bot_actor_station_id")
-                        .and_then(serde_json::Value::as_str)
-                        != Some(mutation.identity.target_station_id.as_str())
+                    || soland_storage::applet_bot_account_from_identity(&mutation.identity.record)?
+                        .station_id
+                        != mutation.identity.target_station_id
                 {
                     return Err(PersistenceError::Conflict(
                         "schema_violation: Applet identity/installation key does not match its record"

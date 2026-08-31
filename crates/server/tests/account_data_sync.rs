@@ -761,7 +761,7 @@ fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones() {
             event["actor_id"],
             serde_json::to_value(local_account_actor(&state, actor_core.clone())).unwrap()
         );
-        assert_eq!(event["payload"]["holder_id"], actor_core.as_str());
+        assert!(event["payload"].get("holder_id").is_none());
         assert_eq!(event["payload"]["expected_revision"], 1);
         assert_eq!(event["payload"]["body"], second_value);
         assert!(

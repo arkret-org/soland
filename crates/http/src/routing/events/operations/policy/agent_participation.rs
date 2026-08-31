@@ -493,29 +493,26 @@ async fn operation_agent_write_context(
     state: &AppState,
     operation: &Operation,
 ) -> Result<Option<(String, AgentParticipationMode)>, &'static str> {
-    let actor_id = Some(operation.context.sender.to_string());
-    let executed_by = operation_executed_by(operation);
     let authorization_ref = operation.context.authorization_ref.as_deref();
-    if let (Some(actor_id), Some(executed_by), Some(authorization_ref)) =
-        (actor_id.as_deref(), executed_by, authorization_ref)
+    if let (Some(executed_by), Some(authorization_ref)) =
+        (operation.context.executed_by.as_ref(), authorization_ref)
     {
-        let managed = state
-            .agent_pairings()
-            .agent(actor_id)
+        use crate::routing::identity::managed_agent_pcr::{
+            managed_agent_controller_account, managed_agent_record_for_actor,
+        };
+        if let Some(record) = managed_agent_record_for_actor(state, &operation.context.sender)
             .await
             .map_err(|_| "agent_principal_lookup_unavailable")?
-            .is_some_and(|record| {
-                arkret_wire::DidCoreId::new(record.controller_id.clone())
-                    .or_else(|_| {
-                        arkret_wire::Did::new(record.controller_id.clone())
-                            .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-                    })
-                    .is_ok_and(|controller_id| controller_id.as_str() == executed_by)
-                    && record.principal_control_realm_id == operation.realm_id.as_str()
-                    && record.controller_authorization_ref.as_str() == authorization_ref
-            });
-        if managed {
-            return Ok(None);
+        {
+            let controller_account = managed_agent_controller_account(state, &record)
+                .await
+                .map_err(|_| "agent_principal_lookup_unavailable")?;
+            if executed_by == &arkret_wire::ActorId::account(controller_account)
+                && record.principal_control_realm_id == operation.realm_id.as_str()
+                && record.controller_authorization_ref.as_str() == authorization_ref
+            {
+                return Ok(None);
+            }
         }
     }
     if let Some(executed_by) = operation_executed_by(operation)
