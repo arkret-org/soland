@@ -730,7 +730,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         );
                         let document = match serde_json::from_value::<
                             arkret_models_identity::service_identity::ServiceDidDocument,
-                        >(document_value)
+                        >(document_value.clone())
                         {
                             Ok(document) => document,
                             Err(error) => {
@@ -850,6 +850,37 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                     continue;
                                 }
                             };
+                        let now = chrono::Utc::now();
+                        let resolved_document = soland_services::identity::DidDocumentState {
+                            did: document.id.to_string(),
+                            did_document: document_value,
+                            key_log_head: document_view
+                                .head_event_digest
+                                .as_ref()
+                                .map(ToString::to_string),
+                            seq: document_view.seq.unwrap_or_default(),
+                            method_evidence: serde_json::json!({
+                                "source": "peer_identity_document",
+                                "receipts": document_view.receipts,
+                            }),
+                            fetched_at: now,
+                            expires_at: now
+                                + chrono::Duration::seconds(
+                                    soland_services::identity::DID_DOCUMENT_HIGH_RISK_TTL_SECS,
+                                ),
+                            updated_at: now,
+                        };
+                        if let Err(error) =
+                            state.cache_verified_federation_peer_document(resolved_document)
+                        {
+                            tracing::warn!(
+                                %endpoint,
+                                peer_id = %description.service_id,
+                                %error,
+                                "federation peer DID document could not enter the verified resolver snapshot"
+                            );
+                            continue;
+                        }
                         let discovered = format!(
                             "{}|{}|{}",
                             endpoint.trim_end_matches('/'),

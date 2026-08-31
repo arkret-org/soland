@@ -1263,6 +1263,17 @@ impl AppState {
         &self.dids
     }
 
+    /// Retain a peer document that has already passed the standard
+    /// ServiceDescribe, registration-key, and assertion-method checks.
+    pub fn cache_verified_federation_peer_document(
+        &self,
+        document: soland_services::identity::DidDocumentState,
+    ) -> Result<(), String> {
+        self.dids
+            .cache_resolved_document_state(document)
+            .map(|_| ())
+    }
+
     /// Obtain the shared resolver for a production send. Absence is a hard
     /// configuration error; callers must never fall back to a raw URL/cache.
     pub fn service_route_resolver(&self) -> Result<Arc<ServiceRouteResolver>, &'static str> {
