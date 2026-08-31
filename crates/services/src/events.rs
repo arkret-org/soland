@@ -43,8 +43,8 @@ pub struct PeerEventsPageQuery {
 #[derive(Clone, Debug)]
 pub struct ActiveAgentAccountabilityQuery {
     pub accountability_event_id: String,
-    pub controller_id: String,
-    pub agent_id: String,
+    pub controller_account_id: arkret_wire::AccountId,
+    pub agent_account_id: arkret_wire::AccountId,
     pub accepted_at: DateTime<Utc>,
 }
 
@@ -1136,6 +1136,14 @@ fn active_agent_accountability(
     events: &[AcceptedEvent],
     query: &ActiveAgentAccountabilityQuery,
 ) -> bool {
+    let controller_actor = arkret_wire::ActorId::account(query.controller_account_id.clone());
+    if query.agent_account_id.station_id != query.controller_account_id.station_id
+        || accepted_event_actor(original_event).as_ref() != Some(&controller_actor)
+    {
+        return false;
+    }
+    let controller_id = query.controller_account_id.principal_id.as_str();
+    let agent_id = query.agent_account_id.principal_id.as_str();
     if arkret_wire::EventKind::AgentProvision == original_event.kind {
         let Ok(event) =
             serde_json::from_value::<arkret_wire::Event>(original_event.envelope.clone())
@@ -1147,9 +1155,8 @@ fn active_agent_accountability(
         };
         return provision.validate().is_ok()
             && original_event.received_at <= query.accepted_at
-            && original_event.actor_id == query.controller_id
-            && provision.controller_id.as_str() == query.controller_id
-            && provision.agent_id.as_str() == query.agent_id
+            && provision.controller_id.as_str() == controller_id
+            && provision.agent_id.as_str() == agent_id
             && matches!(
                 provision.accountability_scope,
                 AgentProvisionAccountabilityScope::AgentOperator
@@ -1173,12 +1180,8 @@ fn active_agent_accountability(
             candidate.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
                 && candidate.received_at <= query.accepted_at
                 && candidate.realm_id == original_event.realm_id
-                && candidate
-                    .envelope
-                    .get("executed_by")
-                    .and_then(Value::as_str)
-                    .unwrap_or(candidate.actor_id.as_str())
-                    == query.controller_id
+                && accepted_event_actor(candidate).as_ref() == Some(&controller_actor)
+                && accepted_event_executor(candidate).as_ref() == Some(&controller_actor)
         })
         .filter_map(|candidate| {
             let payload = candidate
@@ -1187,52 +1190,60 @@ fn active_agent_accountability(
                 .unwrap_or(&candidate.envelope);
             let grant =
                 serde_json::from_value::<AccountabilityGrantPayload>(payload.clone()).ok()?;
-            (grant.issuer_id.as_str() == query.controller_id
-                && grant.subject_id.as_str() == query.agent_id
+            (grant.issuer_id.as_str() == controller_id
+                && grant.subject_id.as_str() == agent_id
                 && grant.cell_subject().ok().as_deref() == Some(original_cell_subject.as_str()))
             .then_some((candidate.actor_seq, grant))
         })
         .max_by_key(|(actor_seq, _)| *actor_seq)
         .map(|(_, grant)| grant);
-    let signed_by_controller = original_event
-        .envelope
-        .get("executed_by")
-        .and_then(Value::as_str)
-        .unwrap_or(original_event.actor_id.as_str())
-        == query.controller_id;
+    let signed_by_controller =
+        accepted_event_executor(original_event).as_ref() == Some(&controller_actor);
     let projected_scopes = active_accountability_scopes(
         events,
         original_event.realm_id.as_deref(),
-        &query.controller_id,
-        &query.agent_id,
+        &query.controller_account_id,
+        agent_id,
         query.accepted_at,
     );
     original_event.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
         && signed_by_controller
-        && original_grant.issuer_id.as_str() == query.controller_id
-        && original_grant.subject_id.as_str() == query.agent_id
+        && original_grant.issuer_id.as_str() == controller_id
+        && original_grant.subject_id.as_str() == agent_id
         && !projected_scopes.is_empty()
         && current_grant.is_some_and(|grant| grant.validate_lifecycle_at(query.accepted_at).is_ok())
+}
+
+fn accepted_event_actor(record: &AcceptedEvent) -> Option<arkret_wire::ActorId> {
+    let actor: arkret_wire::ActorId =
+        serde_json::from_value(record.envelope.get("actor_id")?.clone()).ok()?;
+    (record.actor_id == actor.to_string()).then_some(actor)
+}
+
+pub fn accepted_event_executor(record: &AcceptedEvent) -> Option<arkret_wire::ActorId> {
+    let actor = accepted_event_actor(record)?;
+    match record.envelope.get("executed_by") {
+        None => Some(actor),
+        Some(value) => serde_json::from_value(value.clone()).ok(),
+    }
 }
 
 fn active_accountability_scopes(
     events: &[AcceptedEvent],
     realm_id: Option<&str>,
-    issuer: &str,
+    issuer_account: &arkret_wire::AccountId,
     subject: &str,
     at: DateTime<Utc>,
 ) -> BTreeSet<AccountabilityScopeKind> {
+    let issuer = issuer_account.principal_id.as_str();
+    let issuer_actor = arkret_wire::ActorId::account(issuer_account.clone());
     let mut latest_by_cell = BTreeMap::<String, (u64, AccountabilityGrantPayload)>::new();
     for candidate in events.iter().filter(|candidate| {
         candidate.kind == arkret_wire::event_kind_str::IDENTITY_ACCOUNTABILITY_GRANT
             && candidate.received_at <= at
             && candidate.realm_id.as_deref() == realm_id
-            && candidate
-                .envelope
-                .get("executed_by")
-                .and_then(Value::as_str)
-                .unwrap_or(candidate.actor_id.as_str())
-                == issuer
+            && accepted_event_actor(candidate).as_ref() == Some(&issuer_actor)
+            && accepted_event_executor(candidate).as_ref() == Some(&issuer_actor)
     }) {
         let payload = candidate
             .envelope
@@ -2630,6 +2641,13 @@ mod tests {
         assert_eq!(result.deliveries_inserted, 1);
     }
 
+    fn accountability_account(principal: &str) -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            DidCoreId::new(principal).unwrap(),
+            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        )
+    }
+
     fn accountability_event(
         event_id: &str,
         actor_seq: u64,
@@ -2654,7 +2672,10 @@ mod tests {
     ) -> AcceptedEvent {
         AcceptedEvent {
             event_id: event_id.to_owned(),
-            actor_id: "ak:did_core:web:controller.example".to_owned(),
+            actor_id: arkret_wire::ActorId::account(accountability_account(
+                "ak:did_core:web:controller.example",
+            ))
+            .to_string(),
             actor_seq,
             realm_id: Some("ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL".to_owned()),
             kind: "ak.identity.accountability_grant".to_owned(),
@@ -2663,7 +2684,12 @@ mod tests {
             canonical_digest: format!("sha256:{actor_seq}"),
             canonical_bytes: Vec::new(),
             envelope: serde_json::json!({
-                "executed_by": "ak:did_core:web:controller.example",
+                "actor_id": arkret_wire::ActorId::account(accountability_account(
+                    "ak:did_core:web:controller.example",
+                )),
+                "executed_by": arkret_wire::ActorId::account(accountability_account(
+                    "ak:did_core:web:controller.example",
+                )),
                 "payload": {
                     "schema": "ak.schema.accountability_grant.v1",
                     "issuer_id": "ak:did_core:web:controller.example",
@@ -2698,8 +2724,8 @@ mod tests {
         );
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: original.event_id.clone(),
-            controller_id: "ak:did_core:web:controller.example".to_owned(),
-            agent_id: "ak:did_core:web:agent.example".to_owned(),
+            controller_account_id: accountability_account("ak:did_core:web:controller.example"),
+            agent_account_id: accountability_account("ak:did_core:web:agent.example"),
             accepted_at,
         };
         assert!(active_agent_accountability(
@@ -2721,14 +2747,56 @@ mod tests {
         ));
 
         let wrong_controller = ActiveAgentAccountabilityQuery {
-            controller_id: "ak:did_core:web:other.example".to_owned(),
-            ..query
+            controller_account_id: accountability_account("ak:did_core:web:other.example"),
+            ..query.clone()
         };
         assert!(!active_agent_accountability(
             &original,
             std::slice::from_ref(&original),
             &wrong_controller
         ));
+
+        let mut foreign = query.clone();
+        foreign.controller_account_id.station_id =
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+        foreign.agent_account_id.station_id = foreign.controller_account_id.station_id.clone();
+        assert!(!active_agent_accountability(
+            &original,
+            std::slice::from_ref(&original),
+            &foreign,
+        ));
+        let mut wrong_executor = original.clone();
+        wrong_executor.envelope["executed_by"] =
+            serde_json::to_value(arkret_wire::ActorId::account(foreign.controller_account_id))
+                .unwrap();
+        assert!(!active_agent_accountability(
+            &wrong_executor,
+            std::slice::from_ref(&wrong_executor),
+            &query,
+        ));
+        for invalid in [
+            serde_json::json!("ak:did_core:web:controller.example"),
+            serde_json::Value::Null,
+        ] {
+            let mut malformed = original.clone();
+            malformed.envelope["executed_by"] = invalid;
+            assert!(accepted_event_executor(&malformed).is_none());
+        }
+        let mut mismatched_metadata = original.clone();
+        mismatched_metadata.actor_id = "ak:did_core:web:controller.example".to_owned();
+        assert!(accepted_event_executor(&mismatched_metadata).is_none());
+        let mut no_executor = original.clone();
+        no_executor
+            .envelope
+            .as_object_mut()
+            .unwrap()
+            .remove("executed_by");
+        assert_eq!(
+            accepted_event_executor(&no_executor),
+            Some(arkret_wire::ActorId::account(
+                query.controller_account_id.clone()
+            )),
+        );
     }
 
     #[test]
@@ -2760,8 +2828,8 @@ mod tests {
         let events = [superset.clone(), singleton, reordered_revoke];
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: superset.event_id.clone(),
-            controller_id: "ak:did_core:web:controller.example".to_owned(),
-            agent_id: "ak:did_core:web:agent.example".to_owned(),
+            controller_account_id: accountability_account("ak:did_core:web:controller.example"),
+            agent_account_id: accountability_account("ak:did_core:web:agent.example"),
             accepted_at,
         };
         assert!(!active_agent_accountability(&superset, &events, &query));
@@ -2769,8 +2837,8 @@ mod tests {
             active_accountability_scopes(
                 &events,
                 superset.realm_id.as_deref(),
-                &query.controller_id,
-                &query.agent_id,
+                &query.controller_account_id,
+                query.agent_account_id.principal_id.as_str(),
                 accepted_at,
             ),
             BTreeSet::from([AccountabilityScopeKind::ContractedService])
@@ -2799,8 +2867,8 @@ mod tests {
         let events = [superset.clone(), subset_revoke];
         let query = ActiveAgentAccountabilityQuery {
             accountability_event_id: superset.event_id.clone(),
-            controller_id: "ak:did_core:web:controller.example".to_owned(),
-            agent_id: "ak:did_core:web:agent.example".to_owned(),
+            controller_account_id: accountability_account("ak:did_core:web:controller.example"),
+            agent_account_id: accountability_account("ak:did_core:web:agent.example"),
             accepted_at,
         };
         assert!(active_agent_accountability(&superset, &events, &query));
@@ -2808,8 +2876,8 @@ mod tests {
             active_accountability_scopes(
                 &events,
                 superset.realm_id.as_deref(),
-                &query.controller_id,
-                &query.agent_id,
+                &query.controller_account_id,
+                query.agent_account_id.principal_id.as_str(),
                 accepted_at,
             ),
             BTreeSet::from([

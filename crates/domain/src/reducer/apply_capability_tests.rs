@@ -572,7 +572,7 @@ mod agent_key_tests {
             "constraint_kind": "authority_control",
             "constraint_subkind": "applet_authority",
             "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
-            "executed_by": "ak:did_core:web:bridge.example",
+            "executed_by": actor("ak:did_core:web:bridge.example"),
             "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }, {
             "constraint_kind": "temporal",
@@ -643,6 +643,18 @@ mod agent_key_tests {
         let base = bridge_grant_payload();
         let mut mutations = Vec::new();
 
+        for executor in [
+            json!("ak:did_core:web:bridge.example"),
+            json!(actor("ak:did_core:web:other.example")),
+            json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:bridge.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
+            ))),
+        ] {
+            let mut wrong_executor = base.clone();
+            wrong_executor["grant"]["constraints"][0]["executed_by"] = executor;
+            mutations.push(wrong_executor);
+        }
         let mut wrong_subject = base.clone();
         wrong_subject["grant"]["subject"] = json!("ak:did_core:web:other.example");
         mutations.push(wrong_subject);

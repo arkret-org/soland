@@ -594,9 +594,9 @@ fn apply_member_identity_update_dispatch(
     let actor_id = op
         .payload
         .get("actor_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned();
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
+        .map(|actor| actor.to_string())
+        .unwrap_or_default();
     let segment = op
         .payload
         .get("segment")
@@ -1327,6 +1327,52 @@ mod tests {
     use arkret_wire::EventKind;
 
     use super::default_apply_registry;
+
+    #[test]
+    fn member_identity_dispatch_preserves_the_complete_actor() {
+        let realm_id = arkret_identifiers::RealmId::new(
+            "ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL",
+        )
+        .unwrap();
+        let mut actors = Vec::new();
+        for station in [
+            "ak:did_core:web:first.example",
+            "ak:did_core:web:second.example",
+        ] {
+            let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new(station).unwrap(),
+            ));
+            let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+                arkret_identifiers::OperationId::new(
+                    "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+                )
+                .unwrap(),
+                realm_id.clone(),
+                EventKind::MemberIdentityUpdate.as_str(),
+                serde_json::json!({
+                    "realm_id": realm_id,
+                    "actor_id": actor,
+                    "segment": "member_identity",
+                }),
+            );
+            let mut state = super::ProjectionState::default();
+            let hlc = super::ServerHlc::new("member-identity-test");
+            let super::ProjectionEffect::MemberIdentityProjected { actor_id, .. } =
+                super::apply_member_identity_update_dispatch(&mut state, &operation, &hlc)
+            else {
+                panic!("complete Actor must project")
+            };
+            assert_eq!(actor_id, actor.to_string());
+            actors.push(actor_id);
+            operation.payload["actor_id"] = serde_json::json!(actor.signing_principal_id());
+            assert!(matches!(
+                super::apply_member_identity_update_dispatch(&mut state, &operation, &hlc),
+                super::ProjectionEffect::Rejected { .. },
+            ));
+        }
+        assert_ne!(actors[0], actors[1]);
+    }
 
     #[test]
     fn apply_registry_exactly_covers_active_reducer_inputs() {

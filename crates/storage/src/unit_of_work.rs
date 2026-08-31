@@ -189,6 +189,74 @@ pub fn has_self_principal_pcr_device_authorized_shape(
 mod tests {
     use super::has_self_principal_pcr_device_authorized_shape;
 
+    #[test]
+    fn applet_managed_authorities_require_full_accounts_at_one_station() {
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap();
+        let bot = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:bot.example").unwrap(),
+            station.clone(),
+        ));
+        let ghost = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:ghost.example").unwrap(),
+            station.clone(),
+        ));
+        let identity = serde_json::json!({"bot_actor_id": bot});
+        let installation = serde_json::json!({"ghosts": [{"ghost_actor_id": ghost}]});
+        let authorities = super::applet_managed_authorities_from_record(&identity, &installation)
+            .expect("full Bot and Ghost Accounts are accepted");
+        assert_eq!(authorities.len(), 2);
+        assert!(
+            authorities
+                .iter()
+                .all(|claim| claim.station_id == station.as_str())
+        );
+
+        for invalid_actor in [
+            serde_json::json!(bot.signing_principal_id()),
+            serde_json::json!(arkret_wire::ActorId::service(
+                bot.signing_principal_id().clone()
+            )),
+        ] {
+            assert!(
+                super::applet_bot_account_from_identity(
+                    &serde_json::json!({"bot_actor_id": invalid_actor})
+                )
+                .is_err()
+            );
+            assert!(
+                super::applet_managed_authorities_from_record(
+                    &identity,
+                    &serde_json::json!({"ghosts": [{"ghost_actor_id": invalid_actor}]})
+                )
+                .is_err()
+            );
+        }
+        let foreign_ghost = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            ghost.signing_principal_id().clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign.example").unwrap(),
+        ));
+        assert!(
+            super::applet_managed_authorities_from_record(
+                &identity,
+                &serde_json::json!({"ghosts": [{"ghost_actor_id": foreign_ghost}]})
+            )
+            .is_err()
+        );
+        assert!(
+            super::applet_managed_authorities_from_record(
+                &identity,
+                &serde_json::json!({"ghosts": [{"ghost_actor_id": bot}]})
+            )
+            .is_err()
+        );
+        assert!(
+            super::applet_bot_account_from_identity(
+                &serde_json::json!({"bot_actor_id": bot, "bot_actor_station_id": station})
+            )
+            .is_err()
+        );
+    }
+
     fn accepted_pcr_device_event() -> arkret_wire::Event {
         let mut event = arkret_wire::test_support::raw_event_at(
             arkret_wire::EventKind::DeviceAuthorize.as_str(),
@@ -424,6 +492,40 @@ pub fn applet_namespaces_from_record(
     })
 }
 
+fn applet_account_from_actor_field(
+    record: &serde_json::Value,
+    field: &str,
+) -> PersistenceResult<arkret_wire::AccountId> {
+    let actor = record.get(field).cloned().ok_or_else(|| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: durable Applet record omits {field}"
+        ))
+    })?;
+    let actor: arkret_wire::ActorId = serde_json::from_value(actor).map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: durable Applet {field} is not a full ActorId: {error}"
+        ))
+    })?;
+    actor.as_account_id().cloned().ok_or_else(|| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: durable Applet {field} must identify an Account"
+        ))
+    })
+}
+
+/// The Bot's immutable Account is carried only by its full ActorId.
+pub fn applet_bot_account_from_identity(
+    identity: &serde_json::Value,
+) -> PersistenceResult<arkret_wire::AccountId> {
+    if identity.get("bot_actor_station_id").is_some() {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: durable Applet identity contains retired bot_actor_station_id"
+                .to_owned(),
+        ));
+    }
+    applet_account_from_actor_field(identity, "bot_actor_id")
+}
+
 /// Derive every immutable managed authority pair from the canonical Applet
 /// record. The uniqueness table is a transaction index of this set; it never
 /// accepts a separately supplied claim list.
@@ -431,19 +533,10 @@ pub fn applet_managed_authorities_from_record(
     identity: &serde_json::Value,
     installation: &serde_json::Value,
 ) -> PersistenceResult<std::collections::BTreeSet<ManagedAuthorityClaim>> {
-    let required = |field: &str| {
-        identity
-            .get(field)
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                PersistenceError::Conflict(format!(
-                    "schema_violation: durable Applet record omits {field}"
-                ))
-            })
-    };
+    let bot_account = applet_bot_account_from_identity(identity)?;
     let mut authorities = std::collections::BTreeSet::from([ManagedAuthorityClaim {
-        actor_id: required("bot_actor_id")?.to_owned(),
-        station_id: required("bot_actor_station_id")?.to_owned(),
+        actor_id: bot_account.principal_id.to_string(),
+        station_id: bot_account.station_id.to_string(),
     }]);
     let ghosts = installation
         .get("ghosts")
@@ -454,25 +547,21 @@ pub fn applet_managed_authorities_from_record(
             )
         })?;
     for ghost in ghosts {
-        let actor_id = ghost
-            .get("ghost_actor_id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "schema_violation: durable Applet Ghost omits ghost_actor_id".to_owned(),
-                )
-            })?;
-        let station_id = ghost
-            .get("actor_station_id")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| {
-                PersistenceError::Conflict(
-                    "schema_violation: durable Applet Ghost omits actor_station_id".to_owned(),
-                )
-            })?;
+        if ghost.get("actor_station_id").is_some() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: durable Applet Ghost contains retired actor_station_id"
+                    .to_owned(),
+            ));
+        }
+        let account = applet_account_from_actor_field(ghost, "ghost_actor_id")?;
+        if account.station_id != bot_account.station_id {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: durable Applet Ghost belongs to another Station".to_owned(),
+            ));
+        }
         if !authorities.insert(ManagedAuthorityClaim {
-            actor_id: actor_id.to_owned(),
-            station_id: station_id.to_owned(),
+            actor_id: account.principal_id.to_string(),
+            station_id: account.station_id.to_string(),
         }) {
             return Err(PersistenceError::Conflict(
                 "applet_managed_authority_conflict".to_owned(),

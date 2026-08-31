@@ -1169,12 +1169,9 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             );
             if soland_storage::applet_id_from_record(&mutation.identity.record)?
                 != mutation.applet_id.as_str()
-                || mutation
-                    .identity
-                    .record
-                    .get("bot_actor_station_id")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(mutation.identity.target_station_id.as_str())
+                || soland_storage::applet_bot_account_from_identity(&mutation.identity.record)?
+                    .station_id
+                    != mutation.identity.target_station_id
             {
                 return Err(PersistenceError::Conflict(
                     "schema_violation: Applet identity winner key does not match its record"
@@ -1394,8 +1391,6 @@ mod tests {
         applet_id: &str,
     ) -> serde_json::Value {
         let object = record.as_object_mut().unwrap();
-        object.remove("bot_actor_id");
-        object.remove("bot_actor_station_id");
         object.insert("applet_id".to_owned(), serde_json::json!(applet_id));
         object.insert(
             "effective_scope".to_owned(),
@@ -1407,9 +1402,15 @@ mod tests {
     fn test_applet_identity(applet_id: &str, bot_actor_id: &str) -> serde_json::Value {
         serde_json::json!({
             "applet_id": applet_id,
-            "bot_actor_id": bot_actor_id,
-            "bot_actor_station_id": "ak:did_core:web:soland.example",
+            "bot_actor_id": test_applet_actor(bot_actor_id),
         })
+    }
+
+    fn test_applet_actor(principal_id: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal_id).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+        ))
     }
 
     fn existing_identity_commit(identity: &serde_json::Value) -> AppletIdentityCommit {
@@ -3008,8 +3009,6 @@ mod tests {
             serde_json::json!({
                 "status": "installed",
                 "revoked_at": null,
-                "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                "bot_actor_station_id": "ak:did_core:web:soland.example",
                 "package": {"namespaces": {}},
                 "ghosts": [],
             }),
@@ -3079,12 +3078,9 @@ mod tests {
                     serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
-                        "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:one",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:one"),
                             "external_id": "one",
                         }],
                     }),
@@ -3129,12 +3125,9 @@ mod tests {
                 serde_json::json!({
                     "status": "installed",
                     "revoked_at": null,
-                    "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                    "bot_actor_station_id": "ak:did_core:web:soland.example",
                     "package": {"namespaces": {}},
                     "ghosts": [{
-                        "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                        "actor_station_id": "ak:did_core:web:soland.example",
+                        "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:first"),
                         "external_id": "first",
                     }],
                 }),
@@ -3167,12 +3160,9 @@ mod tests {
                     serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
-                        "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:first"),
                             "external_id": "first",
                         }],
                     }),
@@ -3183,16 +3173,12 @@ mod tests {
                     serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
-                        "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:first"),
                             "external_id": "first",
                         }, {
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:second",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:second"),
                             "external_id": "second",
                         }],
                     }),
@@ -3254,12 +3240,9 @@ mod tests {
                     serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
-                        "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:first"),
                             "external_id": "first",
                         }],
                     }),
@@ -3270,16 +3253,12 @@ mod tests {
                     serde_json::json!({
                         "status": "installed",
                         "revoked_at": null,
-                        "bot_actor_id": "ak:did_core:web:fixture-bot.example",
-                        "bot_actor_station_id": "ak:did_core:web:soland.example",
                         "package": {"namespaces": {}},
                         "ghosts": [{
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:first",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:first"),
                             "external_id": "first",
                         }, {
-                            "ghost_actor_id": "ak:did_core:web:bridge.example:ghost:third",
-                            "actor_station_id": "ak:did_core:web:soland.example",
+                            "ghost_actor_id": test_applet_actor("ak:did_core:web:bridge.example:ghost:third"),
                             "external_id": "third",
                         }],
                     }),
@@ -3314,10 +3293,16 @@ mod tests {
             .unwrap();
         assert_eq!(ghosts.len(), 2);
         assert!(ghosts.iter().any(|ghost| {
-            ghost["ghost_actor_id"] == "ak:did_core:web:bridge.example:ghost:second"
+            ghost["ghost_actor_id"]
+                == serde_json::json!(test_applet_actor(
+                    "ak:did_core:web:bridge.example:ghost:second"
+                ))
         }));
         assert!(!ghosts.iter().any(|ghost| {
-            ghost["ghost_actor_id"] == "ak:did_core:web:bridge.example:ghost:third"
+            ghost["ghost_actor_id"]
+                == serde_json::json!(test_applet_actor(
+                    "ak:did_core:web:bridge.example:ghost:third"
+                ))
         }));
     }
 
@@ -3362,8 +3347,6 @@ mod tests {
                         serde_json::json!({
                             "status": "installed",
                             "revoked_at": null,
-                            "bot_actor_id": authority.actor_id.clone(),
-                            "bot_actor_station_id": authority.station_id.clone(),
                             "package": {"namespaces": namespaces.clone()},
                             "ghosts": [],
                         }),
@@ -3390,11 +3373,7 @@ mod tests {
     async fn applet_installations_are_unique_per_scope_and_share_one_identity() {
         let store = SolandMemoryPersistenceStore::new();
         let applet_id = typed_id("ak:applet:");
-        let identity = serde_json::json!({
-            "applet_id": applet_id,
-            "bot_actor_id": "ak:did_core:web:shared-bot.example",
-            "bot_actor_station_id": "ak:did_core:web:soland.example",
-        });
+        let identity = test_applet_identity(&applet_id, "ak:did_core:web:shared-bot.example");
         let install = |scope: arkret_wire::ScopeRef, identity: serde_json::Value, reuse: bool| {
             let event_realm_id = scope.realm_id().to_string();
             let record = serde_json::json!({
@@ -3443,11 +3422,8 @@ mod tests {
             .unwrap();
         assert_eq!(store.applets.records.lock().len(), 2);
 
-        let conflicting_identity = serde_json::json!({
-            "applet_id": applet_id,
-            "bot_actor_id": "ak:did_core:web:different-bot.example",
-            "bot_actor_station_id": "ak:did_core:web:soland.example",
-        });
+        let conflicting_identity =
+            test_applet_identity(&applet_id, "ak:did_core:web:different-bot.example");
         let error = store
             .commit_event_batch(install(test_applet_scope(), conflicting_identity, true))
             .await

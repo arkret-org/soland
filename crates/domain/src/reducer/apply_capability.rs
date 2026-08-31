@@ -997,8 +997,11 @@ impl ProjectionState {
                         == Some(rule.required_constraint_subkind)
                     && constraint.get("applet_id").and_then(Value::as_str)
                         == Some(registration.applet_id.as_str())
-                    && constraint.get("executed_by").and_then(Value::as_str)
-                        == Some(registration.service_id.as_str())
+                    && constraint.get("executed_by").cloned().and_then(|value| {
+                        serde_json::from_value::<arkret_wire::ActorId>(value).ok()
+                    }) == Some(arkret_wire::ActorId::service(
+                        registration.service_id.clone(),
+                    ))
                     && constraint.get("registration_epoch").and_then(Value::as_str)
                         == Some(registration.registration_epoch.as_str())
             })

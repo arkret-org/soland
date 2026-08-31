@@ -236,12 +236,8 @@ pub(super) fn accountability_grant_envelope_signed_by(
     record: &soland_services::events::AcceptedEvent,
     issuer: &str,
 ) -> bool {
-    record
-        .envelope
-        .get("executed_by")
-        .and_then(Value::as_str)
-        .unwrap_or(record.actor_id.as_str())
-        == issuer
+    soland_services::events::accepted_event_executor(record)
+        .is_some_and(|actor| actor.signing_principal_id().as_str() == issuer)
 }
 
 pub(super) fn accountability_grant_value_active_for(

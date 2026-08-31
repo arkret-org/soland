@@ -385,9 +385,25 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &verification_method,
         state.service_id(),
     )?;
+    let agent_actor = pairing_account_actor(&agent_id, state.service_id())?;
+    let controller_actor = pairing_account_actor(&controller_id, state.service_id())?;
+    let controller_account_pk = agent_record.controller_account_pk.ok_or_else(|| {
+        pairing_failed_precondition("pairing controller has no exact Account binding")
+    })?;
+    let controller_account = state
+        .identities()
+        .account_by_id(controller_account_pk)
+        .await
+        .map_err(|error| AppError::internal(format!("pairing controller lookup failed: {error}")))?
+        .ok_or_else(|| pairing_failed_precondition("pairing controller Account is missing"))?;
+    if controller_actor.as_account_id() != Some(&controller_account.account_id) {
+        return Err(pairing_failed_precondition(
+            "pairing controller Account belongs to another Station",
+        ));
+    }
     let events = state
         .event_queries()
-        .accepted_events_for_actor(&agent_id)
+        .accepted_events_for_actor(&agent_actor.to_string())
         .await
         .map_err(|error| {
             AppError::internal(format!("authorization reconciliation failed: {error}"))
@@ -395,14 +411,14 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let accepted = events.into_iter().find(|event| {
         if event.event_id != pending_authorize_event_id
             || event.kind != arkret_wire::event_kind_str::AGENT_KEY_AUTHORIZE
-            || event.actor_id != agent_id
+            || event.actor_id != agent_actor.to_string()
         {
             return false;
         }
         let envelope = &event.envelope;
         let payload = envelope.get("payload").unwrap_or(&Value::Null);
         let evidence = payload.get("approval_evidence").unwrap_or(&Value::Null);
-        envelope.get("executed_by").and_then(Value::as_str) == Some(controller_id.as_str())
+        envelope_actor(envelope, "executed_by").as_ref() == Some(&controller_actor)
             && envelope.get("authorization_ref").and_then(Value::as_str)
                 == Some(expected_authorization_ref.as_str())
             && envelope.get("realm_id").and_then(Value::as_str) == Some(expected_realm_id.as_str())
@@ -1369,6 +1385,21 @@ pub(super) async fn submit_production_key_authorize_event(
     authorized_public_key_digest: &str,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
+    // Both bearer and explicitly authenticated S2S callers retain their
+    // destination Station in the internal credential. Never infer it from an
+    // Event supplied by the caller.
+    let controller_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    if controller_actor != pairing_account_actor(&agent_record.controller_id, state.service_id())?
+        || agent_record
+            .controller_account_pk
+            .zip(session.account_pk)
+            .is_some_and(|(expected, actual)| expected != actual)
+    {
+        return Err(AppError::capability_denied(
+            "pairing requires the exact bound controller Account",
+        ));
+    }
     ensure_key_authorize_event_matches_request(
         envelope,
         &session.actor,
@@ -1393,6 +1424,19 @@ pub(super) async fn submit_production_key_authorize_event(
     Ok(outcome.event_id)
 }
 
+fn pairing_account_actor(principal: &str, station: &str) -> Result<arkret_wire::ActorId, AppError> {
+    Ok(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal.to_owned())
+            .map_err(|_| AppError::capability_denied("pairing principal is invalid"))?,
+        arkret_wire::DidCoreId::new(station.to_owned())
+            .map_err(|_| AppError::capability_denied("pairing Station is invalid"))?,
+    )))
+}
+
+fn envelope_actor(envelope: &Value, field: &str) -> Option<arkret_wire::ActorId> {
+    serde_json::from_value(envelope.get(field)?.clone()).ok()
+}
+
 pub(super) fn ensure_key_authorize_event_matches_request(
     envelope: &Value,
     controller: &str,
@@ -1409,14 +1453,16 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             "authorize_event.kind must be ak.agent.key.authorize",
         ));
     }
-    if envelope.get("actor_id").and_then(Value::as_str) != Some(agent_id) {
+    if envelope_actor(envelope, "actor_id") != Some(pairing_account_actor(agent_id, service_id)?) {
         return Err(AppError::capability_denied(
-            "authorize_event.actor_id must match the managed Agent principal",
+            "authorize_event.actor_id must match the managed Agent Account",
         ));
     }
-    if envelope.get("executed_by").and_then(Value::as_str) != Some(controller) {
+    if envelope_actor(envelope, "executed_by")
+        != Some(pairing_account_actor(controller, service_id)?)
+    {
         return Err(AppError::capability_denied(
-            "authorize_event.executed_by must match the authenticated controller",
+            "authorize_event.executed_by must match the authenticated controller Account",
         ));
     }
     let expected_authorization_ref = agent_record.controller_authorization_ref.as_str();

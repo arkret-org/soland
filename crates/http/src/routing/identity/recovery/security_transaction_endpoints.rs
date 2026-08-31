@@ -1,6 +1,6 @@
 use arkret_event_draft::EventPayloadExt as _;
 use arkret_wire::{
-    AcceptedStep, RecoveryPreparedPlan, SchemaId, SecurityTransactionAcceptor,
+    AcceptedStep, ActorId, DidCoreId, RecoveryPreparedPlan, SchemaId, SecurityTransactionAcceptor,
     SecurityTransactionPreparedPlan, SecurityTransactionStep,
 };
 use ed25519_dalek::Signer as _;
@@ -77,7 +77,14 @@ async fn load_owned_security_transaction(
         .await
         .map_err(recovery_service_error)?
         .ok_or_else(|| AppError::not_found("security transaction not found"))?;
-    if record.resource.principal_id.as_str() != session.actor {
+    let transaction_actor = transaction_account_actor(
+        &record.resource.principal_id,
+        &record.resource.coordinator_id,
+        &state.service_core_id(),
+    )?;
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
+    if transaction_actor != session_actor {
         // The standard read contract deliberately makes an invisible
         // transaction indistinguishable from a missing one.
         return Err(AppError::not_found("security transaction not found"));
@@ -88,6 +95,30 @@ async fn load_owned_security_transaction(
         .map(|binding| &binding.recovery_session_id);
     enforce_recovery_grant_transaction_binding(state, session, recovery_session_id).await?;
     Ok(record)
+}
+
+fn transaction_account_actor(
+    principal_id: &DidCoreId,
+    coordinator_id: &DidCoreId,
+    local_station_id: &DidCoreId,
+) -> Result<ActorId, AppError> {
+    // The Station-local transaction contract binds this exact Account pair.
+    // Never substitute the current Station for a foreign stored coordinator.
+    if coordinator_id != local_station_id {
+        return Err(AppError::not_found("security transaction not found"));
+    }
+    Ok(ActorId::account(AccountId::new(
+        principal_id.clone(),
+        coordinator_id.clone(),
+    )))
+}
+
+fn recovery_authorization_actor_matches(
+    stored_actor_key: &str,
+    envelope_actor: &ActorId,
+    transaction_actor: &ActorId,
+) -> bool {
+    envelope_actor == transaction_actor && stored_actor_key == envelope_actor.to_string()
 }
 
 #[salvo::oapi::endpoint(
@@ -129,6 +160,18 @@ pub(super) async fn security_transaction_create(
         .map_err(|error| {
             AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
         })?;
+    if transaction_account_actor(
+        &resource.principal_id,
+        &resource.coordinator_id,
+        &state.service_core_id(),
+    )? != crate::routing::identity::session_actor::session_actor_from_credential(
+        state, &session,
+    )? {
+        return Err(AppError::capability_denied(
+            "security transaction does not match the authenticated account",
+        )
+        .with_wire_code("security_transaction_principal_isolation"));
+    }
     let stored = state
         .security_transactions()
         .create(SecurityTransactionRecord {
@@ -470,6 +513,11 @@ async fn continue_rotation_upload(
     res: &mut Response,
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
+    let transaction_actor = transaction_account_actor(
+        &transaction.resource.principal_id,
+        &transaction.resource.coordinator_id,
+        &state.service_core_id(),
+    )?;
     let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
     begin_rotation_step(
         state,
@@ -499,22 +547,17 @@ async fn continue_rotation_upload(
                     AppError::conflict("prepared backup material omits a reserved backup")
                         .with_wire_code("security_transaction_failed_precondition")
                 })?;
-            if value.get("ciphertext_digest").and_then(Value::as_str)
-                != Some(expected.ciphertext_digest.as_str())
-                || value.get("actor_id").and_then(Value::as_str)
-                    != Some(transaction.resource.principal_id.as_str())
-                || value.get("series_id").and_then(Value::as_str)
-                    != Some(rotation.new_series_id.as_str())
-                || value.get("backup_kind").and_then(Value::as_str)
-                    != Some(match rotation.backup_kind {
-                        arkret_wire::BackupRotationKind::SecretStorage => "secret_storage",
-                        arkret_wire::BackupRotationKind::MlsHistory => "mls_history",
-                    })
-            {
-                return Err(
-                    AppError::conflict("prepared backup ciphertext digest changed")
-                        .with_wire_code("security_transaction_failed_precondition"),
-                );
+            if !backup_value_matches_rotation(
+                &value,
+                &transaction_actor,
+                &rotation.new_series_id,
+                rotation.backup_kind,
+                expected,
+            ) {
+                return Err(AppError::conflict(
+                    "prepared backup identity, series, kind, or digest changed",
+                )
+                .with_wire_code("security_transaction_failed_precondition"));
             }
             if let Some(existing) = state
                 .key_backups()
@@ -642,7 +685,7 @@ fn initial_backup_erase_outcome(
 
 fn backup_value_matches_rotation(
     value: &Value,
-    principal_id: &arkret_wire::DidCoreId,
+    actor_id: &ActorId,
     series_id: &arkret_wire::BackupSeriesId,
     backup_kind: arkret_wire::BackupRotationKind,
     expected: &arkret_wire::BackupObjectRef,
@@ -650,7 +693,9 @@ fn backup_value_matches_rotation(
     value.get("backup_id").and_then(Value::as_str) == Some(expected.backup_id.as_str())
         && value.get("ciphertext_digest").and_then(Value::as_str)
             == Some(expected.ciphertext_digest.as_str())
-        && value.get("actor_id").and_then(Value::as_str) == Some(principal_id.as_str())
+        && value.get("actor_id").is_some_and(|value| {
+            serde_json::from_value::<ActorId>(value.clone()).is_ok_and(|actor| &actor == actor_id)
+        })
         && value.get("series_id").and_then(Value::as_str) == Some(series_id.as_str())
         && value.get("backup_kind").and_then(Value::as_str)
             == Some(backup_rotation_kind_name(backup_kind))
@@ -733,6 +778,11 @@ pub(crate) async fn backup_series_erase_command(
     let plan = rotation_plan(&transaction)?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let transaction_actor = transaction_account_actor(
+        &transaction.resource.principal_id,
+        &transaction.resource.coordinator_id,
+        &state.service_core_id(),
+    )?;
     let planned_series_match = plan.backup_rotations.len() == request.series.len()
         && plan
             .backup_rotations
@@ -749,8 +799,7 @@ pub(crate) async fn backup_series_erase_command(
         || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
         || plan.erase_confirmation_digest != request.erase_confirmation_digest
         || !planned_series_match
-        || request.authorization_lease.actor_id.signing_principal_id()
-            != &transaction.resource.principal_id
+        || request.authorization_lease.actor_id != transaction_actor
         || request.authorization_lease.actor_id != session_actor
         || request.authorization_lease.device_id.as_str() != session.device_id
         || request.authorization_lease.action
@@ -869,7 +918,7 @@ pub(crate) async fn backup_series_erase_command(
             };
             if !backup_value_matches_rotation(
                 &stored,
-                &transaction.resource.principal_id,
+                &transaction_actor,
                 &rotation.new_series_id,
                 rotation.backup_kind,
                 expected,
@@ -896,7 +945,7 @@ pub(crate) async fn backup_series_erase_command(
         let active_pointer = state
             .projections()
             .key_backup_active_series(
-                transaction.resource.principal_id.as_str(),
+                &transaction_actor.to_string(),
                 backup_rotation_kind_name(rotation.backup_kind),
             )
             .ok_or_else(|| {
@@ -942,7 +991,7 @@ pub(crate) async fn backup_series_erase_command(
                     })?;
                 if !backup_value_matches_rotation(
                     &existing,
-                    &transaction.resource.principal_id,
+                    &transaction_actor,
                     &rotation.previous_series_id,
                     rotation.backup_kind,
                     old,
@@ -1005,7 +1054,7 @@ pub(crate) async fn backup_series_erase_command(
                 .map_err(recovery_service_error)?
                 && !backup_value_matches_rotation(
                     &existing,
-                    &transaction.resource.principal_id,
+                    &transaction_actor,
                     &request.series[result_index].previous_series_id,
                     request.series[result_index].backup_kind,
                     &old,
@@ -1338,18 +1387,27 @@ async fn continue_issue_terminal_receipt(
             AppError::conflict("durable device authorization Event is unavailable")
                 .with_wire_code("security_transaction_failed_precondition")
         })?;
-    if authorization_event.actor_id != transaction.resource.principal_id.as_str() {
-        return Err(AppError::conflict(
-            "device authorization Event belongs to a different principal",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
-    }
     let authorization_envelope: arkret_wire::Event =
         serde_json::from_value(authorization_event.envelope.clone()).map_err(|error| {
             AppError::internal(format!(
                 "accepted device authorization Event is invalid: {error}"
             ))
         })?;
+    let transaction_actor = transaction_account_actor(
+        &transaction.resource.principal_id,
+        &transaction.resource.coordinator_id,
+        &state.service_core_id(),
+    )?;
+    if !recovery_authorization_actor_matches(
+        &authorization_event.actor_id,
+        &authorization_envelope.actor_id,
+        &transaction_actor,
+    ) {
+        return Err(AppError::conflict(
+            "device authorization Event or its stored identity belongs to a different account",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
     let authorization_payload = authorization_envelope
         .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
         .map_err(|error| {
@@ -1840,5 +1898,118 @@ fn security_transaction_service_error(error: soland_services::ServiceError) -> A
         AppError::conflict(error.detail()).with_wire_code("duplicate_conflict")
     } else {
         recovery_service_error(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn core(name: &str) -> DidCoreId {
+        DidCoreId::new(format!("ak:did_core:web:{name}.example")).unwrap()
+    }
+
+    #[test]
+    fn transaction_account_binding_rejects_a_foreign_coordinator() {
+        let principal = core("alice");
+        let local = core("station-a");
+        let foreign = core("station-b");
+        let actor = transaction_account_actor(&principal, &local, &local).unwrap();
+        assert_eq!(
+            actor,
+            ActorId::account(AccountId::new(principal.clone(), local.clone()))
+        );
+        assert!(transaction_account_actor(&principal, &foreign, &local).is_err());
+        assert_ne!(
+            actor,
+            transaction_account_actor(&principal, &foreign, &foreign).unwrap()
+        );
+    }
+
+    #[test]
+    fn backup_rotation_match_requires_the_exact_account_actor() {
+        let principal = core("alice");
+        let station = core("station-a");
+        let actor = transaction_account_actor(&principal, &station, &station).unwrap();
+        let expected = arkret_wire::BackupObjectRef {
+            backup_id: arkret_wire::BackupId::new(
+                "ak:backup:01964137-0000-7000-8000-000000000001".to_owned(),
+            )
+            .unwrap(),
+            ciphertext_digest: Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+        };
+        let series_id = arkret_wire::BackupSeriesId::new(
+            "ak:backup_series:01964137-0000-7000-8000-000000000001".to_owned(),
+        )
+        .unwrap();
+        // The matcher's identity/digest fragment; envelope validation remains
+        // the SDK's responsibility at the publication boundary.
+        let value = json!({
+            "backup_id": expected.backup_id,
+            "ciphertext_digest": expected.ciphertext_digest,
+            "actor_id": actor,
+            "series_id": series_id,
+            "backup_kind": "secret_storage"
+        });
+        let matches = |value: &Value| {
+            backup_value_matches_rotation(
+                value,
+                &actor,
+                &series_id,
+                arkret_wire::BackupRotationKind::SecretStorage,
+                &expected,
+            )
+        };
+        assert!(matches(&value));
+        for wrong_actor in [
+            json!(ActorId::account(AccountId::new(
+                principal.clone(),
+                core("station-b")
+            ))),
+            json!(ActorId::service(principal.clone())),
+            json!(principal),
+            json!(actor.to_string()),
+        ] {
+            let mut changed = value.clone();
+            changed["actor_id"] = wrong_actor;
+            assert!(!matches(&changed));
+        }
+        let mut changed = value;
+        changed["ciphertext_digest"] = json!(format!("sha256:{}", "b".repeat(64)));
+        assert!(!matches(&changed));
+    }
+
+    #[test]
+    fn terminal_recovery_requires_matching_full_actor_metadata_and_envelope() {
+        let principal = core("alice");
+        let local = core("station-a");
+        let actor = transaction_account_actor(&principal, &local, &local).unwrap();
+        let foreign = ActorId::account(AccountId::new(principal.clone(), core("station-b")));
+        assert!(recovery_authorization_actor_matches(
+            &actor.to_string(),
+            &actor,
+            &actor
+        ));
+        assert!(!recovery_authorization_actor_matches(
+            &foreign.to_string(),
+            &foreign,
+            &actor
+        ));
+        assert!(!recovery_authorization_actor_matches(
+            &foreign.to_string(),
+            &actor,
+            &actor
+        ));
+        assert!(!recovery_authorization_actor_matches(
+            principal.as_str(),
+            &actor,
+            &actor
+        ));
+        let service = ActorId::service(principal);
+        assert!(!recovery_authorization_actor_matches(
+            &service.to_string(),
+            &service,
+            &actor
+        ));
     }
 }
