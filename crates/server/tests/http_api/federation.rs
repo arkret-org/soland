@@ -305,6 +305,42 @@ async fn peer_events_query_and_frontier_use_peer_surface_body() {
     );
     assert!(!page["has_more"].as_bool().unwrap_or(false), "{page:?}");
 
+    let resolve_target = "https://server.test/_arkret/peer/events/resolve";
+    let resolve_body = serde_json::json!({
+        "realm_id": test_realm_id(),
+        "event_ids": [expected_event_id],
+        "include_payload": true
+    });
+    let mut resolve = TestClient::query(resolve_target).json(&resolve_body);
+    for (name, value) in signed_federation_query_headers(
+        PEER_SOURCE_DID,
+        service_id(),
+        DESTINATION_TRUST_DOMAIN,
+        resolve_target,
+        &resolve_body,
+    ) {
+        resolve = resolve.add_header(name, value, true);
+    }
+    let resolved: Value = resolve
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        resolved["events"][0]["event"]["event_id"], expected_event_id,
+        "peer resolve must return EventFederationSubmission: {resolved:?}"
+    );
+    assert_eq!(
+        resolved["events"][0]["ingress_receipts"],
+        serde_json::json!([]),
+        "ordinary online acceptance has an explicit empty receipt set: {resolved:?}"
+    );
+    assert!(
+        resolved["events"][0].get("authorization_lease").is_none(),
+        "ordinary online acceptance must not synthesize delayed evidence: {resolved:?}"
+    );
+
     let frontier_target = "https://server.test/_arkret/peer/events/frontier";
     let frontier_body = serde_json::json!({"realm_id": test_realm_id()});
     let mut frontier = TestClient::query(frontier_target).json(&frontier_body);
@@ -1226,6 +1262,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         authorization_lease: Some(lease),
         ingress_receipts: vec![receipt],
         control_proposal_ack,
+        ackless_self_principal_admission_evidence: None,
         membership_compensation_evidence: None,
     }
 }

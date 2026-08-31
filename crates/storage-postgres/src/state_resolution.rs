@@ -238,6 +238,8 @@ struct ControlProposalSnapshotRow {
     #[diesel(sql_type = Nullable<Jsonb>)]
     control_proposal_ack: Option<Value>,
     #[diesel(sql_type = Jsonb)]
+    ingress_class: Value,
+    #[diesel(sql_type = Jsonb)]
     proposal_decisions: Value,
     #[diesel(sql_type = Array<Text>)]
     covering_seal_ids: Vec<String>,
@@ -1110,7 +1112,7 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
-                "SELECT c.digest_suite, c.event_json, c.control_proposal_ack, c.proposal_decisions, \
+                "SELECT c.digest_suite, c.event_json, c.control_proposal_ack, c.ingress_class, c.proposal_decisions, \
                         COALESCE( \
                           array_agg(b.seal_id ORDER BY b.seal_id) \
                             FILTER (WHERE b.seal_id IS NOT NULL), \
@@ -1123,7 +1125,7 @@ impl ControlEventStore for PgControlEventStore {
                                    WHERE q.seal_id = b.seal_id) \
                  WHERE c.event_digest=$1 \
                  GROUP BY c.event_digest, c.digest_suite, c.event_json, c.control_proposal_ack, \
-                          c.proposal_decisions",
+                          c.ingress_class, c.proposal_decisions",
             )
             .bind::<Text, _>(&digest)
             .get_result::<ControlProposalSnapshotRow>(&mut *conn)
@@ -1139,6 +1141,8 @@ impl ControlEventStore for PgControlEventStore {
                         .control_proposal_ack
                         .map(|value| serde_json::from_value(value).map_err(serde_to_store))
                         .transpose()?,
+                    ingress_class: serde_json::from_value(row.ingress_class)
+                        .map_err(serde_to_store)?,
                     decisions: serde_json::from_value(row.proposal_decisions)
                         .map_err(serde_to_store)?,
                     covering_seals: covering_seal_ids(row.covering_seal_ids)?,

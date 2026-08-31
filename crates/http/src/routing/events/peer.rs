@@ -42,6 +42,93 @@ const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_READ_LIMIT: usize = 100;
 
+async fn retained_federation_submission(
+    state: &AppState,
+    event: arkret_wire::Event,
+    event_digest: &arkret_wire::Hash,
+) -> Result<arkret_wire::EventFederationSubmission, AppError> {
+    let publication = state
+        .event_queries()
+        .publication_evidence(event_digest.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("publication evidence lookup: {error}")))?;
+    if publication
+        .as_ref()
+        .is_some_and(|record| record.realm_id != event.realm_id.as_str())
+    {
+        return Err(AppError::internal(
+            "stored publication evidence Realm does not match its Event",
+        ));
+    }
+    let control_proposal_ack = state
+        .event_queries()
+        .control_proposal_ack_for_digest(event_digest.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Control Proposal Ack lookup: {error}")))?;
+    let ackless_self_principal_admission_evidence = if event.kind.is_control_plane() {
+        let snapshot = state
+            .projections()
+            .control_proposal_snapshot(event_digest)
+            .map_err(|error| {
+                AppError::internal(format!("Control admission evidence lookup: {error}"))
+            })?
+            .ok_or_else(|| AppError::internal("accepted Control Event has no ingress snapshot"))?;
+        match snapshot.ingress_class {
+            arkret_state::state::store::ControlProposalIngressClass::AckRequired => {
+                if control_proposal_ack.is_none() {
+                    return Err(AppError::internal(
+                        "Ack-required Control Event has no durable Ack",
+                    ));
+                }
+                None
+            }
+            arkret_state::state::store::ControlProposalIngressClass::AcklessSelfPrincipal(
+                evidence,
+            ) => {
+                if control_proposal_ack.is_some() {
+                    return Err(AppError::internal(
+                        "Ack-less Control Event unexpectedly has a durable Ack",
+                    ));
+                }
+                Some(arkret_wire::AcklessSelfPrincipalAdmissionEvidence {
+                    device_id: arkret_wire::DeviceId::new(evidence.device_id)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                    device_authorize_event_id: arkret_wire::EventId::new(
+                        evidence.device_authorize_event_id,
+                    )
+                    .map_err(|error| AppError::internal(error.to_string()))?,
+                    device_generation_ref: evidence.device_generation_ref,
+                    seal_basis_digest: arkret_wire::Hash::new(evidence.seal_basis_digest)
+                        .map_err(|error| AppError::internal(error.to_string()))?,
+                })
+            }
+        }
+    } else {
+        None
+    };
+    let membership_compensation_evidence = state
+        .event_queries()
+        .membership_compensation_evidence(event.event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("membership compensation evidence lookup: {error}"))
+        })?
+        .map(|record| record.evidence);
+    Ok(arkret_wire::EventFederationSubmission {
+        event,
+        authorization_lease: publication
+            .as_ref()
+            .map(|record| record.authorization_lease.clone()),
+        ingress_receipts: publication
+            .into_iter()
+            .map(|record| record.ingress_receipt)
+            .collect(),
+        control_proposal_ack,
+        ackless_self_principal_admission_evidence,
+        membership_compensation_evidence,
+    })
+}
+
 pub(super) fn router() -> Router {
     Router::new()
         .push(
@@ -762,11 +849,6 @@ async fn peer_events_resolve(
     request
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    if request.history_traversal_access.is_some() && request.include_payload == Some(false) {
-        return Err(AppError::param_invalid(
-            "history traversal requires the complete accepted Event payload",
-        ));
-    }
     let source_id = source_id_from_request(req)?;
     for digest in &request.event_digests {
         if !is_valid_hash_digest(digest.as_str()) {
@@ -775,7 +857,6 @@ async fn peer_events_resolve(
             )));
         }
     }
-    let include_payload = request.include_payload.unwrap_or(true);
     let requested_ids = request
         .event_ids
         .iter()
@@ -822,9 +903,18 @@ async fn peer_events_resolve(
             }
             found_ids.insert(event.event_id.as_str().to_owned());
             found_digests.insert(event_digest.as_str().to_owned());
-            events.push(event);
+            let submission = retained_federation_submission(state, event, &event_digest).await?;
+            submission
+                .validate_structural(digest_suite)
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            events.push(submission);
         }
-        events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
+        events.sort_by(|left, right| {
+            left.event
+                .event_id
+                .as_str()
+                .cmp(right.event.event_id.as_str())
+        });
         let outcome = PeerEventsResolveOutcome {
             events,
             missing_event_ids: request
@@ -877,13 +967,25 @@ async fn peer_events_resolve(
         }
         found_ids.insert(record.event_id.clone());
         found_digests.insert(record.canonical_digest.clone());
-        let mut event = super::event_log::sdk_event_for_state(state, &record)?;
-        if !include_payload {
-            event.payload.clear();
-        }
-        events.push(event);
+        let event = super::event_log::sdk_event_for_state(state, &record)?;
+        let submission = retained_federation_submission(
+            state,
+            event,
+            &arkret_wire::Hash::new(record.canonical_digest.clone())
+                .map_err(|error| AppError::internal(error.to_string()))?,
+        )
+        .await?;
+        submission
+            .validate_structural(record.digest_suite)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        events.push(submission);
     }
-    events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
+    events.sort_by(|left, right| {
+        left.event
+            .event_id
+            .as_str()
+            .cmp(right.event.event_id.as_str())
+    });
     let mut missing_event_ids = Vec::new();
     for id in &request.event_ids {
         if !found_ids.contains(id.as_str()) {

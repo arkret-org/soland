@@ -3065,6 +3065,15 @@ pub(crate) async fn submit_federation_events(
                 // already receipted by its origin ingress, and the transported
                 // evidence is stored verbatim below instead.
                 control_proposal_ack: inbound_control_proposal_acks.get(&id),
+                ackless_self_principal_admission_evidence: submissions
+                    .iter()
+                    .find(|submission| submission.event.event_id.as_str() == id)
+                    .and_then(|submission| {
+                        submission
+                            .ackless_self_principal_admission_evidence
+                            .as_ref()
+                    }),
+                federation_source_id: Some(&source_id),
                 membership_compensation_evidence: submissions
                     .iter()
                     .find(|submission| submission.event.event_id.as_str() == id)

@@ -3082,6 +3082,15 @@ mod control_move_ingress_negatives {
                 arkret_canonical::DigestSuite::Sha256,
             )
             .unwrap();
+        let snapshot = stores
+            .control_event_store
+            .control_proposal_snapshot(&fixture.proposal_digest)
+            .unwrap()
+            .expect("the durable Control proposal snapshot must be readable");
+        assert!(matches!(
+            snapshot.ingress_class,
+            arkret_state::state::store::ControlProposalIngressClass::AckRequired
+        ));
         assert_eq!(
             control_seal_schedule_row_count(&pool, Some(fixture.realm_id.as_str())).await,
             1,

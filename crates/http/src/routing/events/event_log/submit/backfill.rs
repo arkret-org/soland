@@ -1,12 +1,5 @@
 use super::*;
 
-fn requires_separate_publication_evidence(event: &arkret_wire::Event) -> bool {
-    event.kind.is_control_plane()
-        || event.authorization_ref.as_ref().is_some_and(|reference| {
-            arkret_wire::MembershipCompensationDelegationRef::new(reference.as_str()).is_ok()
-        })
-}
-
 pub(in crate::routing) async fn verify_frontier_backfill_event(
     state: &AppState,
     event: &arkret_wire::Event,
@@ -27,8 +20,9 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
     state: &AppState,
     source_id: &str,
     source_trust_domain: &str,
-    event: &arkret_wire::Event,
+    submission: &arkret_wire::EventFederationSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let event = &submission.event;
     let digest_suite = trusted_federated_event_digest_suites(state, &[event])
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error))?
         [0];
@@ -44,24 +38,6 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
     let (method, key) = verify_federated_event_admission(state, event, digest_suite)
         .await
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_proof", error))?;
-    // The read rail does not carry independent publication evidence. Never
-    // enter self-publication's Ack minting fallback with a replicated Control
-    // Event, including an anchor or an ACKLESS class whose authority still
-    // needs its own dedicated replay context.
-    if requires_separate_publication_evidence(event) {
-        return Err(SubmitOneError::new(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "temporarily_unavailable",
-            "backfill_publication_evidence_unavailable",
-        ));
-    }
-    let submission = arkret_wire::EventFederationSubmission {
-        event: event.clone(),
-        authorization_lease: None,
-        ingress_receipts: Vec::new(),
-        control_proposal_ack: None,
-        membership_compensation_evidence: None,
-    };
     submission
         .validate_structural(digest_suite)
         .map_err(|error| {
@@ -71,6 +47,32 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
                 error.to_string(),
             )
         })?;
+    validate_membership_compensation_semantics(
+        event,
+        submission.membership_compensation_evidence.as_ref(),
+    )?;
+    if let Some(lease) = &submission.authorization_lease {
+        validate_authorization_lease_for_event(state, None, event, lease).await?;
+        validate_ingress_receipt_proofs(state, &submission.ingress_receipts, lease).await?;
+        store_inbound_publication_evidence(
+            state,
+            &InboundPublicationEvidence {
+                event_digest: event.event_digest_with_digest_suite(digest_suite).map_err(
+                    |error| {
+                        SubmitOneError::new(
+                            StatusCode::BAD_REQUEST,
+                            "event_id_digest_mismatch",
+                            error.to_string(),
+                        )
+                    },
+                )?,
+                realm_id: event.realm_id.to_string(),
+                authorization_lease: lease.clone(),
+                ingress_receipts: submission.ingress_receipts.clone(),
+            },
+        )
+        .await?;
+    }
     let envelope = typed_event_to_canonical_value(event.clone())?;
     let profile = crate::routing::federation::federation::federation_profile_intersection_for_peer(
         state,
@@ -167,6 +169,12 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         envelope,
         SubmitEventContext {
             internal_admission: Some(&admission),
+            control_proposal_ack: submission.control_proposal_ack.as_ref(),
+            ackless_self_principal_admission_evidence: submission
+                .ackless_self_principal_admission_evidence
+                .as_ref(),
+            federation_source_id: Some(source_id),
+            membership_compensation_evidence: submission.membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
         SubmitMode::Commit(SubmitCommitOptions {
@@ -179,10 +187,8 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
-    fn frontier_backfill_never_treats_bare_control_or_compensation_as_online_data() {
+    fn frontier_backfill_detects_controls_and_compensation_that_need_evidence() {
         let mut event = arkret_wire::test_support::raw_event_at(
             "ak.message.create",
             arkret_wire::ScopeRef::Realm {
@@ -199,14 +205,14 @@ mod tests {
             chrono::Utc::now(),
         )
         .unwrap();
-        assert!(!requires_separate_publication_evidence(&event));
+        assert!(!event.kind.is_control_plane());
         for kind in [
             arkret_wire::EventKind::MemberState,
             arkret_wire::EventKind::DeviceRevoke,
             arkret_wire::EventKind::RealmCreate,
         ] {
             event.kind = kind;
-            assert!(requires_separate_publication_evidence(&event));
+            assert!(event.kind.is_control_plane());
         }
         event.kind = arkret_wire::EventKind::MessageCreate;
         event.authorization_ref = Some(
@@ -216,6 +222,8 @@ mod tests {
             ))
             .unwrap(),
         );
-        assert!(requires_separate_publication_evidence(&event));
+        assert!(event.authorization_ref.as_ref().is_some_and(|reference| {
+            arkret_wire::MembershipCompensationDelegationRef::new(reference.as_str()).is_ok()
+        }));
     }
 }

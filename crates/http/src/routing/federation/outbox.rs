@@ -2770,6 +2770,7 @@ mod tests {
                 authorization_lease: Some(lease),
                 ingress_receipts: vec![receipt],
                 control_proposal_ack: None,
+                ackless_self_principal_admission_evidence: None,
                 membership_compensation_evidence: None,
             }
         };

@@ -299,24 +299,52 @@ async fn federation_submissions(
     for (event, digest) in events.iter().zip(digests) {
         let record = by_digest.get(&digest);
         let is_control_move = event.kind.is_control_plane();
-        let control_proposal_ack = if is_control_move {
-            // A current accepted device is the proposal authority in its own
-            // Human PCR. This class is intentionally federated without an Ack;
-            // receivers run the same accepted-state admission check and still
-            // require the successor Seal before applying the Move.
-            if matches!(
-                super::value::self_principal_pcr_control_authority(state, event).await?,
-                super::value::SelfPrincipalPcrAuthority::Authorized(_)
-            ) {
+        let proposal_digest = is_control_move
+            .then(|| arkret_identifiers::Hash::new(digest.clone()))
+            .transpose()
+            .map_err(|error| {
+                format!(
+                    "Control Move {} digest is not a typed Hash: {error}",
+                    event.event_id
+                )
+            })?;
+        let durable_snapshot = proposal_digest
+            .as_ref()
+            .map(|digest| state.projections().control_proposal_snapshot(digest))
+            .transpose()
+            .map_err(|error| {
+                format!(
+                    "failed to read Control Move {} ingress evidence for federation: {error}",
+                    event.event_id
+                )
+            })?
+            .flatten();
+        let ackless_self_principal_admission_evidence = durable_snapshot
+            .as_ref()
+            .and_then(|snapshot| match &snapshot.ingress_class {
+                arkret_state::state::store::ControlProposalIngressClass::AcklessSelfPrincipal(
+                    evidence,
+                ) => Some(evidence),
+                arkret_state::state::store::ControlProposalIngressClass::AckRequired => None,
+            })
+            .map(|evidence| {
+                Ok::<_, String>(arkret_wire::AcklessSelfPrincipalAdmissionEvidence {
+                    device_id: arkret_wire::DeviceId::new(evidence.device_id.clone())
+                        .map_err(|error| error.to_string())?,
+                    device_authorize_event_id: arkret_wire::EventId::new(
+                        evidence.device_authorize_event_id.clone(),
+                    )
+                    .map_err(|error| error.to_string())?,
+                    device_generation_ref: evidence.device_generation_ref,
+                    seal_basis_digest: arkret_wire::Hash::new(evidence.seal_basis_digest.clone())
+                        .map_err(|error| error.to_string())?,
+                })
+            })
+            .transpose()?;
+        let control_proposal_ack = if let Some(proposal_digest) = proposal_digest {
+            if ackless_self_principal_admission_evidence.is_some() {
                 None
             } else {
-                let proposal_digest =
-                    arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
-                        format!(
-                            "Control Move {} digest is not a typed Hash: {error}",
-                            event.event_id
-                        )
-                    })?;
                 if let Some(ack) = current_control_proposal_ack
                     .filter(|ack| ack.proposal_digest == proposal_digest)
                     .or_else(|| {
@@ -354,6 +382,7 @@ async fn federation_submissions(
                 .map(|record| vec![record.ingress_receipt.clone()])
                 .unwrap_or_default(),
             control_proposal_ack,
+            ackless_self_principal_admission_evidence,
             membership_compensation_evidence: membership_compensation_evidence
                 .filter(|evidence| {
                     authorization_selects_compensation(

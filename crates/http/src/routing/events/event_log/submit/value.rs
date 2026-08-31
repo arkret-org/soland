@@ -30,6 +30,9 @@ pub(super) struct SubmitEventContext<'a> {
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
     pub(super) authorization_lease: Option<&'a arkret_wire::AuthorizationLease>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
+    pub(super) ackless_self_principal_admission_evidence:
+        Option<&'a arkret_wire::AcklessSelfPrincipalAdmissionEvidence>,
+    pub(super) federation_source_id: Option<&'a str>,
     pub(super) membership_compensation_evidence:
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
 }
@@ -44,6 +47,8 @@ impl SubmitEventContext<'_> {
             internal_admission: None,
             authorization_lease: None,
             control_proposal_ack: None,
+            ackless_self_principal_admission_evidence: None,
+            federation_source_id: None,
             membership_compensation_evidence: None,
         }
     }
@@ -1120,8 +1125,16 @@ fn self_principal_pcr_device_query(
     actor: &arkret_wire::ActorId,
     device_id: String,
 ) -> Option<soland_services::identity::FindDeviceQuery> {
+    self_principal_pcr_device_query_for_station(actor, &state.service_core_id(), device_id)
+}
+
+fn self_principal_pcr_device_query_for_station(
+    actor: &arkret_wire::ActorId,
+    station_id: &arkret_wire::DidCoreId,
+    device_id: String,
+) -> Option<soland_services::identity::FindDeviceQuery> {
     let account = actor.as_account_id()?;
-    if account.station_id != state.service_core_id() {
+    if &account.station_id != station_id {
         return None;
     }
     // The inventory is Station-private and keyed by signing principal. Only
@@ -1328,12 +1341,24 @@ pub(in crate::routing::events::event_log) async fn replay_ackless_self_principal
     event: &Event,
     class: &AcklessSelfPrincipalIngress,
 ) -> Result<Option<&'static str>, String> {
+    replay_ackless_self_principal_ingress_for_station(state, event, class, &state.service_core_id())
+        .await
+}
+
+async fn replay_ackless_self_principal_ingress_for_station(
+    state: &AppState,
+    event: &Event,
+    class: &AcklessSelfPrincipalIngress,
+    station_id: &arkret_wire::DidCoreId,
+) -> Result<Option<&'static str>, String> {
     if let Some(reason) = self_principal_pcr_control_shape_rejection(event) {
         return Ok(Some(reason));
     }
-    let Some(device_query) =
-        self_principal_pcr_device_query(state, &event.actor_id, class.device_id.clone())
-    else {
+    let Some(device_query) = self_principal_pcr_device_query_for_station(
+        &event.actor_id,
+        station_id,
+        class.device_id.clone(),
+    ) else {
         return Ok(Some("event actor is not an Account at this Station"));
     };
     if self_principal_pcr_device_id(event).as_deref() != Some(class.device_id.as_str()) {
@@ -2155,7 +2180,51 @@ pub(super) async fn submit_event_value_with_context(
     let received_at = now();
     let control_event_for_proposal =
         Some(submitted_event.clone()).filter(|event| event.kind.is_control_plane());
-    let ackless_self_principal_ingress = if let Some(event) = control_event_for_proposal
+    let ackless_self_principal_ingress = if let Some(evidence) =
+        context.ackless_self_principal_admission_evidence
+    {
+        let event = control_event_for_proposal.as_ref().ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "Ack-less self-principal evidence requires a Control Move",
+            )
+        })?;
+        let source_id = context.federation_source_id.ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "Ack-less self-principal evidence requires a federation source",
+            )
+        })?;
+        let source_id = arkret_wire::DidCoreId::new(source_id.to_owned()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                format!("Ack-less federation source is invalid: {error}"),
+            )
+        })?;
+        let class = AcklessSelfPrincipalIngress {
+            device_id: evidence.device_id.to_string(),
+            device_authorize_event_id: evidence.device_authorize_event_id.to_string(),
+            device_generation_ref: evidence.device_generation_ref,
+            seal_basis_digest: evidence.seal_basis_digest.to_string(),
+        };
+        if let Some(reason) =
+            replay_ackless_self_principal_ingress_for_station(state, event, &class, &source_id)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
+                })?
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                format!("Ack-less self-principal admission evidence is invalid: {reason}"),
+            ));
+        }
+        Some(class)
+    } else if let Some(event) = control_event_for_proposal
         .as_ref()
         .filter(|event| event.kind != arkret_wire::EventKind::DeviceRevoke)
     {

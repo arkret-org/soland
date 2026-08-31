@@ -324,7 +324,8 @@ impl RrkAcquisitionWorker {
             if !outcome.missing_event_ids.is_empty() || !outcome.missing_event_digests.is_empty() {
                 return Err("event_dependency_missing".to_owned());
             }
-            for event in outcome.events {
+            for submission in outcome.events {
+                let event = submission.event;
                 let matching = batch
                     .iter()
                     .filter(|expected| {

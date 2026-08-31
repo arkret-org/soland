@@ -252,7 +252,9 @@ impl FrontierExchangeWorker {
             EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
         };
         let actor_set = actors.iter().cloned().collect::<BTreeSet<_>>();
-        let mut pending = Vec::new();
+        let mut pending: Vec<arkret_wire::EventFederationSubmission> = Vec::new();
+        let mut selectors = remote.head_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let mut disclosed_positions = BTreeSet::new();
         let mut bytes = 0;
         let mut pages = 0;
         let mut trust_domain = String::new();
@@ -287,7 +289,13 @@ impl FrontierExchangeWorker {
                     if event.realm_id != remote.realm_id || event.actor_id != *actor {
                         return Err("schema_violation:challenge_selector_mismatch".to_owned());
                     }
-                    pending.push(event);
+                    crate::routing::events::event_log::verify_frontier_backfill_event(
+                        &self.state,
+                        &event,
+                    )
+                    .await?;
+                    disclosed_positions.insert((event.actor_id.clone(), event.actor_seq));
+                    selectors.insert(event.event_id);
                 }
                 if !page.has_more {
                     break;
@@ -303,13 +311,13 @@ impl FrontierExchangeWorker {
         }
         // Resolve advertised heads, then verified predecessor dependencies.
         // A finite selector and byte budget bounds even adversarial DAGs.
-        let mut selectors = remote.head_ids.iter().cloned().collect::<BTreeSet<_>>();
         let mut dependencies = BTreeSet::new();
         let mut resolved = BTreeSet::new();
         let mut admitted = BTreeSet::new();
         let mut dependency_closure_complete = false;
         for _ in 0..64 {
-            for event in &pending {
+            for submission in &pending {
+                let event = &submission.event;
                 crate::routing::events::event_log::verify_frontier_backfill_event(
                     &self.state,
                     event,
@@ -362,7 +370,14 @@ impl FrontierExchangeWorker {
                 if pages > 128 || bytes > 64 * 1024 * 1024 {
                     return Err("temporarily_unavailable:dependency_budget".to_owned());
                 }
-                for event in &outcome.events {
+                for submission in &outcome.events {
+                    let event = &submission.event;
+                    let digest_suite = arkret::signed_event_digest_claim(event)
+                        .and_then(|digest| digest.digest_suite().map_err(Into::into))
+                        .map_err(|error| format!("schema_violation:{error}"))?;
+                    submission
+                        .validate_structural(digest_suite)
+                        .map_err(|error| format!("schema_violation:{error}"))?;
                     crate::routing::events::event_log::verify_frontier_backfill_event(
                         &self.state,
                         event,
@@ -380,7 +395,7 @@ impl FrontierExchangeWorker {
                 if outcome
                     .events
                     .iter()
-                    .any(|event| event.realm_id != remote.realm_id)
+                    .any(|submission| submission.event.realm_id != remote.realm_id)
                 {
                     return Err("schema_violation:dependency_realm_mismatch".to_owned());
                 }
@@ -394,37 +409,37 @@ impl FrontierExchangeWorker {
         // never expand the replication obligation of this exchange.
         for actor in actors {
             let upper = remote.actor_seq_upper_bounds[actor];
-            if !pending
-                .iter()
-                .any(|event| event.actor_id == *actor && event.actor_seq == upper)
-            {
+            if !disclosed_positions.contains(&(actor.clone(), upper)) {
                 return Err("schema_violation:advertised_actor_bound_not_disclosed".to_owned());
             }
         }
-        pending.retain(|event| {
+        pending.retain(|submission| {
+            let event = &submission.event;
             actor_set.contains(&event.actor_id) || dependencies.contains(&event.event_id)
         });
-        pending.sort_by(|a, b| (a.actor_seq, &a.event_id).cmp(&(b.actor_seq, &b.event_id)));
+        pending.sort_by(|a, b| {
+            (a.event.actor_seq, &a.event.event_id).cmp(&(b.event.actor_seq, &b.event.event_id))
+        });
         for _ in 0..64 {
             if pending.is_empty() {
                 return Ok(admitted);
             }
             let mut retry = Vec::new();
             let mut progress = false;
-            for event in pending {
+            for submission in pending {
                 match crate::routing::events::event_log::admit_frontier_backfill_event(
                     &self.state,
                     peer_id.as_str(),
                     &trust_domain,
-                    &event,
+                    &submission,
                 )
                 .await
                 {
                     Ok(_) => {
-                        admitted.insert(event.event_id.to_string());
+                        admitted.insert(submission.event.event_id.to_string());
                         progress = true;
                     }
-                    Err(error) if error.code == "dependency_missing" => retry.push(event),
+                    Err(error) if error.code == "dependency_missing" => retry.push(submission),
                     Err(error) => {
                         if error.quarantine_event_id.is_some() {
                             return Err(error.code);
