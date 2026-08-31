@@ -90,15 +90,7 @@ fn moderation_decision_id(operation: &Operation) -> String {
 }
 
 fn moderation_request_canonical_digest(operation: &Operation) -> Option<String> {
-    payload_str(operation, "request_canonical_digest").or_else(|| {
-        operation
-            .payload
-            .get("policy_decision_ref")
-            .and_then(|value| value.get("request_canonical_digest"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-    })
+    payload_str(operation, "request_canonical_digest")
 }
 
 /// The 0-based index of `ak.component.moderation_state.v1` in the

@@ -139,21 +139,4 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         .map(|rows| rows.into_iter().map(PolicyDocumentRecord::from).collect())
         .map_err(PersistenceError::database)
     }
-
-    async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        // Linear scan in Pg — same semantics as Memory backend but driven by
-        // a SELECT. The row count is small (per-Realm policy documents) so a
-        // full table walk is acceptable. Callers apply their own match
-        // predicate on the returned rows.
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let rows: Vec<PolicyDocumentRow> = sql_query(
-            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
-             FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, id ASC",
-        )
-        .load::<PolicyDocumentRow>(&mut *conn).await
-        .map_err(PersistenceError::database)?;
-        Ok(rows.into_iter().map(PolicyDocumentRecord::from).collect())
-    }
 }

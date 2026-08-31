@@ -837,19 +837,6 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
             .collect())
     }
 
-    async fn active_policy_documents(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::governance::PolicyDocumentRecord>> {
-        Ok(self
-            .0
-            .policy_documents()
-            .list_active()
-            .await?
-            .into_iter()
-            .map(application_policy_document)
-            .collect())
-    }
-
     async fn retention_policy(
         &self,
         realm_id: &str,
