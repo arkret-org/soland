@@ -134,7 +134,7 @@ pub(crate) async fn contact_continuity_checkpoint(
     let replay_key = format!("contact-checkpoint:{}", body.idempotency_key.as_str());
     if let Some(stored) = state
         .jobs()
-        .idempotency_record(&principal_id, &replay_key)
+        .scoped_idempotency_record(&holder, "ak.self.contact.command.checkpoint", &replay_key)
         .await
         .map_err(|error| AppError::internal(format!("checkpoint replay lookup: {error}")))?
     {
@@ -253,9 +253,9 @@ pub(crate) async fn contact_continuity_checkpoint(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id,
+            authenticated_actor: holder,
+            operation_id: "ak.self.contact.command.checkpoint".to_owned(),
             idempotency_key: replay_key,
-            service_id: state.service_core_id(),
             request_hash,
             response_status: salvo::http::StatusCode::OK.as_u16().into(),
             response_body: serde_json::to_value(&outcome)

@@ -904,10 +904,14 @@ pub(super) async fn register_package_install(
         authoring_preview_subject_key,
         authoring_request_digest,
         crate::routing::events::event_log::EventCommitIdempotency {
-            principal_id: arkret_wire::DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+                    AppError::internal(format!("session actor invalid: {error}"))
+                })?,
+                state.service_core_id(),
+            )),
+            operation_id: "ak.self.applet.command.install".to_owned(),
             key: record.idempotency_key.clone(),
-            service_id: state.service_core_id(),
             request_hash: record.install_body_digest.to_string(),
         },
         serde_json::to_value(&response)

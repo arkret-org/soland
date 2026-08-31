@@ -868,9 +868,9 @@ pub enum ProjectedEventAppendResult {
 
 #[derive(Clone, Debug)]
 pub struct IdempotentResponse {
-    pub principal_id: DidCoreId,
+    pub authenticated_actor: arkret_wire::ActorId,
+    pub operation_id: String,
     pub key: String,
-    pub service_id: DidCoreId,
     pub request_hash: String,
     pub status: i32,
     pub body: Value,
@@ -1092,9 +1092,9 @@ pub trait EventReadPort: Send + Sync {
         &self,
         event_id: &str,
     ) -> ServiceResult<Vec<EventBatchReceipt>>;
-    async fn identity_anchor_account_slot_for_principal(
+    async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>>;
     async fn control_proposal_ack_for_digest(
         &self,
@@ -1489,13 +1489,11 @@ impl EventQueryService {
             .canonical_batch_receipts_for_event(event_id)
             .await
     }
-    pub async fn identity_anchor_account_slot_for_principal(
+    pub async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>> {
-        self.events
-            .identity_anchor_account_slot_for_principal(principal_id)
-            .await
+        self.events.identity_anchor_account_slot(account_id).await
     }
     pub async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats> {
         self.events.realm_event_stats(realm_id).await

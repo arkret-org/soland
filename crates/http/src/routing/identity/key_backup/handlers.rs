@@ -242,9 +242,17 @@ pub(super) async fn put_key_backup(
             "key backup body is not canonical-hashable: {error}"
         ))
     })?;
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        idempotency_principal_id.clone(),
+        state.service_core_id(),
+    ));
     match state
         .jobs()
-        .idempotency_record(&idempotency_principal_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.keys.backups.resource.replace",
+            &idempotency_key,
+        )
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
     {
@@ -348,9 +356,12 @@ async fn persist_key_backup_idempotency(
         }
     };
     let record = soland_services::jobs::IdempotencyState {
-        principal_id: principal_id.clone(),
+        authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal_id.clone(),
+            state.service_core_id(),
+        )),
+        operation_id: "ak.self.keys.backups.resource.replace".to_owned(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: StatusCode::OK.as_u16() as i32,
         response_body,
@@ -576,9 +587,17 @@ pub(super) async fn delete_key_backup(
             "delete request body is not canonical-hashable: {error}"
         ))
     })?;
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        idempotency_principal_id.clone(),
+        state.service_core_id(),
+    ));
     match state
         .jobs()
-        .idempotency_record(&idempotency_principal_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.keys.backups.resource.delete",
+            &idempotency_key,
+        )
         .await
     {
         Ok(Some(record)) if record.request_hash == request_hash => {
@@ -683,9 +702,12 @@ async fn record_delete_idempotency(
     };
     let created_at = chrono::Utc::now();
     let record = soland_services::jobs::IdempotencyState {
-        principal_id: actor_id.clone(),
+        authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor_id.clone(),
+            state.service_core_id(),
+        )),
+        operation_id: "ak.self.keys.backups.resource.delete".to_owned(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: 200,
         response_body,

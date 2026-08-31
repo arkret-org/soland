@@ -265,7 +265,24 @@ impl PersistenceHandle {
         Ok(self
             .persistence
             .idempotency_keys()
-            .get(principal_id, idempotency_key)
+            .get(
+                &arkret_wire::ActorId::service(principal_id.clone()),
+                crate::jobs::INTERNAL_IDEMPOTENCY_OPERATION,
+                idempotency_key,
+            )
+            .await?)
+    }
+
+    pub async fn scoped_idempotency_record(
+        &self,
+        authenticated_actor: &arkret_wire::ActorId,
+        operation_id: &str,
+        idempotency_key: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::IdempotencyRecord>> {
+        Ok(self
+            .persistence
+            .idempotency_keys()
+            .get(authenticated_actor, operation_id, idempotency_key)
             .await?)
     }
 
@@ -909,6 +926,17 @@ impl soland_storage::ServiceRouteStore for PersistenceHandle {
         self.persistence
             .service_routes()
             .advance_last_seen_floor(floor)
+            .await
+    }
+
+    async fn publish_route_cache(
+        &self,
+        floor: arkret_models_identity::ServiceResolutionLastSeenFloor,
+        entry: arkret_models_identity::ServiceRouteCacheEntry,
+    ) -> PersistenceResult<soland_storage::MonotonicRouteWrite> {
+        self.persistence
+            .service_routes()
+            .publish_route_cache(floor, entry)
             .await
     }
 

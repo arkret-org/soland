@@ -1061,8 +1061,8 @@ mod tests {
             crate::state::EventNotificationKind::Account {
                 account_id: ref received_account_id,
                 recipient_id: ref received_recipient_id,
-            } if received_account_id == &account_id.to_string()
-                && received_recipient_id == state.service_id()
+            } if received_account_id == &account_id
+                && received_recipient_id.as_str() == state.service_id()
         ));
         for device_id in [first_device, second_device] {
             let queued = state

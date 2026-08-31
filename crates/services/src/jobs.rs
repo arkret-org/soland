@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
 use arkret_identifiers::DidCoreId;
+use arkret_wire::ActorId;
+
+pub const INTERNAL_IDEMPOTENCY_OPERATION: &str = "soland://internal/idempotency";
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -13,6 +16,12 @@ pub trait MaintenancePort: Send + Sync {
     async fn idempotency_record(
         &self,
         principal_id: &DidCoreId,
+        key: &str,
+    ) -> ServiceResult<Option<IdempotencyState>>;
+    async fn idempotency_record_scoped(
+        &self,
+        authenticated_actor: &ActorId,
+        operation_id: &str,
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>>;
     async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
@@ -37,9 +46,9 @@ pub trait RuntimeHealthPort: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct IdempotencyState {
-    pub principal_id: DidCoreId,
+    pub authenticated_actor: ActorId,
+    pub operation_id: String,
     pub idempotency_key: String,
-    pub service_id: DidCoreId,
     pub request_hash: String,
     pub response_status: i32,
     pub response_body: Value,
@@ -103,6 +112,16 @@ impl JobsService {
     ) -> ServiceResult<Option<IdempotencyState>> {
         self.maintenance.idempotency_record(principal_id, key).await
     }
+    pub async fn scoped_idempotency_record(
+        &self,
+        authenticated_actor: &ActorId,
+        operation_id: &str,
+        key: &str,
+    ) -> ServiceResult<Option<IdempotencyState>> {
+        self.maintenance
+            .idempotency_record_scoped(authenticated_actor, operation_id, key)
+            .await
+    }
     pub async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()> {
         self.maintenance.store_idempotency_record(record).await
     }
@@ -165,6 +184,14 @@ mod tests {
         async fn idempotency_record(
             &self,
             _principal_id: &DidCoreId,
+            _key: &str,
+        ) -> ServiceResult<Option<IdempotencyState>> {
+            Ok(None)
+        }
+        async fn idempotency_record_scoped(
+            &self,
+            _authenticated_actor: &ActorId,
+            _operation_id: &str,
             _key: &str,
         ) -> ServiceResult<Option<IdempotencyState>> {
             Ok(None)

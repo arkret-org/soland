@@ -1305,17 +1305,19 @@ impl EventStore for PgEventStore {
                 if let Some(slot) = account_slot {
                     let affected = sql_query(
                         "INSERT INTO identity_anchor_account_slots \
-                            (account_authority_id, account_subject, principal_id, realm_id, create_event_id) \
-                         VALUES ($1, $2, $3, $4, $5) \
+                            (account_authority_id, account_subject, principal_id, station_id, realm_id, create_event_id) \
+                         VALUES ($1, $2, $3, $4, $5, $6) \
                          ON CONFLICT (account_authority_id, account_subject) DO UPDATE SET \
                             principal_id = EXCLUDED.principal_id \
                          WHERE identity_anchor_account_slots.principal_id = EXCLUDED.principal_id \
+                           AND identity_anchor_account_slots.station_id = EXCLUDED.station_id \
                            AND identity_anchor_account_slots.realm_id = EXCLUDED.realm_id \
                            AND identity_anchor_account_slots.create_event_id = EXCLUDED.create_event_id",
                     )
                     .bind::<Text, _>(&slot.account_authority_id)
                     .bind::<Text, _>(&slot.account_subject)
-                    .bind::<Text, _>(&slot.principal_id)
+                    .bind::<Text, _>(slot.account_id.principal_id.as_str())
+                    .bind::<Text, _>(slot.account_id.station_id.as_str())
                     .bind::<Text, _>(&slot.realm_id)
                     .bind::<Text, _>(&slot.create_event_id)
                     .execute(conn)
@@ -1472,9 +1474,9 @@ impl EventStore for PgEventStore {
         rows.into_iter().map(EventBatchReceipt::try_from).collect()
     }
 
-    async fn identity_anchor_account_slot_for_principal(
+    async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>> {
         #[derive(QueryableByName)]
         struct AccountSlotRow {
@@ -1485,6 +1487,8 @@ impl EventStore for PgEventStore {
             #[diesel(sql_type = Text)]
             principal_id: arkret_identifiers::DidCoreId,
             #[diesel(sql_type = Text)]
+            station_id: arkret_identifiers::DidCoreId,
+            #[diesel(sql_type = Text)]
             realm_id: String,
             #[diesel(sql_type = Text)]
             create_event_id: String,
@@ -1494,10 +1498,11 @@ impl EventStore for PgEventStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT account_authority_id, account_subject, principal_id, realm_id, create_event_id \
-             FROM identity_anchor_account_slots WHERE principal_id = $1 LIMIT 2",
+            "SELECT account_authority_id, account_subject, principal_id, station_id, realm_id, create_event_id \
+             FROM identity_anchor_account_slots WHERE principal_id = $1 AND station_id = $2 LIMIT 2",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(account_id.principal_id.as_str())
+        .bind::<Text, _>(account_id.station_id.as_str())
         .load::<AccountSlotRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -1506,12 +1511,15 @@ impl EventStore for PgEventStore {
             [row] => Ok(Some(IdentityAnchorAccountSlot {
                 account_authority_id: row.account_authority_id.clone(),
                 account_subject: row.account_subject.clone(),
-                principal_id: row.principal_id.clone(),
+                account_id: arkret_wire::AccountId::new(
+                    row.principal_id.clone(),
+                    row.station_id.clone(),
+                ),
                 realm_id: row.realm_id.clone(),
                 create_event_id: row.create_event_id.clone(),
             })),
             _ => Err(PersistenceError::Conflict(
-                "principal has multiple identity-anchor account slots".to_owned(),
+                "account has multiple identity-anchor account slots".to_owned(),
             )),
         }
     }

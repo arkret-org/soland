@@ -111,12 +111,12 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<EventBatchReceipt>>;
-    /// Accepted identity-anchor account binding for one stable principal.
+    /// Accepted identity-anchor binding for one exact protocol Account.
     /// This is service-internal authority evidence and is never projected to
     /// holder sync as AccountData.
-    async fn identity_anchor_account_slot_for_principal(
+    async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>>;
     /// Control Proposal Ack committed in the same durable unit as `proposal_digest`.
     ///
@@ -184,7 +184,7 @@ pub struct IdentityAnchorFrontierCas {
 pub struct IdentityAnchorAccountSlot {
     pub account_authority_id: String,
     pub account_subject: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub realm_id: String,
     pub create_event_id: String,
 }

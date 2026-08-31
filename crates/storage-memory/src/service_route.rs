@@ -313,6 +313,51 @@ impl ServiceRouteStore for MemoryServiceRouteStore {
         Ok(outcome)
     }
 
+    async fn publish_route_cache(
+        &self,
+        floor: ServiceResolutionLastSeenFloor,
+        entry: ServiceRouteCacheEntry,
+    ) -> PersistenceResult<MonotonicRouteWrite> {
+        if entry.service_id != floor.service_id
+            || entry.service_kind != floor.service_kind
+            || entry.record_sequence != floor.record_sequence
+            || entry.record_digest != floor.record_digest
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "route cache entry does not match its accepted floor".to_owned(),
+            ));
+        }
+        let key = service_key(&floor.service_id, &floor.service_kind);
+        let mut state = self.state.lock();
+        let outcome = match state.floors.get(&key) {
+            Some(current) if current.record_sequence > floor.record_sequence => {
+                MonotonicRouteWrite::Stale
+            }
+            Some(current)
+                if current.record_sequence == floor.record_sequence
+                    && current.record_digest == floor.record_digest =>
+            {
+                MonotonicRouteWrite::Replay
+            }
+            Some(current) if current.record_sequence == floor.record_sequence => {
+                MonotonicRouteWrite::Conflict {
+                    accepted_digest: current.record_digest.clone(),
+                }
+            }
+            _ => {
+                state.floors.insert(key.clone(), floor);
+                MonotonicRouteWrite::Applied
+            }
+        };
+        if matches!(
+            &outcome,
+            MonotonicRouteWrite::Applied | MonotonicRouteWrite::Replay
+        ) {
+            state.cache.insert(key, entry);
+        }
+        Ok(outcome)
+    }
+
     async fn notice_state(
         &self,
         service_id: &DidCoreId,
@@ -554,6 +599,32 @@ mod tests {
         }
     }
 
+    fn cache_entry(
+        record_sequence: u64,
+        record_digest: Hash,
+        base_url: &str,
+    ) -> ServiceRouteCacheEntry {
+        let route = record();
+        let now = route.record.issued_at;
+        ServiceRouteCacheEntry {
+            service_id: route.record.service_id,
+            service_kind: route.record.service_kind,
+            did: route.record.did,
+            method_history_head: route.record.method_history_head,
+            version_id: route.record.version_id,
+            record_sequence,
+            record_digest,
+            base_url: base_url.to_owned(),
+            current_record_url: route.record.current_record_url,
+            describe_digest: route.record.describe_digest,
+            verified_at: now,
+            refresh_after: route.record.refresh_after,
+            expires_at: route.record.expires_at,
+            cached_at: now,
+            cache_expires_at: route.record.expires_at,
+        }
+    }
+
     fn mirror(request_id: &str, artifact_digest: Hash) -> ServiceResolutionMirrorEntry {
         let source = DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let realm_id =
@@ -674,6 +745,47 @@ mod tests {
                 .is_quarantined(&floor.service_id, &floor.service_kind)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn stale_floor_cannot_overwrite_published_route_cache() {
+        let store = MemoryServiceRouteStore::new();
+        let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 2, 0).unwrap();
+        let accepted = cache_entry(8, hash('b'), "https://successor.example/");
+        let accepted_floor = ServiceResolutionLastSeenFloor {
+            service_id: accepted.service_id.clone(),
+            service_kind: accepted.service_kind.clone(),
+            record_sequence: accepted.record_sequence,
+            record_digest: accepted.record_digest.clone(),
+            verified_at: now,
+        };
+        assert_eq!(
+            store
+                .publish_route_cache(accepted_floor, accepted.clone())
+                .await
+                .unwrap(),
+            MonotonicRouteWrite::Applied
+        );
+
+        let stale = cache_entry(7, hash('a'), "https://stale.example/");
+        let stale_floor = ServiceResolutionLastSeenFloor {
+            service_id: stale.service_id.clone(),
+            service_kind: stale.service_kind.clone(),
+            record_sequence: stale.record_sequence,
+            record_digest: stale.record_digest.clone(),
+            verified_at: now,
+        };
+        assert_eq!(
+            store.publish_route_cache(stale_floor, stale).await.unwrap(),
+            MonotonicRouteWrite::Stale
+        );
+        assert_eq!(
+            store
+                .route_cache(&accepted.service_id, &accepted.service_kind)
+                .await
+                .unwrap(),
+            Some(accepted)
         );
     }
 

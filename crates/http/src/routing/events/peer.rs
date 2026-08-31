@@ -306,9 +306,9 @@ async fn peer_account_status_submit(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: idempotency_principal_id,
+            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key,
-            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(&outcome)

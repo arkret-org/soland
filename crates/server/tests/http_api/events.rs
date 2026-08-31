@@ -838,7 +838,11 @@ async fn events_describe_and_single_event_submit_work_body() {
         .test_persistence()
         .idempotency_keys()
         .get(
-            &fixture_actor_core_id("did:web:alice.example"),
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                fixture_actor_core_id("did:web:alice.example"),
+                state.service_core_id(),
+            )),
+            "ak.self.events.command.submit",
             "single-event-atomic-commit",
         )
         .await

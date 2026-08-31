@@ -525,7 +525,11 @@ pub(super) async fn submit_identity_anchor_batch(
                 .expect("PCR genesis audience checked above")
                 .to_string(),
             account_subject: pins.account_subject.to_string(),
-            principal_id: first.actor_id.clone(),
+            account_id: first
+                .actor
+                .as_account_id()
+                .expect("PCR genesis actor checked as Account")
+                .clone(),
             realm_id: first.realm_id.to_string(),
             create_event_id: first.event_id.to_string(),
         })

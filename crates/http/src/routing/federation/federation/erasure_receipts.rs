@@ -167,9 +167,9 @@ async fn submit(
     state
         .jobs()
         .store_idempotency_record(IdempotencyState {
-            principal_id: source_id,
+            authenticated_actor: arkret_wire::ActorId::service(source_id),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key: key,
-            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body: serde_json::to_value(&outcome)
@@ -241,9 +241,9 @@ async fn persist_lookup(
     state
         .jobs()
         .store_idempotency_record(IdempotencyState {
-            principal_id: state.service_core_id(),
+            authenticated_actor: arkret_wire::ActorId::service(state.service_core_id()),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key: lookup_key,
-            service_id: state.service_core_id(),
             request_hash: package
                 .computed_receipt_digest()
                 .map_err(|error| AppError::internal(error.to_string()))?

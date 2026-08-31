@@ -1172,16 +1172,28 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             }
 
             if let Some(record) = request.idempotency {
+                let actor_key = record.authenticated_actor.canonical_key().map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "authenticated ActorId is invalid: {error}"
+                    ))
+                })?;
+                let authenticated_actor = serde_json::to_value(&record.authenticated_actor)
+                    .map_err(|error| {
+                        PersistenceError::SchemaViolation(format!(
+                            "authenticated ActorId encode failed: {error}"
+                        ))
+                    })?;
                 let inserted = sql_query(
                     "INSERT INTO idempotency_keys \
-                     (principal_id, idempotency_key, service_id, request_hash, response_status, \
+                     (actor_key, authenticated_actor, operation_id, idempotency_key, request_hash, response_status, \
                       response_body, created_at, expires_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-                     ON CONFLICT (principal_id, idempotency_key) DO NOTHING",
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                     ON CONFLICT (actor_key, operation_id, idempotency_key) DO NOTHING",
                 )
-                .bind::<Text, _>(&record.principal_id)
+                .bind::<Text, _>(&actor_key)
+                .bind::<Jsonb, _>(&authenticated_actor)
+                .bind::<Text, _>(&record.operation_id)
                 .bind::<Text, _>(&record.idempotency_key)
-                .bind::<Text, _>(&record.service_id)
                 .bind::<Text, _>(&record.request_hash)
                 .bind::<Integer, _>(record.response_status)
                 .bind::<Jsonb, _>(&record.response_body)

@@ -196,9 +196,9 @@ fn persistence_event_commit_request(
         idempotency: command
             .idempotency
             .map(|record| soland_storage::IdempotencyRecord {
-                principal_id: record.principal_id,
+                authenticated_actor: record.authenticated_actor,
+                operation_id: record.operation_id,
                 idempotency_key: record.key,
-                service_id: record.service_id,
                 request_hash: record.request_hash,
                 response_status: record.status,
                 response_body: record.body,
@@ -411,14 +411,14 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .map(application_accepted_event)
             .collect())
     }
-    async fn identity_anchor_account_slot_for_principal(
+    async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<soland_storage::IdentityAnchorAccountSlot>> {
         Ok(self
             .0
             .events()
-            .identity_anchor_account_slot_for_principal(principal_id)
+            .identity_anchor_account_slot(account_id)
             .await?)
     }
     async fn canonical_batch_receipts_for_event(

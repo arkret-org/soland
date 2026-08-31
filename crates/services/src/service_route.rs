@@ -300,40 +300,13 @@ impl ServiceRouteResolver {
                 ));
             }
         }
-        match self
-            .store
-            .advance_last_seen_floor(ServiceResolutionLastSeenFloor {
-                service_id: service_id.clone(),
-                service_kind: service_kind.to_owned(),
-                record_sequence: record.record.record_sequence,
-                record_digest: digest.clone(),
-                verified_at: now,
-            })
-            .await?
-        {
-            MonotonicRouteWrite::Applied | MonotonicRouteWrite::Replay => {}
-            MonotonicRouteWrite::Stale => {
-                return Err(ServiceError::Conflict("service route rollback".to_owned()));
-            }
-            MonotonicRouteWrite::Conflict { accepted_digest } => {
-                self.store
-                    .quarantine_fork(ServiceResolutionForkEvidence {
-                        service_id: service_id.clone(),
-                        service_kind: service_kind.to_owned(),
-                        artifact_family: "service_resolution_record".to_owned(),
-                        artifact_key: record.record.record_sequence.to_string(),
-                        accepted_digest,
-                        conflicting_digest: digest,
-                        evidence: serde_json::json!({"source": format!("{:?}", candidate.source), "race": true}),
-                        quarantined_at: now,
-                    })
-                    .await?;
-                self.store
-                    .evict_route_cache(service_id, service_kind)
-                    .await?;
-                return Err(ServiceError::Conflict("service route fork".to_owned()));
-            }
-        }
+        let floor = ServiceResolutionLastSeenFloor {
+            service_id: service_id.clone(),
+            service_kind: service_kind.to_owned(),
+            record_sequence: record.record.record_sequence,
+            record_digest: digest.clone(),
+            verified_at: now,
+        };
         let entry = ServiceRouteCacheEntry {
             service_id: service_id.clone(),
             service_kind: service_kind.to_owned(),
@@ -351,7 +324,30 @@ impl ServiceRouteResolver {
             cached_at: now,
             cache_expires_at: std::cmp::min(record.record.expires_at, now + self.cache_ttl),
         };
-        self.store.put_route_cache(entry.clone()).await?;
+        match self.store.publish_route_cache(floor, entry.clone()).await? {
+            MonotonicRouteWrite::Applied | MonotonicRouteWrite::Replay => {}
+            MonotonicRouteWrite::Stale => {
+                return Err(ServiceError::Conflict("service route rollback".to_owned()));
+            }
+            MonotonicRouteWrite::Conflict { accepted_digest } => {
+                self.store
+                    .quarantine_fork(ServiceResolutionForkEvidence {
+                        service_id: service_id.clone(),
+                        service_kind: service_kind.to_owned(),
+                        artifact_family: "service_resolution_record".to_owned(),
+                        artifact_key: entry.record_sequence.to_string(),
+                        accepted_digest,
+                        conflicting_digest: entry.record_digest.clone(),
+                        evidence: serde_json::json!({"source": format!("{:?}", candidate.source), "race": true}),
+                        quarantined_at: now,
+                    })
+                    .await?;
+                self.store
+                    .evict_route_cache(service_id, service_kind)
+                    .await?;
+                return Err(ServiceError::Conflict("service route fork".to_owned()));
+            }
+        }
         let describe_cache_expires_at = std::cmp::min(
             entry.cache_expires_at,
             std::cmp::min(entry.expires_at, now + self.describe_cache_ttl),

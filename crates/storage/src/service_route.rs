@@ -140,6 +140,16 @@ pub trait ServiceRouteStore: Send + Sync {
         floor: ServiceResolutionLastSeenFloor,
     ) -> PersistenceResult<MonotonicRouteWrite>;
 
+    /// Atomically publish a verified monotonic floor and its disposable route
+    /// cache projection. A stale or conflicting floor MUST leave the cache
+    /// unchanged, so an older resolver cannot overwrite a concurrently
+    /// accepted successor.
+    async fn publish_route_cache(
+        &self,
+        floor: ServiceResolutionLastSeenFloor,
+        entry: ServiceRouteCacheEntry,
+    ) -> PersistenceResult<MonotonicRouteWrite>;
+
     async fn notice_state(
         &self,
         service_id: &DidCoreId,

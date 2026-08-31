@@ -474,9 +474,9 @@ async fn submit_applet_record_event_batch(
     }
     let created_at = now();
     prepared[0].command.idempotency = Some(soland_services::events::IdempotentResponse {
-        principal_id: idempotency.principal_id,
+        authenticated_actor: idempotency.authenticated_actor,
+        operation_id: idempotency.operation_id,
         key: idempotency.key,
-        service_id: idempotency.service_id,
         request_hash: idempotency.request_hash,
         status: response_status.as_u16() as i32,
         body: response_body,

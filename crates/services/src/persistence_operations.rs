@@ -1017,7 +1017,25 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
         Ok(self
             .0
             .idempotency_keys()
-            .get(principal_id, key)
+            .get(
+                &arkret_wire::ActorId::service(principal_id.clone()),
+                crate::jobs::INTERNAL_IDEMPOTENCY_OPERATION,
+                key,
+            )
+            .await?
+            .map(application_idempotency))
+    }
+
+    async fn idempotency_record_scoped(
+        &self,
+        authenticated_actor: &arkret_wire::ActorId,
+        operation_id: &str,
+        key: &str,
+    ) -> crate::ServiceResult<Option<crate::jobs::IdempotencyState>> {
+        Ok(self
+            .0
+            .idempotency_keys()
+            .get(authenticated_actor, operation_id, key)
             .await?
             .map(application_idempotency))
     }
@@ -1071,9 +1089,9 @@ fn application_idempotency(
     record: soland_storage::IdempotencyRecord,
 ) -> crate::jobs::IdempotencyState {
     crate::jobs::IdempotencyState {
-        principal_id: record.principal_id,
+        authenticated_actor: record.authenticated_actor,
+        operation_id: record.operation_id,
         idempotency_key: record.idempotency_key,
-        service_id: record.service_id,
         request_hash: record.request_hash,
         response_status: record.response_status,
         response_body: record.response_body,
@@ -1085,9 +1103,9 @@ fn persistence_idempotency(
     record: crate::jobs::IdempotencyState,
 ) -> soland_storage::IdempotencyRecord {
     soland_storage::IdempotencyRecord {
-        principal_id: record.principal_id,
+        authenticated_actor: record.authenticated_actor,
+        operation_id: record.operation_id,
         idempotency_key: record.idempotency_key,
-        service_id: record.service_id,
         request_hash: record.request_hash,
         response_status: record.response_status,
         response_body: record.response_body,

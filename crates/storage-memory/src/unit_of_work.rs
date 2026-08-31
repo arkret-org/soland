@@ -803,7 +803,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         if let Some(record) = request.idempotency {
-            let key = (record.principal_id.clone(), record.idempotency_key.clone());
+            let key = (
+                record.authenticated_actor.clone(),
+                record.operation_id.clone(),
+                record.idempotency_key.clone(),
+            );
             if staged_idempotency.contains_key(&key) {
                 return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
             }
@@ -1070,7 +1074,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 }
             }
             if let Some(record) = event_request.idempotency {
-                let key = (record.principal_id.clone(), record.idempotency_key.clone());
+                let key = (
+                    record.authenticated_actor.clone(),
+                    record.operation_id.clone(),
+                    record.idempotency_key.clone(),
+                );
                 if staged_idempotency.contains_key(&key) {
                     return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
                 }
@@ -3031,16 +3039,19 @@ mod tests {
         let principal_id =
             arkret_wire::DidCoreId::new("ak:did_core:web:bridge.example".to_owned()).unwrap();
         let idempotency_key = "ghost-batch-conflict";
+        let operation_id = "arkret://operations/test/ghost-batch";
+        let authenticated_actor = arkret_wire::ActorId::service(principal_id.clone());
         let now = Utc::now();
         store.idempotency_keys.data.lock().insert(
-            (principal_id.clone(), idempotency_key.to_owned()),
+            (
+                authenticated_actor.clone(),
+                operation_id.to_owned(),
+                idempotency_key.to_owned(),
+            ),
             IdempotencyRecord {
-                principal_id: principal_id.clone(),
+                authenticated_actor: authenticated_actor.clone(),
+                operation_id: operation_id.to_owned(),
                 idempotency_key: idempotency_key.to_owned(),
-                service_id: arkret_wire::DidCoreId::new(
-                    "ak:did_core:web:soland.example".to_owned(),
-                )
-                .unwrap(),
                 request_hash: "sha256:first".to_owned(),
                 response_status: 201,
                 response_body: serde_json::json!({"first": true}),
@@ -3055,12 +3066,9 @@ mod tests {
                 realm_id(),
                 principal_id.as_str(),
                 Some(IdempotencyRecord {
-                    principal_id: principal_id.clone(),
+                    authenticated_actor,
+                    operation_id: operation_id.to_owned(),
                     idempotency_key: idempotency_key.to_owned(),
-                    service_id: arkret_wire::DidCoreId::new(
-                        "ak:did_core:web:soland.example".to_owned(),
-                    )
-                    .unwrap(),
                     request_hash: "sha256:competing".to_owned(),
                     response_status: 201,
                     response_body: serde_json::json!({"first": false}),

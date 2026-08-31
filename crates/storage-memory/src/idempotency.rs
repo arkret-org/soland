@@ -1,5 +1,3 @@
-use arkret_wire::DidCoreId;
-
 use super::{
     Arc, BTreeMap, IdempotencyRecord, IdempotencyStore, Mutex, PersistenceResult, Utc, async_trait,
 };
@@ -8,7 +6,8 @@ use super::{
 pub(crate) struct MemoryIdempotencyStore {
     #[cfg(feature = "fault-injection")]
     fault_injector: Arc<crate::FaultInjector>,
-    pub(crate) data: Arc<Mutex<BTreeMap<(DidCoreId, String), IdempotencyRecord>>>,
+    pub(crate) data:
+        Arc<Mutex<BTreeMap<(arkret_wire::ActorId, String, String), IdempotencyRecord>>>,
 }
 impl MemoryIdempotencyStore {
     #[cfg(not(feature = "fault-injection"))]
@@ -32,12 +31,17 @@ impl MemoryIdempotencyStore {
 impl IdempotencyStore for MemoryIdempotencyStore {
     async fn get(
         &self,
-        principal_id: &DidCoreId,
+        authenticated_actor: &arkret_wire::ActorId,
+        operation_id: &str,
         idempotency_key: &str,
     ) -> PersistenceResult<Option<IdempotencyRecord>> {
         let data = self.data.lock();
         Ok(data
-            .get(&(principal_id.clone(), idempotency_key.to_owned()))
+            .get(&(
+                authenticated_actor.clone(),
+                operation_id.to_owned(),
+                idempotency_key.to_owned(),
+            ))
             .cloned())
     }
 
@@ -51,8 +55,12 @@ impl IdempotencyStore for MemoryIdempotencyStore {
         // First-writer-wins: keep the earliest landed row (mirrors the Pg
         // `ON CONFLICT DO NOTHING`), so a concurrent racer reads back the
         // original first response rather than overwriting it.
-        data.entry((record.principal_id.clone(), record.idempotency_key.clone()))
-            .or_insert_with(|| record.clone());
+        data.entry((
+            record.authenticated_actor.clone(),
+            record.operation_id.clone(),
+            record.idempotency_key.clone(),
+        ))
+        .or_insert_with(|| record.clone());
         #[cfg(feature = "fault-injection")]
         self.fault_injector.check(
             crate::FaultPoint::IdempotencyRecord,
@@ -66,9 +74,16 @@ impl IdempotencyStore for MemoryIdempotencyStore {
         expected: &IdempotencyRecord,
         completed: &IdempotencyRecord,
     ) -> PersistenceResult<bool> {
+        if expected.authenticated_actor != completed.authenticated_actor
+            || expected.operation_id != completed.operation_id
+            || expected.idempotency_key != completed.idempotency_key
+        {
+            return Ok(false);
+        }
         let mut data = self.data.lock();
         let key = (
-            expected.principal_id.clone(),
+            expected.authenticated_actor.clone(),
+            expected.operation_id.clone(),
             expected.idempotency_key.clone(),
         );
         if data.get(&key) != Some(expected) {

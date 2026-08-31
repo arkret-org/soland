@@ -415,6 +415,94 @@ impl ServiceRouteStore for PgServiceRouteStore {
         })
     }
 
+    async fn publish_route_cache(
+        &self,
+        floor: ServiceResolutionLastSeenFloor,
+        entry: ServiceRouteCacheEntry,
+    ) -> PersistenceResult<MonotonicRouteWrite> {
+        if entry.service_id != floor.service_id
+            || entry.service_kind != floor.service_kind
+            || entry.record_sequence != floor.record_sequence
+            || entry.record_digest != floor.record_digest
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "route cache entry does not match its accepted floor".to_owned(),
+            ));
+        }
+        let floor_value = encode(&floor)?;
+        let entry_value = encode(&entry)?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            lock_route_sequence(conn, &floor.service_id, &floor.service_kind).await?;
+            let current = sql_query(
+                "SELECT floor AS value FROM service_resolution_last_seen_floors \
+                 WHERE service_id=$1 AND service_kind=$2 FOR UPDATE",
+            )
+            .bind::<Text, _>(floor.service_id.as_str())
+            .bind::<Text, _>(&floor.service_kind)
+            .get_result::<JsonRow>(conn)
+            .await
+            .optional()?
+            .map(|row| decode::<ServiceResolutionLastSeenFloor>(row.value))
+            .transpose()?;
+            let outcome = match current.as_ref() {
+                Some(current) if current.record_sequence > floor.record_sequence => {
+                    MonotonicRouteWrite::Stale
+                }
+                Some(current)
+                    if current.record_sequence == floor.record_sequence
+                        && current.record_digest == floor.record_digest =>
+                {
+                    MonotonicRouteWrite::Replay
+                }
+                Some(current) if current.record_sequence == floor.record_sequence => {
+                    MonotonicRouteWrite::Conflict {
+                        accepted_digest: current.record_digest.clone(),
+                    }
+                }
+                _ => MonotonicRouteWrite::Applied,
+            };
+            if matches!(&outcome, MonotonicRouteWrite::Applied) {
+                sql_query(
+                    "INSERT INTO service_resolution_last_seen_floors \
+                     (service_id,service_kind,floor,updated_at) VALUES($1,$2,$3,$4) \
+                     ON CONFLICT(service_id,service_kind) DO UPDATE SET \
+                     floor=EXCLUDED.floor,updated_at=EXCLUDED.updated_at",
+                )
+                .bind::<Text, _>(floor.service_id.as_str())
+                .bind::<Text, _>(&floor.service_kind)
+                .bind::<Jsonb, _>(&floor_value)
+                .bind::<Timestamptz, _>(floor.verified_at)
+                .execute(conn)
+                .await?;
+            }
+            if matches!(
+                &outcome,
+                MonotonicRouteWrite::Applied | MonotonicRouteWrite::Replay
+            ) {
+                sql_query(
+                    "INSERT INTO service_route_cache \
+                     (service_id,service_kind,entry,cache_expires_at,updated_at) \
+                     VALUES($1,$2,$3,$4,$5) ON CONFLICT(service_id,service_kind) \
+                     DO UPDATE SET entry=EXCLUDED.entry, \
+                     cache_expires_at=EXCLUDED.cache_expires_at,updated_at=EXCLUDED.updated_at",
+                )
+                .bind::<Text, _>(entry.service_id.as_str())
+                .bind::<Text, _>(&entry.service_kind)
+                .bind::<Jsonb, _>(&entry_value)
+                .bind::<Timestamptz, _>(entry.cache_expires_at)
+                .bind::<Timestamptz, _>(entry.cached_at)
+                .execute(conn)
+                .await?;
+            }
+            Ok(outcome)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn notice_state(
         &self,
         service_id: &DidCoreId,

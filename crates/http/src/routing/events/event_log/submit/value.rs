@@ -3438,9 +3438,9 @@ pub(super) async fn submit_event_value_with_context(
                 SubmitCommitIdempotency::CommitKey(record) => {
                     let created_at = now();
                     soland_services::events::IdempotentResponse {
-                        principal_id: record.principal_id.clone(),
+                        authenticated_actor: record.authenticated_actor.clone(),
+                        operation_id: record.operation_id.clone(),
                         key: record.key.clone(),
-                        service_id: record.service_id.clone(),
                         request_hash: record.request_hash.clone(),
                         status: StatusCode::OK.as_u16() as i32,
                         body: serde_json::to_value(&accepted_response.outcome)

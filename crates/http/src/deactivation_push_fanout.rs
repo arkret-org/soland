@@ -112,9 +112,9 @@ async fn store_completion(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: completion_principal_id(state),
+            authenticated_actor: arkret_wire::ActorId::service(completion_principal_id(state)),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key: completion_key(did),
-            service_id: state.service_core_id(),
             request_hash: base_fanout_id(state.service_id(), did),
             response_status: 200,
             response_body: serde_json::to_value(ack)

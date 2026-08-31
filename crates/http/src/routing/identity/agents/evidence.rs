@@ -673,8 +673,16 @@ async fn reserve_evidence_challenge(
     };
     let key = format!("agent-signer-evidence:{}", challenge.as_str());
     let persistence = state.persistence();
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        state.service_core_id(),
+    ));
     if persistence
-        .idempotency_record(agent_id, &key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.agent_signer_evidence.read.resolve",
+            &key,
+        )
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .is_some()
@@ -686,9 +694,9 @@ async fn reserve_evidence_challenge(
     let now = chrono::Utc::now();
     persistence
         .record_idempotency(&soland_storage::IdempotencyRecord {
-            principal_id: agent_id.clone(),
+            authenticated_actor: authenticated_actor.clone(),
+            operation_id: "ak.self.agent_signer_evidence.read.resolve".to_owned(),
             idempotency_key: key.clone(),
-            service_id: state.service_core_id(),
             request_hash,
             response_status: 201,
             response_body: serde_json::json!({"reservation": marker}),
@@ -698,7 +706,11 @@ async fn reserve_evidence_challenge(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let winner = persistence
-        .idempotency_record(agent_id, &key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.agent_signer_evidence.read.resolve",
+            &key,
+        )
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .and_then(|record| {

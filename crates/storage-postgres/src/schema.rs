@@ -658,10 +658,11 @@ diesel::table! {
 }
 
 diesel::table! {
-    idempotency_keys (principal_id, idempotency_key) {
-        principal_id -> Text,
+    idempotency_keys (actor_key, operation_id, idempotency_key) {
+        actor_key -> Text,
+        authenticated_actor -> Jsonb,
+        operation_id -> Text,
         idempotency_key -> Text,
-        service_id -> Text,
         request_hash -> Text,
         response_status -> Int4,
         response_body -> Jsonb,

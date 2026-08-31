@@ -116,9 +116,9 @@ pub async fn ensure_intent(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: principal_idempotency_id,
+            authenticated_actor: arkret_wire::ActorId::service(principal_idempotency_id),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key: key,
-            service_id: state.service_core_id(),
             request_hash,
             response_status: 202,
             response_body: serde_json::to_value(&execution)
@@ -138,9 +138,9 @@ async fn store_execution(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: execution_principal_id(state),
+            authenticated_actor: arkret_wire::ActorId::service(execution_principal_id(state)),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             idempotency_key: execution_key(&execution.triggering_status_record_id, execution.state),
-            service_id: state.service_core_id(),
             request_hash: execution_hash(execution)?,
             response_status: if execution.state == ExecutionState::Pending {
                 202

@@ -1006,12 +1006,16 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
     let now = database_timestamp_now();
     let principal_id = DidCoreId::new(format!("ak:did_core:web:{namespace}.example"))
         .expect("idempotency principal id");
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        DidCoreId::new(format!("ak:did_core:web:{namespace}-station.example")).unwrap(),
+    ));
+    let operation_id = "arkret://operations/contract/idempotency".to_owned();
     let idempotency_key = format!("idempotency:{namespace}");
     let first = IdempotencyRecord {
-        principal_id: principal_id.clone(),
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: operation_id.clone(),
         idempotency_key: idempotency_key.clone(),
-        service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example".to_owned())
-            .unwrap(),
         request_hash: "sha256:first".to_owned(),
         response_status: 200,
         response_body: serde_json::json!({"accepted": true}),
@@ -1021,7 +1025,7 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
     store.record(&first).await.expect("record first response");
     assert_eq!(
         store
-            .get(&principal_id, &idempotency_key)
+            .get(&authenticated_actor, &operation_id, &idempotency_key)
             .await
             .expect("read first response"),
         Some(first.clone())
@@ -1036,19 +1040,55 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
         .expect("record competing response");
     assert_eq!(
         store
-            .get(&principal_id, &idempotency_key)
+            .get(&authenticated_actor, &operation_id, &idempotency_key)
             .await
             .expect("read first-writer response"),
-        Some(first),
+        Some(first.clone()),
         "the first response must win a duplicate-key race"
+    );
+
+    let other_station_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        DidCoreId::new(format!("ak:did_core:web:{namespace}-other-station.example")).unwrap(),
+    ));
+    let mut other_station = first.clone();
+    other_station.authenticated_actor = other_station_actor.clone();
+    other_station.response_body = serde_json::json!({"station": "other"});
+    store
+        .record(&other_station)
+        .await
+        .expect("record other Station");
+    assert_eq!(
+        store
+            .get(&other_station_actor, &operation_id, &idempotency_key)
+            .await
+            .expect("read other Station"),
+        Some(other_station),
+        "the same principal and key at another Station is an independent scope"
+    );
+
+    let other_operation_id = "arkret://operations/contract/idempotency-other";
+    let mut other_operation = first.clone();
+    other_operation.operation_id = other_operation_id.to_owned();
+    other_operation.response_body = serde_json::json!({"operation": "other"});
+    store
+        .record(&other_operation)
+        .await
+        .expect("record other operation");
+    assert_eq!(
+        store
+            .get(&authenticated_actor, other_operation_id, &idempotency_key)
+            .await
+            .expect("read other operation"),
+        Some(other_operation),
+        "the same actor and key in another operation is an independent scope"
     );
 
     let reservation_key = format!("idempotency-reservation:{namespace}");
     let reservation = IdempotencyRecord {
-        principal_id: principal_id.clone(),
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: operation_id.clone(),
         idempotency_key: reservation_key.clone(),
-        service_id: arkret_identifiers::DidCoreId::new("ak:did_core:web:soland.example".to_owned())
-            .unwrap(),
         request_hash: "sha256:reserved".to_owned(),
         response_status: 102,
         response_body: serde_json::json!({"reservation_id": namespace}),
@@ -1081,7 +1121,7 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
     );
     assert_eq!(
         store
-            .get(&principal_id, &reservation_key)
+            .get(&authenticated_actor, &operation_id, &reservation_key)
             .await
             .expect("read completed reservation"),
         Some(completed),
@@ -2169,12 +2209,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
             received_at: now,
         }],
         idempotency: Some(IdempotencyRecord {
-            principal_id: idempotency_principal_id.clone(),
+            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+            operation_id: "arkret://operations/contract/event-commit".to_owned(),
             idempotency_key: idempotency_key.clone(),
-            service_id: arkret_identifiers::DidCoreId::new(
-                "ak:did_core:web:soland.example".to_owned(),
-            )
-            .unwrap(),
             request_hash: format!("sha256:{event_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({"event_id": event_id}),
@@ -2238,7 +2275,11 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&idempotency_principal_id, &idempotency_key)
+            .get(
+                &arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+                "arkret://operations/contract/event-commit",
+                &idempotency_key,
+            )
             .await
             .expect("read idempotency record")
             .is_some()
@@ -2523,12 +2564,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
         device_revocation_gate: None,
         projections: Vec::new(),
         idempotency: Some(IdempotencyRecord {
-            principal_id: idempotency_principal_id.clone(),
+            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+            operation_id: "arkret://operations/contract/contact-commit".to_owned(),
             idempotency_key: contact_idempotency_key.clone(),
-            service_id: arkret_identifiers::DidCoreId::new(
-                "ak:did_core:web:soland.example".to_owned(),
-            )
-            .unwrap(),
             request_hash: format!("sha256:contact-{event_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({"status": "accepted"}),
@@ -2579,7 +2617,11 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&idempotency_principal_id, &contact_idempotency_key)
+            .get(
+                &arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+                "arkret://operations/contract/contact-commit",
+                &contact_idempotency_key,
+            )
             .await
             .unwrap()
             .is_some(),
@@ -2675,12 +2717,9 @@ pub async fn assert_event_commit_unit_of_work_contract(
             received_at: now,
         }],
         idempotency: Some(IdempotencyRecord {
-            principal_id: idempotency_principal_id.clone(),
+            authenticated_actor: arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+            operation_id: "arkret://operations/contract/rollback".to_owned(),
             idempotency_key: rollback_idempotency_key.clone(),
-            service_id: arkret_identifiers::DidCoreId::new(
-                "ak:did_core:web:soland.example".to_owned(),
-            )
-            .unwrap(),
             request_hash: format!("sha256:{rollback_uuid}"),
             response_status: 200,
             response_body: serde_json::json!({}),
@@ -2735,7 +2774,11 @@ pub async fn assert_event_commit_unit_of_work_contract(
     assert!(
         stores
             .idempotency
-            .get(&idempotency_principal_id, &rollback_idempotency_key)
+            .get(
+                &arkret_wire::ActorId::service(idempotency_principal_id.clone()),
+                "arkret://operations/contract/rollback",
+                &rollback_idempotency_key,
+            )
             .await
             .expect("idempotency rollback")
             .is_none()

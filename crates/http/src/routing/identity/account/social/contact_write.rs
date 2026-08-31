@@ -517,9 +517,12 @@ async fn store_prepare(
         state
             .jobs()
             .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                principal_id: principal_id.clone(),
+                authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    principal_id.clone(),
+                    state.service_core_id(),
+                )),
+                operation_id: "ak.self.contact.command.prepare".to_owned(),
                 idempotency_key: key,
-                service_id: state.service_core_id(),
                 request_hash: request_hash.to_owned(),
                 response_status: StatusCode::OK.as_u16().into(),
                 response_body: body,
@@ -535,6 +538,7 @@ async fn store_prepare(
 async fn replay<T: DeserializeOwned>(
     state: &AppState,
     principal: &str,
+    operation_id: &str,
     key: &str,
     request_hash: &str,
 ) -> Result<Option<T>, AppError> {
@@ -542,7 +546,14 @@ async fn replay<T: DeserializeOwned>(
         .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     let Some(record) = state
         .jobs()
-        .idempotency_record(&principal_id, key)
+        .scoped_idempotency_record(
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal_id,
+                state.service_core_id(),
+            )),
+            operation_id,
+            key,
+        )
         .await
         .map_err(|error| AppError::internal(format!("Contact idempotency lookup: {error}")))?
     else {
@@ -561,6 +572,7 @@ async fn replay<T: DeserializeOwned>(
 async fn persist_final(
     state: &AppState,
     principal: &str,
+    operation_id: &str,
     key: &str,
     request_hash: &str,
     outcome: &ContactOperationOutcome,
@@ -571,9 +583,12 @@ async fn persist_final(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id,
+            authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal_id,
+                state.service_core_id(),
+            )),
+            operation_id: operation_id.to_owned(),
             idempotency_key: key.to_owned(),
-            service_id: state.service_core_id(),
             request_hash: request_hash.to_owned(),
             response_status: StatusCode::OK.as_u16().into(),
             response_body: serde_json::to_value(outcome)
@@ -607,6 +622,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     if let Some(outcome) = replay::<ContactOperationOutcome>(
         state,
         &session.actor,
+        "ak.self.contact.command.prepare",
         &contact_phase_idempotency_key("prepare", &idempotency_key),
         &request_hash,
     )
@@ -862,8 +878,12 @@ async fn reservation_for_commit(
         .map_err(|error| AppError::internal(format!("Contact principal id invalid: {error}")))?;
     let record = state
         .jobs()
-        .idempotency_record(
-            &principal_id,
+        .scoped_idempotency_record(
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal_id,
+                state.service_core_id(),
+            )),
+            "ak.self.contact.command.prepare",
             &contact_reservation_key(&body.reservation_handle),
         )
         .await
@@ -1119,6 +1139,7 @@ async fn commit(
     if let Some(outcome) = replay::<ContactOperationOutcome>(
         state,
         &session.actor,
+        "ak.self.contact.command.commit",
         &contact_phase_idempotency_key("commit", &body.idempotency_key),
         &request_hash,
     )
@@ -1168,6 +1189,7 @@ async fn commit(
         persist_final(
             state,
             &session.actor,
+            "ak.self.contact.command.commit",
             &contact_phase_idempotency_key("commit", &body.idempotency_key),
             &request_hash,
             &outcome,
@@ -1185,10 +1207,13 @@ async fn commit(
     .await?;
     let idempotency_created_at = now();
     let contact_idempotency = soland_services::events::IdempotentResponse {
-        principal_id: DidCoreId::new(session.actor.clone())
-            .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+        authenticated_actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(session.actor.clone())
+                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            state.service_core_id(),
+        )),
+        operation_id: "ak.self.contact.command.commit".to_owned(),
         key: contact_phase_idempotency_key("commit", &body.idempotency_key),
-        service_id: state.service_core_id(),
         request_hash: request_hash.clone(),
         status: StatusCode::OK.as_u16() as i32,
         body: serde_json::to_value(&outcome)

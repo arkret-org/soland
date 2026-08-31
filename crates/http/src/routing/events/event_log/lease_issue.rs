@@ -54,11 +54,16 @@ pub(super) async fn issue_authorization_leases(
         )
         .with_status(StatusCode::BAD_REQUEST)
     })?;
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone())
+            .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+        state.service_core_id(),
+    ));
     match state
         .jobs()
-        .idempotency_record(
-            &arkret_wire::DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.authorization_leases.command.issue",
             idempotency_key,
         )
         .await
@@ -120,10 +125,9 @@ pub(super) async fn issue_authorization_leases(
     state
         .jobs()
         .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: arkret_wire::DidCoreId::new(session.actor.clone())
-                .map_err(|error| AppError::internal(format!("session actor invalid: {error}")))?,
+            authenticated_actor,
+            operation_id: "ak.self.authorization_leases.command.issue".to_owned(),
             idempotency_key: idempotency_key.to_owned(),
-            service_id: state.service_core_id(),
             request_hash,
             response_status: StatusCode::OK.as_u16() as i32,
             response_body,

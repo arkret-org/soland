@@ -149,7 +149,14 @@ async fn lookup_provision_allocation(
         .map_err(|error| AppError::internal(format!("controller principal id invalid: {error}")))?;
     state
         .jobs()
-        .idempotency_record(&controller_id, key)
+        .scoped_idempotency_record(
+            &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                controller_id,
+                state.service_core_id(),
+            )),
+            "ak.self.agent.command.provision",
+            key,
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("Agent provision allocation lookup failed: {error}"))
@@ -332,9 +339,11 @@ pub(super) async fn provision_agent(
             state
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                    principal_id: controller_id.clone(),
+                    authenticated_actor: arkret_wire::ActorId::account(
+                        arkret_wire::AccountId::new(controller_id.clone(), state.service_core_id()),
+                    ),
+                    operation_id: "ak.self.agent.command.provision".to_owned(),
                     idempotency_key: key.clone(),
-                    service_id: state.service_core_id(),
                     request_hash: request_hash.clone(),
                     response_status: i32::from(StatusCode::OK.as_u16()),
                     response_body: serde_json::to_value(&prepared).map_err(|error| {
@@ -386,9 +395,7 @@ pub(super) async fn provision_agent(
             let prepare_key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
             let allocation = lookup_provision_allocation(state, &controller_id, &prepare_key)
                 .await?
-                .filter(|record| {
-                    record.expires_at > now_utc && record.service_id.as_str() == state.service_id()
-                })
+                .filter(|record| record.expires_at > now_utc)
                 .ok_or_else(allocation_missing)?;
             let prepared: PreparedAgentProvision =
                 serde_json::from_value(allocation.response_body.clone()).map_err(|error| {
@@ -705,11 +712,18 @@ pub(super) async fn provision_agent(
             state
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
-                    principal_id: DidCoreId::new(controller_id.clone()).map_err(|error| {
-                        AppError::internal(format!("controller principal id invalid: {error}"))
-                    })?,
+                    authenticated_actor: arkret_wire::ActorId::account(
+                        arkret_wire::AccountId::new(
+                            DidCoreId::new(controller_id.clone()).map_err(|error| {
+                                AppError::internal(format!(
+                                    "controller principal id invalid: {error}"
+                                ))
+                            })?,
+                            state.service_core_id(),
+                        ),
+                    ),
+                    operation_id: "ak.self.agent.command.provision".to_owned(),
                     idempotency_key: commit_key,
-                    service_id: state.service_core_id(),
                     request_hash,
                     response_status: i32::from(StatusCode::CREATED.as_u16()),
                     response_body: serde_json::to_value(&outcome).map_err(|error| {

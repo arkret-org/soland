@@ -319,9 +319,9 @@ pub(in crate::routing) struct SubmittedEventOutcome {
 
 #[derive(Debug)]
 pub(in crate::routing) struct EventCommitIdempotency {
-    pub principal_id: arkret_wire::DidCoreId,
+    pub authenticated_actor: arkret_wire::ActorId,
+    pub operation_id: String,
     pub key: String,
-    pub service_id: arkret_wire::DidCoreId,
     pub request_hash: String,
 }
 
@@ -3248,9 +3248,9 @@ async fn prepare_agent_event_admission_receipt(
         .map_err(|error| format!("receipt encoding failed: {error}"))?;
     Ok(Some(PreparedAgentEventAdmissionReceipt {
         idempotency: Some(soland_services::events::IdempotentResponse {
-            principal_id: receiver_id.clone(),
+            authenticated_actor: arkret_wire::ActorId::service(receiver_id.clone()),
+            operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
             key: receipt_key,
-            service_id: state.service_core_id(),
             request_hash: event.event_id.as_str().to_owned(),
             status: 200,
             body,

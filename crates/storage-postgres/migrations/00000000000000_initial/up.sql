@@ -2705,15 +2705,16 @@ CREATE TABLE public.websocket_auth_replay_ledger (
 CREATE INDEX websocket_auth_replay_ledger_retain_until_idx ON public.websocket_auth_replay_ledger (retain_until);
 
 CREATE TABLE public.idempotency_keys (
-    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    actor_key text NOT NULL,
+    authenticated_actor jsonb NOT NULL,
+    operation_id text NOT NULL,
     idempotency_key text NOT NULL,
-    service_id text NOT NULL CHECK (service_id LIKE 'ak:did_core:%'),
     request_hash text NOT NULL,
     response_status integer NOT NULL,
     response_body jsonb NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     created_at timestamp with time zone NOT NULL,
-    CONSTRAINT idempotency_keys_pkey PRIMARY KEY (principal_id, idempotency_key)
+    CONSTRAINT idempotency_keys_pkey PRIMARY KEY (actor_key, operation_id, idempotency_key)
 );
 
 CREATE INDEX idempotency_keys_expiry_idx ON public.idempotency_keys USING btree (expires_at);
@@ -2897,10 +2898,11 @@ CREATE TABLE public.identity_anchor_account_slots (
     account_authority_id text NOT NULL CHECK (account_authority_id LIKE 'ak:did_core:%'),
     account_subject text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     realm_id text NOT NULL,
     create_event_id text NOT NULL,
     PRIMARY KEY (account_authority_id, account_subject),
-    UNIQUE (principal_id)
+    UNIQUE (principal_id, station_id)
 );
 
 CREATE TABLE public.direct_conversation_founding_slots (

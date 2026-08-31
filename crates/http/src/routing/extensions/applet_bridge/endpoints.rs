@@ -1296,7 +1296,11 @@ async fn provision_ghost_actor_endpoint(
         .to_string();
     if let Some(replay) = state
         .jobs()
-        .idempotency_record(&authoring_basis.service_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
+            "ak.peer.applet_bridge.command.submit",
+            &idempotency_key,
+        )
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
     {
@@ -1569,9 +1573,9 @@ async fn provision_ghost_actor_endpoint(
             })?
             .to_string(),
         crate::routing::events::event_log::EventCommitIdempotency {
-            principal_id: authoring_basis.service_id.clone(),
+            authenticated_actor: arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
+            operation_id: "ak.peer.applet_bridge.command.submit".to_owned(),
             key: idempotency_key.clone(),
-            service_id: state.service_core_id(),
             request_hash: request_digest.clone(),
         },
         serde_json::to_value(&outcome)
@@ -1587,7 +1591,11 @@ async fn provision_ghost_actor_endpoint(
             "duplicate" | "duplicate_conflict" | "cas_conflict"
         ) && let Some(replay) = state
             .jobs()
-            .idempotency_record(&authoring_basis.service_id, &idempotency_key)
+            .scoped_idempotency_record(
+                &arkret_wire::ActorId::service(authoring_basis.service_id.clone()),
+                "ak.peer.applet_bridge.command.submit",
+                &idempotency_key,
+            )
             .await
             .map_err(|lookup_error| {
                 AppError::internal(format!("idempotency lookup failed: {lookup_error}"))

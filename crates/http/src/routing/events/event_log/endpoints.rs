@@ -236,9 +236,8 @@ fn availability_idempotency_outcome(
     record: soland_storage::IdempotencyRecord,
     request: &SealAvailabilityReceiptIssueRequest,
     request_hash: &str,
-    service_id: &arkret_wire::DidCoreId,
 ) -> Result<Option<SealAvailabilityReceiptIssueOutcome>, AppError> {
-    if record.request_hash != request_hash || record.service_id != *service_id {
+    if record.request_hash != request_hash {
         return Err(AppError::internal(
             "availability idempotency record binding mismatch",
         ));
@@ -268,7 +267,7 @@ fn availability_idempotency_outcome(
 
 async fn wait_for_availability_idempotency_outcome(
     state: &AppState,
-    principal_id: &arkret_wire::DidCoreId,
+    authenticated_actor: &arkret_wire::ActorId,
     idempotency_key: &str,
     request: &SealAvailabilityReceiptIssueRequest,
     request_hash: &str,
@@ -276,7 +275,11 @@ async fn wait_for_availability_idempotency_outcome(
     for _ in 0..AVAILABILITY_RESERVATION_WAIT_ATTEMPTS {
         let record = state
             .persistence()
-            .idempotency_record(principal_id, idempotency_key)
+            .scoped_idempotency_record(
+                authenticated_actor,
+                "ak.self.seals.command.issue_availability_receipts",
+                idempotency_key,
+            )
             .await
             .map_err(|error| {
                 AppError::internal(format!("availability idempotency lookup failed: {error}"))
@@ -288,12 +291,7 @@ async fn wait_for_availability_idempotency_outcome(
                 )
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
             })?;
-        if let Some(outcome) = availability_idempotency_outcome(
-            record,
-            request,
-            request_hash,
-            &state.service_core_id(),
-        )? {
+        if let Some(outcome) = availability_idempotency_outcome(record, request, request_hash)? {
             return Ok(outcome);
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -374,6 +372,10 @@ async fn issue_seal_availability_receipts(
     })?;
     let idempotency_key =
         format!("ak.self.seals.command.issue_availability_receipts.v1:{request_hash}");
+    let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        session_core_id.clone(),
+        state.service_core_id(),
+    ));
     state
         .jobs()
         .prune_expired_idempotency(Utc::now())
@@ -388,24 +390,23 @@ async fn issue_seal_availability_receipts(
     let _availability_guard = availability_lock.lock().await;
     if let Some(record) = state
         .persistence()
-        .idempotency_record(&session_core_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.seals.command.issue_availability_receipts",
+            &idempotency_key,
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("availability idempotency lookup failed: {error}"))
         })?
     {
-        if let Some(cached) = availability_idempotency_outcome(
-            record,
-            &request,
-            &request_hash,
-            &state.service_core_id(),
-        )? {
+        if let Some(cached) = availability_idempotency_outcome(record, &request, &request_hash)? {
             return json_ok(cached);
         }
         return json_ok(
             wait_for_availability_idempotency_outcome(
                 state,
-                &session_core_id,
+                &authenticated_actor,
                 &idempotency_key,
                 &request,
                 &request_hash,
@@ -479,9 +480,9 @@ async fn issue_seal_availability_receipts(
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
             .ok_or_else(|| AppError::internal("availability reservation time is invalid"))?;
     let reservation = soland_storage::IdempotencyRecord {
-        principal_id: session_core_id.clone(),
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: "ak.self.seals.command.issue_availability_receipts".to_owned(),
         idempotency_key: idempotency_key.clone(),
-        service_id: state.service_core_id(),
         request_hash: request_hash.clone(),
         response_status: AVAILABILITY_RESERVATION_STATUS,
         response_body: serde_json::json!({
@@ -500,23 +501,24 @@ async fn issue_seal_availability_receipts(
         })?;
     let landed_reservation = state
         .persistence()
-        .idempotency_record(&session_core_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.seals.command.issue_availability_receipts",
+            &idempotency_key,
+        )
         .await
         .map_err(|error| AppError::internal(format!("reload availability reservation: {error}")))?
         .ok_or_else(|| AppError::internal("availability reservation did not persist"))?;
     if landed_reservation != reservation {
-        if let Some(cached) = availability_idempotency_outcome(
-            landed_reservation,
-            &request,
-            &request_hash,
-            &state.service_core_id(),
-        )? {
+        if let Some(cached) =
+            availability_idempotency_outcome(landed_reservation, &request, &request_hash)?
+        {
             return json_ok(cached);
         }
         return json_ok(
             wait_for_availability_idempotency_outcome(
                 state,
-                &session_core_id,
+                &authenticated_actor,
                 &idempotency_key,
                 &request,
                 &request_hash,
@@ -598,9 +600,9 @@ async fn issue_seal_availability_receipts(
         .min()
         .unwrap_or(sealed_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS));
     let completed = soland_storage::IdempotencyRecord {
-        principal_id: session_core_id.clone(),
+        authenticated_actor: authenticated_actor.clone(),
+        operation_id: "ak.self.seals.command.issue_availability_receipts".to_owned(),
         idempotency_key: idempotency_key.clone(),
-        service_id: state.service_core_id(),
         request_hash: request_hash.clone(),
         response_status: StatusCode::OK.as_u16() as i32,
         response_body: serde_json::to_value(&outcome).map_err(|error| {
@@ -620,7 +622,7 @@ async fn issue_seal_availability_receipts(
         return json_ok(
             wait_for_availability_idempotency_outcome(
                 state,
-                &session_core_id,
+                &authenticated_actor,
                 &idempotency_key,
                 &request,
                 &request_hash,
@@ -630,21 +632,20 @@ async fn issue_seal_availability_receipts(
     }
     let landed = state
         .persistence()
-        .idempotency_record(&session_core_id, &idempotency_key)
+        .scoped_idempotency_record(
+            &authenticated_actor,
+            "ak.self.seals.command.issue_availability_receipts",
+            &idempotency_key,
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!("reload availability idempotency outcome: {error}"))
         })?
         .ok_or_else(|| AppError::internal("availability idempotency outcome did not persist"))?;
-    let landed = availability_idempotency_outcome(
-        landed,
-        &request,
-        &request_hash,
-        &state.service_core_id(),
-    )?
-    .ok_or_else(|| {
-        AppError::internal("availability reservation remained pending after completion")
-    })?;
+    let landed =
+        availability_idempotency_outcome(landed, &request, &request_hash)?.ok_or_else(|| {
+            AppError::internal("availability reservation remained pending after completion")
+        })?;
     json_ok(landed)
 }
 
@@ -900,7 +901,19 @@ fn submit_event_authenticated<'a>(
                     return;
                 }
             };
-            match state.jobs().idempotency_record(&principal_id, key).await {
+            let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal_id.clone(),
+                state.service_core_id(),
+            ));
+            match state
+                .jobs()
+                .scoped_idempotency_record(
+                    &authenticated_actor,
+                    "ak.self.events.command.submit",
+                    key,
+                )
+                .await
+            {
                 Ok(Some(record)) if record.request_hash == request_hash => {
                     // Replay: re-emit the cached first response verbatim, no
                     // re-execution and no second side effect.
@@ -938,9 +951,9 @@ fn submit_event_authenticated<'a>(
                         session,
                         envelope,
                         EventCommitIdempotency {
-                            principal_id: principal_id.clone(),
+                            authenticated_actor,
+                            operation_id: "ak.self.events.command.submit".to_owned(),
                             key: key.to_owned(),
-                            service_id: state.service_core_id(),
                             request_hash: request_hash.clone(),
                         },
                     )
@@ -1147,9 +1160,9 @@ async fn persist_idempotency_first_response(
         }
     };
     let record = soland_services::jobs::IdempotencyState {
-        principal_id,
+        authenticated_actor: arkret_wire::ActorId::service(principal_id),
+        operation_id: soland_services::jobs::INTERNAL_IDEMPOTENCY_OPERATION.to_owned(),
         idempotency_key: idempotency_key.to_owned(),
-        service_id: state.service_core_id(),
         request_hash: request_hash.to_owned(),
         response_status: status.as_u16() as i32,
         response_body: body.clone(),

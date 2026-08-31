@@ -736,6 +736,9 @@ impl EventStore for MemoryEventStore {
             if staged_account_slots
                 .get(&key)
                 .is_some_and(|existing| existing != &slot)
+                || staged_account_slots
+                    .values()
+                    .any(|existing| existing.account_id == slot.account_id && existing != &slot)
             {
                 return Err(PersistenceError::Conflict(
                     "account_principal_control_realm_already_exists".to_owned(),
@@ -793,22 +796,22 @@ impl EventStore for MemoryEventStore {
             .collect())
     }
 
-    async fn identity_anchor_account_slot_for_principal(
+    async fn identity_anchor_account_slot(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<IdentityAnchorAccountSlot>> {
         let matches = self
             .identity_anchor_account_slots
             .lock()
             .values()
-            .filter(|slot| slot.principal_id.as_str() == principal_id)
+            .filter(|slot| &slot.account_id == account_id)
             .cloned()
             .collect::<Vec<_>>();
         match matches.as_slice() {
             [] => Ok(None),
             [slot] => Ok(Some(slot.clone())),
             _ => Err(PersistenceError::Conflict(
-                "principal has multiple identity-anchor account slots".to_owned(),
+                "account has multiple identity-anchor account slots".to_owned(),
             )),
         }
     }
@@ -1007,10 +1010,81 @@ impl EventStore for MemoryEventStore {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::DidCoreId;
+    use arkret_wire::{AccountId, DidCoreId};
     use chrono::Utc;
 
     use super::*;
+
+    fn account(principal: &str, station: &str) -> AccountId {
+        AccountId::new(
+            DidCoreId::new(principal).unwrap(),
+            DidCoreId::new(station).unwrap(),
+        )
+    }
+
+    fn account_slot(account_id: AccountId, suffix: &str) -> IdentityAnchorAccountSlot {
+        IdentityAnchorAccountSlot {
+            account_authority_id: format!("ak:did_core:web:authority-{suffix}.example"),
+            account_subject: format!("subject-{suffix}"),
+            account_id,
+            realm_id: format!("ak:realm:{suffix}"),
+            create_event_id: format!("ak:event:{suffix}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn identity_anchor_slots_isolate_same_principal_at_different_stations() {
+        let store = MemoryEventStore::with_devices(
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(BTreeMap::new())),
+            Arc::new(Mutex::new(Vec::new())),
+            MemoryGovernanceDependencyStore::default(),
+        );
+        let first_account = account(
+            "ak:did_core:web:shared-principal.example",
+            "ak:did_core:web:station-a.example",
+        );
+        let second_account = account(
+            "ak:did_core:web:shared-principal.example",
+            "ak:did_core:web:station-b.example",
+        );
+        let first_slot = account_slot(first_account.clone(), "a");
+        let second_slot = account_slot(second_account.clone(), "b");
+        {
+            let mut slots = store.identity_anchor_account_slots.lock();
+            slots.insert(
+                (
+                    first_slot.account_authority_id.clone(),
+                    first_slot.account_subject.clone(),
+                ),
+                first_slot.clone(),
+            );
+            slots.insert(
+                (
+                    second_slot.account_authority_id.clone(),
+                    second_slot.account_subject.clone(),
+                ),
+                second_slot.clone(),
+            );
+        }
+
+        assert_eq!(
+            store
+                .identity_anchor_account_slot(&first_account)
+                .await
+                .unwrap(),
+            Some(first_slot)
+        );
+        assert_eq!(
+            store
+                .identity_anchor_account_slot(&second_account)
+                .await
+                .unwrap(),
+            Some(second_slot)
+        );
+    }
 
     fn record(canonical_bytes: &[u8]) -> CanonicalEventRecord {
         let digest = arkret_canonical::sha256_bytes(canonical_bytes);

@@ -8,12 +8,12 @@ pub struct PgIdempotencyStore {
 }
 #[derive(QueryableByName)]
 struct IdempotencyRow {
+    #[diesel(sql_type = Jsonb)]
+    authenticated_actor: Value,
     #[diesel(sql_type = Text)]
-    principal_id: arkret_identifiers::DidCoreId,
+    operation_id: String,
     #[diesel(sql_type = Text)]
     idempotency_key: String,
-    #[diesel(sql_type = Text)]
-    service_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
     request_hash: String,
     #[diesel(sql_type = Integer)]
@@ -25,60 +25,87 @@ struct IdempotencyRow {
     #[diesel(sql_type = Timestamptz)]
     expires_at: chrono::DateTime<Utc>,
 }
-impl From<IdempotencyRow> for IdempotencyRecord {
-    fn from(row: IdempotencyRow) -> Self {
-        Self {
-            principal_id: row.principal_id,
+impl TryFrom<IdempotencyRow> for IdempotencyRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: IdempotencyRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            authenticated_actor: serde_json::from_value(row.authenticated_actor).map_err(
+                |error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "stored authenticated ActorId is invalid: {error}"
+                    ))
+                },
+            )?,
+            operation_id: row.operation_id,
             idempotency_key: row.idempotency_key,
-            service_id: row.service_id,
             request_hash: row.request_hash,
             response_status: row.response_status,
             response_body: row.response_body,
             created_at: row.created_at,
             expires_at: row.expires_at,
-        }
+        })
     }
+}
+
+fn actor_key(actor: &arkret_wire::ActorId) -> PersistenceResult<String> {
+    actor.canonical_key().map_err(|error| {
+        PersistenceError::SchemaViolation(format!("authenticated ActorId is invalid: {error}"))
+    })
+}
+
+fn actor_value(actor: &arkret_wire::ActorId) -> PersistenceResult<Value> {
+    serde_json::to_value(actor).map_err(|error| {
+        PersistenceError::SchemaViolation(format!("authenticated ActorId encode failed: {error}"))
+    })
 }
 #[async_trait]
 impl IdempotencyStore for PgIdempotencyStore {
     async fn get(
         &self,
-        principal_id: &arkret_identifiers::DidCoreId,
+        authenticated_actor: &arkret_wire::ActorId,
+        operation_id: &str,
         idempotency_key: &str,
     ) -> PersistenceResult<Option<IdempotencyRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let actor_key = actor_key(authenticated_actor)?;
         Ok(sql_query(
-            "SELECT principal_id, idempotency_key, service_id, request_hash, response_status, \
+            "SELECT authenticated_actor, operation_id, idempotency_key, request_hash, response_status, \
              response_body, created_at, expires_at \
-             FROM idempotency_keys WHERE principal_id = $1 AND idempotency_key = $2",
+             FROM idempotency_keys WHERE actor_key = $1 AND operation_id = $2 AND idempotency_key = $3",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(&actor_key)
+        .bind::<Text, _>(operation_id)
         .bind::<Text, _>(idempotency_key)
         .get_result::<IdempotencyRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?
-        .map(IdempotencyRecord::from))
+        .map(IdempotencyRecord::try_from)
+        .transpose()?)
     }
 
     async fn record(&self, record: &IdempotencyRecord) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let actor_key = actor_key(&record.authenticated_actor)?;
+        let actor_value = actor_value(&record.authenticated_actor)?;
         // First-writer-wins under a concurrent race: the earliest row stays,
         // and a racer's later read returns it as a Replay.
         sql_query(
             "INSERT INTO idempotency_keys \
-             (principal_id, idempotency_key, service_id, request_hash, response_status, \
+             (actor_key, authenticated_actor, operation_id, idempotency_key, request_hash, response_status, \
               response_body, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             ON CONFLICT (principal_id, idempotency_key) DO NOTHING",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (actor_key, operation_id, idempotency_key) DO NOTHING",
         )
-        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&actor_key)
+        .bind::<Jsonb, _>(&actor_value)
+        .bind::<Text, _>(&record.operation_id)
         .bind::<Text, _>(&record.idempotency_key)
-        .bind::<Text, _>(&record.service_id)
         .bind::<Text, _>(&record.request_hash)
         .bind::<Integer, _>(record.response_status)
         .bind::<Jsonb, _>(&record.response_body)
@@ -95,25 +122,31 @@ impl IdempotencyStore for PgIdempotencyStore {
         expected: &IdempotencyRecord,
         completed: &IdempotencyRecord,
     ) -> PersistenceResult<bool> {
+        if expected.authenticated_actor != completed.authenticated_actor
+            || expected.operation_id != completed.operation_id
+            || expected.idempotency_key != completed.idempotency_key
+        {
+            return Ok(false);
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let actor_key = actor_key(&expected.authenticated_actor)?;
         sql_query(
-            "UPDATE idempotency_keys SET service_id = $9, request_hash = $10, \
-             response_status = $11, response_body = $12, created_at = $13, expires_at = $14 \
-             WHERE principal_id = $1 AND idempotency_key = $2 AND service_id = $3 \
+            "UPDATE idempotency_keys SET request_hash = $9, response_status = $10, \
+             response_body = $11, created_at = $12, expires_at = $13 \
+             WHERE actor_key = $1 AND operation_id = $2 AND idempotency_key = $3 \
              AND request_hash = $4 AND response_status = $5 AND response_body = $6 \
              AND created_at = $7 AND expires_at = $8",
         )
-        .bind::<Text, _>(&expected.principal_id)
+        .bind::<Text, _>(&actor_key)
+        .bind::<Text, _>(&expected.operation_id)
         .bind::<Text, _>(&expected.idempotency_key)
-        .bind::<Text, _>(&expected.service_id)
         .bind::<Text, _>(&expected.request_hash)
         .bind::<Integer, _>(expected.response_status)
         .bind::<Jsonb, _>(&expected.response_body)
         .bind::<Timestamptz, _>(expected.created_at)
         .bind::<Timestamptz, _>(expected.expires_at)
-        .bind::<Text, _>(&completed.service_id)
         .bind::<Text, _>(&completed.request_hash)
         .bind::<Integer, _>(completed.response_status)
         .bind::<Jsonb, _>(&completed.response_body)
