@@ -1753,7 +1753,7 @@ fn projection_event_scope_circle_id(
     None
 }
 
-fn circle_scope_visible_to_session(
+pub(super) fn circle_scope_visible_to_session(
     state: &AppState,
     projection: &ProjectionState,
     scope_circle_id: Option<&str>,

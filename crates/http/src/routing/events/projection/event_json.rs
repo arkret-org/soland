@@ -7,7 +7,6 @@ use super::*;
 #[derive(Clone, Debug)]
 pub struct ProjectedEventPage {
     pub items: Vec<ProjectionEventRecord>,
-    pub next_cursor: Option<String>,
     pub has_more: bool,
 }
 
