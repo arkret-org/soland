@@ -499,8 +499,8 @@ fn managed_actor_fixture(
     let version_time = chrono::DateTime::parse_from_rfc3339("2026-08-24T00:00:00.000Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let inception = arkret_signatures::webvh::prepare_managed_agent_inception(
-        &arkret_signatures::webvh::ManagedAgentInceptionInput {
+    let inception = arkret_signatures::webvh::prepare_agent_inception(
+        &arkret_signatures::webvh::AgentInceptionInput {
             principal_endpoint: &endpoint,
             local_id: &local_id,
             controller_id,
@@ -2848,7 +2848,7 @@ async fn signed_install_events(
         schema: arkret_wire::SchemaId::ACTOR_PROFILE_V1.to_owned(),
         realm_id: Some(realm_id.clone()),
         principal_id: package.bot_actor_id.signing_principal_id().clone(),
-        actor_kind: arkret_wire::ActorKind::Integration,
+        actor_kind: arkret_wire::ActorKind::Bot,
         display_name: "Applet Bot".to_owned(),
         handle: None,
         agent_slug: None,

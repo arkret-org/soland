@@ -500,7 +500,7 @@ fn validate_bot_managed_actor_unit(
         && actor_profile.accountable_principal_ids[0].as_str() == package.service_id.as_str();
     if actor_profile.principal_id != *package.bot_actor_id.signing_principal_id()
         || actor_profile.realm_id.as_ref() != Some(basis.effective_scope.realm_id())
-        || actor_profile.actor_kind != arkret_wire::ActorKind::Integration
+        || actor_profile.actor_kind != arkret_wire::ActorKind::Bot
         || actor_profile
             .profile_fields
             .get("managed_by_applet")

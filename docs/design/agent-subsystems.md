@@ -28,7 +28,7 @@ GET 返回每个 slot 的 `{target_scope, selection, version}`，供客户端诚
 
 ## S1 — Governance policy projection
 
-Realm、Circle 与 Strand 的 `agent_participation.native_agent` 是 reducer 管理的治理策略。子级只能相对父级
+Realm、Circle 与 Strand 的 `agent_participation.agent` 是 reducer 管理的治理策略。子级只能相对父级
 tighten；放宽返回 `agent_participation_ceiling_widen`。投影层把当前策略写入
 `agent_participation_ceiling`，读侧按目标 scope 求出当前最内层有效 policy。
 
@@ -88,7 +88,7 @@ pub(crate) async fn dispatch_message_notifications(
    - 去重:同 `(actor, source_event_id, type=mention)` 最多一条。
    - 发送者自我 mention 默认不通知。
    - `level=muted` / 个人 blocklist / DND / `dont_notify` push rule 覆盖。
-   - **agent 第三方 mention gate(AKP-0016 §9.4.5)**:若 recipient 是 native personal agent(`actor_kind="agent"` 或 `agent_principal` 表命中)且 mention 作者 ≠ 该 agent 的 controller(经 `ak.identity.accountability_grant` 解析)且 effective `accept_third_party_mention=false`(读 `agent_participation` selection ∩ `agent_participation_ceiling`,即复用 `resolve_effective_ceiling` + selection)→ **跳过该 recipient**,不写 notification、不入队。
+   - **Agent 第三方 mention gate(AKP-0016 §9.4.5)**:若 recipient 是 Agent(`actor_kind="agent"` 或 `agent_principal` 表命中)且 mention 作者 ≠ 该 Agent 的 controller(经 `ak.identity.accountability_grant` 解析)且 effective `accept_third_party_mention=false`(读 `agent_participation` selection ∩ `agent_participation_ceiling`,即复用 `resolve_effective_ceiling` + selection)→ **跳过该 recipient**,不写 notification、不入队。
 3. **落库**:`NotificationStore::put`(合并 reason set;reply/assignment/reaction/watch 与 mention 命中同 recipient 时合并为单行)。
 4. **入队 push**:对有 push device 的 recipient,构造 frame 调用既有 `routing/interop/push_outbound`(floria),受 `max_recipients` / rate-limit / review gate(audience mention)约束;不得先推后撤。
 

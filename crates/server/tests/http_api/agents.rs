@@ -1,4 +1,4 @@
-//! Integration tests - personal-agent HTTP surfaces.
+//! Integration tests - agent HTTP surfaces.
 
 use arkret_state::lattice::CellState;
 
@@ -7,7 +7,7 @@ use super::common::*;
 pub(crate) const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 pub(crate) const CONTROLLER_DEVICE_SIGNING_SEED: [u8; 32] = [91u8; 32];
 /// Fragment of the controller's backup-HPKE key agreement seeded by
-/// [`seed_agent_provision_prerequisites`]. Managed-Agent PCR key backups must
+/// [`seed_agent_provision_prerequisites`]. Agent PCR key backups must
 /// name it as `encryption.recipient_key_ref`.
 pub(crate) const CONTROLLER_BACKUP_HPKE_FRAGMENT: &str = "backup-hpke-1";
 const CONTROLLER_BACKUP_HPKE_PUBLIC_KEY: &str = "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW";
@@ -802,8 +802,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let binding_signing_key = SigningKey::from_bytes(&[22_u8; 32]);
     let successor_signing_key = SigningKey::from_bytes(&[23_u8; 32]);
-    let agent_inception = arkret_signatures::webvh::prepare_managed_agent_inception(
-        &arkret_signatures::webvh::ManagedAgentInceptionInput {
+    let agent_inception = arkret_signatures::webvh::prepare_agent_inception(
+        &arkret_signatures::webvh::AgentInceptionInput {
             principal_endpoint: &url::Url::parse("https://soland.local").unwrap(),
             local_id: &format!("agent-{}", uuid::Uuid::now_v7().simple()),
             controller_id: &controller_id,
@@ -909,8 +909,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
         controller_did.clone(),
         verification_method.clone(),
     );
-    let create_payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
-        arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+    let create_payload = arkret_bootstrap::build_agent_pcr_create_payload(
+        arkret_bootstrap::AgentPcrCreatePayloadInput {
             agent_id: agent_id.clone(),
             notary: principal_control_notary(
                 arkret_wire::AccountId::new(agent_id.clone(), state.service_core_id()),
@@ -1237,12 +1237,11 @@ async fn provision_agent_sdk_commit_attempt_inner(
         "{controller_seal_response_body}; controller Events: {controller_event_inventory:?}"
     );
 
-    let genesis_authority =
-        arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_delegated_create(
-            &pcr_genesis,
-            &genesis_projector,
-        )
-        .unwrap();
+    let genesis_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_delegated_create(
+        &pcr_genesis,
+        &genesis_projector,
+    )
+    .unwrap();
     let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
     let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
         pcr_genesis.realm_id.clone(),
@@ -1293,7 +1292,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         serde_json::json!([accepted_genesis.event_id]),
         "{genesis_response_body}"
     );
-    let genesis_seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
+    let genesis_seal = arkret_bootstrap::build_agent_pcr_event_seal(
         std::slice::from_ref(&accepted_genesis),
         None,
         None,
@@ -1337,8 +1336,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .await;
     assert_eq!(hidden_get.status_code, Some(StatusCode::NOT_FOUND));
 
-    let binding_update = arkret_signatures::webvh::prepare_managed_agent_binding_update(
-        &arkret_signatures::webvh::ManagedAgentBindingUpdateInput {
+    let binding_update = arkret_signatures::webvh::prepare_agent_binding_update(
+        &arkret_signatures::webvh::AgentBindingUpdateInput {
             did: did.as_str(),
             local_id: &agent_inception.local_id,
             previous_entries: std::slice::from_ref(&agent_inception.log_entry),

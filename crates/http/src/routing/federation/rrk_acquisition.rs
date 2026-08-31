@@ -426,12 +426,12 @@ impl RrkAcquisitionWorker {
             &event_values,
             &dependency_values,
             |event, _digest_suite, evidence, dependencies| {
-                arkret::verify_native_agent_historical_event_key(
+                arkret::verify_agent_historical_event_key(
                     event,
                     evidence,
                     dependencies,
                     |request| {
-                        super::super::governance_history::verify_native_agent_history_trust(
+                        super::super::governance_history::verify_agent_history_trust(
                             &self.state,
                             request,
                         )

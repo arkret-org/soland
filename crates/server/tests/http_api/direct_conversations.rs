@@ -734,7 +734,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact_body() {
     assert_eq!(
         body["reason_detail"],
         format!(
-            "no owned active managed-Agent authorization or accepted contact projection: requester_id=ak:did_core:web:alice.example, peer={}",
+            "no owned active Agent authorization or accepted contact projection: requester_id=ak:did_core:web:alice.example, peer={}",
             local_actor(core_id(BOB_DID))
         )
     );

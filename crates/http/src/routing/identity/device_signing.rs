@@ -208,7 +208,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
             }
             verify_welcome_signature(envelope, claim_receipt, device_public_key)
         }
-        arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterNativeAgent {
+        arkret_models_collaboration::events_payloads::MlsRequesterTrustBinding::RequesterAgent {
             requester_agent_id,
             requester_agent_verification_method,
             requester_agent_key_authorize_event_id,
@@ -226,7 +226,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
                     .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
                 return verify_welcome_signature(envelope, claim_receipt, key.as_str());
             }
-            if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+            if crate::routing::identity::agent_pcr::agent_record_for_actor(
                 state, &envelope.requester_actor_id,
             ).await.map_err(|_| arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?.is_none()
                 || !crate::routing::mls::current_agent_key_authorization_matches_method(
@@ -616,7 +616,7 @@ mod tests {
         let method = "did:web:agent.example#runtime";
         let (envelope, receipt) = signed_welcome_fixture(
             actor,
-            MlsRequesterTrustBinding::RequesterNativeAgent {
+            MlsRequesterTrustBinding::RequesterAgent {
                 requester_agent_id: principal.clone(),
                 requester_agent_verification_method: arkret_wire::DidUrl::new(method.to_owned())
                     .unwrap(),

@@ -17,7 +17,7 @@ pub struct PendingAgentPairingCommitIntent {
     pub signing_key_binding: Option<AgentSigningKeyBinding>,
 }
 
-/// Durable projection of a managed Agent principal.
+/// Durable projection of a Agent principal.
 ///
 /// The controller, PCR, and controller-authorization fields form the immutable
 /// identity binding. Adapters preserve those immutable fields during updates.

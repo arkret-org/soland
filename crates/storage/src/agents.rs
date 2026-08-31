@@ -36,7 +36,7 @@ pub fn agent_participation_record_key(record: &Value) -> (Option<String>, Option
             .map(ToOwned::to_owned),
     )
 }
-/// AKP-0008 — native personal agent principal persistence (provision /
+/// AKP-0008 — Agent principal persistence (provision /
 /// list / get / lifecycle). The typed persistence model keeps database column
 /// names, nullability, UUIDs, and timestamps checked at compile time. The wire
 /// boundary projects it into `agent_projection`, dropping internal columns —

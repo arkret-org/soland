@@ -62,7 +62,7 @@ pub struct ProjectionState {
     /// against the FSM state field, not stored as separate collections.
     pub members: BTreeMap<(String, String), SolandMembershipState>,
     /// Exact controller authority and controller join generation carried by a
-    /// Native Personal Agent membership Event. Effective Agent membership is
+    /// Agent membership Event. Effective Agent membership is
     /// derived by joining this binding with the current controller member cell.
     pub agent_membership_bindings: BTreeMap<(String, String), AgentControllerMembershipBinding>,
     /// Server-side invite projection keyed by `invite_id`.
@@ -1325,7 +1325,7 @@ impl ProjectionState {
 
     /// Whether the Realm declared `ak.profile.principal_control_realm.v1`.
     ///
-    /// PCR and managed-Agent control Realms permanently pin history access to
+    /// PCR and Agent control Realms permanently pin history access to
     /// `since_join`.
     pub fn realm_is_principal_control(&self, realm_id: &str) -> bool {
         self.realm_schema_refs(realm_id)

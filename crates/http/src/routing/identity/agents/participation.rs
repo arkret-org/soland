@@ -61,7 +61,7 @@ pub(super) async fn set_agent_participation(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
         chrono::Utc::now(),
@@ -133,7 +133,7 @@ pub(super) async fn get_agent_participation(
     let session = aa.authenticated_session(state, req).await?;
     let agent_id = agent_id.into_inner();
     let record = require_agent_controller(state, &session, &agent_id).await?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
         chrono::Utc::now(),

@@ -419,10 +419,10 @@ mod received_at_stamp_tests {
     }
 }
 
-mod managed_agent_pcr_batch_tests {
+mod agent_pcr_batch_tests {
     use super::*;
 
-    fn managed_agent_create_value() -> Value {
+    fn agent_create_value() -> Value {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ".to_owned())
                 .unwrap();
@@ -430,29 +430,23 @@ mod managed_agent_pcr_batch_tests {
             arkret_identifiers::Did::new("did:webvh:z6mkfixtureagent:agent.example".to_owned())
                 .unwrap();
         let agent_actor_id = arkret_wire::project_did_to_core_id(&agent_id).unwrap();
-        let genesis =
-            arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
-                arkret_wire::GenesisSalt::new(
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
-                )
+        let genesis = arkret_models_collaboration::events_payloads::RealmGenesis::agent_control(
+            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
-                arkret_models_identity::ResolutionCommitment {
-                    did: agent_id.clone(),
-                    method_history_head: format!("sha256:{}", "8".repeat(64)),
-                    version_id: "1-Qmfixture".to_owned(),
-                },
-                arkret_identifiers::TrustDomainId::new(
-                    "ak:trust_domain:managed-agent-pcr".to_owned(),
-                )
-                .unwrap(),
-                vec!["ak.profile.principal_control_realm.v1".to_owned()],
-                arkret_wire::CORE_REDUCER_PROFILE,
-                arkret_canonical::DigestSuite::Sha256,
-                arkret_wire::SecurityClass::HighAssurance,
-                arkret_wire::EncryptionProfile::MlsRfc9420,
-                crate::test_single_signer_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
-            )
-            .unwrap();
+            arkret_models_identity::ResolutionCommitment {
+                did: agent_id.clone(),
+                method_history_head: format!("sha256:{}", "8".repeat(64)),
+                version_id: "1-Qmfixture".to_owned(),
+            },
+            arkret_identifiers::TrustDomainId::new("ak:trust_domain:agent-pcr".to_owned()).unwrap(),
+            vec!["ak.profile.principal_control_realm.v1".to_owned()],
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_wire::SecurityClass::HighAssurance,
+            arkret_wire::EncryptionProfile::MlsRfc9420,
+            crate::test_single_signer_notary("did:webvh:z6mkfixtureagent:agent.example", 43),
+        )
+        .unwrap();
         let payload =
             arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
                 .to_value()
@@ -480,23 +474,18 @@ mod managed_agent_pcr_batch_tests {
     }
 
     #[test]
-    fn delegated_managed_agent_create_bypasses_ordinary_bootstrap_router() {
-        assert!(batch_is_managed_agent_pcr_create(&[
-            managed_agent_create_value()
-        ]));
+    fn delegated_agent_create_bypasses_ordinary_bootstrap_router() {
+        assert!(batch_is_agent_pcr_create(&[agent_create_value()]));
     }
 
     #[test]
     fn ordinary_or_multi_event_create_stays_on_ordinary_bootstrap_router() {
-        let mut ordinary = managed_agent_create_value();
+        let mut ordinary = agent_create_value();
         ordinary.as_object_mut().unwrap().remove("executed_by");
-        assert!(!batch_is_managed_agent_pcr_create(&[ordinary]));
+        assert!(!batch_is_agent_pcr_create(&[ordinary]));
 
-        let managed = managed_agent_create_value();
-        assert!(!batch_is_managed_agent_pcr_create(&[
-            managed.clone(),
-            managed,
-        ]));
+        let managed = agent_create_value();
+        assert!(!batch_is_agent_pcr_create(&[managed.clone(), managed,]));
     }
 }
 

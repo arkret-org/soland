@@ -247,24 +247,24 @@ fn stamp_projection_operation_received_at(
     );
 }
 
-fn is_managed_agent_pcr_create(event: &arkret_wire::Event) -> bool {
+fn is_agent_pcr_create(event: &arkret_wire::Event) -> bool {
     event.kind == arkret_wire::EventKind::RealmCreate
         && event.executed_by.as_ref() != Some(&event.actor_id)
-        && arkret_bootstrap::materialize_managed_agent_pcr_control(
+        && arkret_bootstrap::materialize_agent_pcr_control(
             std::slice::from_ref(event),
             &genesis_cell_write_projector,
         )
         .is_ok()
 }
 
-fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
+fn batch_is_agent_pcr_create(envelopes: &[Value]) -> bool {
     if envelopes.len() != 1 {
         return false;
     }
     let Ok(event) = serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()) else {
         return false;
     };
-    is_managed_agent_pcr_create(&event)
+    is_agent_pcr_create(&event)
 }
 
 #[derive(Debug)]
@@ -1354,7 +1354,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                     "controller-Agent founding evidence does not match the current provision",
                 ));
             }
-            crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            crate::routing::identity::agent_pcr::validate_agent_controller_binding(
                 state,
                 &agent,
                 accepted_at,
@@ -1565,7 +1565,7 @@ async fn submit_event_batch_outcome_with_leases(
         )
         .await;
     }
-    if batch_begins_realm_create(&envelopes) && !batch_is_managed_agent_pcr_create(&envelopes) {
+    if batch_begins_realm_create(&envelopes) && !batch_is_agent_pcr_create(&envelopes) {
         return submit_realm_bootstrap_batch(
             state,
             session,
@@ -1584,14 +1584,14 @@ async fn submit_event_batch_outcome_with_leases(
     let mut pending_delivery_count = 0_u32;
     let mut realm_actor_frontiers = BTreeMap::new();
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
-    // `event-auth-state-resolution.md` §5(1) — the managed Agent PCR genesis is
+    // `event-auth-state-resolution.md` §5(1) — the Agent PCR genesis is
     // the delegated branch of the closed `ak.realm.create` anchor unit, so its
     // create carries no `seal_basis` and its registry plane check must run in
     // the bootstrap context. The ordinary-Realm branch already returned above;
     // reaching here with a leading create means this branch, and
-    // `batch_is_managed_agent_pcr_create` has already materialized the unit.
+    // `batch_is_agent_pcr_create` has already materialized the unit.
     if batch_begins_realm_create(&envelopes)
-        && batch_is_managed_agent_pcr_create(&envelopes)
+        && batch_is_agent_pcr_create(&envelopes)
         && let (Some(realm_id), Some(actor_id)) = (
             event_realm_id_from_value(&envelopes[0]),
             event_actor_from_value(&envelopes[0]).map(|actor| actor.to_string()),
@@ -2234,9 +2234,7 @@ async fn verify_federated_event_admission(
                 .producer_signer_resolution_evidence_digest
                 .is_none())
     {
-        return Err(
-            "Native Agent admission omitted its frozen producer signer evidence".to_owned(),
-        );
+        return Err("Agent admission omitted its frozen producer signer evidence".to_owned());
     }
     let producer_multibase = admission
         .producer_signing_key_did
@@ -3077,7 +3075,7 @@ pub(crate) async fn submit_federation_events(
                             res,
                             StatusCode::SERVICE_UNAVAILABLE,
                             "temporarily_unavailable",
-                            "accepted Native Agent Event is missing its atomic receipt",
+                            "accepted Agent Event is missing its atomic receipt",
                         );
                         return;
                     }

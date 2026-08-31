@@ -251,7 +251,7 @@ async fn validate_one_operation_policy(
             // reducer-derived event; the generic submit path is closed.
             return Err("sidecar_create_denied");
         }
-        validate_managed_agent_grant_ceiling(state, operation).await?;
+        validate_agent_grant_ceiling(state, operation).await?;
         if kinds::operation_is_message_create(operation)
             && !message_operation_is_encrypted(operation)
             && !has_plaintext_service_binding
@@ -262,9 +262,9 @@ async fn validate_one_operation_policy(
             );
         }
         validate_principal_control_realm_binding(state, operation)?;
-        message_rules::validate_managed_agent_control_realm_binding(state, operation).await?;
+        message_rules::validate_agent_control_realm_binding(state, operation).await?;
         validate_accountability_profile_policy(state, operations, operation).await?;
-        crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
+        crate::routing::identity::agent_pcr::validate_active_series_operation_authority(
             state, operation,
         )
         .await?;
@@ -329,7 +329,7 @@ async fn validate_agent_operation_membership(
     let Some(record) = record else {
         return Ok(());
     };
-    // The managed Agent's own PCR genesis is a lifecycle bootstrap, not a
+    // The Agent's own PCR genesis is a lifecycle bootstrap, not a
     // Realm-participation write. Its controller delegation, provision Event,
     // accountability grant and PCR binding have already been checked by the
     // closed envelope gate. Requiring an effective Realm membership here
@@ -342,14 +342,14 @@ async fn validate_agent_operation_membership(
         return Ok(());
     }
     let result = if operation.realm_id.as_str() == record.principal_control_realm_id {
-        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        crate::routing::identity::agent_pcr::validate_agent_controller_binding(
             state,
             &record,
             operation.created_at,
         )
         .await
     } else {
-        crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+        crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
             state,
             &record,
             operation.realm_id.as_str(),
@@ -426,7 +426,7 @@ mod tests {
     }
 }
 
-async fn validate_managed_agent_grant_ceiling(
+async fn validate_agent_grant_ceiling(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -447,7 +447,7 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(record) = record else {
         return Ok(());
     };
-    crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+    crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
         state,
         &record,
         operation.realm_id.as_str(),

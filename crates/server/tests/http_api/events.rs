@@ -36,7 +36,7 @@ fn projected_cell_targets(envelope: &Value) -> std::collections::BTreeSet<String
 
 // ── Agent SessionGrant + DPoP fixture ────────────────────────────────────────
 //
-// A managed-Agent session is only ever admitted as a typed SessionGrant
+// A Agent session is only ever admitted as a typed SessionGrant
 // presented together with a DPoP proof (`enforce_agent_session_authority`), so
 // a locally seeded bearer SessionRecord can no longer stand in for one. The
 // fixture below runs the real prepare/commit provisioning ceremony over HTTP,
@@ -118,7 +118,7 @@ async fn read_introspection_request(stream: &mut tokio::net::TcpStream) -> Vec<u
     }
 }
 
-/// Provision a managed Agent through the real ceremony, activate its runtime
+/// Provision a Agent through the real ceremony, activate its runtime
 /// key through the storage port, and stand up a session-grant introspection
 /// mock that vouches for a grant scoped to exactly `granted_scopes`.
 async fn seed_agent_grant_session(

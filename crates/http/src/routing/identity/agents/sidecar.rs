@@ -205,10 +205,8 @@ async fn agent_record_is_desired_sidecar_member(
     {
         return Ok(false);
     }
-    let account = crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
-        state, record,
-    )
-    .await?;
+    let account =
+        crate::routing::identity::agent_pcr::agent_controller_account(state, record).await?;
     if &account != controller {
         return Ok(false);
     }

@@ -56,15 +56,14 @@ pub(super) async fn mls_governance_proof(
             )?
             .to_string(),
         );
-    let managed_agent_pcr =
-        crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
-            state,
-            &session.actor,
-            realm_value,
-        )
-        .await?;
+    let agent_pcr = crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
+        state,
+        &session.actor,
+        realm_value,
+    )
+    .await?;
     let realm_accessible = own_pcr
-        || managed_agent_pcr
+        || agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(state, realm_value, Some(&session))
             .await;
     if !realm_accessible || !scope_visible_to_session(state, &request.effective_scope, &session) {
@@ -372,7 +371,7 @@ async fn materialize_realm_control_with_transported_seals(
                 .envelope
                 .pointer("/payload/object/purpose")
                 .and_then(serde_json::Value::as_str)
-                == Some("managed_agent_control")
+                == Some("agent_control")
             && record
                 .envelope
                 .get("executed_by")
@@ -380,7 +379,7 @@ async fn materialize_realm_control_with_transported_seals(
                     serde_json::from_value::<arkret_wire::ActorId>(executed_by.clone()).is_ok()
                 })
     }) {
-        return materialize_managed_agent_realm_control(state, realm_id, &realm_records);
+        return materialize_agent_realm_control(state, realm_id, &realm_records);
     }
     let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
     let principal_control_actor = realm_records
@@ -743,7 +742,7 @@ async fn materialize_realm_control_with_transported_seals(
     Ok(MaterializedRealmControl { seal_view })
 }
 
-fn materialize_managed_agent_realm_control(
+fn materialize_agent_realm_control(
     state: &AppState,
     realm_id: &RealmId,
     records: &[soland_services::events::AcceptedEvent],
@@ -756,7 +755,7 @@ fn materialize_managed_agent_realm_control(
             AppError::new(
                 ErrorCode::StateMismatch,
                 format!(
-                    "stored managed Agent PCR Event {} is not canonical: {error}",
+                    "stored Agent PCR Event {} is not canonical: {error}",
                     record.event_id
                 ),
             )
@@ -771,7 +770,7 @@ fn materialize_managed_agent_realm_control(
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 format!(
-                    "stored managed Agent PCR Event {} is scoped to another Realm",
+                    "stored Agent PCR Event {} is scoped to another Realm",
                     record.event_id
                 ),
             ));
@@ -782,7 +781,7 @@ fn materialize_managed_agent_realm_control(
                 AppError::new(
                     ErrorCode::StateMismatch,
                     format!(
-                        "stored managed Agent PCR Event {} digest failed: {error}",
+                        "stored Agent PCR Event {} digest failed: {error}",
                         record.event_id
                     ),
                 )
@@ -791,7 +790,7 @@ fn materialize_managed_agent_realm_control(
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 format!(
-                    "stored managed Agent PCR Event {} canonical digest mismatch",
+                    "stored Agent PCR Event {} canonical digest mismatch",
                     record.event_id
                 ),
             ));
@@ -799,11 +798,11 @@ fn materialize_managed_agent_realm_control(
         event_digest_suites.insert(event.event_id.clone(), record.digest_suite);
         events.push(event);
     }
-    let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
+    let material = arkret_bootstrap::materialize_agent_pcr_control(&events, &|event| {
         let event_digest_suite = event_digest_suites
             .get(&event.event_id)
             .copied()
-            .ok_or_else(|| "managed Agent PCR Event has no frozen digest suite".to_owned())?;
+            .ok_or_else(|| "Agent PCR Event has no frozen digest suite".to_owned())?;
         state
             .projections()
             .project_accepted_cell_writes_with_digest_suite(event, event_digest_suite)
@@ -812,13 +811,13 @@ fn materialize_managed_agent_realm_control(
     .map_err(|error| {
         AppError::new(
             ErrorCode::StateMismatch,
-            format!("managed Agent PCR control material is invalid: {error}"),
+            format!("Agent PCR control material is invalid: {error}"),
         )
     })?;
     if &material.realm_id != realm_id {
         return Err(AppError::new(
             ErrorCode::StateMismatch,
-            "managed Agent PCR material resolved to a different Realm",
+            "Agent PCR material resolved to a different Realm",
         ));
     }
     let managed_covered = material
@@ -834,9 +833,7 @@ fn materialize_managed_agent_realm_control(
                 .copied()
                 .map(|event_digest_suite| (event.clone(), event_digest_suite))
                 .ok_or_else(|| {
-                    proof_state_error(
-                        "managed Agent PCR Event has no frozen completeness digest suite",
-                    )
+                    proof_state_error("Agent PCR Event has no frozen completeness digest suite")
                 })
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -859,7 +856,7 @@ fn materialize_managed_agent_realm_control(
     .map_err(|error| {
         AppError::new(
             ErrorCode::FrontierUnavailable,
-            format!("accepted managed Agent PCR Seal materialization failed: {error}"),
+            format!("accepted Agent PCR Seal materialization failed: {error}"),
         )
     })?;
     Ok(MaterializedRealmControl { seal_view })
@@ -900,11 +897,11 @@ pub(in crate::routing) async fn materialize_governance_frontier(
         &group_genesis_binding,
         &leaves,
         |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_native_agent_historical_event_key(
+            arkret::verify_agent_historical_event_key(
                 event,
                 evidence,
                 dependencies,
-                |trust_request| verify_native_agent_history_trust(state, trust_request),
+                |trust_request| verify_agent_history_trust(state, trust_request),
             )
         },
     )
@@ -975,11 +972,11 @@ async fn load_governance_checkpoint(
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
         |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_native_agent_historical_event_key(
+            arkret::verify_agent_historical_event_key(
                 event,
                 evidence,
                 dependencies,
-                |trust_request| verify_native_agent_history_trust(state, trust_request),
+                |trust_request| verify_agent_history_trust(state, trust_request),
             )
         },
     )
@@ -1050,11 +1047,11 @@ pub(crate) async fn load_verified_governance_checkpoint(
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
         |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_native_agent_historical_event_key(
+            arkret::verify_agent_historical_event_key(
                 event,
                 evidence,
                 dependencies,
-                |trust_request| verify_native_agent_history_trust(state, trust_request),
+                |trust_request| verify_agent_history_trust(state, trust_request),
             )
         },
     )
@@ -1255,42 +1252,41 @@ fn group_genesis_binding(
     Ok(binding)
 }
 
-fn verify_native_agent_history_trust(
+fn verify_agent_history_trust(
     state: &AppState,
-    request: arkret::NativeAgentHistoricalTrustRequest<'_>,
+    request: arkret::AgentHistoricalTrustRequest<'_>,
 ) -> Result<(), arkret_wire::WireError> {
     match request {
-        arkret::NativeAgentHistoricalTrustRequest::PcrSeal(seal) => {
+        arkret::AgentHistoricalTrustRequest::PcrSeal(seal) => {
             let retained = state
                 .projections()
                 .seal_by_id(&seal.id)
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent PCR Seal is not locally accepted".to_owned(),
+                        "Agent PCR Seal is not locally accepted".to_owned(),
                     )
                 })?;
             if retained != *seal {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent PCR Seal differs from locally accepted bytes".to_owned(),
+                    "Agent PCR Seal differs from locally accepted bytes".to_owned(),
                 ));
             }
             Ok(())
         }
-        arkret::NativeAgentHistoricalTrustRequest::LifecycleWitness(witness) => {
+        arkret::AgentHistoricalTrustRequest::LifecycleWitness(witness) => {
             let retained_seal = state
                 .projections()
                 .seal_by_id(&witness.seal_id)
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent lifecycle Seal is not locally accepted".to_owned(),
+                        "Agent lifecycle Seal is not locally accepted".to_owned(),
                     )
                 })?;
             if retained_seal != witness.seal || retained_seal.id != witness.seal_id {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle witness differs from locally accepted history"
-                        .to_owned(),
+                    "Agent lifecycle witness differs from locally accepted history".to_owned(),
                 ));
             }
             let digest_suites = state
@@ -1304,7 +1300,7 @@ fn verify_native_agent_history_trust(
             )?;
             if !retained_seal.delta.contains(&event_digest) {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
+                    "Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
                 ));
             }
             let retained_event = state
@@ -1313,19 +1309,19 @@ fn verify_native_agent_history_trust(
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent lifecycle Event is not locally accepted".to_owned(),
+                        "Agent lifecycle Event is not locally accepted".to_owned(),
                     )
                 })?;
             if retained_event != witness.accepted_status_event {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle Event differs from locally accepted history".to_owned(),
+                    "Agent lifecycle Event differs from locally accepted history".to_owned(),
                 ));
             }
             Ok(())
         }
-        arkret::NativeAgentHistoricalTrustRequest::Transparency(_) => {
+        arkret::AgentHistoricalTrustRequest::Transparency(_) => {
             Err(arkret_wire::WireError::Protocol(
-                "Native Agent transparency trust anchor is unavailable".to_owned(),
+                "Agent transparency trust anchor is unavailable".to_owned(),
             ))
         }
     }
@@ -1958,33 +1954,27 @@ mod tests {
         )
     }
 
-    fn managed_agent_pcr_create() -> Event {
+    fn agent_pcr_create() -> Event {
         let realm_id =
             RealmId::new("ak:realm:AZiVojGkhKKjoBSA6eV96sZAm4u3Ze_3uMmkr30F6ZQZ").unwrap();
         let actor_did = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
-        let genesis =
-            arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
-                arkret_wire::GenesisSalt::new(
-                    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned(),
-                )
+        let genesis = arkret_models_collaboration::events_payloads::RealmGenesis::agent_control(
+            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
                 .unwrap(),
-                arkret_models_identity::ResolutionCommitment {
-                    did: actor_did.clone(),
-                    method_history_head: format!("sha256:{}", "8".repeat(64)),
-                    version_id: "1-Qmfixture".to_owned(),
-                },
-                arkret_identifiers::TrustDomainId::new(
-                    "ak:trust_domain:managed-agent-pcr".to_owned(),
-                )
-                .unwrap(),
-                vec![arkret_wire::ProfileId::PRINCIPAL_CONTROL_REALM_V1.to_owned()],
-                arkret_wire::CORE_REDUCER_PROFILE,
-                arkret_canonical::DigestSuite::Sha256,
-                arkret_wire::SecurityClass::HighAssurance,
-                arkret_wire::EncryptionProfile::MlsRfc9420,
-                crate::test_single_signer_notary("did:web:agent.example", 42),
-            )
-            .unwrap();
+            arkret_models_identity::ResolutionCommitment {
+                did: actor_did.clone(),
+                method_history_head: format!("sha256:{}", "8".repeat(64)),
+                version_id: "1-Qmfixture".to_owned(),
+            },
+            arkret_identifiers::TrustDomainId::new("ak:trust_domain:agent-pcr".to_owned()).unwrap(),
+            vec![arkret_wire::ProfileId::PRINCIPAL_CONTROL_REALM_V1.to_owned()],
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_canonical::DigestSuite::Sha256,
+            arkret_wire::SecurityClass::HighAssurance,
+            arkret_wire::EncryptionProfile::MlsRfc9420,
+            crate::test_single_signer_notary("did:web:agent.example", 42),
+        )
+        .unwrap();
         let payload =
             arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
                 .to_value()
@@ -2003,7 +1993,7 @@ mod tests {
     }
 
     /// The v1 wire carries no producer `effects[]`, so the canonical
-    /// genesis cells of a managed Agent PCR create are whatever the registered
+    /// genesis cells of a Agent PCR create are whatever the registered
     /// contract derives — and the create-log target is the wire singleton
     /// (`realm-and-space.md` §2.8.3), never a per-Realm subject. A per-Realm
     /// variant would both fork the `state_root` leaf set and turn a per-Realm
@@ -2011,7 +2001,7 @@ mod tests {
     #[test]
     fn governance_materializer_derives_the_canonical_genesis_cells() {
         let state = test_state();
-        let event = managed_agent_pcr_create();
+        let event = agent_pcr_create();
         let realm_id = event.realm_id.clone();
         let move_id = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let ops = canonical_event_ops(
@@ -2045,7 +2035,7 @@ mod tests {
     #[test]
     fn governance_materializer_rejects_a_realm_create_it_cannot_project() {
         let state = test_state();
-        let mut event = managed_agent_pcr_create();
+        let mut event = agent_pcr_create();
         let realm_id = event.realm_id.clone();
         event.payload.remove("object");
         let move_id = Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap();

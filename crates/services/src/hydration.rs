@@ -307,7 +307,7 @@ async fn hydrate_canonical_realm_bootstraps(
         .enumerate()
         .filter(|(_, record)| record.kind == arkret_wire::EventKind::RealmCreate.as_str())
     {
-        // PCR and managed-Agent control Realms have their own closed genesis
+        // PCR and Agent control Realms have their own closed genesis
         // protocols. They are durable canonical Events too, but they are not
         // ordinary Realm bootstrap transactions and must never be fed to the
         // ordinary Realm validator/reducer below.
@@ -331,7 +331,7 @@ async fn hydrate_canonical_realm_bootstraps(
         if matches!(
             create_payload.object.purpose,
             RealmPurpose::PrincipalControl
-                | RealmPurpose::ManagedAgentControl
+                | RealmPurpose::AgentControl
                 | RealmPurpose::AppletManagedControl
         ) {
             continue;
@@ -446,7 +446,7 @@ async fn hydrate_canonical_realm_bootstraps(
 /// `ak.identity.resolution.update` successors are the sole source of current
 /// identity state. Replay therefore derives the same registered cells as live
 /// admission, in acceptance order, including `since_join`, while the registry
-/// condition ensures no Native-Agent status cell is materialized.
+/// condition ensures no Agent status cell is materialized.
 async fn hydrate_applet_managed_pcr_identity(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,

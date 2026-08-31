@@ -271,7 +271,7 @@ impl ProjectionState {
             .get(&(realm_id.to_owned(), agent_id.to_owned()))
     }
 
-    /// Deterministic membership/lifecycle half of Native Personal Agent
+    /// Deterministic membership/lifecycle half of Agent
     /// effective membership. Callers that authorize Agent activity must also
     /// verify the durable provision/accountability binding owned by the
     /// identity service.

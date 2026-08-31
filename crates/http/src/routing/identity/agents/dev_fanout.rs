@@ -1,4 +1,4 @@
-//! Personal-Agent aggregate Event fan-out.
+//! Agent aggregate Event fan-out.
 //!
 //! Provisioning accepts only the closed controller-signed Event pair carried
 //! by the SDK request type. Older aggregate operations that do not yet carry a
@@ -232,7 +232,7 @@ pub(super) fn validate_durable_agent_lifecycle(
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
         return Err(AppError::capability_denied(
-            "lifecycle_event does not match the managed Agent controller binding",
+            "lifecycle_event does not match the Agent controller binding",
         ));
     }
     if event.proofs.is_empty() {

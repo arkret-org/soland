@@ -2231,7 +2231,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_create_cannot_get_self_principal_pcr_context() {
+    fn agent_create_cannot_get_self_principal_pcr_context() {
         let mut envelopes = sdk_canonical_self_principal_bootstrap_unit();
         let mut create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
         create.executed_by = Some(arkret_wire::ActorId::service(crate::test_actor_id_str(

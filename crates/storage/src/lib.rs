@@ -170,7 +170,7 @@ impl PersistenceError {
 /// into a caller-facing reason.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum ConflictCode {
-    /// A native-agent act-on-behalf approval nonce was already consumed.
+    /// A Agent act-on-behalf approval nonce was already consumed.
     ApprovalNonceReused,
     /// The applet was revoked between admission and commit.
     AppletRevoked,
@@ -385,7 +385,7 @@ pub trait MlsAgentStoreRegistry: Send + Sync {
     fn mls_commits(&self) -> &dyn MlsCommitStore;
     // AKP-0010 — agent participation policy.
     fn agent_participation(&self) -> &dyn AgentParticipationStore;
-    // AKP-0008 — native personal agent principals.
+    // AKP-0008 — Agent principals.
     fn agents(&self) -> &dyn AgentStore;
     fn agent_membership_cascades(&self) -> &dyn AgentMembershipCascadeStore;
     /// First-class Agent Sidecar aggregates and context bindings.

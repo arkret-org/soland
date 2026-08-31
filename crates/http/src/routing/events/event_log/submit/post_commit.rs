@@ -911,7 +911,7 @@ fn append_stored_event_dependencies(
 /// applies.
 ///
 /// `Ok(None)` means "not applicable" (no stored Realm-create, or a
-/// managed-agent PCR genesis, which is a different protocol unit). `Err` means
+/// agent PCR genesis, which is a different protocol unit). `Err` means
 /// the prerequisite exists but could not be assembled — the caller must reject
 /// the admission rather than accept an Event whose prerequisite would never
 /// arrive.
@@ -963,7 +963,7 @@ async fn realm_bootstrap_fanout_record(
             )
         })?;
     if arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).is_err() {
-        // Managed-agent PCR genesis is a different protocol unit and does not
+        // Agent PCR genesis is a different protocol unit and does not
         // use ordinary Realm bootstrap fanout.
         return Ok(None);
     }

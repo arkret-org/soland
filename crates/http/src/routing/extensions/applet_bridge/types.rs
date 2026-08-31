@@ -430,6 +430,10 @@ fn validate_managed_actor_unit(
         .map(serde_json::to_value)
         .transpose()
         .map_err(|error| format!("stored {label} external_ref cannot be encoded: {error}"))?;
+    let expected_actor_kind = match role {
+        AppletManagedActorRole::Bot => ActorKind::Bot,
+        AppletManagedActorRole::Ghost => ActorKind::Integration,
+    };
     if profile_event.kind != arkret_wire::EventKind::ProfileCreate
         || &profile_event.actor_id != actor_id
         || profile_event.executed_by.as_ref() != Some(&service_actor_id)
@@ -446,7 +450,7 @@ fn validate_managed_actor_unit(
         )
         || profile.principal_id != *actor_id.signing_principal_id()
         || profile.realm_id.as_ref() != Some(authority_realm_id)
-        || profile.actor_kind != ActorKind::Integration
+        || profile.actor_kind != expected_actor_kind
         || profile.accountable_principal_ids.as_slice() != [authority_package.service_id.clone()]
         || profile
             .profile_fields

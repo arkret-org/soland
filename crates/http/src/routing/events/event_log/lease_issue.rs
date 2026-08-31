@@ -343,11 +343,8 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         )
     } else if events.len() == 1
         && events[0].executed_by.as_ref() != Some(&events[0].actor_id)
-        && arkret_bootstrap::materialize_managed_agent_pcr_control(
-            events,
-            &genesis_cell_write_projector,
-        )
-        .is_ok()
+        && arkret_bootstrap::materialize_agent_pcr_control(events, &genesis_cell_write_projector)
+            .is_ok()
     {
         (
             events[0].realm_id.as_str().to_owned(),

@@ -41,7 +41,7 @@ pub(super) fn agent_participation_ceiling_change(
                     .get("object")
                     .and_then(|p| p.get("agent_participation"))
             })?;
-        base.get("native_agent").cloned()
+        base.get("agent").cloned()
     };
     let to_part = |value: &Value| ParticipationBits {
         reply_message: ap_bool(value, "reply_message"),
@@ -250,7 +250,7 @@ fn ap_effective_for_mode(mode: AgentParticipationMode, effective: ParticipationB
     }
 }
 
-pub(super) async fn native_agent_exists(
+pub(super) async fn agent_exists(
     state: &AppState,
     principal_id: &str,
 ) -> Result<bool, &'static str> {
@@ -497,14 +497,14 @@ async fn operation_agent_write_context(
     if let (Some(executed_by), Some(authorization_ref)) =
         (operation.context.executed_by.as_ref(), authorization_ref)
     {
-        use crate::routing::identity::managed_agent_pcr::{
-            managed_agent_controller_account, managed_agent_record_for_actor,
+        use crate::routing::identity::agent_pcr::{
+            agent_controller_account, agent_record_for_actor,
         };
-        if let Some(record) = managed_agent_record_for_actor(state, &operation.context.sender)
+        if let Some(record) = agent_record_for_actor(state, &operation.context.sender)
             .await
             .map_err(|_| "agent_principal_lookup_unavailable")?
         {
-            let controller_account = managed_agent_controller_account(state, &record)
+            let controller_account = agent_controller_account(state, &record)
                 .await
                 .map_err(|_| "agent_principal_lookup_unavailable")?;
             if executed_by == &arkret_wire::ActorId::account(controller_account)
@@ -518,7 +518,7 @@ async fn operation_agent_write_context(
     if let Some(executed_by) = operation_executed_by(operation)
         && (agent_context_agent_id(operation) == Some(executed_by)
             || operation_provenance_marks_agent(operation)
-            || native_agent_exists(state, executed_by).await?)
+            || agent_exists(state, executed_by).await?)
     {
         return Ok(Some((
             executed_by.to_owned(),
@@ -546,7 +546,7 @@ async fn operation_agent_write_context(
         return Ok(Some((agent_id, mode)));
     }
     if let Some(sender) = policy_operation_sender(operation)
-        && native_agent_exists(state, sender.signing_principal_id().as_str()).await?
+        && agent_exists(state, sender.signing_principal_id().as_str()).await?
     {
         return Ok(Some((
             sender.signing_principal_id().to_string(),

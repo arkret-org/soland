@@ -630,7 +630,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     {
         return json_ok(outcome);
     }
-    // The authenticated device (or managed-Agent allocation) selects one exact
+    // The authenticated device (or Agent allocation) selects one exact
     // `(principal_id, station_id)` pair and its local lifetime PCR
     // lineage. Never resolve account state from the principal core alone.
     let realm_id = contact_authority_realm(state, session, &holder).await?;

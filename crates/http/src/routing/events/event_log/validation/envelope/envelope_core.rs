@@ -327,11 +327,11 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    let managed_agent_delegation = if actor_id != session_actor_id
+    let agent_delegation = if actor_id != session_actor_id
         && !is_authorized_internal_adapter
         && !ephemeral_pairwise_author
     {
-        match crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
+        match crate::routing::identity::agent_pcr::validate_delegated_agent_envelope(
             state,
             object,
             &session.actor,
@@ -345,7 +345,7 @@ async fn validate_event_envelope_with_ingress(
                     session_actor = %session.actor,
                     error_code = %error.code,
                     error_message = %error.message,
-                    "delegated managed Agent Event validation failed"
+                    "delegated Agent Event validation failed"
                 );
                 false
             }
@@ -354,7 +354,7 @@ async fn validate_event_envelope_with_ingress(
         false
     };
     if actor_id != session_actor_id
-        && !managed_agent_delegation
+        && !agent_delegation
         && !is_authorized_internal_adapter
         && !ephemeral_pairwise_author
     {
@@ -369,8 +369,9 @@ async fn validate_event_envelope_with_ingress(
     // arkret-spec b47ff6ec) — Envelope `actor_kind` is reducer-managed:
     // reject any client-supplied value with the spec-canonical
     // `actor_kind_reducer_managed` reason code. The reducer derives the
-    // canonical `EnvelopeActorKind` (Native/Ghost/Service/Agent) from
-    // the Actor Profile after the bearer-session derivation lands.
+    // canonical `EnvelopeActorKind` (user/organization/team/agent/bot/
+    // service/integration) from the Actor Profile after bearer-session
+    // derivation lands. Device and Ghost are not actor kinds.
     // TODO(P2-impl): once the deep reducer pipeline runs here, stamp the
     // canonical `EnvelopeActorKind` onto the persisted projection envelope.
     if object.get("actor_kind").is_some() {
@@ -497,7 +498,7 @@ async fn validate_event_envelope_with_ingress(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, realm_id.as_str());
-    // A managed-Agent PCR create is initially published through the batch
+    // A Agent PCR create is initially published through the batch
     // surface, then may be replayed through the single-submission surface to
     // recover its stored Control Proposal Ack. Let an already accepted Event id
     // reach the submitter's canonical-byte duplicate check; only a different
@@ -531,7 +532,7 @@ async fn validate_event_envelope_with_ingress(
     }
     let is_realm_create_bootstrap = kind == arkret_wire::EventKind::RealmCreate.as_str()
         && realm_create_actor_is_creator(object, actor_id.as_str())
-        && (actor_id == session_actor_id || managed_agent_delegation)
+        && (actor_id == session_actor_id || agent_delegation)
         && (!realm_exists || historical_realm_create);
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session_actor, realm_id.as_str()).await;
@@ -608,7 +609,7 @@ async fn validate_event_envelope_with_ingress(
         && !is_private_invite_delivery
         && !applet_membership_bypass
         && !managed_actor_pcr_rotation
-        && !managed_agent_delegation
+        && !agent_delegation
         && !is_member_self_knock
         && !is_realm_bootstrap_followup
         && !is_identity_anchor_authorize

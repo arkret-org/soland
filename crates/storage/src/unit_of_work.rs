@@ -581,7 +581,7 @@ pub struct ManagedAuthorityClaim {
 #[derive(Clone, Debug)]
 pub struct EventBatchCommitRequest {
     pub events: Vec<EventCommitRequest>,
-    /// One native-agent act-on-behalf approval nonce consumed by an Event in
+    /// One Agent act-on-behalf approval nonce consumed by an Event in
     /// this batch. The ledger row and Event are committed atomically.
     pub agent_approval_nonce: Option<AgentApprovalNonceCommit>,
     /// One moderation franking nonce consumed by a report Event in this

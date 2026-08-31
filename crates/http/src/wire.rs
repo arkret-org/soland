@@ -198,7 +198,7 @@ pub struct SolandAccountRegisterOutcome {
 
 // Identity log / receipts outcomes are owned by the corresponding SDK model crates;
 // authoritative carrier for identity operation shapes); no soland mirrors.
-// AKP-0008 / AKP-0009 — Personal Agent operations. Every request/response
+// AKP-0008 / AKP-0009 — Agent operations. Every request/response
 // DTO is the SDK-authoritative `arkret_models_collaboration::agent_operations` shape (spec
 // `agent-operations.schema.json`): `agent_view`/`agent_list` carry the spec
 // `agent_projection`; the `agent_key_pair` outcome is

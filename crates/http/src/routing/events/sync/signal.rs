@@ -284,7 +284,7 @@ async fn admit_signal(
     }
 
     // (4) — resolve the signer through the authenticated principal's identity
-    // model. Native Agent endpoints use their accepted `ak.agent.key.authorize`
+    // model. Agent endpoints use their accepted `ak.agent.key.authorize`
     // binding; ordinary principals use the accepted device directory. The
     // shared outer shape remains `{actor}#{device_id}` in both branches.
     if session.agent_session.is_some() {
@@ -405,14 +405,13 @@ async fn verify_signal_agent_proof(
     actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
     let sender_actor_id = envelope.sender_actor_id.signing_principal_id().clone();
-    let record =
-        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(state, actor)
-            .await
-            .map_err(|error| {
-                tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
-                signal_rail_unavailable("resolve the Agent signing authorization")
-            })?
-            .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
+    let record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
+            signal_rail_unavailable("resolve the Agent signing authorization")
+        })?
+        .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
     if record.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active {
         return Err(signal_proof_invalid("Signal sender Agent is not active"));
     }
@@ -530,13 +529,10 @@ pub(in crate::routing::events) async fn accept_peer_signal(
         .agent_membership_binding(envelope.realm_id.as_str(), &sender_actor.to_string())
         .is_some()
         || (sender_actor.route_service_id().as_str() == state.service_id().as_str()
-            && crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
-                state,
-                &sender_actor,
-            )
-            .await
-            .map_err(|_| signal_rail_unavailable("resolve the Signal sender provisioning"))?
-            .is_some());
+            && crate::routing::identity::agent_pcr::agent_record_for_actor(state, &sender_actor)
+                .await
+                .map_err(|_| signal_rail_unavailable("resolve the Signal sender provisioning"))?
+                .is_some());
     if is_agent {
         verify_signal_agent_proof(state, envelope, &sender_actor).await?;
     } else {

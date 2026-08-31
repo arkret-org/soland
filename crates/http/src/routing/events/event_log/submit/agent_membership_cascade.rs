@@ -1,4 +1,4 @@
-//! Atomic admission for caller-signed Native Agent membership cascades.
+//! Atomic admission for caller-signed Agent membership cascades.
 
 use arkret_models_collaboration::governance::agent_membership_cascade::{
     AgentCleanupRecord, AgentMembershipCascadeMode, AgentMembershipCascadeOutcome,

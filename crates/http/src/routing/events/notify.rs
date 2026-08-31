@@ -2,7 +2,7 @@
 //! changes.
 //!
 //! Message mention fanout keeps the AKP-0016 third-party agent gate: a native
-//! personal agent is only notified of a third-party mention (author != its
+//! Agent is only notified of a third-party mention (author != its
 //! controller) when its effective `accept_third_party_mention` bit (selection
 //! ∩ ceiling) is true for the message scope; otherwise the mention is dropped
 //! for that agent. Assignment and schedule fanout use the same per-recipient
@@ -371,11 +371,8 @@ pub(crate) async fn dispatch_message_notifications(
                 .await
         {
             let Ok(controller) =
-                crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
-                    state,
-                    &agent_record,
-                )
-                .await
+                crate::routing::identity::agent_pcr::agent_controller_account(state, &agent_record)
+                    .await
             else {
                 continue;
             };

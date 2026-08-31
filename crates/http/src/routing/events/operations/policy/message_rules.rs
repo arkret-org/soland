@@ -270,7 +270,7 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
     }
 }
 
-pub(in crate::routing::events::operations) async fn validate_managed_agent_control_realm_binding(
+pub(in crate::routing::events::operations) async fn validate_agent_control_realm_binding(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
@@ -292,21 +292,18 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     if !explicit_agent_control && !possible_agent_profile_or_genesis {
         return Ok(());
     }
-    let agent_actor = managed_agent_control_actor(
+    let agent_actor = agent_control_actor(
         &operation.context.sender,
         &operation.payload,
         explicit_agent_control,
     )?;
-    let record = crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
-        state,
-        &agent_actor,
-    )
-    .await
-    .map_err(|_| "managed_agent_principal_binding_unavailable")?;
+    let record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, &agent_actor)
+        .await
+        .map_err(|_| "agent_principal_binding_unavailable")?;
     let record = match record {
         Some(record) => record,
         None if possible_agent_profile_or_genesis => return Ok(()),
-        None => return Err("managed_agent_principal_binding_unavailable"),
+        None => return Err("agent_principal_binding_unavailable"),
     };
     let agent_id = agent_actor.signing_principal_id().as_str();
     let expected = &record.principal_control_realm_id;
@@ -317,24 +314,23 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
         let object = operation
             .payload
             .get("object")
-            .ok_or("managed_agent_pcr_genesis_object_missing")?;
+            .ok_or("agent_pcr_genesis_object_missing")?;
         let controller_id = operation
             .context
             .executed_by
             .as_ref()
-            .ok_or("managed_agent_pcr_genesis_controller_missing")?;
+            .ok_or("agent_pcr_genesis_controller_missing")?;
         let controller_account =
-            crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
-                state, &record,
-            )
-            .await
-            .map_err(|_| "managed_agent_principal_binding_unavailable")?;
+            crate::routing::identity::agent_pcr::agent_controller_account(state, &record)
+                .await
+                .map_err(|_| "agent_principal_binding_unavailable")?;
         if controller_id != &arkret_wire::ActorId::account(controller_account) {
-            return Err("managed_agent_principal_binding_unavailable");
+            return Err("agent_principal_binding_unavailable");
         }
-        let initial_resolution = crate::routing::identity::managed_agent_pcr::managed_agent_initial_resolution_for_record(&record)
-            .map_err(|_| "managed_agent_initial_resolution_unavailable")?;
-        crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
+        let initial_resolution =
+            crate::routing::identity::agent_pcr::agent_initial_resolution_for_record(&record)
+                .map_err(|_| "agent_initial_resolution_unavailable")?;
+        crate::routing::identity::agent_pcr::validate_agent_pcr_genesis_object(
             object,
             agent_id,
             controller_id.signing_principal_id().as_str(),
@@ -347,7 +343,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     Ok(())
 }
 
-fn managed_agent_control_actor(
+fn agent_control_actor(
     sender: &arkret_wire::ActorId,
     payload: &Value,
     explicit_agent_control: bool,
@@ -356,9 +352,9 @@ fn managed_agent_control_actor(
         let principal = payload
             .get("agent_id")
             .and_then(Value::as_str)
-            .ok_or("managed_agent_control_event_missing_agent_id")?;
+            .ok_or("agent_control_event_missing_agent_id")?;
         if sender.signing_principal_id().as_str() != principal {
-            return Err("managed_agent_principal_binding_unavailable");
+            return Err("agent_principal_binding_unavailable");
         }
         return Ok(sender.clone());
     }
@@ -367,7 +363,7 @@ fn managed_agent_control_actor(
         .and_then(|object| object.get("actor_id"))
     {
         return serde_json::from_value(actor.clone())
-            .map_err(|_| "managed_agent_principal_binding_unavailable");
+            .map_err(|_| "agent_principal_binding_unavailable");
     }
     Ok(sender.clone())
 }
@@ -577,7 +573,7 @@ pub async fn validate_content_encryption_floor(
 }
 
 #[cfg(test)]
-mod managed_agent_actor_tests {
+mod agent_actor_tests {
     use super::*;
 
     #[test]
@@ -588,11 +584,11 @@ mod managed_agent_actor_tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
         ));
         assert_eq!(
-            managed_agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
+            agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
             actor
         );
         assert_eq!(
-            managed_agent_control_actor(
+            agent_control_actor(
                 &actor,
                 &serde_json::json!({"object":{"actor_id":actor}}),
                 false
@@ -601,12 +597,11 @@ mod managed_agent_actor_tests {
             actor
         );
         assert_eq!(
-            managed_agent_control_actor(&actor, &serde_json::json!({"agent_id":principal}), true)
-                .unwrap(),
+            agent_control_actor(&actor, &serde_json::json!({"agent_id":principal}), true).unwrap(),
             actor
         );
         assert!(
-            managed_agent_control_actor(
+            agent_control_actor(
                 &actor,
                 &serde_json::json!({"object":{"actor_id":principal}}),
                 false
@@ -614,7 +609,7 @@ mod managed_agent_actor_tests {
             .is_err()
         );
         assert!(
-            managed_agent_control_actor(
+            agent_control_actor(
                 &actor,
                 &serde_json::json!({"agent_id":"ak:did_core:web:other.example"}),
                 true

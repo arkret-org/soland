@@ -1376,23 +1376,23 @@ fn history_source_author_profile(
                         content_digest,
                     },
                 authenticated_signer_resolution_evidence,
-            } if content_digest == root_digest => match authenticated_signer_resolution_evidence
-                .as_ref()
-            {
-                arkret_models_identity::AuthenticatedSignerResolutionEvidence::Principal {
-                    ..
-                } => AuthorProfile::OrdinaryHuman,
-                arkret_models_identity::AuthenticatedSignerResolutionEvidence::NativeAgent {
-                    ..
-                } => AuthorProfile::NativeAgent,
-                arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
-                    ..
-                } => {
-                    return Err(AppError::capability_denied(
-                        "member history source cannot use service signer evidence",
-                    ));
+            } if content_digest == root_digest => {
+                match authenticated_signer_resolution_evidence.as_ref() {
+                    arkret_models_identity::AuthenticatedSignerResolutionEvidence::Principal {
+                        ..
+                    } => AuthorProfile::OrdinaryHuman,
+                    arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
+                        ..
+                    } => AuthorProfile::Agent,
+                    arkret_models_identity::AuthenticatedSignerResolutionEvidence::Service {
+                        ..
+                    } => {
+                        return Err(AppError::capability_denied(
+                            "member history source cannot use service signer evidence",
+                        ));
+                    }
                 }
-            },
+            }
             GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
                 selector:
                     GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
@@ -1424,15 +1424,15 @@ fn verify_history_source_proof(
 ) -> Result<(), AppError> {
     arkret::verify_history_source_proof(response, checkpoint, dependencies, |request| match request
     {
-        arkret::HistorySourceProofExternalVerificationRequest::NativeAgent {
+        arkret::HistorySourceProofExternalVerificationRequest::Agent {
             source_record,
             signer_evidence,
             dependencies,
-        } => arkret::verify_native_agent_history_source_key(
+        } => arkret::verify_agent_history_source_key(
             source_record,
             signer_evidence,
             dependencies,
-            |trust_request| verify_native_agent_history_trust(state, trust_request),
+            |trust_request| verify_agent_history_trust(state, trust_request),
         ),
         arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata { .. } => {
             Err(arkret_wire::WireError::Protocol(
@@ -3262,11 +3262,11 @@ async fn validate_retained_history_cut(
         &replay_events,
         &checkpoint_dependencies,
         |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_native_agent_historical_event_key(
+            arkret::verify_agent_historical_event_key(
                 event,
                 evidence,
                 dependencies,
-                |trust_request| verify_native_agent_history_trust(state, trust_request),
+                |trust_request| verify_agent_history_trust(state, trust_request),
             )
         },
     )
@@ -3275,42 +3275,41 @@ async fn validate_retained_history_cut(
     Ok(checkpoint)
 }
 
-pub(crate) fn verify_native_agent_history_trust(
+pub(crate) fn verify_agent_history_trust(
     state: &AppState,
-    request: arkret::NativeAgentHistoricalTrustRequest<'_>,
+    request: arkret::AgentHistoricalTrustRequest<'_>,
 ) -> Result<(), arkret_wire::WireError> {
     match request {
-        arkret::NativeAgentHistoricalTrustRequest::PcrSeal(seal) => {
+        arkret::AgentHistoricalTrustRequest::PcrSeal(seal) => {
             let retained = state
                 .projections()
                 .seal_by_id(&seal.id)
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent PCR Seal is not locally accepted".to_owned(),
+                        "Agent PCR Seal is not locally accepted".to_owned(),
                     )
                 })?;
             if retained != *seal {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent PCR Seal differs from locally accepted bytes".to_owned(),
+                    "Agent PCR Seal differs from locally accepted bytes".to_owned(),
                 ));
             }
             Ok(())
         }
-        arkret::NativeAgentHistoricalTrustRequest::LifecycleWitness(witness) => {
+        arkret::AgentHistoricalTrustRequest::LifecycleWitness(witness) => {
             let retained_seal = state
                 .projections()
                 .seal_by_id(&witness.seal_id)
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent lifecycle Seal is not locally accepted".to_owned(),
+                        "Agent lifecycle Seal is not locally accepted".to_owned(),
                     )
                 })?;
             if retained_seal != witness.seal || retained_seal.id != witness.seal_id {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle witness differs from locally accepted history"
-                        .to_owned(),
+                    "Agent lifecycle witness differs from locally accepted history".to_owned(),
                 ));
             }
             let digest_suites = state
@@ -3324,7 +3323,7 @@ pub(crate) fn verify_native_agent_history_trust(
             )?;
             if !retained_seal.delta.contains(&event_digest) {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
+                    "Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
                 ));
             }
             let retained_event = state
@@ -3333,19 +3332,19 @@ pub(crate) fn verify_native_agent_history_trust(
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
-                        "Native Agent lifecycle Event is not locally accepted".to_owned(),
+                        "Agent lifecycle Event is not locally accepted".to_owned(),
                     )
                 })?;
             if retained_event != witness.accepted_status_event {
                 return Err(arkret_wire::WireError::Protocol(
-                    "Native Agent lifecycle Event differs from locally accepted history".to_owned(),
+                    "Agent lifecycle Event differs from locally accepted history".to_owned(),
                 ));
             }
             Ok(())
         }
-        arkret::NativeAgentHistoricalTrustRequest::Transparency(_) => {
+        arkret::AgentHistoricalTrustRequest::Transparency(_) => {
             Err(arkret_wire::WireError::Protocol(
-                "Native Agent transparency trust anchor is unavailable".to_owned(),
+                "Agent transparency trust anchor is unavailable".to_owned(),
             ))
         }
     }
@@ -3875,7 +3874,7 @@ async fn build_history_recipient_authority_views(
     ),
     AppError,
 > {
-    if let RequesterEndpointAuthorization::NativeAgent {
+    if let RequesterEndpointAuthorization::Agent {
         requester_agent_id,
         requester_agent_verification_method,
         requester_agent_key_authorize_event_id,
@@ -4957,7 +4956,7 @@ async fn validate_history_requester_endpoint_authorization(
                 ));
             }
         }
-        RequesterEndpointAuthorization::NativeAgent {
+        RequesterEndpointAuthorization::Agent {
             requester_agent_id,
             requester_agent_verification_method,
             requester_agent_key_authorize_event_id,

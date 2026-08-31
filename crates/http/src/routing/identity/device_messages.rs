@@ -469,10 +469,10 @@ pub(crate) async fn fanout_actor_private_update(
             // origin device to exclude.
             (None, sender_id.as_str(), None)
         }
-        DeviceMessageSender::NativeAgent { .. } => {
+        DeviceMessageSender::Agent { .. } => {
             tracing::warn!(
                 actor,
-                "actor-private fanout rejected because Native Agent senders are not cell materializers"
+                "actor-private fanout rejected because Agent senders are not cell materializers"
             );
             return 0;
         }

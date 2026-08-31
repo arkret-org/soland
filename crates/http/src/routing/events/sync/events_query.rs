@@ -728,7 +728,7 @@ pub(crate) async fn authorize_actor_only_selectors(
         {
             return Err(unauthorized());
         }
-        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+        crate::routing::identity::agent_pcr::validate_agent_controller_binding(
             state,
             &agent,
             Utc::now(),
@@ -1044,18 +1044,18 @@ async fn events_query_impl(
     let range_completeness =
         range_completeness_for_query(state, session.as_ref(), &parts, &realms).await?;
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
-    let mut managed_agent_control_realms: std::collections::BTreeSet<String> =
+    let mut agent_control_realms: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
     for realm in realms {
         if let Some(session) = session.as_ref()
-            && crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
+            && crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
                 state,
                 &session.actor,
                 &realm,
             )
             .await?
         {
-            managed_agent_control_realms.insert(realm.clone());
+            agent_control_realms.insert(realm.clone());
             accessible_realms.push(realm);
             continue;
         }
@@ -1136,7 +1136,7 @@ async fn events_query_impl(
         if !actor_filter.is_empty() && !actor_filter.contains(&actor) {
             continue;
         }
-        let managed = managed_agent_control_realms.contains(&realm);
+        let managed = agent_control_realms.contains(&realm);
         if !managed {
             if !projection_record_visible_to_session(state, &view, session.as_ref()).await {
                 continue;
@@ -2536,7 +2536,7 @@ async fn durable_events_query_from_parts(
     filter_digest: &str,
 ) -> Result<EventsQueryOutcome, soland_http::error::AppError> {
     let actors_set = parts.actors.iter().cloned().collect();
-    // Exact holder/managed-Agent authority was checked before this call.
+    // Exact holder/Agent authority was checked before this call.
     // Personal blocklists are presentation state, not canonical-log filters.
     let records = canonical_events_for_actor_selectors(state, &actors_set).await?;
     let after = if backward { stop_cursor } else { cursor };

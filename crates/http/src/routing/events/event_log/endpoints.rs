@@ -345,17 +345,17 @@ async fn issue_seal_availability_receipts(
             )?
             .to_string(),
         );
-    let managed_agent = if own_pcr {
+    let agent = if own_pcr {
         None
     } else {
-        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
+        crate::routing::identity::agent_pcr::agent_record_for_controller_pcr(
             state,
             &session.actor,
             request.realm_id.as_str(),
         )
         .await?
     };
-    if !own_pcr && managed_agent.is_none() {
+    if !own_pcr && agent.is_none() {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "availability preparation is limited to the caller's own or delegated Agent principal-control Realm",
@@ -681,17 +681,17 @@ async fn submit_event_seal(
             )?
             .to_string(),
         );
-    let managed_agent = if own_pcr {
+    let agent = if own_pcr {
         None
     } else {
-        crate::routing::identity::managed_agent_pcr::managed_agent_record_for_controller_pcr(
+        crate::routing::identity::agent_pcr::agent_record_for_controller_pcr(
             state,
             &session.actor,
             seal.realm_id.as_str(),
         )
         .await?
     };
-    if !own_pcr && managed_agent.is_none() {
+    if !own_pcr && agent.is_none() {
         return Err(AppError::new(
             ErrorCode::PolicyViolation,
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
@@ -717,8 +717,8 @@ async fn submit_event_seal(
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    let effect = if let Some(agent_record) = managed_agent.as_ref() {
-        crate::routing::federation::move_seal::apply_managed_agent_event_seal(
+    let effect = if let Some(agent_record) = agent.as_ref() {
+        crate::routing::federation::move_seal::apply_agent_event_seal(
             state,
             &seal,
             agent_record,
@@ -1631,15 +1631,14 @@ async fn seals_frontier(
         .projections()
         .snapshot()
         .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string());
-    let managed_agent_pcr =
-        crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
-            state,
-            &session.actor,
-            realm_id.as_str(),
-        )
-        .await?;
+    let agent_pcr = crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
+        state,
+        &session.actor,
+        realm_id.as_str(),
+    )
+    .await?;
     let accessible = own_pcr
-        || managed_agent_pcr
+        || agent_pcr
         || crate::routing::spaces::space::realm_id_accessible(
             state,
             realm_id.as_str(),
@@ -1650,21 +1649,18 @@ async fn seals_frontier(
         // Same code as invisible-event reads: existence must not leak.
         return Err(AppError::not_found("realm not found"));
     }
-    if managed_agent_pcr {
-        // Managed Agent PCR Seals are device-generation artifacts. When
+    if agent_pcr {
+        // Agent PCR Seals are device-generation artifacts. When
         // accepted Events are ahead of the accepted Seal, return the previous
         // signed head so the delegated controller can author the successor;
         // the service must not synthesize that Seal.
         let Some(seal) =
-            crate::routing::identity::managed_agent_pcr::managed_agent_event_seal_head(
-                state,
-                realm_id.as_str(),
-            )
-            .await?
+            crate::routing::identity::agent_pcr::agent_event_seal_head(state, realm_id.as_str())
+                .await?
         else {
             return Err(AppError::new(
                 ErrorCode::FrontierUnavailable,
-                "managed Agent PCR has no accepted device-signed Seal",
+                "Agent PCR has no accepted device-signed Seal",
             )
             .with_status(StatusCode::SERVICE_UNAVAILABLE));
         };
@@ -1691,8 +1687,8 @@ async fn seals_frontier(
         );
         return soland_http::result::json_ok(SealFrontierState {
             frontier,
-            receipts: vec![ManagedAgentPcrSealHeadReceipt {
-                kind: ManagedAgentPcrSealHeadReceiptKind::ManagedAgentPcrSealHeadV1,
+            receipts: vec![AgentPcrSealHeadReceipt {
+                kind: AgentPcrSealHeadReceiptKind::AgentPcrSealHeadV1,
                 seal,
             }],
         });
@@ -1748,11 +1744,11 @@ async fn events_frontier(
                 .projections()
                 .snapshot()
                 .realm_is_principal_control_for_actor(&realm_value, &actor);
-        let managed_agent_pcr = state
+        let agent_pcr = state
             .agent_pairings()
             .agent(actor_id.as_str())
             .await
-            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+            .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
             .is_some_and(|record| {
                 is_local_account
                     && record.controller_id == session.actor
@@ -1797,7 +1793,7 @@ async fn events_frontier(
             false
         };
         if !own_actor_pcr
-            && !managed_agent_pcr
+            && !agent_pcr
             && !applet_managed_actor_pcr
             && !invited_actor
             && !authored_realm_history
@@ -1817,18 +1813,18 @@ async fn events_frontier(
         });
     }
 
-    let managed_agent_pcr = state
+    let agent_pcr = state
         .agent_pairings()
         .agent(actor_id.as_str())
         .await
-        .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+        .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
         .filter(|record| {
             is_local_account
                 && record.controller_id == session.actor
                 && record.state != AgentLifecycleState::Deactivated
         })
         .map(|record| record.principal_control_realm_id);
-    // Applet-managed principals are not Native Agents. Their immutable
+    // Applet-managed principals are not Agents. Their immutable
     // provision/PCR anchors live in the Applet record and are visible only to
     // the exact registration service. Revocation keeps historical reads
     // available while the combined selector above refuses authoring access.
@@ -1871,7 +1867,7 @@ async fn events_frontier(
             applet_managed_actor_pcr == Some(realm_value.as_str())
         } else {
             own_actor_pcr.as_deref() == Some(realm_value.as_str())
-                || managed_agent_pcr.as_deref() == Some(realm_value.as_str())
+                || agent_pcr.as_deref() == Some(realm_value.as_str())
                 || crate::routing::spaces::space::realm_id_accessible(
                     state,
                     &realm_value,
@@ -1935,7 +1931,7 @@ fn merge_applet_managed_actor_pcr_access(
 }
 
 /// Resolve an Applet-managed principal through its immutable provision/PCR
-/// anchor without pretending it is a Native Agent. The exact registration
+/// anchor without pretending it is an Agent. The exact registration
 /// service is the only caller allowed to observe the actor's PCR aggregate.
 /// A revoked record remains readable for historical recovery, but `active`
 /// becomes false so the Realm+actor authoring selector fails closed.

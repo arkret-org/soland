@@ -749,7 +749,7 @@ pub(super) async fn agent_key_pair(
     )
     .await?;
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &agent_record,
         chrono::Utc::now(),
@@ -848,7 +848,7 @@ pub(super) fn service_pairing_controller_device_id(
             .is_some_and(|lease| lease.actor_id.signing_principal_id() != &agent_core)
     {
         return Err(AppError::capability_denied(
-            "delegated pairing Event and any delayed authorization lease must name the managed Agent",
+            "delegated pairing Event and any delayed authorization lease must name the Agent",
         ));
     }
     if submission
@@ -1462,7 +1462,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     }
     if envelope_actor(envelope, "actor_id") != Some(pairing_account_actor(agent_id, service_id)?) {
         return Err(AppError::capability_denied(
-            "authorize_event.actor_id must match the managed Agent Account",
+            "authorize_event.actor_id must match the Agent Account",
         ));
     }
     if envelope_actor(envelope, "executed_by")

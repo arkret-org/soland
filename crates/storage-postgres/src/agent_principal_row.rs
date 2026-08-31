@@ -76,7 +76,7 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
                     "Agent recipient_id is not a did_core_id: {error}"
                 ))
             })?;
-        validate_managed_agent_identity_binding(&id, &record.controller_authorization_ref)?;
+        validate_agent_identity_binding(&id, &record.controller_authorization_ref)?;
         Ok(Self {
             id,
             controller_id,
@@ -139,7 +139,7 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
     }
 }
 
-fn validate_managed_agent_identity_binding(
+fn validate_agent_identity_binding(
     agent_id: &DidCoreId,
     controller_authorization_ref: &DidUrl,
 ) -> Result<(), PersistenceError> {
@@ -257,26 +257,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn managed_agent_binding_accepts_did_delegation_for_projected_core() {
+    fn agent_binding_accepts_did_delegation_for_projected_core() {
         let authorization_ref =
             DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#managed-controller").unwrap();
         let agent_id = DidCoreId::new("ak:did_core:webvh:z6mkfixtureagent").unwrap();
 
-        validate_managed_agent_identity_binding(&agent_id, &authorization_ref)
+        validate_agent_identity_binding(&agent_id, &authorization_ref)
             .expect("the delegation DID projects to the stored Agent core id");
     }
 
     #[test]
-    fn managed_agent_binding_rejects_controller_did_or_wrong_fragment() {
+    fn agent_binding_rejects_controller_did_or_wrong_fragment() {
         let controller_delegation =
             DidUrl::new("did:web:controller.example#managed-controller").unwrap();
         let agent_id = DidCoreId::new("ak:did_core:webvh:z6mkfixtureagent").unwrap();
-        assert!(
-            validate_managed_agent_identity_binding(&agent_id, &controller_delegation).is_err()
-        );
+        assert!(validate_agent_identity_binding(&agent_id, &controller_delegation).is_err());
 
         let wrong_fragment =
             DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#controller").unwrap();
-        assert!(validate_managed_agent_identity_binding(&agent_id, &wrong_fragment).is_err());
+        assert!(validate_agent_identity_binding(&agent_id, &wrong_fragment).is_err());
     }
 }

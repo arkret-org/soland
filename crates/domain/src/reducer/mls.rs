@@ -9,7 +9,7 @@
 //!    layer maps to HTTP 409 `cas_conflict`.
 //!
 //! 2. **Welcome endpoint persistence** — `apply_welcome_enqueue`. Each accepted Welcome is appended
-//!    to an exact device, Native-Agent method, or Realm-local pairwise method projection.
+//!    to an exact device, Agent method, or Realm-local pairwise method projection.
 //!
 //! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group.
 //!

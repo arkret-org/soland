@@ -505,7 +505,7 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
             .agent_pairings()
             .agent(actor_typed.signing_principal_id().as_str())
             .await
-        && crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+        && crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
             state,
             &agent,
             realm_id,

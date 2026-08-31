@@ -132,7 +132,7 @@ fn welcome_recipient_device_id(
         arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
             recipient_device_id,
         } => Some(recipient_device_id),
-        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
             ..
         }
         | arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise { .. } => None,
@@ -1095,7 +1095,7 @@ fn validate_peer_claim_time_window(body: &PeerKeyPackagesClaimRequestBody) -> Re
     let authorization = &body.requester_authorization;
     let signed_at = match authorization {
         PeerKeyPackageRequesterAuthorization::Device { signed_at, .. }
-        | PeerKeyPackageRequesterAuthorization::NativeAgent { signed_at, .. }
+        | PeerKeyPackageRequesterAuthorization::Agent { signed_at, .. }
         | PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { signed_at, .. } => {
             *signed_at
         }
@@ -1192,7 +1192,7 @@ async fn verify_local_claim_participant_authorization(
             signature.sig.as_str(),
         ));
     }
-    if let PeerKeyPackageRequesterAuthorization::NativeAgent {
+    if let PeerKeyPackageRequesterAuthorization::Agent {
         verification_method,
         requester_agent_id,
         agent_key_authorize_event_id,
@@ -1204,13 +1204,11 @@ async fn verify_local_claim_participant_authorization(
             requester_agent_id.clone(),
             body.service_binding.source_id.clone(),
         ));
-        let agent = crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
-            state,
-            &agent_actor,
-        )
-        .await?;
+        let agent =
+            crate::routing::identity::agent_pcr::agent_record_for_actor(state, &agent_actor)
+                .await?;
         let Some(agent) = agent else {
-            return reject("native_agent_missing");
+            return reject("agent_missing");
         };
         if agent.state != AgentLifecycleState::Active
             || !current_agent_key_authorization_matches_method(
@@ -1222,7 +1220,7 @@ async fn verify_local_claim_participant_authorization(
             .await
             || requester_agent_id != &body.requester_id
         {
-            return reject("native_agent_authorization_stale");
+            return reject("agent_authorization_stale");
         }
         if signature
             .signature_algorithm
@@ -1230,7 +1228,7 @@ async fn verify_local_claim_participant_authorization(
             .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
             || signature.kid.as_str() != verification_method.as_str()
         {
-            return reject("native_agent_signature_shape");
+            return reject("agent_signature_shape");
         }
         let signing_bytes = keypackage_claim_authorization_signing_bytes(
             &body.unsigned_request(),
@@ -1264,7 +1262,7 @@ async fn verify_local_claim_participant_authorization(
                 requester_device_id,
                 device_authorize_event_id,
             ),
-            PeerKeyPackageRequesterAuthorization::NativeAgent { .. } => unreachable!(),
+            PeerKeyPackageRequesterAuthorization::Agent { .. } => unreachable!(),
             PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => unreachable!(),
         };
     if signature
@@ -1602,7 +1600,7 @@ async fn validate_welcome_peer_claim_ledger(
             };
             principal
         }
-        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+        arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
             recipient_agent_id,
             agent_key_authorize_event_id,
             ..
@@ -1757,7 +1755,7 @@ async fn validate_welcome_peer_claim_ledger(
             && claim.agent_key_authorize_event_id.is_none()
             && claim.pairwise_verification_method.is_none() => {}
         (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
                 recipient_agent_id,
                 recipient_agent_verification_method,
                 agent_key_authorize_event_id,
@@ -1843,7 +1841,7 @@ async fn validate_local_welcome_recipient_authorization(
             }
         }
         (
-            MlsWelcomeRecipient::NativeAgent {
+            MlsWelcomeRecipient::Agent {
                 recipient_agent_id,
                 recipient_agent_verification_method,
                 agent_key_authorize_event_id,
@@ -1854,12 +1852,10 @@ async fn validate_local_welcome_recipient_authorization(
                 recipient_agent_id.clone(),
                 welcome.claim_receipt.destination_id.clone(),
             ));
-            if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
-                state, &actor,
-            )
-            .await
-            .map_err(|_| "peer_claim_welcome_invalid")?
-            .is_none()
+            if crate::routing::identity::agent_pcr::agent_record_for_actor(state, &actor)
+                .await
+                .map_err(|_| "peer_claim_welcome_invalid")?
+                .is_none()
                 || !current_agent_key_authorization_matches_method(
                     state,
                     recipient_agent_id,
@@ -2104,7 +2100,7 @@ async fn claim_keypackage(
             requester_device_id,
             ..
         } if requester_device_id.as_str() == session.device_id => {}
-        PeerKeyPackageRequesterAuthorization::NativeAgent {
+        PeerKeyPackageRequesterAuthorization::Agent {
             requester_agent_id, ..
         } if requester_agent_id.as_str() == session.actor => {}
         PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => {}
@@ -2979,12 +2975,12 @@ async fn validate_recipient_durable_receipt(
                 && recipient_device_id == durable_recipient_device_id
         }
         (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
                 recipient_agent_id,
                 recipient_agent_verification_method,
                 agent_key_authorize_event_id,
             },
-            arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+            arkret_models_crypto::RecipientMlsDurableSigner::Agent {
                 recipient_agent_id: durable_recipient_agent_id,
                 recipient_agent_verification_method: durable_recipient_agent_verification_method,
                 agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
@@ -3073,7 +3069,7 @@ async fn verify_keypackage_consumer_signature(
             )
             .await
         }
-        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+        arkret_models_crypto::RecipientMlsDurableSigner::Agent {
             recipient_agent_id,
             recipient_agent_verification_method,
             agent_key_authorize_event_id,
@@ -3089,7 +3085,7 @@ async fn verify_keypackage_consumer_signature(
                 .await
             {
                 return Err(AppError::capability_denied(
-                    "Native Agent consume authority is not current",
+                    "Agent consume authority is not current",
                 ));
             }
             let key = crate::jws_verify::resolve_ed25519_pubkey_async(
@@ -3097,7 +3093,7 @@ async fn verify_keypackage_consumer_signature(
                 recipient_agent_verification_method.as_str(),
             )
             .await
-            .map_err(|_| AppError::capability_denied("Native Agent consume key is unavailable"))?;
+            .map_err(|_| AppError::capability_denied("Agent consume key is unavailable"))?;
             if !crate::routing::identity::device_signing::ed25519_verify(
                 &key,
                 signing_input,
@@ -3175,7 +3171,7 @@ fn keypackage_record_matches_consumer(
                 && record.endpoint_verification_method.is_none()
                 && record.intended_realm_id.is_none()
         }
-        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+        arkret_models_crypto::RecipientMlsDurableSigner::Agent {
             recipient_agent_verification_method,
             agent_key_authorize_event_id,
             ..
@@ -3671,12 +3667,12 @@ fn welcome_recipient_matches_consumer(
                 && recipient_device_id == durable_recipient_device_id
         }
         (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::NativeAgent {
+            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
                 recipient_agent_id,
                 recipient_agent_verification_method,
                 agent_key_authorize_event_id,
             },
-            arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+            arkret_models_crypto::RecipientMlsDurableSigner::Agent {
                 recipient_agent_id: durable_recipient_agent_id,
                 recipient_agent_verification_method: durable_recipient_agent_verification_method,
                 agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
@@ -3723,7 +3719,7 @@ fn projected_welcome_matches_consumer(
             row.recipient_device_id.as_deref() == Some(recipient_device_id.as_str())
                 && row.recipient_endpoint_verification_method.is_none()
         }
-        arkret_models_crypto::RecipientMlsDurableSigner::NativeAgent {
+        arkret_models_crypto::RecipientMlsDurableSigner::Agent {
             recipient_agent_verification_method,
             ..
         } => {
@@ -4416,14 +4412,14 @@ async fn current_agent_keypackage_trust_binding(
     if agent.state != AgentLifecycleState::Active {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "Native Agent must be active before publishing or claiming a KeyPackage",
+            "Agent must be active before publishing or claiming a KeyPackage",
         )
         .with_wire_code("claim_generation_mismatch"));
     }
     let event_ref = agent.authorized_event_ref.as_deref().ok_or_else(|| {
         AppError::new(
             ErrorCode::FailedPrecondition,
-            "Native Agent has no accepted key authorization",
+            "Agent has no accepted key authorization",
         )
         .with_wire_code("claim_generation_mismatch")
     })?;
@@ -4433,7 +4429,7 @@ async fn current_agent_keypackage_trust_binding(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "Native Agent key authorization is incomplete",
+                "Agent key authorization is incomplete",
             )
             .with_wire_code("claim_generation_mismatch")
         })?;
@@ -4446,7 +4442,7 @@ async fn current_agent_keypackage_trust_binding(
     if !active_event {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "Native Agent key authorization is no longer active",
+            "Agent key authorization is no longer active",
         )
         .with_wire_code("claim_generation_mismatch"));
     }
@@ -4460,7 +4456,7 @@ async fn current_agent_keypackage_trust_binding(
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::FailedPrecondition,
-                "Native Agent key authorization Event is unavailable",
+                "Agent key authorization Event is unavailable",
             )
             .with_wire_code("claim_generation_mismatch")
         })?;
@@ -4485,7 +4481,7 @@ async fn current_agent_keypackage_trust_binding(
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "Native Agent key authorization does not match current accepted state",
+            "Agent key authorization does not match current accepted state",
         )
         .with_wire_code("claim_generation_mismatch"));
     }
@@ -4596,11 +4592,11 @@ async fn current_keypackage_claim_trust_selector(
                 .ok_or_else(|| {
                     AppError::new(
                         ErrorCode::FailedPrecondition,
-                        "Native Agent membership is unavailable",
+                        "Agent membership is unavailable",
                     )
                     .with_wire_code("claim_generation_mismatch")
                 })?;
-            crate::routing::identity::managed_agent_pcr::validate_effective_agent_realm_membership(
+            crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
                 state,
                 &agent,
                 realm_id,
@@ -4610,7 +4606,7 @@ async fn current_keypackage_claim_trust_selector(
             .map_err(|_| {
                 AppError::new(
                     ErrorCode::FailedPrecondition,
-                    "Native Agent is not an effective Realm member",
+                    "Agent is not an effective Realm member",
                 )
                 .with_wire_code("claim_generation_mismatch")
             })?;
@@ -4721,7 +4717,7 @@ fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
 /// This intentionally reuses the same accepted-device trust
 /// selector and capability-subset rules as `claim_keypackages_for_request`.
 /// Merely having an untrusted or capability-incomplete KeyPackage row is not
-/// sufficient for the native-agent `leave -> join` carve-out in actor.md
+/// sufficient for the Agent `leave -> join` carve-out in actor.md
 /// section 3.3 / realm-and-space.md section 2.7.
 pub(crate) async fn has_claimable_realm_membership_keypackage(
     state: &AppState,
@@ -5056,7 +5052,7 @@ mod trust_binding_tests {
     fn signed_welcome_ledger_payload(
         state: &AppState,
         actor: arkret_wire::ActorId,
-        native_agent: bool,
+        agent: bool,
     ) -> arkret_models_collaboration::events_payloads::MlsWelcomePayload {
         use arkret_models_collaboration::events_payloads::{
             MlsRequesterTrustBinding, MlsWelcomePayload,
@@ -5076,9 +5072,9 @@ mod trust_binding_tests {
         let authorization =
             arkret_wire::EventId::new("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
                 .unwrap();
-        welcome.claim_envelope.trust_binding = if native_agent {
+        welcome.claim_envelope.trust_binding = if agent {
             welcome.sender_device_id = None;
-            MlsRequesterTrustBinding::RequesterNativeAgent {
+            MlsRequesterTrustBinding::RequesterAgent {
                 requester_agent_id: actor.signing_principal_id().clone(),
                 requester_agent_verification_method: arkret_wire::DidUrl::new(
                     "did:web:requester.example#signing-key",
@@ -5148,12 +5144,12 @@ mod trust_binding_tests {
             } else {
                 state.service_core_id()
             };
-            for native_agent in [false, true] {
+            for agent in [false, true] {
                 let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     principal.clone(),
                     station.clone(),
                 ));
-                let welcome = signed_welcome_ledger_payload(&state, actor.clone(), native_agent);
+                let welcome = signed_welcome_ledger_payload(&state, actor.clone(), agent);
                 let payload = serde_json::to_value(&welcome).unwrap();
                 let realm = welcome.claim_envelope.intended_realm_id.as_str();
                 let result = if federated {
@@ -5171,7 +5167,7 @@ mod trust_binding_tests {
                 assert_eq!(
                     result,
                     Err("peer_claim_welcome_pending"),
-                    "a valid signed receipt must reach the missing ledger: federated={federated}, native_agent={native_agent}"
+                    "a valid signed receipt must reach the missing ledger: federated={federated}, agent={agent}"
                 );
                 let wrong_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     principal.clone(),
@@ -5429,7 +5425,7 @@ mod trust_binding_tests {
     }
 
     #[test]
-    fn native_agent_binding_is_an_exclusive_branch() {
+    fn agent_binding_is_an_exclusive_branch() {
         let event_id = "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19";
         let binding =
             trust_binding_from_parts(None, Some(event_id.to_owned()), None, None, "invalid")
@@ -5452,7 +5448,7 @@ mod trust_binding_tests {
     }
 
     #[tokio::test]
-    async fn native_agent_keypackage_upload_binds_leaf_and_publish_signature_to_authorized_key() {
+    async fn agent_keypackage_upload_binds_leaf_and_publish_signature_to_authorized_key() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -5577,7 +5573,7 @@ mod trust_binding_tests {
             soland_domain::reducer::ProjectionEffect::AgentKeyAuthorizeProjected { .. }
         ));
 
-        let identity = arkret_mls::ArkretMlsIdentity::new_native_agent(
+        let identity = arkret_mls::ArkretMlsIdentity::new_agent(
             principal_core.clone(),
             arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
             arkret_wire::EventId::new(authorize_event_id.clone()).unwrap(),

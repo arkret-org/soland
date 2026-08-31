@@ -739,19 +739,17 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 .agent_pairings()
                 .agent(actor_id.signing_principal_id().as_str())
                 .await
-                .map_err(|error| fail(format!("managed Agent authority lookup failed: {error}")))?
-                .ok_or_else(|| {
-                    fail("delegated Event actor is not a local managed Agent".to_owned())
-                })?;
+                .map_err(|error| fail(format!("Agent authority lookup failed: {error}")))?
+                .ok_or_else(|| fail("delegated Event actor is not a local Agent".to_owned()))?;
             let agent_controller_id = arkret_wire::DidCoreId::new(agent.controller_id.clone())
                 .or_else(|_| {
                     arkret_wire::Did::new(agent.controller_id.clone())
                         .and_then(|did| arkret_wire::project_did_to_core_id(&did))
                 })
-                .map_err(|error| fail(format!("managed Agent controller is invalid: {error}")))?;
+                .map_err(|error| fail(format!("Agent controller is invalid: {error}")))?;
             if agent_controller_id != expected_principal_id {
                 return Err(fail(
-                    "delegated Event signer is not the managed Agent controller".to_owned(),
+                    "delegated Event signer is not the Agent controller".to_owned(),
                 ));
             }
             let authorization_ref = envelope
@@ -762,7 +760,7 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 })?;
             if authorization_ref != agent.controller_authorization_ref.as_str() {
                 return Err(fail(
-                    "delegated Event does not use the managed Agent authorization_ref".to_owned(),
+                    "delegated Event does not use the Agent authorization_ref".to_owned(),
                 ));
             }
         }

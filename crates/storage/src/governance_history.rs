@@ -274,7 +274,7 @@ pub fn historical_agent_signer_evidence_key(
     else {
         return Ok(None);
     };
-    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+    let AuthenticatedSignerResolutionEvidence::Agent {
         signer_id,
         verification_method,
         agent_signer_evidence,

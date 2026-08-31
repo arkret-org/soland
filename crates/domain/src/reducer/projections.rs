@@ -262,7 +262,7 @@ pub struct MlsKeyPackageProjection {
     pub owner_account_pk: i64,
     pub actor_id: String,
     pub device_id: Option<String>,
-    /// Exact did:key/Native-Agent verification method used by non-device endpoints.
+    /// Exact did:key/Agent verification method used by non-device endpoints.
     pub endpoint_verification_method: Option<String>,
     /// Realm affinity is present only for the minimal-metadata pairwise branch.
     pub intended_realm_id: Option<String>,
@@ -306,7 +306,7 @@ pub struct MlsWelcome {
     pub group_id: String,
     pub recipient_actor_id: String,
     pub recipient_device_id: Option<String>,
-    /// Exact did:key/Native-Agent verification method used by non-device endpoints.
+    /// Exact did:key/Agent verification method used by non-device endpoints.
     pub recipient_endpoint_verification_method: Option<String>,
     /// Realm affinity is present only for the minimal-metadata pairwise branch.
     pub intended_realm_id: Option<String>,
@@ -640,7 +640,7 @@ pub struct CircleProjection {
     pub members: BTreeSet<String>,
 }
 
-/// First-class native Agent Sidecar aggregate. Sidecars are not Circles and
+/// First-class Agent Sidecar aggregate. Sidecars are not Circles and
 /// never acquire Circle membership or a hidden Circle/Strand backing object.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SidecarProjection {
@@ -1028,7 +1028,7 @@ pub struct SolandMembershipState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     /// Machine-readable reason for the current state when the transition was
     /// not member-initiated (for example `controller_membership_ended` on the
-    /// forced native-agent cascade, actor.md §3.3). `None` for ordinary
+    /// forced Agent cascade, actor.md §3.3). `None` for ordinary
     /// member-driven transitions.
     pub reason: Option<String>,
 }

@@ -266,7 +266,7 @@ async fn validate_active_series_authority_before_commit(
             "active-series actor_id must equal the Event actor_id",
         ));
     }
-    crate::routing::identity::managed_agent_pcr::validate_active_series_operation_authority(
+    crate::routing::identity::agent_pcr::validate_active_series_operation_authority(
         state, operation,
     )
     .await
@@ -334,7 +334,7 @@ pub(in crate::routing) async fn submit_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
-        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
+        && !batch_is_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return submit_ordinary_realm_genesis(state, session, envelope, None).await;
     }
@@ -349,10 +349,10 @@ pub(in crate::routing) async fn submit_event_value(
     // batch (strand-and-message.md 8.4), so a single-Event submit can never carry one.
     validate_watch_set_others_audit_pairs(std::slice::from_ref(&envelope))
         .map_err(SubmitOneError::from)?;
-    // `event-auth-state-resolution.md` §5(1) — a managed Agent PCR genesis is
+    // `event-auth-state-resolution.md` §5(1) — a Agent PCR genesis is
     // the delegated branch of the closed `ak.realm.create` anchor unit and
     // carries no `seal_basis`, so it needs the bootstrap CBA context. Only a
-    // create that `batch_is_managed_agent_pcr_create` already materialized as
+    // create that `batch_is_agent_pcr_create` already materialized as
     // that unit reaches this point.
     let bootstrap_contexts = single_realm_create_bootstrap_context(&envelope);
     submit_event_value_with_context(
@@ -557,7 +557,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
     let envelope = typed_event_to_canonical_value(event)?;
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
-        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
+        && !batch_is_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         if commit_options.idempotency.is_some()
             || commit_options.device_pairing.is_some()
@@ -842,7 +842,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::RealmCreate.as_str())
-        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
+        && !batch_is_agent_pcr_create(std::slice::from_ref(&envelope))
     {
         return submit_ordinary_realm_genesis(state, session, envelope, None).await;
     }
@@ -1071,7 +1071,7 @@ async fn restore_exact_duplicate_control_event(
 /// It deliberately skips the external Control Proposal Ack/decision rail, but
 /// it still enters the pending-control store and requires an accepted
 /// successor Seal for finality. Every condition is checked against accepted
-/// state; managed Agents and ordinary Realms therefore remain on the Ack rail.
+/// state; Agents and ordinary Realms therefore remain on the Ack rail.
 fn self_principal_pcr_control_shape_rejection(event: &Event) -> Option<&'static str> {
     if !event.kind.is_reducer_input() {
         return Some("event kind is not a reducer input");
@@ -1523,7 +1523,7 @@ pub(super) async fn accepted_event_envelope(
         return Err(SubmitOneError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "temporarily_unavailable",
-            "Native Agent admission could not freeze producer signer evidence",
+            "Agent admission could not freeze producer signer evidence",
         ));
     }
     let authenticated_resolution =
@@ -1985,16 +1985,15 @@ pub(super) async fn submit_event_value_with_context(
             ));
         }
     }
-    let managed_agent_pcr_genesis =
-        batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope));
-    if managed_agent_pcr_genesis && context.control_proposal_ack.is_none() {
+    let agent_pcr_genesis = batch_is_agent_pcr_create(std::slice::from_ref(&envelope));
+    if agent_pcr_genesis && context.control_proposal_ack.is_none() {
         return Err(SubmitOneError::new(
             StatusCode::PRECONDITION_FAILED,
             "failed_precondition",
-            "managed Agent PCR genesis requires a delegated-controller Control Proposal Ack",
+            "Agent PCR genesis requires a delegated-controller Control Proposal Ack",
         ));
     }
-    let managed_bootstrap_contexts = if managed_agent_pcr_genesis {
+    let managed_bootstrap_contexts = if agent_pcr_genesis {
         match (
             event_realm_id_from_value(&envelope),
             event_actor_from_value(&envelope).map(|actor| actor.to_string()),
@@ -2015,7 +2014,7 @@ pub(super) async fn submit_event_value_with_context(
         Vec::new()
     };
     let realm_bootstrap_contexts =
-        if managed_agent_pcr_genesis && context.realm_bootstrap_contexts.is_empty() {
+        if agent_pcr_genesis && context.realm_bootstrap_contexts.is_empty() {
             managed_bootstrap_contexts.as_slice()
         } else {
             context.realm_bootstrap_contexts
@@ -2292,7 +2291,7 @@ pub(super) async fn submit_event_value_with_context(
                 .await,
                 ingress_receipt.as_ref(),
             );
-            if (envelope.get("seal_basis").is_some() || managed_agent_pcr_genesis)
+            if (envelope.get("seal_basis").is_some() || agent_pcr_genesis)
                 && !self_principal_pcr_device_authorized
             {
                 let digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
@@ -2568,7 +2567,7 @@ pub(super) async fn submit_event_value_with_context(
                 reason,
             ));
         }
-        // AKP-0016 §5.2 / architecture §7 — native personal agent writes
+        // AKP-0016 §5.2 / architecture §7 — Agent writes
         // require an auditable agent_context plus the effective participation
         // bit for the write mode. Per 0016-agent-participation-policy.md §6,
         // missing materialised grants are preconditions, not auth-context
@@ -2964,14 +2963,16 @@ pub(super) async fn submit_event_value_with_context(
         if self_principal_pcr_device_authorized {
             None
         } else {
-            let managed_agent_pcr_control =
-                crate::control_proposal::managed_agent_pcr_event_matches_accepted_delegation(
-                    state, event,
-                )
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error)
-                })?;
+            let agent_pcr_control =
+                crate::control_proposal::agent_pcr_event_matches_accepted_delegation(state, event)
+                    .await
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            error,
+                        )
+                    })?;
             let policy = crate::control_proposal::control_proposal_policy(
                 state,
                 &realm_id,
@@ -2986,13 +2987,13 @@ pub(super) async fn submit_event_value_with_context(
                 )
             })?;
             if let Some(ack) = context.control_proposal_ack {
-                // A managed Agent PCR closed genesis is the one delegated
+                // A Agent PCR closed genesis is the one delegated
                 // ingress-authority class: its receipt is signed by the
                 // controller device named by the accepted Agent DID
                 // delegation, never by a frozen notary descriptor and never
                 // by this service (`authz/cba-profiles.md`, ingress source 1).
-                let authority_set_ref = if managed_agent_pcr_control {
-                    crate::control_proposal::verify_managed_agent_pcr_ack(state, event, ack, policy)
+                let authority_set_ref = if agent_pcr_control {
+                    crate::control_proposal::verify_agent_pcr_ack(state, event, ack, policy)
                         .await
                         .map_err(|error| {
                             SubmitOneError::new(
@@ -3046,11 +3047,11 @@ pub(super) async fn submit_event_value_with_context(
                     ));
                 }
                 Some(ack.clone())
-            } else if managed_agent_pcr_control {
+            } else if agent_pcr_control {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     "failed_precondition",
-                    "managed Agent PCR Control Move requires a delegated-controller Control Proposal Ack",
+                    "Agent PCR Control Move requires a delegated-controller Control Proposal Ack",
                 ));
             } else if event.seal_basis.is_none() {
                 let bootstrap_authority = context

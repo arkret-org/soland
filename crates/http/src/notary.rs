@@ -1871,7 +1871,7 @@ async fn local_service_is_eligible_availability_holder(
     if matches!(
         create_payload.object.purpose,
         arkret_models_collaboration::events_payloads::RealmPurpose::PrincipalControl
-            | arkret_models_collaboration::events_payloads::RealmPurpose::ManagedAgentControl
+            | arkret_models_collaboration::events_payloads::RealmPurpose::AgentControl
             | arkret_models_collaboration::events_payloads::RealmPurpose::AppletManagedControl
     ) {
         create

@@ -1,6 +1,6 @@
-//! AKP-0008 / AKP-0009 — Personal Agent provisioning + lifecycle surface.
+//! AKP-0008 / AKP-0009 — Agent provisioning + lifecycle surface.
 //!
-//! Implements the 11 personal-agent HTTP operations gap-reported as missing
+//! Implements the 11 agent HTTP operations gap-reported as missing
 //! in soland. The handlers below stand up the cross-project HTTP contract
 //! (sodmin admin UI, inkson client, cotest journey vectors) ahead of the
 //! deep reducer logic.

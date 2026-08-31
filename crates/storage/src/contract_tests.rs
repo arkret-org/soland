@@ -2285,7 +2285,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .is_some()
     );
 
-    // Native-agent approvals are consumed by the same transaction as their
+    // Agent approvals are consumed by the same transaction as their
     // accepted Event. A competing Event using the same tuple must lose and
     // leave no canonical or projection prefix behind.
     let approval_agent = format!("did:web:agent-{namespace}.example");

@@ -701,7 +701,7 @@ async fn postgres_franking_target_proof_fault_and_restart_contract_when_configur
 }
 
 #[tokio::test]
-async fn postgres_agent_store_accepts_spec_managed_agent_binding_when_configured() {
+async fn postgres_agent_store_accepts_spec_agent_binding_when_configured() {
     let Some(pool) = test_pool().await else {
         return;
     };
@@ -725,7 +725,7 @@ async fn postgres_agent_store_accepts_spec_managed_agent_binding_when_configured
     store
         .put(record.clone())
         .await
-        .expect("spec-valid managed Agent binding must persist");
+        .expect("spec-valid Agent binding must persist");
     assert_eq!(store.get(&agent_id).await.unwrap(), Some(record));
 
     use diesel::sql_types::Text;

@@ -62,7 +62,7 @@ fn principal_genesis_resolution_value(
     };
     if !matches!(
         object.get("purpose").and_then(Value::as_str),
-        Some("principal_control" | "managed_agent_control" | "applet_managed_control")
+        Some("principal_control" | "agent_control" | "applet_managed_control")
     ) {
         return Ok(None);
     }
@@ -984,11 +984,11 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
-        let managed_agent_status = if kind == arkret_wire::EventKind::RealmCreate
+        let agent_status = if kind == arkret_wire::EventKind::RealmCreate
             && payload_object
                 .and_then(|object| object.get("purpose"))
                 .and_then(Value::as_str)
-                == Some("managed_agent_control")
+                == Some("agent_control")
         {
             let agent_id = operation.context.sender.signing_principal_id().to_string();
             let actor_key = match operation.context.sender.canonical_key() {
@@ -1345,7 +1345,7 @@ impl ProjectionState {
                                 Some(
                                     "direct_conversation"
                                         | "principal_control"
-                                        | "managed_agent_control"
+                                        | "agent_control"
                                         | "applet_managed_control"
                                 )
                             )
@@ -1391,11 +1391,11 @@ impl ProjectionState {
                         CellState::Value(resolution),
                     );
                 }
-                // The managed-Agent PCR genesis is the sole transition from
+                // The Agent PCR genesis is the sole transition from
                 // the internal FSM state `uninitialized` to the first public
                 // state `active`. Provision admission only reserves/declares
                 // the future PCR and must never activate this cell early.
-                if let Some((agent_id, cell)) = managed_agent_status {
+                if let Some((agent_id, cell)) = agent_status {
                     self.cells
                         .insert(cell, CellState::Value(Value::String("active".to_owned())));
                     self.agent_lifecycles

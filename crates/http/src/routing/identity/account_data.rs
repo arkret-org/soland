@@ -281,7 +281,7 @@ async fn session_actor_is_agent_runtime(
 /// Unified agent-context predicate for the controller-private gate. A session
 /// is an agent context when it carries an agent grant marker OR when its actor
 /// is itself a registered agent runtime principal — put/delete and get/list
-/// MUST agree on this so a native agent principal cannot read what it is
+/// MUST agree on this so a Agent principal cannot read what it is
 /// forbidden to write (non-disclosure: get stays `not_found`, list filters).
 async fn session_is_agent_context(
     state: &AppState,
@@ -473,8 +473,8 @@ async fn put_account_data(
     }
     validate_registered_account_data_key(&account_data_key)?;
 
-    // AKP-0008 / AKP-0009: registered personal-agent account-data types are
-    // controller-private; native agent principals cannot write them directly,
+    // AKP-0008 / AKP-0009: registered agent account-data types are
+    // controller-private; Agent principals cannot write them directly,
     // and neither can an agent-granted session that presents the controller
     // as its actor.
     if let Some(spec) = registered_account_data_key_spec(&account_data_key)
@@ -574,7 +574,7 @@ async fn get_account_data(
 
     // Controller-private entries are indistinguishable from absent ones for
     // Agent runtime sessions (fail closed, no existence disclosure). Same
-    // predicate as put/delete: agent grant marker OR native agent principal.
+    // predicate as put/delete: agent grant marker OR Agent principal.
     if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
     {
@@ -607,7 +607,7 @@ async fn list_account_data(
     let session = aa.authenticated_session(state, req).await?;
     let account_key =
         super::session_actor::session_actor_from_credential(state, &session)?.to_string();
-    // Same predicate as put/delete: agent grant marker OR native agent
+    // Same predicate as put/delete: agent grant marker OR Agent
     // principal (non-disclosure list filtering).
     let agent_context = session_is_agent_context(state, &session).await?;
     let entries = state

@@ -464,7 +464,7 @@ async fn agent_signer_evidence_bundle_for_sync(
             {
                 continue;
             }
-            let AuthenticatedSignerResolutionEvidence::NativeAgent {
+            let AuthenticatedSignerResolutionEvidence::Agent {
                 signer_id,
                 verification_method,
                 agent_signer_evidence,

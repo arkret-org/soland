@@ -3,7 +3,7 @@
 //! Walks the open pairing surface end to end with SDK-produced material:
 //! provisioning (real ceremony) → `POST /_arkret/open/agent-pairing/
 //! runtime-key-requests` → open status poll → `POST /_arkret/gate/account/
-//! agent-key-pair` → successor managed-Agent PCR Seal → idempotent retry that
+//! agent-key-pair` → successor Agent PCR Seal → idempotent retry that
 //! activates the runtime. Unlike the storage-port fixture in `events.rs`
 //! (which seeds runtime activation directly to test session-grant semantics),
 //! every protocol step here goes over the HTTP surface.
@@ -35,7 +35,7 @@ fn ceremony_requested_scope() -> Value {
     })
 }
 
-/// Seed the controller-side managed-Agent PCR recovery material the pairing
+/// Seed the controller-side Agent PCR recovery material the pairing
 /// commit gate requires: the Agent PCR MLS group, an `mls_history` key backup
 /// The pairing ceremony drives the full Event admission state machine, whose
 // debug-codegen stack frame exceeds the default 2 MiB test-thread stack on
@@ -310,13 +310,12 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         .into_iter()
         .find(|record| record.event_id == genesis_event_id.as_str())
         .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
-        .expect("accepted managed Agent PCR genesis");
-    let agent_pcr_authority =
-        arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_accepted_create(
-            &accepted_genesis,
-            &super::agents::genesis_projector,
-        )
-        .unwrap();
+        .expect("accepted Agent PCR genesis");
+    let agent_pcr_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_accepted_create(
+        &accepted_genesis,
+        &super::agents::genesis_projector,
+    )
+    .unwrap();
     let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
         agent_pcr_realm.clone(),
         arkret_wire::Hash::new(
@@ -460,7 +459,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     );
     assert_eq!(pair_outcome["authorize_event_ref"], event_id.as_str());
 
-    // ── 5/5 — the controller publishes the successor managed-Agent PCR Seal
+    // ── 5/5 — the controller publishes the successor Agent PCR Seal
     // covering the authorize Event, then replays the exact idempotent request.
     // Only accepted Seal application makes the authorization portable, so this
     // is the step that flips the runtime to `active`. ──────────────────
@@ -522,7 +521,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
     >(&availability_body)
     .unwrap();
-    let successor_seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
+    let successor_seal = arkret_bootstrap::build_agent_pcr_event_seal(
         &pcr_events,
         Some(&genesis_seal),
         Some(&availability),

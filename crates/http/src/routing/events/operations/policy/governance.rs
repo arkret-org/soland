@@ -121,7 +121,7 @@ pub(super) async fn validate_member_state_policy(
         if actor == &target {
             return Ok(());
         }
-        if let Some(agent) = native_agent_controlled_by_record(state, &target, actor).await {
+        if let Some(agent) = agent_controlled_by_record(state, &target, actor).await {
             match agent.state {
                 AgentLifecycleState::Active => {}
                 AgentLifecycleState::Paused => return Err("agent_paused"),
@@ -194,7 +194,7 @@ pub(super) async fn validate_member_state_policy(
         let Some(target) = membership_target(operation) else {
             return Err("invalid_membership_target");
         };
-        if actor == &target || native_agent_controlled_by(state, &target, actor, false).await {
+        if actor == &target || agent_controlled_by(state, &target, actor, false).await {
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
@@ -261,7 +261,7 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
         })
 }
 
-async fn native_agent_controlled_by_record(
+async fn agent_controlled_by_record(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
     controller_id: &arkret_wire::ActorId,
@@ -324,7 +324,7 @@ async fn has_active_accountability_grant(
         })
 }
 
-async fn native_agent_controlled_by(
+async fn agent_controlled_by(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
     controller_id: &arkret_wire::ActorId,

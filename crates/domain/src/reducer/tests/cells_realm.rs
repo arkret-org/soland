@@ -1307,10 +1307,10 @@ fn apply_projected_create(
     state.apply_projected(&operation, &writes, hlc)
 }
 
-/// The typed `initial_resolution` a managed-Agent PCR genesis MUST carry.
-/// `RealmGenesis::managed_agent_control` owns the field, so the reducer tests
+/// The typed `initial_resolution` a Agent PCR genesis MUST carry.
+/// `RealmGenesis::agent_control` owns the field, so the reducer tests
 /// build it through the constructor instead of patching the serialized payload.
-fn managed_agent_initial_resolution() -> arkret_models_identity::ResolutionCommitment {
+fn agent_initial_resolution() -> arkret_models_identity::ResolutionCommitment {
     arkret_models_identity::ResolutionCommitment {
         did: arkret_identifiers::Did::new("did:webvh:z6mkreducertest:reducer-test.example")
             .unwrap(),
@@ -1320,24 +1320,22 @@ fn managed_agent_initial_resolution() -> arkret_models_identity::ResolutionCommi
 }
 
 #[test]
-fn managed_agent_genesis_activates_agent_status_cell_once() {
+fn agent_genesis_activates_agent_status_cell_once() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
     let agent_id = arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkreducertest").unwrap();
-    let genesis =
-        arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
-            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
-                .unwrap(),
-            managed_agent_initial_resolution(),
-            arkret_identifiers::TrustDomainId::new("ak:trust_domain:managed-agent-pcr".to_owned())
-                .unwrap(),
-            vec!["ak.profile.principal_control_realm.v1".to_owned()],
-            arkret_wire::CORE_REDUCER_PROFILE,
-            arkret_canonical::DigestSuite::Sha256,
-            arkret_wire::SecurityClass::HighAssurance,
-            arkret_wire::EncryptionProfile::MlsRfc9420,
-            test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
-        )
-        .unwrap();
+    let genesis = arkret_models_collaboration::events_payloads::RealmGenesis::agent_control(
+        arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
+            .unwrap(),
+        agent_initial_resolution(),
+        arkret_identifiers::TrustDomainId::new("ak:trust_domain:agent-pcr".to_owned()).unwrap(),
+        vec!["ak.profile.principal_control_realm.v1".to_owned()],
+        arkret_wire::CORE_REDUCER_PROFILE,
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_wire::SecurityClass::HighAssurance,
+        arkret_wire::EncryptionProfile::MlsRfc9420,
+        test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
+    )
+    .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
         .to_value()
         .unwrap();
@@ -1366,7 +1364,7 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
     let effect = state.apply_projected(&operation, &writes, &ServerHlc::new("test"));
     assert!(
         !matches!(effect, ProjectionEffect::Rejected { .. }),
-        "managed-Agent genesis unexpectedly rejected: {effect:?}; writes={writes:?}"
+        "Agent genesis unexpectedly rejected: {effect:?}; writes={writes:?}"
     );
     assert_eq!(
         state.agent_lifecycles.get(agent_id.as_str()),
@@ -1404,24 +1402,22 @@ fn managed_agent_genesis_activates_agent_status_cell_once() {
 }
 
 #[test]
-fn managed_agent_genesis_requires_the_registered_status_projection() {
+fn agent_genesis_requires_the_registered_status_projection() {
     let realm_id = "ak:realm:AcCjaDaAwSr00p03dwj9Gz2Aeq-1E2F2dAXTHFzPSdbQ";
     let agent_id = arkret_identifiers::DidCoreId::new("ak:did_core:webvh:z6mkreducertest").unwrap();
-    let genesis =
-        arkret_models_collaboration::events_payloads::RealmGenesis::managed_agent_control(
-            arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
-                .unwrap(),
-            managed_agent_initial_resolution(),
-            arkret_identifiers::TrustDomainId::new("ak:trust_domain:managed-agent-pcr".to_owned())
-                .unwrap(),
-            vec!["ak.profile.principal_control_realm.v1".to_owned()],
-            arkret_wire::CORE_REDUCER_PROFILE,
-            arkret_canonical::DigestSuite::Sha256,
-            arkret_wire::SecurityClass::HighAssurance,
-            arkret_wire::EncryptionProfile::MlsRfc9420,
-            test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
-        )
-        .unwrap();
+    let genesis = arkret_models_collaboration::events_payloads::RealmGenesis::agent_control(
+        arkret_wire::GenesisSalt::new("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_owned())
+            .unwrap(),
+        agent_initial_resolution(),
+        arkret_identifiers::TrustDomainId::new("ak:trust_domain:agent-pcr".to_owned()).unwrap(),
+        vec!["ak.profile.principal_control_realm.v1".to_owned()],
+        arkret_wire::CORE_REDUCER_PROFILE,
+        arkret_canonical::DigestSuite::Sha256,
+        arkret_wire::SecurityClass::HighAssurance,
+        arkret_wire::EncryptionProfile::MlsRfc9420,
+        test_single_signer_notary("did:webvh:z6mkreducertest:reducer-test.example"),
+    )
+    .unwrap();
     let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(genesis)
         .to_value()
         .unwrap();
@@ -1649,7 +1645,7 @@ fn the_bundle_projects_every_registered_component() {
             "kind": "principal_admission",
             "allowed_did_methods": ["did:web"]
         }]},
-        "agent_participation": {"native_agent": {
+        "agent_participation": {"agent": {
             "reply_message": true,
             "reaction_add": false,
             "reaction_remove": false,

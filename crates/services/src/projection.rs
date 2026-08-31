@@ -635,7 +635,7 @@ impl ProjectionService {
     /// The service layer cannot resolve accepted device generations. Callers
     /// must therefore supply exact digests, never a Realm-wide boolean. An
     /// empty set preserves the fail-closed behavior used by ordinary Realms,
-    /// managed Agent PCRs and reanchor control.
+    /// Agent PCRs and reanchor control.
     pub fn control_governance_health_with_ackless_authorities(
         &self,
         realm_id: &RealmId,

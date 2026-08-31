@@ -666,7 +666,7 @@ async fn enforce_account_registration_policy(
     )
 }
 
-async fn managed_agent_direct_authorization_basis(
+async fn agent_direct_authorization_basis(
     state: &AppState,
     controller: &str,
     agent_id: &str,
@@ -675,7 +675,7 @@ async fn managed_agent_direct_authorization_basis(
         .agent_pairings()
         .agent(agent_id)
         .await
-        .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+        .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
     else {
         return Ok(None);
     };
@@ -695,19 +695,18 @@ async fn managed_agent_direct_authorization_basis(
             record.state.as_wire_str()
         )));
     }
-    if let Err(error) =
-        crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
-            state,
-            &record,
-            now(),
-        )
-        .await
+    if let Err(error) = crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+        state,
+        &record,
+        now(),
+    )
+    .await
     {
         return Err(unavailable(format!(
             "owned-Agent controller binding validation failed: agent_id={agent_id}, controller={controller}, error={error}"
         )));
     }
-    managed_agent_direct_authorization_basis_from_record(&record)
+    agent_direct_authorization_basis_from_record(&record)
         .ok_or_else(|| {
             unavailable(format!(
                 "owned-Agent authorization basis is incomplete: agent_id={agent_id}, controller={controller}"
@@ -716,7 +715,7 @@ async fn managed_agent_direct_authorization_basis(
         .map(Some)
 }
 
-fn managed_agent_direct_authorization_basis_from_record(
+fn agent_direct_authorization_basis_from_record(
     record: &AgentPairingState,
 ) -> Option<
     arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
@@ -733,7 +732,7 @@ fn managed_agent_direct_authorization_basis_from_record(
         .map(|event_ref| EventId::new(event_ref?.to_owned()).ok())
         .collect::<Option<Vec<_>>>()?;
     let basis =
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis::managed_agent_controller(event_refs);
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis::agent_controller(event_refs);
     basis.validate_shape().ok()?;
     Some(basis)
 }
@@ -1804,7 +1803,7 @@ async fn direct_conversation_resolve(
             .agent_pairings()
             .agent(peer.signing_principal_id().as_str())
             .await
-            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?;
+            .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?;
         if record.as_ref().map(|record| record.controller_id.as_str())
             != Some(controller_account_id.principal_id.as_str())
         {
@@ -1820,13 +1819,13 @@ async fn direct_conversation_resolve(
     // coordinates exist, a scope/lifecycle change suspends sending but must
     // not make those coordinates disappear.
     let scope = "direct_message";
-    let managed_agent_basis = managed_agent_direct_authorization_basis(
+    let agent_basis = agent_direct_authorization_basis(
         state,
         &session.actor,
         peer.signing_principal_id().as_str(),
     )
     .await?;
-    let contact = if managed_agent_basis.is_some() {
+    let contact = if agent_basis.is_some() {
         None
     } else {
         let contact = direct_contact_for_pair(state, &actor, &peer).await?;
@@ -1836,13 +1835,13 @@ async fn direct_conversation_resolve(
                 "direct conversation is unavailable",
             )
             .with_private_detail(format!(
-                "no owned active managed-Agent authorization or accepted contact projection: requester_id={}, peer={peer}",
+                "no owned active Agent authorization or accepted contact projection: requester_id={}, peer={peer}",
                 session.actor
             )));
         }
         contact
     };
-    let accepted_contact = if managed_agent_basis.is_some() {
+    let accepted_contact = if agent_basis.is_some() {
         None
     } else {
         accepted_contact_for_pair(state, &actor, &peer, scope).await?
@@ -1911,7 +1910,7 @@ async fn direct_conversation_resolve(
             });
         }
         if state.account_lifecycle_state(&session.actor) != "active"
-            || (managed_agent_basis.is_none()
+            || (agent_basis.is_none()
                 && state.account_lifecycle_state(peer.signing_principal_id().as_str()) != "active")
         {
             return json_ok(DirectConversationResolveOutcome::Suspended {
@@ -1947,14 +1946,12 @@ async fn direct_conversation_resolve(
                 send_blockers.push(DirectConversationSendBlocker::ContactScopeStale);
             }
         }
-        if managed_agent_basis.is_some() {
+        if agent_basis.is_some() {
             let agent_active = state
                 .agent_pairings()
                 .agent(peer.signing_principal_id().as_str())
                 .await
-                .map_err(|error| {
-                    AppError::internal(format!("managed Agent lookup failed: {error}"))
-                })?
+                .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
                 .is_some_and(|agent| agent.state == AgentLifecycleState::Active);
             if !agent_active {
                 send_blockers.push(DirectConversationSendBlocker::AgentRuntimeUnavailable);
@@ -1998,7 +1995,7 @@ async fn direct_conversation_resolve(
         &actor,
         &peer,
         contact.as_ref(),
-        managed_agent_basis.is_some(),
+        agent_basis.is_some(),
     )
     .await?;
     if let Some(founder_id) = founder.as_deref() {
@@ -2030,7 +2027,7 @@ async fn direct_conversation_resolve(
             });
         }
     }
-    if managed_agent_basis.is_none() && accepted_contact.is_none() {
+    if agent_basis.is_none() && accepted_contact.is_none() {
         return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
             retry_after_ms: None,
         });
@@ -2511,7 +2508,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_direct_basis_uses_provisioning_and_runtime_key_facts() {
+    fn agent_direct_basis_uses_provisioning_and_runtime_key_facts() {
         let created_at = chrono::Utc::now();
         let mut record = AgentPairingState::new(
             "did:web:agents.example:assistant".to_owned(),
@@ -2528,10 +2525,10 @@ mod tests {
         record.authorized_event_ref =
             Some("ak:event:AVeCvdcuh1hDJWwYlZJb_1yRzWQwN1-pXxgZYTyd7BGT".to_owned());
 
-        let basis = managed_agent_direct_authorization_basis_from_record(&record).unwrap();
+        let basis = agent_direct_authorization_basis_from_record(&record).unwrap();
         assert_eq!(
             basis.kind,
-            arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::ManagedAgentController
+            arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AgentController
         );
         assert_eq!(
             basis
@@ -2546,7 +2543,7 @@ mod tests {
         );
 
         record.authorized_event_ref = None;
-        assert!(managed_agent_direct_authorization_basis_from_record(&record).is_none());
+        assert!(agent_direct_authorization_basis_from_record(&record).is_none());
     }
 
     #[test]

@@ -218,11 +218,9 @@ pub(super) async fn resolve_agent_selector(
     }
     let subject = matches[0].id.as_str();
     let controller_account =
-        crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
-            state, matches[0],
-        )
-        .await
-        .map_err(|_| selector_not_found())?;
+        crate::routing::identity::agent_pcr::agent_controller_account(state, matches[0])
+            .await
+            .map_err(|_| selector_not_found())?;
     let subject_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         directory_actor_core_id(subject)?,
         controller_account.station_id,

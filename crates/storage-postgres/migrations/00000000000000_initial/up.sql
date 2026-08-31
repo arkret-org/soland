@@ -228,7 +228,7 @@ CREATE UNIQUE INDEX agent_principals_approval_request_idx ON public.agent_princi
 
 CREATE INDEX agent_principals_state_idx ON public.agent_principals USING btree (state);
 
--- Durable Native Agent runtime inbox.  This is intentionally separate from
+-- Durable Agent runtime inbox.  This is intentionally separate from
 -- device messages: the runtime authorization snapshot is the delivery guard.
 CREATE TABLE public.agent_runtime_messages (
     message_id uuid PRIMARY KEY,

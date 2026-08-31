@@ -20,7 +20,7 @@ fn managed_controller_core_id(controller_id: &str) -> Result<DidCoreId, AppError
             Did::new(controller_id.to_owned())
                 .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
-        .map_err(|error| schema_error(format!("managed Agent controller DID is invalid: {error}")))
+        .map_err(|error| schema_error(format!("Agent controller DID is invalid: {error}")))
 }
 
 const CONTROLLER_DELEGATION_FRAGMENT: &str = "managed-controller";
@@ -37,7 +37,7 @@ pub(crate) fn controller_authorization_ref(agent_did: &Did) -> Result<DidUrl, Ap
     })
 }
 
-pub(crate) async fn accepted_managed_agent_initial_resolution(
+pub(crate) async fn accepted_agent_initial_resolution(
     state: &AppState,
     agent_did: &Did,
     controller_id: &arkret_identifiers::DidCoreId,
@@ -48,22 +48,17 @@ pub(crate) async fn accepted_managed_agent_initial_resolution(
         .await
         .map_err(|error| {
             failed_precondition(
-                format!("managed Agent accepted inception is unavailable: {error}"),
-                "managed_agent_inception_unavailable",
+                format!("Agent accepted inception is unavailable: {error}"),
+                "agent_inception_unavailable",
             )
         })?;
     if pinned.status != PinnedDidVersionStatus::Current || !pinned.version_id.starts_with("1-") {
         return Err(failed_precondition(
-            "managed Agent prepare requires an unrotated accepted inception",
-            "managed_agent_inception_not_current",
+            "Agent prepare requires an unrotated accepted inception",
+            "agent_inception_not_current",
         ));
     }
-    validate_managed_agent_inception_document(
-        &pinned.document,
-        agent_did,
-        controller_id.as_str(),
-        false,
-    )?;
+    validate_agent_inception_document(&pinned.document, agent_did, controller_id.as_str(), false)?;
     Ok(arkret_models_identity::ResolutionCommitment {
         did: agent_did.clone(),
         method_history_head: pinned.log_head_digest.to_string(),
@@ -71,26 +66,26 @@ pub(crate) async fn accepted_managed_agent_initial_resolution(
     })
 }
 
-fn validate_managed_agent_inception_document(
+fn validate_agent_inception_document(
     document: &Value,
     agent_did: &Did,
     controller_id: &str,
     allow_pcr_binding: bool,
 ) -> Result<(), AppError> {
-    arkret_signatures::webvh::validate_managed_agent_did_document_profile(
+    arkret_signatures::webvh::validate_agent_did_document_profile(
         agent_did.as_str(),
         document,
         &[],
     )
-    .map_err(|error| schema_error(format!("managed Agent DID profile is invalid: {error}")))?;
+    .map_err(|error| schema_error(format!("Agent DID profile is invalid: {error}")))?;
     let services = document
         .get("service")
         .and_then(Value::as_array)
-        .ok_or_else(|| schema_error("managed Agent inception service set is missing"))?;
+        .ok_or_else(|| schema_error("Agent inception service set is missing"))?;
     let expected_service_count = if allow_pcr_binding { 3 } else { 2 };
     if services.len() != expected_service_count {
         return Err(schema_error(
-            "managed Agent DID service set does not match its lifecycle phase",
+            "Agent DID service set does not match its lifecycle phase",
         ));
     }
     let expected_id = format!("{}#{CONTROLLER_DELEGATION_FRAGMENT}", agent_did.as_str());
@@ -102,14 +97,14 @@ fn validate_managed_agent_inception_document(
             != Some(controller_id)
     {
         return Err(schema_error(
-            "managed Agent inception must contain one matching controller delegation",
+            "Agent inception must contain one matching controller delegation",
         ));
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn managed_agent_binding_is_accepted(
+pub(crate) async fn agent_binding_is_accepted(
     state: &AppState,
     initial_resolution: &arkret_models_identity::ResolutionCommitment,
     controller_id: &str,
@@ -118,10 +113,9 @@ pub(crate) async fn managed_agent_binding_is_accepted(
     requested_scope_digest: &Hash,
 ) -> Result<bool, AppError> {
     let controller_core_id = managed_controller_core_id(controller_id)?;
-    let initial_head = arkret_identifiers::Hash::new(
-        initial_resolution.method_history_head.clone(),
-    )
-    .map_err(|error| schema_error(format!("managed Agent inception head is invalid: {error}")))?;
+    let initial_head =
+        arkret_identifiers::Hash::new(initial_resolution.method_history_head.clone())
+            .map_err(|error| schema_error(format!("Agent inception head is invalid: {error}")))?;
     state
         .dids()
         .resolve_pinned_webvh_state(
@@ -132,8 +126,8 @@ pub(crate) async fn managed_agent_binding_is_accepted(
         .await
         .map_err(|error| {
             failed_precondition(
-                format!("managed Agent committed inception is unavailable: {error}"),
-                "managed_agent_inception_unavailable",
+                format!("Agent committed inception is unavailable: {error}"),
+                "agent_inception_unavailable",
             )
         })?;
     let current = state
@@ -142,8 +136,8 @@ pub(crate) async fn managed_agent_binding_is_accepted(
         .await
         .map_err(|error| {
             failed_precondition(
-                format!("managed Agent current DID history is unavailable: {error}"),
-                "managed_agent_did_binding_unavailable",
+                format!("Agent current DID history is unavailable: {error}"),
+                "agent_did_binding_unavailable",
             )
         })?;
     if current.version_id == initial_resolution.version_id {
@@ -151,11 +145,11 @@ pub(crate) async fn managed_agent_binding_is_accepted(
     }
     if !current.version_id.starts_with("2-") {
         return Err(failed_precondition(
-            "managed Agent PCR binding must be the first continuous update after inception",
-            "managed_agent_did_binding_not_entry_one",
+            "Agent PCR binding must be the first continuous update after inception",
+            "agent_did_binding_not_entry_one",
         ));
     }
-    validate_managed_agent_inception_document(
+    validate_agent_inception_document(
         &current.document,
         &initial_resolution.did,
         controller_core_id.as_str(),
@@ -165,7 +159,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
         .document
         .get("service")
         .and_then(Value::as_array)
-        .ok_or_else(|| schema_error("managed Agent DID service set is missing"))?;
+        .ok_or_else(|| schema_error("Agent DID service set is missing"))?;
     let expected_id = format!(
         "{}#arkret-principal-control-realm",
         initial_resolution.did.as_str()
@@ -199,7 +193,7 @@ pub(crate) async fn managed_agent_binding_is_accepted(
             .is_some()
     {
         return Err(schema_error(
-            "managed Agent DID PCR service binding does not match the accepted create-locked tuple",
+            "Agent DID PCR service binding does not match the accepted create-locked tuple",
         ));
     }
     Ok(true)
@@ -328,7 +322,7 @@ fn backup_matches_series_genesis(
         && backup.get("series_seq").and_then(Value::as_u64) == Some(0)
 }
 
-pub(crate) async fn managed_agent_controller_account(
+pub(crate) async fn agent_controller_account(
     state: &AppState,
     record: &AgentPrincipalRecord,
 ) -> Result<AccountId, AppError> {
@@ -347,8 +341,8 @@ pub(crate) async fn managed_agent_controller_account(
         state.identities().account(authority).await
     } else {
         return Err(failed_precondition(
-            "managed Agent controller Account binding is missing",
-            "managed_agent_controller_binding_missing",
+            "Agent controller Account binding is missing",
+            "agent_controller_binding_missing",
         ));
     }
     .map_err(|error| {
@@ -356,8 +350,8 @@ pub(crate) async fn managed_agent_controller_account(
     })?
     .ok_or_else(|| {
         failed_precondition(
-            "managed Agent controller Account no longer exists",
-            "managed_agent_controller_binding_missing",
+            "Agent controller Account no longer exists",
+            "agent_controller_binding_missing",
         )
     })?;
     if account.account_id.principal_id != managed_controller_core_id(&record.controller_id)?
@@ -371,14 +365,14 @@ pub(crate) async fn managed_agent_controller_account(
             .is_some_and(|authority| authority != &account.account_id)
     {
         return Err(failed_precondition(
-            "managed Agent controller Account binding does not match",
-            "managed_agent_controller_binding_mismatch",
+            "Agent controller Account binding does not match",
+            "agent_controller_binding_mismatch",
         ));
     }
     Ok(account.account_id)
 }
 
-fn managed_agent_actor_for_account(
+fn agent_actor_for_account(
     record: &AgentPrincipalRecord,
     account: &AccountId,
 ) -> Result<ActorId, AppError> {
@@ -389,7 +383,7 @@ fn managed_agent_actor_for_account(
     )))
 }
 
-pub(crate) async fn managed_agent_record_for_actor(
+pub(crate) async fn agent_record_for_actor(
     state: &AppState,
     actor: &ActorId,
 ) -> Result<Option<AgentPrincipalRecord>, AppError> {
@@ -401,11 +395,11 @@ pub(crate) async fn managed_agent_record_for_actor(
     else {
         return Ok(None);
     };
-    let account = managed_agent_controller_account(state, &record).await?;
-    if actor != &managed_agent_actor_for_account(&record, &account)? {
+    let account = agent_controller_account(state, &record).await?;
+    if actor != &agent_actor_for_account(&record, &account)? {
         return Err(failed_precondition(
             "Agent Actor does not match its stored hosting Station",
-            "managed_agent_principal_binding_mismatch",
+            "agent_principal_binding_mismatch",
         ));
     }
     Ok(Some(record))
@@ -417,13 +411,13 @@ pub(crate) async fn controller_manages_agent_pcr(
     pcr_id: &str,
 ) -> Result<bool, AppError> {
     Ok(
-        managed_agent_record_for_controller_pcr(state, controller_id, pcr_id)
+        agent_record_for_controller_pcr(state, controller_id, pcr_id)
             .await?
             .is_some(),
     )
 }
 
-pub(crate) async fn managed_agent_record_for_controller_pcr(
+pub(crate) async fn agent_record_for_controller_pcr(
     state: &AppState,
     controller_id: &str,
     pcr_id: &str,
@@ -432,14 +426,14 @@ pub(crate) async fn managed_agent_record_for_controller_pcr(
         .agent_pairings()
         .agents_for_controller(controller_id)
         .await
-        .map_err(|error| AppError::internal(format!("managed Agent PCR lookup failed: {error}")))?;
+        .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?;
     Ok(agents.into_iter().find(|record| {
         record.principal_control_realm_id == pcr_id
             && record.state != AgentLifecycleState::Deactivated
     }))
 }
 
-pub(crate) async fn managed_agent_event_seal_head(
+pub(crate) async fn agent_event_seal_head(
     state: &AppState,
     pcr_id: &str,
 ) -> Result<Option<Seal>, AppError> {
@@ -462,7 +456,7 @@ pub(crate) async fn managed_agent_event_seal_head(
         return Ok(None);
     }
 
-    // A managed Agent PCR is notarized by its accepted Agent key authority or
+    // A Agent PCR is notarized by its accepted Agent key authority or
     // by the accountable controller authorized by the accepted PCR history.
     // The service must never mint a substitute Seal with its own key merely
     // because accepted Events exist.
@@ -474,14 +468,14 @@ pub(crate) async fn managed_agent_event_seal_head(
     Ok(Some(seal))
 }
 
-pub(crate) async fn managed_agent_pcr_genesis_accepted_at(
+pub(crate) async fn agent_pcr_genesis_accepted_at(
     state: &AppState,
     agent_id: &str,
     pcr_id: &str,
 ) -> Result<Option<DateTime<Utc>>, AppError> {
-    let record = managed_agent_record(state, agent_id).await?;
-    let account = managed_agent_controller_account(state, &record).await?;
-    let actor = managed_agent_actor_for_account(&record, &account)?;
+    let record = agent_record(state, agent_id).await?;
+    let account = agent_controller_account(state, &record).await?;
+    let actor = agent_actor_for_account(&record, &account)?;
     if record.principal_control_realm_id != pcr_id {
         return Ok(None);
     }
@@ -491,11 +485,11 @@ pub(crate) async fn managed_agent_pcr_genesis_accepted_at(
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR genesis lookup failed: {error}")))?;
     Ok(events.iter().find_map(|event| {
-        managed_agent_genesis_matches(event, &actor, pcr_id).then_some(event.received_at)
+        agent_genesis_matches(event, &actor, pcr_id).then_some(event.received_at)
     }))
 }
 
-fn managed_agent_genesis_matches(
+fn agent_genesis_matches(
     event: &soland_services::events::AcceptedEvent,
     actor: &ActorId,
     pcr_id: &str,
@@ -522,7 +516,7 @@ pub(crate) async fn validate_agent_controller_binding(
     accepted_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     requested_scope_digest_for_record(agent_record)?;
-    let agent_did = managed_agent_did(agent_record)?;
+    let agent_did = agent_did(agent_record)?;
     let document = agent_did_document_at(state, &agent_did, accepted_at).await?;
     validate_agent_did_identity_anchor(&document, &agent_did)?;
     validate_agent_runtime_authority(agent_record)?;
@@ -537,19 +531,18 @@ pub(crate) async fn validate_effective_agent_realm_membership(
 ) -> Result<(), AppError> {
     if agent_record.state != AgentLifecycleState::Active {
         return Err(failed_precondition(
-            "managed Agent lifecycle is not active",
+            "Agent lifecycle is not active",
             "agent_membership_inactive",
         ));
     }
-    let controller_account = managed_agent_controller_account(state, agent_record).await?;
-    let agent_actor =
-        managed_agent_actor_for_account(agent_record, &controller_account)?.to_string();
+    let controller_account = agent_controller_account(state, agent_record).await?;
+    let agent_actor = agent_actor_for_account(agent_record, &controller_account)?.to_string();
     let projection = state.projections().snapshot();
     let binding = projection
         .agent_membership_binding(realm_id, &agent_actor)
         .ok_or_else(|| {
             failed_precondition(
-                "managed Agent membership has no controller-generation binding",
+                "Agent membership has no controller-generation binding",
                 "agent_membership_inactive",
             )
         })?;
@@ -557,7 +550,7 @@ pub(crate) async fn validate_effective_agent_realm_membership(
         || !projection.effective_agent_membership_base(realm_id, &agent_actor)
     {
         return Err(failed_precondition(
-            "managed Agent membership controller authority or generation is no longer current",
+            "Agent membership controller authority or generation is no longer current",
             "agent_membership_inactive",
         ));
     }
@@ -565,7 +558,7 @@ pub(crate) async fn validate_effective_agent_realm_membership(
     validate_agent_controller_binding(state, agent_record, accepted_at).await
 }
 
-pub(crate) fn managed_agent_initial_resolution_for_record(
+pub(crate) fn agent_initial_resolution_for_record(
     agent_record: &AgentPrincipalRecord,
 ) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {
     let value = agent_record
@@ -575,13 +568,13 @@ pub(crate) fn managed_agent_initial_resolution_for_record(
         .cloned()
         .ok_or_else(|| {
             failed_precondition(
-                "managed Agent provisioning initial resolution is missing",
-                "managed_agent_initial_resolution_missing",
+                "Agent provisioning initial resolution is missing",
+                "agent_initial_resolution_missing",
             )
         })?;
     serde_json::from_value(value).map_err(|error| {
         AppError::internal(format!(
-            "stored managed Agent initial resolution is invalid: {error}"
+            "stored Agent initial resolution is invalid: {error}"
         ))
     })
 }
@@ -598,11 +591,11 @@ async fn validate_active_agent_accountability(
         .and_then(Value::as_str)
         .ok_or_else(|| {
             failed_precondition(
-                "managed Agent provisioning accountability reference is missing",
+                "Agent provisioning accountability reference is missing",
                 arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
             )
         })?;
-    let controller_account_id = managed_agent_controller_account(state, agent_record).await?;
+    let controller_account_id = agent_controller_account(state, agent_record).await?;
     let query = ActiveAgentAccountabilityQuery {
         accountability_event_id: accountability_event_id.to_owned(),
         agent_account_id: AccountId::new(
@@ -620,7 +613,7 @@ async fn validate_active_agent_accountability(
         .map_err(|error| AppError::internal(format!("accountability lookup failed: {error}")))?;
     if !active {
         return Err(failed_precondition(
-            "managed Agent accountability grant is missing or inactive",
+            "Agent accountability grant is missing or inactive",
             arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         ));
     }
@@ -632,10 +625,10 @@ pub(crate) async fn validate_delegated_agent_envelope(
     envelope: &serde_json::Map<String, Value>,
     controller_id: &str,
 ) -> Result<(), AppError> {
-    if managed_agent_envelope_uses_root_anchor(envelope) {
+    if agent_envelope_uses_root_anchor(envelope) {
         return Err(failed_precondition(
-            "managed Agent Events cannot use self-principal root anchors",
-            "managed_agent_root_anchor_forbidden",
+            "Agent Events cannot use self-principal root anchors",
+            "agent_root_anchor_forbidden",
         ));
     }
     // Realm-create wire envelopes intentionally omit `realm_id`; the receiver
@@ -645,7 +638,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
     let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
         .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
     let agent_id = event.actor_id.signing_principal_id().as_str();
-    let record = managed_agent_record(state, agent_id).await?;
+    let record = agent_record(state, agent_id).await?;
     let controller_core_id = managed_controller_core_id(controller_id)?;
     if managed_controller_core_id(&record.controller_id)? != controller_core_id
         || event
@@ -658,7 +651,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
     {
         return Err(failed_precondition(
             "delegated Agent Event does not match the controller/PCR binding",
-            "managed_agent_delegation_mismatch",
+            "agent_delegation_mismatch",
         ));
     }
     let kind = event.kind.as_str();
@@ -678,26 +671,26 @@ pub(crate) async fn validate_delegated_agent_envelope(
     if !kind_is_delegated_control {
         return Err(failed_precondition(
             "controller delegation does not cover this Agent Event kind",
-            "managed_agent_delegation_scope",
+            "agent_delegation_scope",
         ));
     }
     if kind == arkret_wire::EventKind::RealmCreate.as_str() {
         let object = event
             .payload
             .get("object")
-            .ok_or_else(|| schema_error("managed Agent PCR genesis object is missing"))?;
+            .ok_or_else(|| schema_error("Agent PCR genesis object is missing"))?;
         validate_agent_pcr_genesis_object(
             object,
             agent_id,
             controller_id,
             record.principal_control_realm_id.as_str(),
             state.config().trust_domain.as_str(),
-            &managed_agent_initial_resolution_for_record(&record)?,
+            &agent_initial_resolution_for_record(&record)?,
         )?;
         let realm_id =
             RealmId::new(record.principal_control_realm_id.clone()).map_err(|error| {
                 schema_error(format!(
-                    "managed Agent PCR binding contains an invalid Realm id: {error}"
+                    "Agent PCR binding contains an invalid Realm id: {error}"
                 ))
             })?;
         validate_agent_pcr_genesis_effect(envelope, &realm_id)?;
@@ -708,7 +701,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
     validate_agent_controller_binding(state, &record, Utc::now()).await
 }
 
-fn managed_agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) -> bool {
+fn agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Value>) -> bool {
     envelope
         .get("refs")
         .and_then(Value::as_array)
@@ -728,14 +721,10 @@ fn validate_agent_pcr_genesis_effect(
     realm_id: &RealmId,
 ) -> Result<(), AppError> {
     let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
-        .map_err(|error| {
-            schema_error(format!(
-                "managed Agent PCR genesis Event is invalid: {error}"
-            ))
-        })?;
+        .map_err(|error| schema_error(format!("Agent PCR genesis Event is invalid: {error}")))?;
     if &event.realm_id != realm_id {
         return Err(schema_error(
-            "managed Agent PCR genesis Realm differs from its account binding",
+            "Agent PCR genesis Realm differs from its account binding",
         ));
     }
     // The accepted provision is resolved by the whole-value reverse lookup
@@ -744,8 +733,8 @@ fn validate_agent_pcr_genesis_effect(
     // derivation cyclic.
     if !event.refs.is_empty() {
         return Err(failed_precondition(
-            "managed Agent PCR genesis must not carry semantic references",
-            "managed_agent_pcr_genesis_ref_forbidden",
+            "Agent PCR genesis must not carry semantic references",
+            "agent_pcr_genesis_ref_forbidden",
         ));
     }
     // v1 carries no producer `effects[]`: the canonical genesis writes
@@ -756,11 +745,7 @@ fn validate_agent_pcr_genesis_effect(
         &event,
         arkret_canonical::DigestSuite::Sha256,
     )
-    .map_err(|error| {
-        schema_error(format!(
-            "managed Agent PCR create projection failed: {error}"
-        ))
-    })?;
+    .map_err(|error| schema_error(format!("Agent PCR create projection failed: {error}")))?;
     let expected = arkret_bootstrap::expected_realm_create_cells(&event);
     let actual: std::collections::BTreeSet<String> = derived
         .iter()
@@ -768,8 +753,8 @@ fn validate_agent_pcr_genesis_effect(
         .collect();
     if derived.len() != expected.len() || actual != expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis must derive the canonical registered genesis cells",
-            "managed_agent_pcr_create_effect_mismatch",
+            "Agent PCR genesis must derive the canonical registered genesis cells",
+            "agent_pcr_create_effect_mismatch",
         ));
     }
     Ok(())
@@ -784,51 +769,43 @@ pub(crate) fn validate_agent_pcr_genesis_object(
     expected_initial_resolution: &arkret_models_identity::ResolutionCommitment,
 ) -> Result<(), AppError> {
     RealmId::new(expected_realm_id.to_owned())
-        .map_err(|error| schema_error(format!("managed Agent PCR Realm id is invalid: {error}")))?;
+        .map_err(|error| schema_error(format!("Agent PCR Realm id is invalid: {error}")))?;
     let genesis_salt = object
         .get("genesis_salt")
         .and_then(Value::as_str)
-        .ok_or_else(|| schema_error("managed Agent PCR genesis_salt is missing"))?;
+        .ok_or_else(|| schema_error("Agent PCR genesis_salt is missing"))?;
     let initial_resolution = serde_json::from_value::<
         arkret_models_identity::identity_resolution::ResolutionCommitment,
     >(
         object
             .get("initial_resolution")
             .cloned()
-            .ok_or_else(|| schema_error("managed Agent PCR initial_resolution is missing"))?,
+            .ok_or_else(|| schema_error("Agent PCR initial_resolution is missing"))?,
     )
-    .map_err(|error| {
-        schema_error(format!(
-            "managed Agent PCR initial_resolution is invalid: {error}"
-        ))
-    })?;
+    .map_err(|error| schema_error(format!("Agent PCR initial_resolution is invalid: {error}")))?;
     if &initial_resolution != expected_initial_resolution {
         return Err(failed_precondition(
-            "managed Agent PCR initial_resolution differs from the accepted inception locked by provisioning",
-            "managed_agent_initial_resolution_mismatch",
+            "Agent PCR initial_resolution differs from the accepted inception locked by provisioning",
+            "agent_initial_resolution_mismatch",
         ));
     }
     let notary = serde_json::from_value::<arkret_wire::NotaryValue>(
         object
             .get("notary")
             .cloned()
-            .ok_or_else(|| schema_error("managed Agent PCR notary is missing"))?,
+            .ok_or_else(|| schema_error("Agent PCR notary is missing"))?,
     )
-    .map_err(|error| schema_error(format!("managed Agent PCR notary is invalid: {error}")))?;
+    .map_err(|error| schema_error(format!("Agent PCR notary is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(agent_id.to_owned())
-        .map_err(|error| schema_error(format!("managed Agent core id is invalid: {error}")))?;
-    let expected = arkret_bootstrap::build_managed_agent_pcr_create_payload(
-        arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+        .map_err(|error| schema_error(format!("Agent core id is invalid: {error}")))?;
+    let expected = arkret_bootstrap::build_agent_pcr_create_payload(
+        arkret_bootstrap::AgentPcrCreatePayloadInput {
             agent_id,
             notary,
             initial_resolution: expected_initial_resolution.clone(),
             controller_id: managed_controller_core_id(controller_id)?,
             genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
-                |error| {
-                    schema_error(format!(
-                        "managed Agent PCR genesis_salt is invalid: {error}"
-                    ))
-                },
+                |error| schema_error(format!("Agent PCR genesis_salt is invalid: {error}")),
             )?,
             trust_domain: arkret_wire::TrustDomainId::new(trust_domain.to_owned()).map_err(
                 |error| schema_error(format!("configured trust domain is invalid: {error}")),
@@ -838,33 +815,30 @@ pub(crate) fn validate_agent_pcr_genesis_object(
     )
     .map_err(|error| {
         AppError::internal(format!(
-            "canonical managed Agent PCR genesis construction failed: {error}"
+            "canonical Agent PCR genesis construction failed: {error}"
         ))
     })?;
     let expected = serde_json::to_value(expected.object).map_err(|error| {
         AppError::internal(format!(
-            "canonical managed Agent PCR genesis encoding failed: {error}"
+            "canonical Agent PCR genesis encoding failed: {error}"
         ))
     })?;
     if object != &expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis does not match the canonical profile-closed payload",
+            "Agent PCR genesis does not match the canonical profile-closed payload",
             "principal_control_realm_profile_mismatch",
         ));
     }
     Ok(())
 }
 
-async fn managed_agent_record(
-    state: &AppState,
-    agent_id: &str,
-) -> Result<AgentPrincipalRecord, AppError> {
+async fn agent_record(state: &AppState, agent_id: &str) -> Result<AgentPrincipalRecord, AppError> {
     state
         .agent_pairings()
         .agent(agent_id)
         .await
-        .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
-        .ok_or_else(|| schema_error("managed_principal_id does not identify a local managed Agent"))
+        .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
+        .ok_or_else(|| schema_error("managed_principal_id does not identify a local Agent"))
 }
 
 async fn agent_did_document_at(
@@ -886,54 +860,44 @@ async fn agent_did_document_at(
         return Ok(document);
     }
     Err(schema_error(
-        "managed Agent DID accepted history is unavailable at the evaluation time",
+        "Agent DID accepted history is unavailable at the evaluation time",
     ))
 }
 
-fn managed_agent_did(record: &AgentPrincipalRecord) -> Result<Did, AppError> {
+fn agent_did(record: &AgentPrincipalRecord) -> Result<Did, AppError> {
     let (controller, _) = record
         .controller_authorization_ref
         .as_str()
         .split_once('#')
-        .ok_or_else(|| {
-            schema_error("managed Agent controller authorization ref has no fragment")
-        })?;
+        .ok_or_else(|| schema_error("Agent controller authorization ref has no fragment"))?;
     let did = Did::new(controller.to_owned())
-        .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
+        .map_err(|error| schema_error(format!("Agent DID is invalid: {error}")))?;
     let projected = arkret_wire::project_did_to_core_id(&did)
-        .map_err(|error| schema_error(format!("managed Agent DID projection failed: {error}")))?;
+        .map_err(|error| schema_error(format!("Agent DID projection failed: {error}")))?;
     if projected.as_str() != record.id.as_str() {
         return Err(schema_error(
-            "managed Agent DID does not project to the stored core id",
+            "Agent DID does not project to the stored core id",
         ));
     }
     let expected_authorization_ref = controller_authorization_ref(&did)?;
     if expected_authorization_ref != record.controller_authorization_ref {
         return Err(schema_error(
-            "managed Agent controller authorization ref does not match its DID",
+            "Agent controller authorization ref does not match its DID",
         ));
     }
     Ok(did)
 }
 
 fn validate_agent_did_identity_anchor(document: &Value, agent_did: &Did) -> Result<(), AppError> {
-    arkret_signatures::webvh::validate_managed_agent_did_document_profile(
-        agent_did.as_str(),
-        document,
-        &[],
-    )
-    .map_err(|error| {
-        schema_error(format!(
-            "managed Agent DID identity profile is invalid: {error}"
-        ))
-    })
+    arkret_signatures::webvh::validate_agent_did_document_profile(agent_did.as_str(), document, &[])
+        .map_err(|error| schema_error(format!("Agent DID identity profile is invalid: {error}")))
 }
 
 fn validate_agent_runtime_authority(record: &AgentPrincipalRecord) -> Result<(), AppError> {
     record.runtime_bindings().map(|_| ()).map_err(|error| {
         failed_precondition(
-            format!("managed Agent accepted key authority is invalid: {error}"),
-            "managed_agent_key_authority_invalid",
+            format!("Agent accepted key authority is invalid: {error}"),
+            "agent_key_authority_invalid",
         )
     })
 }
@@ -945,14 +909,14 @@ pub(crate) fn requested_scope_digest_for_record(
         record
             .requested_scope
             .clone()
-            .ok_or_else(|| schema_error("managed Agent requested_scope is missing"))?,
+            .ok_or_else(|| schema_error("Agent requested_scope is missing"))?,
     )
-    .map_err(|error| schema_error(format!("managed Agent requested_scope is invalid: {error}")))?;
+    .map_err(|error| schema_error(format!("Agent requested_scope is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(record.id.clone())
-        .map_err(|error| schema_error(format!("managed Agent DID is invalid: {error}")))?;
+        .map_err(|error| schema_error(format!("Agent DID is invalid: {error}")))?;
     let controller_id = managed_controller_core_id(&record.controller_id)?;
     agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
-        .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))
+        .map_err(|error| schema_error(format!("Agent ceiling digest failed: {error}")))
 }
 
 fn schema_error(message: impl Into<String>) -> AppError {
@@ -1009,21 +973,21 @@ mod tests {
             envelope: serde_json::json!({"actor_id":actor}),
             received_at: chrono::Utc::now(),
         };
-        assert!(super::managed_agent_genesis_matches(&event, &actor, PCR));
+        assert!(super::agent_genesis_matches(&event, &actor, PCR));
         let foreign = super::ActorId::account(arkret_wire::AccountId::new(
             actor.signing_principal_id().clone(),
             super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         ));
-        assert!(!super::managed_agent_genesis_matches(&event, &foreign, PCR));
+        assert!(!super::agent_genesis_matches(&event, &foreign, PCR));
         event.envelope["actor_id"] = serde_json::json!(foreign);
-        assert!(!super::managed_agent_genesis_matches(&event, &actor, PCR));
+        assert!(!super::agent_genesis_matches(&event, &actor, PCR));
         event.envelope["actor_id"] = serde_json::json!(actor);
         event.actor_id = AGENT.into();
-        assert!(!super::managed_agent_genesis_matches(&event, &actor, PCR));
+        assert!(!super::agent_genesis_matches(&event, &actor, PCR));
     }
 
     #[tokio::test]
-    async fn managed_agent_account_binding_rejects_same_principal_at_another_station() {
+    async fn agent_account_binding_rejects_same_principal_at_another_station() {
         let state = crate::state::AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -1066,7 +1030,7 @@ mod tests {
         // Pre-genesis reservation has no PK yet, but has its exact accepted Account.
         record.provision_event_refs = Some(serde_json::json!({"controller_authority":local}));
         assert_eq!(
-            super::managed_agent_controller_account(&state, &record)
+            super::agent_controller_account(&state, &record)
                 .await
                 .unwrap(),
             local
@@ -1077,9 +1041,9 @@ mod tests {
             .save_agent(record.clone())
             .await
             .unwrap();
-        let actor = super::managed_agent_actor_for_account(&record, &local).unwrap();
+        let actor = super::agent_actor_for_account(&record, &local).unwrap();
         assert!(
-            super::managed_agent_record_for_actor(&state, &actor)
+            super::agent_record_for_actor(&state, &actor)
                 .await
                 .unwrap()
                 .is_some()
@@ -1089,13 +1053,13 @@ mod tests {
             super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         ));
         assert!(
-            super::managed_agent_record_for_actor(&state, &foreign_actor)
+            super::agent_record_for_actor(&state, &foreign_actor)
                 .await
                 .is_err()
         );
         record.controller_account_pk = Some(soland_storage::AccountPk(2));
         assert!(
-            super::managed_agent_controller_account(&state, &record)
+            super::agent_controller_account(&state, &record)
                 .await
                 .is_err()
         );
@@ -1110,7 +1074,7 @@ mod tests {
     const CONTROLLER: &str = "ak:did_core:web:controller.example";
     const CONTROLLER_DID: &str = "did:web:controller.example";
     const PCR: &str = "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M";
-    const TRUST_DOMAIN: &str = "ak:trust_domain:managed-agent-pcr";
+    const TRUST_DOMAIN: &str = "ak:trust_domain:agent-pcr";
 
     fn requested_scope() -> Value {
         json!({
@@ -1150,8 +1114,8 @@ mod tests {
     }
 
     fn pcr_genesis() -> Value {
-        let payload = arkret_bootstrap::build_managed_agent_pcr_create_payload(
-            arkret_bootstrap::ManagedAgentPcrCreatePayloadInput {
+        let payload = arkret_bootstrap::build_agent_pcr_create_payload(
+            arkret_bootstrap::AgentPcrCreatePayloadInput {
                 agent_id: arkret_identifiers::DidCoreId::new(AGENT).unwrap(),
                 notary: crate::test_single_signer_notary(AGENT_DID, 42),
                 initial_resolution: arkret_models_identity::ResolutionCommitment {
@@ -1180,7 +1144,7 @@ mod tests {
     fn did_identity_anchor_rejects_business_authority_fields() {
         let agent_did = Did::new(AGENT_DID).unwrap();
         validate_agent_did_identity_anchor(&did_document(), &agent_did)
-            .expect("identity-only managed Agent DID document must pass");
+            .expect("identity-only Agent DID document must pass");
 
         let mut wrong_id = did_document();
         wrong_id["id"] = json!(CONTROLLER_DID);
@@ -1265,7 +1229,7 @@ mod tests {
         let realm_id = event.realm_id.clone();
         let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)
-            .expect("canonical managed Agent PCR create must derive its genesis cells");
+            .expect("canonical Agent PCR create must derive its genesis cells");
         // The create-log target is the wire singleton, never a per-Realm
         // subject (`realm-and-space.md` §2.8.3).
         let derived = arkret_schema::project_registered_cell_writes(
@@ -1291,7 +1255,7 @@ mod tests {
     }
 
     #[test]
-    fn managed_agent_envelope_rejects_self_principal_root_anchor_roles() {
+    fn agent_envelope_rejects_self_principal_root_anchor_roles() {
         for role in ["did_inception", "did_recovery_anchor", "bootstrap_binding"] {
             let envelope = serde_json::json!({
                 "refs": [{
@@ -1300,11 +1264,11 @@ mod tests {
                     "critical": true
                 }]
             });
-            assert!(managed_agent_envelope_uses_root_anchor(
+            assert!(agent_envelope_uses_root_anchor(
                 envelope.as_object().unwrap()
             ));
         }
-        assert!(!managed_agent_envelope_uses_root_anchor(
+        assert!(!agent_envelope_uses_root_anchor(
             serde_json::json!({"refs": []}).as_object().unwrap()
         ));
     }

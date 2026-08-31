@@ -227,7 +227,7 @@ pub(crate) fn agent_key_scope_within_requested_scope(
         && constraints_preserve_requested_scope(requested_scope, constraints)
 }
 
-/// Managed Agent grants are always bounded by the immutable scope selected
+/// Agent grants are always bounded by the immutable scope selected
 /// at provisioning. Realm membership and policy can only narrow this set.
 pub(crate) fn agent_actions_within_requested_scope(
     record: &AgentPrincipalRecord,

@@ -868,7 +868,7 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
                 "scope_circle_id": circle_id,
                 "metadata": {"title": "Scoped"},
                 "agent_participation": {
-                    "native_agent": {
+                    "agent": {
                         "reply_message": true,
                         "reaction_add": false,
                         "reaction_remove": false,
@@ -1011,7 +1011,7 @@ async fn register_agent_selection(
     );
 }
 
-async fn register_native_agent_membership_context(
+async fn register_agent_membership_context(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
     encrypted: bool,
@@ -1228,7 +1228,7 @@ async fn register_native_agent_membership_context(
     );
 }
 
-fn native_agent_controller_binding() -> serde_json::Value {
+fn agent_controller_binding() -> serde_json::Value {
     serde_json::to_value(
         arkret_models_collaboration::governance::agent_membership_cascade::AgentControllerMembershipBinding {
             controller_account_id: arkret_wire::AccountId {
@@ -1246,12 +1246,12 @@ fn native_agent_controller_binding() -> serde_json::Value {
 }
 
 #[tokio::test]
-async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
+async fn encrypted_realm_agent_join_requires_claimable_keypackage() {
     let state = test_state();
     let realm_id =
         arkret_identifiers::RealmId::new("ak:realm:Aa60MQP_oVAtFU0QOgJEKNdlwd3cd0d4XPjxPSbZSUzn")
             .unwrap();
-    register_native_agent_membership_context(&state, &realm_id, true, false).await;
+    register_agent_membership_context(&state, &realm_id, true, false).await;
     let operation = op(
         realm_id,
         "0000000007d1",
@@ -1261,7 +1261,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
             "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "agent_controller_binding": native_agent_controller_binding()
+            "agent_controller_binding": agent_controller_binding()
         }),
     );
 
@@ -1274,12 +1274,12 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
 }
 
 #[tokio::test]
-async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage() {
+async fn encrypted_realm_agent_join_accepts_standard_claimable_keypackage() {
     let state = test_state();
     let realm_id =
         arkret_identifiers::RealmId::new("ak:realm:AZAcSymeqCpuCXSyTlXUWIeJRNAz-V1BNJ0uNg_hgSZD")
             .unwrap();
-    register_native_agent_membership_context(&state, &realm_id, true, true).await;
+    register_agent_membership_context(&state, &realm_id, true, true).await;
     let operation = op(
         realm_id,
         "0000000007d2",
@@ -1289,7 +1289,7 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
             "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "agent_controller_binding": native_agent_controller_binding()
+            "agent_controller_binding": agent_controller_binding()
         }),
     );
 
@@ -1299,12 +1299,12 @@ async fn encrypted_realm_native_agent_join_accepts_standard_claimable_keypackage
 }
 
 #[tokio::test]
-async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
+async fn plaintext_realm_agent_join_does_not_require_keypackage() {
     let state = test_state();
     let realm_id =
         arkret_identifiers::RealmId::new("ak:realm:ASNBn0fPSkl6VgQFEvleAz9gyjryUEn0sB6JXO38MDRY")
             .unwrap();
-    register_native_agent_membership_context(&state, &realm_id, false, false).await;
+    register_agent_membership_context(&state, &realm_id, false, false).await;
     let operation = op(
         realm_id,
         "0000000007d3",
@@ -1314,7 +1314,7 @@ async fn plaintext_realm_native_agent_join_does_not_require_keypackage() {
             "member_id": fixture_actor(AGENT_CORE_ID),
             "membership": "join",
             "reason": "controller_add_agent",
-            "agent_controller_binding": native_agent_controller_binding()
+            "agent_controller_binding": agent_controller_binding()
         }),
     );
 
@@ -1789,7 +1789,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
 }
 
 #[tokio::test]
-async fn native_agent_member_target_uses_sender_for_agent_write_detection() {
+async fn agent_member_target_uses_sender_for_agent_write_detection() {
     let state = test_state();
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:AeMbHcOGMt3VgaQzdMnK0nUaMYOGvt35z9V139HW8NEU".to_owned(),

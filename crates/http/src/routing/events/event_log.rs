@@ -26,9 +26,9 @@ use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationFoundingUnitSubmission,
 };
 use arkret_models_collaboration::event_sync::{
-    ActorAggregateFrontierKind, ActorAggregateFrontierView, EventsFrontierState,
-    EventsFrontierView, EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef,
-    ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind, RealmActorFrontierView,
+    ActorAggregateFrontierKind, ActorAggregateFrontierView, AgentPcrSealHeadReceipt,
+    AgentPcrSealHeadReceiptKind, EventsFrontierState, EventsFrontierView,
+    EventsSubmitFederationBatchRequestBody, FederationServiceBindingRef, RealmActorFrontierView,
     RealmSealFrontierView, SealFrontierState,
 };
 use arkret_models_collaboration::events_payloads::contact::ContactRequestedPayload;

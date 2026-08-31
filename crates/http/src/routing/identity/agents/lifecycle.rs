@@ -265,7 +265,7 @@ pub(super) async fn provision_agent(
             if active_recovery_policy.is_none() {
                 return Err(AppError::new(
                     ErrorCode::FailedPrecondition,
-                    "controller must accept a recovery policy before provisioning a managed Agent",
+                    "controller must accept a recovery policy before provisioning a Agent",
                 )
                 .with_status(StatusCode::PRECONDITION_FAILED)
                 .with_reason_code("recovery_policy_required"));
@@ -296,7 +296,7 @@ pub(super) async fn provision_agent(
                 AppError::param_invalid(format!("Agent did projection failed: {error}"))
             })?;
             let initial_resolution =
-                crate::routing::identity::managed_agent_pcr::accepted_managed_agent_initial_resolution(
+                crate::routing::identity::agent_pcr::accepted_agent_initial_resolution(
                     state,
                     &did,
                     &controller_id,
@@ -311,7 +311,7 @@ pub(super) async fn provision_agent(
                 AppError::internal(format!("requested_scope digest failed: {error}"))
             })?;
             let controller_authorization_ref =
-                crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&did)?;
+                crate::routing::identity::agent_pcr::controller_authorization_ref(&did)?;
             let allocation_handle = issue_allocation_handle(
                 state,
                 controller_id.as_str(),
@@ -593,7 +593,7 @@ pub(super) async fn provision_agent(
             };
 
             let Some(_pcr_genesis_accepted_at) =
-                crate::routing::identity::managed_agent_pcr::managed_agent_pcr_genesis_accepted_at(
+                crate::routing::identity::agent_pcr::agent_pcr_genesis_accepted_at(
                     state,
                     agent_id.as_str(),
                     principal_control_realm_id.as_str(),
@@ -611,7 +611,7 @@ pub(super) async fn provision_agent(
                 });
             };
 
-            if !crate::routing::identity::managed_agent_pcr::managed_agent_binding_is_accepted(
+            if !crate::routing::identity::agent_pcr::agent_binding_is_accepted(
                 state,
                 &initial_resolution,
                 controller_id.as_str(),
@@ -798,7 +798,7 @@ pub(super) async fn renew_agent_pairing(
     // Lazy-expire first so a stale pending record renews through the same
     // state path as an observed-expired one.
     let record = lazily_expire_pairing(state, record).await?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
         chrono::Utc::now(),
@@ -911,7 +911,7 @@ pub(super) async fn renew_agent_pairing(
         .map_err(|error| AppError::internal(format!("persisted Agent PCR invalid: {error}")))?;
     let controller_authorization_ref = record.controller_authorization_ref.clone();
     let requested_scope_digest =
-        crate::routing::identity::managed_agent_pcr::requested_scope_digest_for_record(&record)?;
+        crate::routing::identity::agent_pcr::requested_scope_digest_for_record(&record)?;
     json_ok(AgentRenewPairingOutcome {
         agent_id,
         principal_control_realm_id,
@@ -1011,7 +1011,7 @@ pub(super) async fn get_agent(
     }
     let record = reconcile_accepted_agent_authorization(state, record).await?;
     let record = lazily_expire_pairing(state, record).await?;
-    crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,
         &record,
         chrono::Utc::now(),

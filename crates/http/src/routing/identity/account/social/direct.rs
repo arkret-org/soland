@@ -386,7 +386,7 @@ async fn validate_direct_binding_event_refs(
                 return Err("contact_ref_count");
             }
         }
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::ManagedAgentController => {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AgentController => {
             let mut authorization_kinds = BTreeSet::new();
             for event_ref in &payload.authorization_basis.event_refs {
                 let accepted = state
@@ -403,7 +403,7 @@ async fn validate_direct_binding_event_refs(
             ]);
             if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
             {
-                return Err("managed_agent_authorization_refs");
+                return Err("agent_authorization_refs");
             }
             let record = state
                 .agent_pairings()
@@ -416,7 +416,7 @@ async fn validate_direct_binding_event_refs(
             if record.controller_id != creator.signing_principal_id().as_str()
                 || record.state != AgentLifecycleState::Active
             {
-                return Err("managed_agent_record");
+                return Err("agent_record");
             }
             let provision_refs = record
                 .provision_event_refs
@@ -438,9 +438,9 @@ async fn validate_direct_binding_event_refs(
                 .map(arkret_identifiers::EventId::as_str)
                 .collect::<BTreeSet<_>>();
             if provided_refs != expected_refs {
-                return Err("managed_agent_refs");
+                return Err("agent_refs");
             }
-            crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
+            crate::routing::identity::agent_pcr::validate_agent_controller_binding(
                 state,
                 &record,
                 payload.created_at.to_owned(),
@@ -497,7 +497,7 @@ async fn validate_direct_founder(
     let authority = match payload.authorization_basis.kind {
         // controller-to-own-Agent has no Contact round: the founder is fixed to the controller so
         // an Agent runtime key never needs Direct Conversation founding scope.
-        DirectConversationAuthorizationKind::ManagedAgentController => {
+        DirectConversationAuthorizationKind::AgentController => {
             DirectConversationFoundingAuthority::ControllerOwnedAgent {
                 controller_id: creator.clone(),
             }
@@ -714,20 +714,20 @@ pub(crate) async fn direct_founder_for_pair(
     actor: &arkret_wire::ActorId,
     peer: &arkret_wire::ActorId,
     contact: Option<&ContactRecord>,
-    managed_agent: bool,
+    agent: bool,
 ) -> Result<Option<String>, AppError> {
     use arkret_models_collaboration::objects::direct_conversation::{
         DirectConversationFoundingAuthority, direct_conversation_founder,
     };
 
-    let authority = if managed_agent {
+    let authority = if agent {
         // controller-to-own-Agent has no Contact round; the founder is fixed to the controller so
         // an Agent runtime key never needs Direct Conversation founding scope.
         let controller = if state
             .agent_pairings()
             .agent(peer.signing_principal_id().as_str())
             .await
-            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+            .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
             .is_some()
         {
             actor

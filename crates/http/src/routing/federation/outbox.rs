@@ -1401,7 +1401,7 @@ impl FederationDispatcher {
             }
         }
         if expected.len() != outcome.agent_event_admission_receipts.len() {
-            return Err("accepted Native Agent Event receipt set is incomplete".to_owned());
+            return Err("accepted Agent Event receipt set is incomplete".to_owned());
         }
         for receipt in outcome.agent_event_admission_receipts {
             let Some((event, admission)) = expected.remove(&receipt.event_id) else {
@@ -1432,7 +1432,7 @@ impl FederationDispatcher {
             .map_err(|error| error.to_string())?;
         }
         if !expected.is_empty() {
-            return Err("accepted Native Agent Event receipt set is incomplete".to_owned());
+            return Err("accepted Agent Event receipt set is incomplete".to_owned());
         }
         Ok(())
     }

@@ -1,4 +1,4 @@
-//! Native Agent signer evidence is a closed current/historical protocol.
+//! Agent signer evidence is a closed current/historical protocol.
 //!
 //! Soland must not reconstruct either branch from old projection rows. Until
 //! all signed snapshot, controller-account gate, lifecycle witness and
@@ -166,7 +166,7 @@ async fn current_authenticated_agent_signer_evidence(
         } else {
             return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
         };
-    let root = arkret::build_native_agent_signer_resolution_evidence(
+    let root = arkret::build_agent_signer_resolution_evidence(
         agent_signer_evidence,
         &local_service_evidence,
         &controller_evidence,
@@ -208,7 +208,7 @@ async fn historical_authenticated_agent_signer_evidence(
     else {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     };
-    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+    let AuthenticatedSignerResolutionEvidence::Agent {
         signer_id,
         verification_method,
         agent_signer_evidence,
@@ -335,7 +335,7 @@ async fn current_controller_signer_evidence(
 ///
 /// `at` is the instant the retained resolution is judged against and MUST be
 /// the same instant the eventual verifier uses: `Utc::now()` for the current
-/// branch, and the receipt `accepted_at` for a historical Native Agent root
+/// branch, and the receipt `accepted_at` for a historical Agent root
 /// (`zh/identity/key-management.md` §historical branch). Judging a historical
 /// leaf at `now` would publish a root that its own verifier evaluates at
 /// `accepted_at` and may reject, which is unrecoverable once the selector
@@ -440,7 +440,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             "receipt producer evidence ref/digest does not resolve byte-exactly",
         ));
     }
-    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+    let AuthenticatedSignerResolutionEvidence::Agent {
         signer_id,
         verification_method,
         agent_signer_evidence,
@@ -451,7 +451,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
     } = *original_root
     else {
         return Err(AppError::internal(
-            "receipt producer evidence is not a Native Agent CurrentAdmission root",
+            "receipt producer evidence is not an Agent CurrentAdmission root",
         ));
     };
     let AgentSignerEvidence::CurrentAdmission {
@@ -462,7 +462,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
     } = *agent_signer_evidence
     else {
         return Err(AppError::internal(
-            "receipt producer evidence is not a Native Agent CurrentAdmission root",
+            "receipt producer evidence is not an Agent CurrentAdmission root",
         ));
     };
     if signer_id != receipt.agent_id || verification_method != receipt.verification_method {
@@ -560,7 +560,7 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         state.notary_signing_key().as_ref(),
     )
     .map_err(|error| AppError::internal(error.to_string()))?;
-    let historical_root = arkret::build_native_agent_signer_resolution_evidence(
+    let historical_root = arkret::build_agent_signer_resolution_evidence(
         historical,
         &authority_evidence,
         &controller_evidence,
@@ -606,7 +606,7 @@ fn replayed_historical_agent_signer_evidence(
             "materialized historical Agent signer evidence has the wrong kind",
         ));
     };
-    let AuthenticatedSignerResolutionEvidence::NativeAgent {
+    let AuthenticatedSignerResolutionEvidence::Agent {
         agent_signer_evidence,
         ..
     } = *authenticated_signer_resolution_evidence
@@ -955,13 +955,11 @@ async fn produce_current_agent_signer_evidence(
         return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationInactive);
     }
 
-    let frontier = crate::routing::identity::managed_agent_pcr::managed_agent_event_seal_head(
-        state,
-        realm_id.as_str(),
-    )
-    .await
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
-    .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let frontier =
+        crate::routing::identity::agent_pcr::agent_event_seal_head(state, realm_id.as_str())
+            .await
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
+            .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let closure = state
         .projections()
         .seal_closure(std::slice::from_ref(&frontier.id))
