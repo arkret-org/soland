@@ -1530,8 +1530,6 @@ mod tests {
         );
         let join_event_id =
             arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x41; 32]);
-        let join_event_digest =
-            arkret_wire::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
         let admission_id = arkret_wire::ProtocolOpaqueId::new("membership-admission-1").unwrap();
         let now = Utc::now();
         let verification_method =
@@ -1540,7 +1538,6 @@ mod tests {
             authority: arkret_wire::MembershipCompensationAuthority::V1,
             admission_id: admission_id.clone(),
             join_event_id: join_event_id.clone(),
-            join_event_digest: join_event_digest.clone(),
             membership_cell_id: arkret_wire::ProtocolOpaqueId::new("membership-cell-1").unwrap(),
             member_id: member_id.clone(),
             join_actor_id: join_actor_id.clone(),
@@ -1578,7 +1575,6 @@ mod tests {
             join_accepted_proof: arkret_wire::MembershipJoinAcceptedProof {
                 admission_id: admission_id.clone(),
                 join_event_id,
-                join_event_digest,
                 accepted_at: now,
                 issuer_id: join_actor_id.signing_principal_id().clone(),
                 signature: signature(),
