@@ -125,6 +125,19 @@ async fn bootstrap_realm(state: &AppState, token: &str, title: &str) -> String {
 
 /// The accepted Seal a Control Move of `realm_id` cites in `seal_basis`.
 async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> SealId {
+    // An accepted Event may still be ahead of the coordinator's signed head.
+    // Sequential FSM writes must cite a Seal covering the prior write, not
+    // merely any existing Seal returned while a successor is pending.
+    let required_link_digests = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id)
+        .await
+        .expect("accepted Realm Link history")
+        .into_iter()
+        .filter(|record| record.kind == arkret_wire::EventKind::RealmLink.as_str())
+        .map(|record| arkret_wire::Hash::new(record.canonical_digest).unwrap())
+        .collect::<std::collections::BTreeSet<_>>();
     for attempt in 0..50 {
         let mut response = TestClient::query("http://server/_arkret/self/seals/frontier")
             .add_header("Arkret-Operation", "ak.self.seals.read.frontier.v1", true)
@@ -137,24 +150,54 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
         if status == Some(StatusCode::OK) {
             let frontier: arkret_models_collaboration::event_sync::SealFrontierState =
                 serde_json::from_value(body).expect("typed Realm Seal frontier");
-            return frontier
+            let leaf = frontier
                 .frontier
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
                 .clone();
+            if seal_covers_link_history(state, &leaf, &required_link_digests) {
+                return leaf;
+            }
+            assert!(
+                attempt < 49,
+                "Realm Seal {leaf} never covered accepted Realm Links: {required_link_digests:?}"
+            );
+        } else {
+            assert_eq!(
+                status,
+                Some(StatusCode::SERVICE_UNAVAILABLE),
+                "Realm Seal frontier failed with {status:?}: {body}"
+            );
+            assert!(
+                attempt < 49,
+                "Realm Seal frontier remained unavailable: {body}"
+            );
         }
-        assert_eq!(
-            status,
-            Some(StatusCode::SERVICE_UNAVAILABLE),
-            "Realm Seal frontier failed with {status:?}: {body}"
-        );
-        assert!(
-            attempt < 49,
-            "Realm Seal frontier remained unavailable: {body}"
-        );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     unreachable!("bounded Realm Seal frontier retry returns or panics")
+}
+
+fn seal_covers_link_history(
+    state: &AppState,
+    leaf: &SealId,
+    required: &std::collections::BTreeSet<arkret_wire::Hash>,
+) -> bool {
+    let mut pending = vec![leaf.clone()];
+    let mut visited = std::collections::BTreeSet::new();
+    let mut covered = std::collections::BTreeSet::new();
+    while let Some(seal_id) = pending.pop() {
+        if !visited.insert(seal_id.clone()) {
+            continue;
+        }
+        let seal = state
+            .test_seal(&seal_id)
+            .expect("read accepted Seal")
+            .expect("frontier and predecessor Seals are durably available");
+        covered.extend(seal.delta);
+        pending.extend(seal.predecessor_refs);
+    }
+    required.is_subset(&covered)
 }
 
 /// The next position on the caller's Realm-scoped actor chain.

@@ -1,9 +1,10 @@
 //! Federation frontier root and signature helpers for `/_arkret/peer/events/frontier`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use arkret_canonical as canonical;
 use arkret_identifiers::{Did, DidCoreId, EventId, Hash, RealmId};
+use arkret_wire::ActorId;
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -31,17 +32,27 @@ pub(crate) fn typed_realm_frontier(
 }
 
 /// Convert the actor -> seq upper bound table to the typed
-/// `BTreeMap<DidCoreId, u64>` shape.
+/// `BTreeMap<ActorId, u64>` shape. Stored identities must already be canonical;
+/// corrupt or legacy rows must never disappear from a signed commitment.
 pub(crate) fn typed_actor_upper_bounds(
     actor_to_seq: impl IntoIterator<Item = (String, u64)>,
-) -> BTreeMap<DidCoreId, u64> {
+) -> Result<BTreeMap<ActorId, u64>, String> {
     let mut out = BTreeMap::new();
     for (actor, seq) in actor_to_seq {
-        if let Ok(actor_id) = DidCoreId::new(actor) {
-            out.insert(actor_id, seq);
+        let actor_id: ActorId = serde_json::from_str(&actor)
+            .map_err(|error| format!("stored frontier actor_id is invalid: {error}"))?;
+        if actor_id
+            .canonical_key()
+            .map_err(|error| error.to_string())?
+            != actor
+        {
+            return Err("stored frontier actor_id is noncanonical".to_owned());
+        }
+        if out.insert(actor_id, seq).is_some() {
+            return Err("duplicate stored frontier actor_id".to_owned());
         }
     }
-    out
+    Ok(out)
 }
 
 /// Compute the deterministic frontier root over current Event heads and
@@ -49,52 +60,23 @@ pub(crate) fn typed_actor_upper_bounds(
 /// being folded into a binary Merkle tree.
 pub(crate) fn frontier_root(
     realm_frontier: &BTreeMap<RealmId, Vec<EventId>>,
-    actor_upper_bounds: &BTreeMap<DidCoreId, u64>,
+    actor_upper_bounds: &BTreeMap<ActorId, u64>,
 ) -> Result<Hash, String> {
-    let mut heads = BTreeSet::new();
-    for events in realm_frontier.values() {
-        for event in events {
-            heads.insert(event.as_str().to_owned());
-        }
-    }
-
-    let mut leaves = Vec::new();
-    for event_id in heads {
-        leaves.push(canonical_hash(&json!({
-            "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_LEAF_V1,
-            "kind": "head",
-            "event_id": event_id,
-        }))?);
-    }
-    for (actor, seq) in actor_upper_bounds {
-        leaves.push(canonical_hash(&json!({
-            "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_LEAF_V1,
-            "kind": "actor_seq_upper_bound",
-            "actor_id": actor.as_str(),
-            "actor_seq": seq,
-        }))?);
-    }
-
-    if leaves.is_empty() {
-        return canonical_hash(&json!({
-            "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_ROOT_V1,
-            "empty": true,
-        }));
-    }
-
-    while leaves.len() > 1 {
-        let mut next = Vec::with_capacity(leaves.len().div_ceil(2));
-        for pair in leaves.chunks(2) {
-            let right = pair.get(1).unwrap_or(&pair[0]);
-            next.push(canonical_hash(&json!({
-                "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_NODE_V1,
-                "left": pair[0].as_str(),
-                "right": right.as_str(),
-            }))?);
-        }
-        leaves = next;
-    }
-    Ok(leaves.remove(0))
+    let heads = realm_frontier
+        .values()
+        .flatten()
+        .cloned()
+        .collect::<Vec<_>>();
+    let leaves = arkret_models_collaboration::event_sync::federation_frontier_leaf_data(
+        &heads,
+        actor_upper_bounds,
+    )
+    .map_err(|error| error.to_string())?;
+    arkret_state::state::state_root::seal_merkle_root_from_leaf_data(
+        &leaves,
+        canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| error.to_string())
 }
 
 /// Canonical payload signed by the issuing service for a federation frontier
@@ -161,11 +143,6 @@ pub(crate) fn sign_frontier_root(
     }))
 }
 
-fn canonical_hash(value: &Value) -> Result<Hash, String> {
-    let digest = canonical::canonical_sha256(value).map_err(|error| error.to_string())?;
-    Hash::new(digest).map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,6 +161,13 @@ mod tests {
 
     fn bob_core() -> DidCoreId {
         DidCoreId::new("ak:did_core:web:bob.example").unwrap()
+    }
+
+    fn account_actor(principal_id: DidCoreId, station: &str) -> ActorId {
+        ActorId::account(arkret_wire::AccountId::new(
+            principal_id,
+            DidCoreId::new(station).unwrap(),
+        ))
     }
 
     fn event(id: &str) -> EventId {
@@ -208,7 +192,10 @@ mod tests {
                 event("ak:event:ASeIBHNVQyeIcU4aBIt2t2BF_ikuVMH0kNru_HgO_gG1"),
             ],
         );
-        let actors = BTreeMap::from_iter(vec![(alice_core(), 7), (bob_core(), 3)]);
+        let actors = BTreeMap::from_iter(vec![
+            (account_actor(alice_core(), "ak:did_core:web:a.example"), 7),
+            (account_actor(bob_core(), "ak:did_core:web:b.example"), 3),
+        ]);
 
         let root_a = frontier_root(&frontier_a, &actors).unwrap();
         let root_b = frontier_root(&frontier_b, &actors).unwrap();
@@ -228,7 +215,10 @@ mod tests {
                 "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
             )],
         );
-        let actors = BTreeMap::from_iter(vec![(alice_core(), 7)]);
+        let actors = BTreeMap::from_iter(vec![(
+            account_actor(alice_core(), "ak:did_core:web:a.example"),
+            7,
+        )]);
         let root = frontier_root(&frontier, &actors).unwrap();
         let observed_at = chrono::DateTime::parse_from_rfc3339("2026-05-20T00:00:00.000Z")
             .unwrap()
@@ -282,6 +272,65 @@ mod tests {
         assert_eq!(
             signature["payload_digest"],
             canonical::sha256_digest(&bytes)
+        );
+    }
+
+    #[test]
+    fn federation_frontier_root_matches_seal_family_full_actor_kat() {
+        let first = account_actor(alice_core(), "ak:did_core:web:a.example");
+        let second = account_actor(alice_core(), "ak:did_core:web:b.example");
+        let actors = BTreeMap::from([(first.clone(), 7), (second.clone(), 3)]);
+        let heads = BTreeMap::from([(
+            realm(),
+            vec![EventId::from_digest(
+                canonical::DigestSuite::Sha256,
+                [0x42; 32],
+            )],
+        )]);
+        // Independently computed from the three literal SDK leaf preimages:
+        // SHA256(01 || SHA256(01 || H(00||actorA) || H(00||actorB)) || H(00||head)).
+        assert_eq!(
+            frontier_root(&heads, &actors).unwrap().as_str(),
+            "sha256:8fa858b5b5a9417816f284625650c12ead84a03c6a4dec21e3cba8f3bea92da5"
+        );
+        assert_eq!(
+            frontier_root(&BTreeMap::new(), &BTreeMap::from([(first.clone(), 7)]))
+                .unwrap()
+                .as_str(),
+            "sha256:632e8690f4ad1b5cfe108bc8ffd80ff7c3b7e779959f235c5bd6639322506b6a"
+        );
+        assert_eq!(
+            frontier_root(&BTreeMap::new(), &BTreeMap::new())
+                .unwrap()
+                .as_str(),
+            "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let mut changed = actors.clone();
+        changed.insert(second, 4);
+        assert_ne!(
+            frontier_root(&heads, &changed).unwrap(),
+            frontier_root(&heads, &actors).unwrap()
+        );
+        changed.remove(&first);
+        assert_ne!(
+            frontier_root(&heads, &changed).unwrap(),
+            frontier_root(&heads, &actors).unwrap()
+        );
+    }
+
+    #[test]
+    fn federation_frontier_actor_conversion_rejects_silent_loss() {
+        let first = account_actor(alice_core(), "ak:did_core:web:a.example");
+        let second = account_actor(alice_core(), "ak:did_core:web:b.example");
+        let bounds =
+            typed_actor_upper_bounds([(first.to_string(), 7), (second.to_string(), 3)]).unwrap();
+        assert_eq!(bounds.len(), 2);
+        assert_eq!(bounds[&first], 7);
+        assert_eq!(bounds[&second], 3);
+        assert!(typed_actor_upper_bounds([(alice_core().to_string(), 7)]).is_err());
+        assert!(typed_actor_upper_bounds([(format!(" {first}"), 7)]).is_err());
+        assert!(
+            typed_actor_upper_bounds([(first.to_string(), 7), (first.to_string(), 8)]).is_err()
         );
     }
 }

@@ -46,6 +46,16 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("blob/get").get(blob_get).head(blob_get))
 }
 
+pub(super) async fn blob_session_has_realm_membership(
+    state: &AppState,
+    realm_id: &str,
+    session: &SessionRecord,
+) -> Result<bool, AppError> {
+    let actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
+    Ok(realm_has_member(state, realm_id, &actor.to_string()).await)
+}
+
 pub(super) fn blob_upload_outcome(
     state: &AppState,
     blob_ref: String,
@@ -133,7 +143,15 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                 );
                 return;
             }
-            if !realm_has_member(state, &realm_id, &session.actor).await {
+            let is_member =
+                match blob_session_has_realm_membership(state, &realm_id, &session).await {
+                    Ok(is_member) => is_member,
+                    Err(error) => {
+                        render_error(res, error.http_status(), error.wire_code(), &error.message);
+                        return;
+                    }
+                };
+            if !is_member {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,
@@ -1654,6 +1672,86 @@ mod presign_block_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn blob_membership_uses_the_exact_authenticated_account() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = DidCoreId::new("ak:did_core:web:blob-owner.example").unwrap();
+        let account = arkret_wire::AccountId::new(principal.clone(), state.service_core_id());
+        let account_pk = soland_storage::AccountPk(71);
+        state
+            .identities()
+            .save_account(soland_services::identity::AccountProfileState {
+                pk: account_pk,
+                principal_id: principal.clone(),
+                account_id: account.clone(),
+                localpart: "blob-owner".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now(),
+            })
+            .await
+            .unwrap();
+        let mut session = SessionRecord {
+            token_hash: "blob-membership-fixture".to_owned(),
+            account_pk: Some(account_pk),
+            actor: principal.to_string(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000071".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now() + chrono::Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        };
+        let realm_id = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+        let foreign = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let mut membership = soland_domain::reducer::SolandMembershipState {
+            member: foreign.to_string(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            membership_event_ref: None,
+            invited_at: None,
+            joined_at: now(),
+            updated_at: now(),
+            reason: None,
+        };
+        state.test_projection().lock().members.insert(
+            (realm_id.to_owned(), membership.member.clone()),
+            membership.clone(),
+        );
+        assert!(
+            !blob_session_has_realm_membership(&state, realm_id, &session)
+                .await
+                .unwrap()
+        );
+        membership.member = arkret_wire::ActorId::account(account).to_string();
+        state
+            .test_projection()
+            .lock()
+            .members
+            .insert((realm_id.to_owned(), membership.member.clone()), membership);
+        assert!(
+            blob_session_has_realm_membership(&state, realm_id, &session)
+                .await
+                .unwrap()
+        );
+        session.audience = foreign.route_service_id().to_string();
+        assert!(
+            blob_session_has_realm_membership(&state, realm_id, &session)
+                .await
+                .is_err()
+        );
+    }
 
     fn blob_record(media_type: &str, filename: Option<&str>) -> BlobRecord {
         BlobRecord {

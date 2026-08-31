@@ -14,6 +14,74 @@ fn core_principal(did: &str) -> arkret_identifiers::DidCoreId {
         .unwrap()
 }
 
+fn local_key_account(state: &AppState, principal: &DidCoreId) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(principal.clone(), state.service_core_id().clone())
+}
+
+fn keys_query_request(
+    state: &AppState,
+    selectors: &[(&DidCoreId, &[&str])],
+) -> arkret_models_crypto::KeysQueryRequestBody {
+    arkret_models_crypto::KeysQueryRequestBody {
+        device_keys: selectors
+            .iter()
+            .map(
+                |(principal, devices)| arkret_models_crypto::QueryAccountDeviceSelector {
+                    account_id: local_key_account(state, principal),
+                    device_ids: devices
+                        .iter()
+                        .map(|id| arkret_identifiers::DeviceId::new(*id).unwrap())
+                        .collect(),
+                },
+            )
+            .collect(),
+        timeout_ms: None,
+    }
+}
+
+fn keys_claim_request(
+    state: &AppState,
+    principal: &DidCoreId,
+    device_id: &str,
+) -> arkret_models_crypto::KeysClaimRequestBody {
+    arkret_models_crypto::KeysClaimRequestBody {
+        one_time_keys: vec![arkret_models_crypto::AccountDeviceAlgorithmEntry {
+            account_id: local_key_account(state, principal),
+            device_algorithms: std::collections::BTreeMap::from([(
+                arkret_identifiers::DeviceId::new(device_id).unwrap(),
+                arkret_wire::NonEmptyString::new("signed_curve25519").unwrap(),
+            )]),
+        }],
+    }
+}
+
+fn account_device_rows<'a>(
+    response: &'a Value,
+    field: &str,
+    state: &AppState,
+    principal: &DidCoreId,
+) -> &'a Value {
+    match field {
+        "device_keys" => {
+            serde_json::from_value::<arkret_models_crypto::KeysQueryOutcome>(response.clone())
+                .expect("keys query must return the canonical SDK outcome");
+        }
+        "one_time_keys" => {
+            serde_json::from_value::<arkret_models_crypto::KeysClaimOutcome>(response.clone())
+                .expect("keys claim must return the canonical SDK outcome");
+        }
+        _ => panic!("unsupported account device collection"),
+    }
+    let account = serde_json::to_value(local_key_account(state, principal)).unwrap();
+    response[field]
+        .as_array()
+        .expect("account entries must be an array")
+        .iter()
+        .find(|entry| entry["account_id"] == account)
+        .map(|entry| &entry["device_keys"])
+        .unwrap_or(&Value::Null)
+}
+
 fn accepted_device_authorize_operation(
     operation_id: OperationId,
     realm_id: RealmId,
@@ -89,16 +157,18 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
 
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): [alice_device]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(&alice_core, &[alice_device])],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert!(query["device_keys"].is_object());
-    let alice_desktop = &query["device_keys"][alice_core.as_str()][alice_device];
+    assert!(query["device_keys"].is_array());
+    let alice_desktop =
+        &account_device_rows(&query, "device_keys", &state, &alice_core)[alice_device];
     assert_eq!(
         alice_desktop["algorithms"]["signed_curve25519:otk1"]["key"],
         "one-time"
@@ -116,39 +186,27 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
 
     let claimed_once: Value = TestClient::post("http://server/_arkret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "one_time_keys": {
-                (alice_core.as_str()): {
-                    "ak:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
-                }
-            }
-        }))
+        .json(&keys_claim_request(&state, &alice_core, alice_device))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(
-        claimed_once["one_time_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        account_device_rows(&claimed_once, "one_time_keys", &state, &alice_core)["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["signed_curve25519"]["key"],
         "one-time"
     );
     let claimed_replay: Value = TestClient::post("http://server/_arkret/self/keys/claim")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "one_time_keys": {
-                (alice_core.as_str()): {
-                    "ak:device:01904100-0000-7000-8000-a11ce0000001": "signed_curve25519"
-                }
-            }
-        }))
+        .json(&keys_claim_request(&state, &alice_core, alice_device))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert!(
-        claimed_replay["one_time_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
+        account_device_rows(&claimed_replay, "one_time_keys", &state, &alice_core)["ak:device:01904100-0000-7000-8000-a11ce0000001"].is_null(),
         "one-time key claim must be single-use"
     );
 
@@ -804,18 +862,23 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
     )
     .await;
     add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), alice)["ok"],
+        true
+    );
 
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): [alice_device]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(&alice_core, &[alice_device])],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][alice_core.as_str()][alice_device];
+    let entry = &account_device_rows(&query, "device_keys", &state, &alice_core)[alice_device];
     let attestation = &entry["device_projection_attestation"]["attestation"];
     assert_eq!(
         attestation["device_signing_key_did"], expected_principal_id_key,
@@ -845,16 +908,17 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke_body() {
 
     let post_revoke: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {bob}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): [alice_device]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(&alice_core, &[alice_device])],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert!(
-        post_revoke["device_keys"][alice_core.as_str()]
+        account_device_rows(&post_revoke, "device_keys", &state, &alice_core)
             .get(alice_device)
             .is_none(),
         "a revoked device must be omitted entirely, not reported: {post_revoke}"
@@ -887,6 +951,12 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
     let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
     let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
     seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_key).await;
+    // Complete login hydration before installing the historical membership fixture.
+    let alice = dev_token(state.clone()).await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
+        true
+    );
     add_test_realm_member(&state, demo_realm_id(), bob);
 
     let realm_id = RealmId::new(demo_realm_id().to_owned()).unwrap();
@@ -906,25 +976,27 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         .test_projection()
         .lock()
         .members
-        .get_mut(&(demo_realm_id().to_owned(), bob_core.to_string()))
+        .get_mut(&(
+            demo_realm_id().to_owned(),
+            arkret_wire::ActorId::account(local_key_account(&state, &bob_core))
+                .canonical_key()
+                .unwrap(),
+        ))
         .expect("Bob membership projection exists")
         .state = "ban".to_owned();
 
-    let alice = dev_token(state.clone()).await;
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {alice}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {
-                (bob_core.as_str()): [bob_device],
-                (carol_core.as_str()): [carol_device]
-            }
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(&bob_core, &[bob_device]), (&carol_core, &[carol_device])],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][bob_core.as_str()][bob_device];
+    let entry = &account_device_rows(&query, "device_keys", &state, &bob_core)[bob_device];
     let attestation = &entry["device_projection_attestation"]["attestation"];
     assert_eq!(
         attestation["device_status"], "active",
@@ -935,7 +1007,7 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban_body()
         expected_principal_id_key
     );
     assert!(
-        query["device_keys"].get(carol_core.as_str()).is_none(),
+        account_device_rows(&query, "device_keys", &state, &carol_core).is_null(),
         "never-member key material must remain hidden: {query}"
     );
 }
@@ -1107,15 +1179,16 @@ async fn keys_query_exposes_accepted_device_anchor_body() {
     .await;
     let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): [alice_device]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(&alice_core, &[alice_device])],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    let entry = &query["device_keys"][alice_core.as_str()][alice_device];
+    let entry = &account_device_rows(&query, "device_keys", &state, &alice_core)[alice_device];
     // The row is complete and attested, and the attestation covers this exact
     // projection — that signature is the whole verification closure of this
     // cross-principal surface (§8.2).
@@ -1232,21 +1305,28 @@ async fn keys_query_hides_revoked_device_body() {
 
     let pre_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(
+                &alice_core,
+                &[
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                    "ak:device:01904100-0000-7000-8000-9b04e0000007",
+                ],
+            )],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
     assert_eq!(
-        pre_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        account_device_rows(&pre_revoke_query, "device_keys", &state, &alice_core)["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );
     assert_eq!(
-        pre_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-9b04e0000007"]
+        account_device_rows(&pre_revoke_query, "device_keys", &state, &alice_core)["ak:device:01904100-0000-7000-8000-9b04e0000007"]
             ["algorithms"]["signed_curve25519:phone"]["key"],
         "phone-device-key"
     );
@@ -1271,9 +1351,16 @@ async fn keys_query_hides_revoked_device_body() {
 
     let post_revoke_query: Value = TestClient::post("http://server/_arkret/self/keys/query")
         .add_header("authorization", format!("Bearer {desktop}"), true)
-        .json(&serde_json::json!({
-            "device_keys": {(alice_core.as_str()): ["ak:device:01904100-0000-7000-8000-a11ce0000001", "ak:device:01904100-0000-7000-8000-9b04e0000007"]}
-        }))
+        .json(&keys_query_request(
+            &state,
+            &[(
+                &alice_core,
+                &[
+                    "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                    "ak:device:01904100-0000-7000-8000-9b04e0000007",
+                ],
+            )],
+        ))
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -1283,13 +1370,13 @@ async fn keys_query_hides_revoked_device_body() {
     // a status field on this cross-principal surface would itself be an
     // enumerable signal about somebody else's device set.
     assert!(
-        post_revoke_query["device_keys"][alice_core.as_str()]
+        account_device_rows(&post_revoke_query, "device_keys", &state, &alice_core)
             .get("ak:device:01904100-0000-7000-8000-9b04e0000007")
             .is_none(),
         "a revoked device must be omitted entirely: {post_revoke_query}"
     );
     assert_eq!(
-        post_revoke_query["device_keys"][alice_core.as_str()]["ak:device:01904100-0000-7000-8000-a11ce0000001"]
+        account_device_rows(&post_revoke_query, "device_keys", &state, &alice_core)["ak:device:01904100-0000-7000-8000-a11ce0000001"]
             ["algorithms"]["signed_curve25519:desktop"]["key"],
         "desktop-device-key"
     );

@@ -274,7 +274,7 @@ async fn seed_dispatch_fixture_for_target(
     let evidence_digest =
         arkret_canonical::canonical_sha256(&evidence).expect("introduction evidence digest");
     let payload = serde_json::json!({
-        "invitee_id": fixture_actor_core_id(BOB),
+        "invitee_account_id": arkret_wire::AccountId::new(fixture_actor_core_id(BOB), recipient_id.clone()),
         "introduction_evidence_digest": evidence_digest,
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
@@ -310,16 +310,21 @@ async fn seed_dispatch_fixture_for_target(
     // instead of re-authoring it, so the fixture does exactly that.
     let resolved: Value = TestClient::query("http://server/_arkret/self/events/resolve")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(
-            &arkret_models_collaboration::http_bodies::EventsResolveRequestBody {
-                event_ids: vec![
-                    arkret_identifiers::EventId::new(event_id.clone()).expect("accepted Event id"),
-                ],
-                event_digests: Vec::new(),
-                include_payload: Some(true),
-                history_traversal_access: None,
-                max_response_bytes: None,
-            },
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(
+                &arkret_models_collaboration::http_bodies::EventsResolveRequestBody {
+                    event_ids: vec![
+                        arkret_identifiers::EventId::new(event_id.clone())
+                            .expect("accepted Event id"),
+                    ],
+                    event_digests: Vec::new(),
+                    include_payload: Some(true),
+                    history_traversal_access: None,
+                    max_response_bytes: None,
+                },
+            )
+            .unwrap(),
         )
         .send(&app_from_state(state.clone()))
         .await

@@ -123,12 +123,15 @@ async fn submit_read_receipt_policy(
 /// The Strand the demo Realm's fixture messages are authored into.
 const TARGET_STRAND_ID: &str = "ak:strand:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j";
 
-fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
+fn read_receipt_plaintext(
+    state: &AppState,
+    actor: &str,
+    event_id: &str,
+    payload_sequence: u64,
+) -> String {
     let receipt = ReadReceipt::new(
         payload_sequence,
-        arkret_wire::ActorId::service(
-            arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).unwrap()).unwrap(),
-        ),
+        fixture_account_actor(state, actor),
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
     )
@@ -233,7 +236,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     let circle_id = "ak:circle:Aa5c9aKm3eqBBuZdfIQ4ORPvt45gtDefEZ3--7YrRKva";
     seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, BOB]);
     let sent_at = chrono::Utc::now();
-    let plaintext = read_receipt_plaintext(BOB, &target_event_id, 1);
+    let plaintext = read_receipt_plaintext(&state, BOB, &target_event_id, 1);
     let receipt = bob_receipt_signal(
         circle_scope(circle_id),
         &seal_ref,
@@ -312,7 +315,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable_body() {
         submit_alice_target_message(state.clone(), &alice_token, "ttl receipt target").await;
     // The plaintext is invariant across these cases; the TTL rules under test
     // live entirely on the signed envelope.
-    let plaintext = |_sent_at| read_receipt_plaintext(BOB, &target_event_id, 1);
+    let plaintext = |_sent_at| read_receipt_plaintext(&state, BOB, &target_event_id, 1);
 
     // §2 — one second past the `session` ceiling fails closed at the ingress.
     let over_ceiling_at = chrono::Utc::now();

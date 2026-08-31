@@ -21,7 +21,7 @@ fn core_id(value: &str) -> arkret_wire::DidCoreId {
 }
 
 fn local_account_id(principal_id: arkret_wire::DidCoreId) -> arkret_wire::AccountId {
-    arkret_wire::AccountId::new(principal_id, core_id("did:web:server.test"))
+    arkret_wire::AccountId::new(principal_id, soland_test_support::fixture_station_id())
 }
 
 fn local_actor(principal_id: arkret_wire::DidCoreId) -> arkret_wire::ActorId {
@@ -44,8 +44,8 @@ fn fixture_protocol_signature(
 }
 
 fn normal_contact_evidence(
-    requester_id: arkret_wire::DidCoreId,
-    target: arkret_wire::DidCoreId,
+    requester_id: arkret_wire::AccountId,
+    target: arkret_wire::AccountId,
     request_event_ref: arkret_wire::EventId,
     response_event_ref: arkret_wire::EventId,
     now: chrono::DateTime<Utc>,
@@ -56,10 +56,10 @@ fn normal_contact_evidence(
     };
 
     let requester_peer = ContactPeer::Human {
-        account_id: local_account_id(requester_id.clone()),
+        account_id: requester_id.clone(),
     };
     let target_peer = ContactPeer::Human {
-        account_id: local_account_id(target.clone()),
+        account_id: target.clone(),
     };
     let mut request_receipt = RequestAcceptanceReceipt {
         core: RequestAcceptanceReceiptCore {
@@ -71,7 +71,7 @@ fn normal_contact_evidence(
             request_event_ref: request_event_ref.clone(),
             source_checkpoint: fixture_hash('2'),
             accepted_at: now,
-            issuer_id: soland_test_support::fixture_station_id(),
+            issuer_id: requester_id.station_id.clone(),
         },
         receipt_digest: fixture_hash('0'),
         signature: fixture_protocol_signature("did:web:station.example", now),
@@ -81,8 +81,8 @@ fn normal_contact_evidence(
         arkret_wire::Hash::new(arkret_canonical::canonical_sha256(&request_receipt).unwrap())
             .unwrap();
     let mut sorted_pair_members = [
-        local_actor(requester_id.clone()),
-        local_actor(target.clone()),
+        arkret_wire::ActorId::account(requester_id.clone()),
+        arkret_wire::ActorId::account(target.clone()),
     ];
     sorted_pair_members.sort();
     let contact_round = ContactRound::Normal {
@@ -95,10 +95,10 @@ fn normal_contact_evidence(
     let contact_round_id =
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(round_material)).unwrap();
     let current_proof =
-        |issuer: arkret_wire::DidCoreId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
+        |issuer: arkret_wire::AccountId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
             ContactCurrentProof {
                 contact_round_id: contact_round_id.clone(),
-                issuer_id: local_actor(issuer),
+                issuer_id: arkret_wire::ActorId::account(issuer),
                 terminal: false,
                 accepted_frontier: vec![head_event_ref.clone()],
                 head_event_ref,
@@ -118,7 +118,7 @@ fn normal_contact_evidence(
             response_event_ref: response_event_ref.clone(),
             outgoing_slot_absence_digest: fixture_hash('5'),
             accepted_at: now,
-            issuer_id: local_actor(target.clone()),
+            issuer_id: arkret_wire::ActorId::account(target.clone()),
             signature: fixture_protocol_signature("did:web:bob.example", now),
         }),
         glare_concurrency_attestations: None,
@@ -171,8 +171,15 @@ async fn seed_accepted_direct_message_contact(
     let response_event_ref =
         arkret_wire::EventId::new(soland_test_support::fixture_content_bound_id("ak:event:"))
             .unwrap();
-    let requester_id = core_id("did:web:alice.example");
-    let target = core_id(target);
+    // Remote claim fixtures bind Alice to the supplied source Station; local
+    // resolve fixtures use the runtime's exact Account, never a URL-derived DID.
+    let requester_id = arkret_wire::AccountId::new(
+        core_id("did:web:alice.example"),
+        peer_id
+            .map(|source| arkret_wire::DidCoreId::new(source).unwrap())
+            .unwrap_or_else(|| state.service_core_id()),
+    );
+    let target = arkret_wire::AccountId::new(core_id(target), state.service_core_id());
     let now = chrono::Utc::now();
     let evidence = normal_contact_evidence(
         requester_id.clone(),
@@ -185,8 +192,8 @@ async fn seed_accepted_direct_message_contact(
         .test_persistence()
         .contacts()
         .put(&soland_domain::identity::ContactRecord {
-            requester_id: local_actor(requester_id),
-            target_id: local_actor(target),
+            requester_id: arkret_wire::ActorId::account(requester_id),
+            target_id: arkret_wire::ActorId::account(target),
             contact_round_id: Some(evidence.contact_round_id.clone()),
             version: Some(1),
             granted_to_target_scopes: vec!["direct_message".to_owned()],
@@ -270,8 +277,51 @@ async fn seed_remote_claim_prerequisites(
 ) -> (ed25519_dalek::SigningKey, String) {
     let alice = "did:web:alice.example";
     let signing_key = test_ephemeral_device_signing_key(alice, ALICE_SIGNING_DEVICE);
-    let authorize_event_id =
-        project_authorized_device(state, alice, ALICE_SIGNING_DEVICE, &signing_key).await;
+    // The destination deliberately has a different same-principal local key.
+    // Only the authenticated source may attest the remote participant facet.
+    project_authorized_device(
+        state,
+        alice,
+        ALICE_SIGNING_DEVICE,
+        &SigningKey::from_bytes(&[99; 32]),
+    )
+    .await;
+    let remote_station = arkret_wire::DidCoreId::new(source_id).unwrap();
+    let remote_genesis =
+        soland_test_support::cba_basis::fixture_principal_control_realm_create_for_server(
+            alice,
+            remote_station.clone(),
+        );
+    let mut remote_authorize = arkret_wire::test_support::raw_event(
+        arkret_wire::EventKind::DeviceAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: remote_genesis.realm_id.clone(),
+        },
+        core_id(alice),
+        remote_station,
+        1,
+        arkret_wire::Hlc::new("019041000000-0000-00000001").unwrap(),
+        serde_json::json!({
+            "principal_id": core_id(alice), "device_id": ALICE_SIGNING_DEVICE,
+            "device_public_key_did": test_ed25519_multibase_public(&signing_key),
+            "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
+            "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
+            "authorized_by": core_id(alice), "not_before": "2026-05-25T00:00:00.000Z",
+            "authorization_binding_kind": "registration_anchor", "device_signature": "c2ln"
+        }),
+    )
+    .unwrap();
+    remote_authorize.prev_refs = vec![remote_genesis.event_id.clone()];
+    remote_authorize
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let remote_authorize = soland_test_support::signed_event::sign_fixture_event(
+        remote_authorize,
+        alice,
+        ALICE_SIGNING_DEVICE,
+        signing_key.to_bytes(),
+    );
+    let authorize_event_id = remote_authorize.event_id.to_string();
     seed_accepted_direct_message_contact(state, BOB_DID, BOB_DEVICE, Some(source_id)).await;
     let now = chrono::Utc::now();
     let consent_grant = signed_canonical_event(
@@ -338,7 +388,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let target = core_id(BOB_DID);
     let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain.clone(),
-        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(local_actor(requester_id.clone())),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(arkret_wire::ActorId::account(arkret_wire::AccountId::new(requester_id.clone(), source_id.clone()))),
         arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(local_actor(target.clone())),
     )
     .unwrap();
@@ -424,6 +474,111 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
         "{}/_arkret/peer/keys/keypackages/claim",
         state.config().public_base_url.trim_end_matches('/')
     );
+    for case in [
+        "wrong_source",
+        "tampered_body",
+        "expired",
+        "forged_transport",
+        "wrong_requester_method_owner",
+        "wrong_requester_device_fragment",
+    ] {
+        let mut rejected_value = request_value.clone();
+        match case {
+            "wrong_source" => {
+                rejected_value["service_binding"]["source_id"] =
+                    serde_json::json!(state.service_core_id())
+            }
+            "tampered_body" => rejected_value["timeout_ms"] = serde_json::json!(4_000),
+            "expired" => {
+                rejected_value["requester_authorization"]["signed_at"] =
+                    serde_json::json!(arkret_canonical::format_timestamp_canonical(
+                        Utc::now() - chrono::Duration::minutes(3)
+                    ));
+                rejected_value["expires_at"] =
+                    serde_json::json!(arkret_canonical::format_timestamp_canonical(
+                        Utc::now() - chrono::Duration::minutes(1)
+                    ));
+            }
+            "wrong_requester_method_owner" | "wrong_requester_device_fragment" => {
+                let method = if case == "wrong_requester_method_owner" {
+                    format!("{BOB_DID}#{ALICE_SIGNING_DEVICE}")
+                } else {
+                    format!("did:web:alice.example#{BOB_DEVICE}")
+                };
+                rejected_value["requester_authorization"]["verification_method"] =
+                    serde_json::json!(method);
+                rejected_value["requester_authorization"]["signature"]["kid"] =
+                    serde_json::json!(method);
+                serde_json::from_value::<arkret_models_crypto::PeerKeyPackagesClaimRequestBody>(
+                    rejected_value.clone(),
+                )
+                .unwrap()
+                .validate_shape()
+                .unwrap();
+            }
+            _ => {}
+        }
+        let mut headers = signed_federation_push_headers_with_idempotency(
+            source_service_did,
+            &destination_id,
+            state.config().trust_domain.as_str(),
+            &target_uri,
+            if case == "tampered_body" {
+                &request_value
+            } else {
+                &rejected_value
+            },
+            request.claim_request_id.as_str(),
+        );
+        if case == "forged_transport" {
+            let signature = headers
+                .iter_mut()
+                .find(|(name, _)| name.eq_ignore_ascii_case("signature"))
+                .expect("fixture has a real HTTP signature");
+            signature.1 = "sig1=:AA==:".to_owned();
+        }
+        let mut rejected = TestClient::post(&target_uri)
+            .add_header("content-type", "application/json", true)
+            .body(canonical_request_body(&rejected_value));
+        for (name, value) in headers {
+            rejected = rejected.add_header(name, value, true);
+        }
+        let mut rejected = rejected.send(&app_from_state(state.clone())).await;
+        let status = rejected.status_code.unwrap();
+        let body: Value = rejected.take_json().await.unwrap();
+        assert!(
+            status.is_client_error(),
+            "{case} must reject before consuming a KeyPackage: {status} {body}"
+        );
+        if matches!(
+            case,
+            "wrong_requester_method_owner" | "wrong_requester_device_fragment"
+        ) {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{case}: {body}");
+            assert_eq!(problem_code(&body), "schema_violation", "{case}: {body}");
+        }
+        assert!(
+            state
+                .test_persistence()
+                .mls_key_packages()
+                .get_peer_claim(source_id.as_str(), request.claim_request_id.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "{case} must not leave a claim ledger"
+        );
+        assert!(
+            state
+                .test_persistence()
+                .mls_key_packages()
+                .snapshot_all()
+                .await
+                .unwrap()
+                .iter()
+                .all(|row| row.claimed_by_mls_group_id.is_none()),
+            "{case} must not consume a KeyPackage"
+        );
+    }
     let headers = signed_federation_push_headers_with_idempotency(
         source_service_did,
         &destination_id,
@@ -578,7 +733,10 @@ async fn direct_resolve_fails_closed_without_accepted_contact_body() {
     assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(
         body["reason_detail"],
-        "no owned active managed-Agent authorization or accepted contact projection: requester_id=ak:did_core:web:alice.example, peer=ak:did_core:web:bob.example"
+        format!(
+            "no owned active managed-Agent authorization or accepted contact projection: requester_id=ak:did_core:web:alice.example, peer={}",
+            local_actor(core_id(BOB_DID))
+        )
     );
 }
 
@@ -637,6 +795,26 @@ async fn direct_resolve_uses_accepted_contact_scope_body() {
     assert_eq!(response.status_code.unwrap().as_u16(), 200);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["state"], "awaiting_founder", "body: {body}");
+    assert_eq!(state.test_direct_conversation_binding_count(), 0);
+
+    let mut other_station = human_direct_resolve_request(BOB_DID);
+    other_station.peer = arkret_models_collaboration::contact_operations::ContactPeer::Human {
+        account_id: arkret_wire::AccountId::new(
+            core_id(BOB_DID),
+            core_id("did:web:other-station.example"),
+        ),
+    };
+    let mut response = post_authenticated_canonical(
+        state.clone(),
+        &alice,
+        "http://server/_arkret/self/direct-conversations/resolve",
+        &other_station,
+    )
+    .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::PRECONDITION_FAILED), "{body}");
+    assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 
@@ -776,7 +954,10 @@ async fn contacts_spec_path_projects_directional_scopes_and_resolve_is_idempoten
         .unwrap();
     let row = &contacts["contacts"][0];
     assert_eq!(row["peer"]["kind"], "human");
-    assert_eq!(row["peer"]["principal_id"], core_id(BOB_DID).as_str());
+    assert_eq!(
+        row["peer"]["account_id"],
+        serde_json::to_value(local_account_id(core_id(BOB_DID))).unwrap()
+    );
     assert_eq!(row["state"], "accepted");
     assert_eq!(row["granted_to_peer_scopes"][0], "direct_message");
     assert_eq!(row["granted_by_peer_scopes"][0], "direct_message");

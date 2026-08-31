@@ -157,7 +157,7 @@ fn signed_keypackage_claim_request(
     body
 }
 
-fn install_routable_member(state: &AppState, realm_id: &str, member: &arkret_wire::DidCoreId) {
+fn install_routable_member(state: &AppState, realm_id: &str, member: &arkret_wire::ActorId) {
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(Utc::now().timestamp_millis())
         .unwrap();
     state.test_projection().lock().members.insert(
@@ -307,6 +307,29 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
     .unwrap();
     let typed = typed.into_event();
     *event = serde_json::to_value(typed).unwrap();
+}
+
+async fn advance_event_to_actor_frontier(state: &AppState, event: &mut Value) {
+    let typed: arkret_wire::Event = serde_json::from_value(event.clone()).unwrap();
+    let actor_key = typed.actor_id.to_string();
+    let records = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(typed.realm_id.as_str())
+        .await
+        .unwrap();
+    let actor_records: Vec<_> = records
+        .iter()
+        .filter(|row| row.actor_id == actor_key)
+        .collect();
+    let last_seq = actor_records.iter().map(|row| row.actor_seq).max();
+    let previous: Vec<_> = actor_records
+        .iter()
+        .filter(|row| Some(row.actor_seq) == last_seq)
+        .map(|row| row.event_id.as_str())
+        .collect();
+    event["actor_seq"] = json!(last_seq.map_or(0, |seq| seq + 1));
+    set_event_prev_refs(event, &previous);
 }
 
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
@@ -511,11 +534,6 @@ async fn mls_lifecycle_end_to_end_body() {
     let group_id = group_id_owned.as_str();
     let realm_bootstrap =
         complete_realm_bootstrap_unit(realm_genesis, alice_did, alice_device, "MLS lifecycle");
-    let bootstrap_frontier_event_id = realm_bootstrap
-        .last()
-        .expect("complete Realm bootstrap")
-        .event_id
-        .to_string();
 
     // ── 0. the Realm has to exist before anything cites it ──────────────
     //
@@ -545,7 +563,8 @@ async fn mls_lifecycle_end_to_end_body() {
         let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
         panic!("Realm create failed with {create_status:?}: {error}");
     }
-    install_routable_member(&state, realm_id, &alice_core);
+    let alice_actor = arkret_wire::ActorId::account(alice_account_id.clone());
+    install_routable_member(&state, realm_id, &alice_actor);
 
     // ── 1. upload a KeyPackage (W1C: ak.self.keys.keypackages.upload.create.v1) ──
     let alice_mls_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
@@ -765,7 +784,11 @@ async fn mls_lifecycle_end_to_end_body() {
     // (`ak.member.state`) and MLS group membership are separate: Bob joins the
     // Realm first, and only then can Alice claim his KeyPackage to add him to
     // the MLS group.
-    install_routable_member(&state, realm_id, &bob_core);
+    let bob_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        bob_core.clone(),
+        state.service_core_id(),
+    ));
+    install_routable_member(&state, realm_id, &bob_actor);
 
     let bob_mls_identity = arkret_mls::ArkretMlsIdentity::new_human_device(
         bob_core.clone(),
@@ -844,8 +867,12 @@ async fn mls_lifecycle_end_to_end_body() {
         .body(arkret_canonical::canonical_json_bytes(&lifecycle_claim_body).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(lifecycle_claim_resp.status_code, Some(StatusCode::OK));
     let lifecycle_claim: Value = lifecycle_claim_resp.take_json().await.unwrap();
+    assert_eq!(
+        lifecycle_claim_resp.status_code,
+        Some(StatusCode::OK),
+        "lifecycle KeyPackage claim failed: {lifecycle_claim}"
+    );
     assert_eq!(
         lifecycle_claim["claims"][0]["keypackage_ref"],
         json!(lifecycle_keypackage_ref)
@@ -947,7 +974,7 @@ async fn mls_lifecycle_end_to_end_body() {
         }),
         Some(realm_seal_basis.clone()),
     );
-    set_event_prev_refs(&mut genesis, &[bootstrap_frontier_event_id.as_str()]);
+    advance_event_to_actor_frontier(&state, &mut genesis).await;
     let mls_genesis_event_id = genesis["event_id"].as_str().unwrap().to_owned();
     let genesis_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
@@ -993,11 +1020,11 @@ async fn mls_lifecycle_end_to_end_body() {
         "keypackage_digest": claimed_keypackage_digest,
         "intended_realm_id": realm_id,
         "claim_id": claim_id,
-        "requester_actor_id": alice_core,
+        "requester_actor_id": alice_actor,
         "requester_device_id": alice_device,
         "requester_device_authorize_event_id": alice_device_authorize_event_id,
         "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
-        "created_at": "2026-05-25T00:00:02.000Z",
+        "created_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
         "signature": {
             "kid": format!("{alice_did}#{alice_device}"),
             "signature_algorithm": "Ed25519",
@@ -1046,8 +1073,7 @@ async fn mls_lifecycle_end_to_end_body() {
         }),
         Some(realm_seal_basis.clone()),
     );
-    set_event_prev_refs(&mut welcome, &[mls_genesis_event_id.as_str()]);
-    let welcome_event_id = welcome["event_id"].as_str().unwrap().to_owned();
+    advance_event_to_actor_frontier(&state, &mut welcome).await;
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -1105,7 +1131,7 @@ async fn mls_lifecycle_end_to_end_body() {
         }),
         Some(realm_seal_basis),
     );
-    set_event_prev_refs(&mut commit, &[welcome_event_id.as_str()]);
+    advance_event_to_actor_frontier(&state, &mut commit).await;
     let commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)

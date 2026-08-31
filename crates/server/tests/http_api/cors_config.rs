@@ -233,7 +233,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
     // Submit Alice's canonical directed invite.
     let event_id = "ak:event:ARdpHJI61pXl2eDxXq5o-JwwZDx5_mx7XTPBZMba03_p";
     let payload = serde_json::json!({
-        "invitee_id": fixture_actor_core_id(bob_did),
+        "invitee_account_id": fixture_account_id(&state, bob_did),
         "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
@@ -268,7 +268,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
     // This test isolates the holder-private read-model projection. The formal
     // dispatch/delivery transport is covered by account_workflow; the accepted
     // Realm Event here creates only the shared Invite lifecycle, so the list
-    // stays empty until the recipient PS commits ak.account.invite_delivery.
+    // stays empty until the recipient Station commits ak.account.invite_delivery.
     let before_delivery: Value = TestClient::get("http://server/_arkret/self/authz/invites")
         .add_header("authorization", format!("Bearer {bob}"), true)
         .send(&app_from_state(state.clone()))
@@ -306,7 +306,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
         .account_data()
         .compare_and_set(
             &soland_storage::AccountDataRecord {
-                actor: fixture_actor_core_id(bob_did).to_string(),
+                actor: fixture_account_actor(&state, bob_did).to_string(),
                 account_data_key: arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
                 revision: 1,
                 payload: serde_json::to_value(delivery).unwrap(),
@@ -331,7 +331,8 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
             // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
                 && invite["id"].as_str() == Some(invite_id.as_str())
-                && invite["invitee_id"].as_str() == Some(fixture_actor_core_id(bob_did).as_str())
+                && invite["invitee_account_id"]
+                    == serde_json::json!(fixture_account_id(&state, bob_did))
                 && invite["state"].as_str() == Some("pending")
         }),
         "expected pending invite for bob in {realm_id} (got: {invites:?})"
@@ -535,7 +536,9 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
         .json(&serde_json::json!({
             "realm_id": state.development_demo_realm_id(),
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                fixture_actor_core_id("did:web:alice.example"), state.service_core_id(),
+            )),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: `mode` is a required enum
             // (p2p|sfu|turn) on the ice-config request body.

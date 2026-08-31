@@ -681,6 +681,15 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     json_ok(prepared_outcome(&reservation))
 }
 
+fn device_authorization_matches_contact_account(
+    authorize_actor: &str,
+    account_id: &arkret_wire::AccountId,
+) -> bool {
+    arkret_wire::ActorId::account(account_id.clone())
+        .canonical_key()
+        .is_ok_and(|expected| authorize_actor == expected)
+}
+
 async fn contact_authority_realm(
     state: &AppState,
     session: &SessionRecord,
@@ -688,6 +697,12 @@ async fn contact_authority_realm(
 ) -> Result<RealmId, AppError> {
     let realm_id = match holder {
         ContactPeer::Human { account_id } => {
+            if account_id.station_id.as_str() != state.service_id() {
+                return Err(AppError::new(
+                    ErrorCode::FailedPrecondition,
+                    "Contact holder account does not belong to this Station",
+                ));
+            }
             let device = state
                 .identities()
                 .find_device(soland_services::identity::FindDeviceQuery {
@@ -735,7 +750,7 @@ async fn contact_authority_realm(
                         "Contact holder device authorization Event is unavailable",
                     )
                 })?;
-            if authorize_event.actor_id != account_id.principal_id.as_str()
+            if !device_authorization_matches_contact_account(&authorize_event.actor_id, account_id)
                 || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
             {
                 return Err(AppError::new(
@@ -2341,4 +2356,39 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
         ));
     }
     Ok(Some(normalized))
+}
+
+#[cfg(test)]
+mod device_authorization_account_tests {
+    use arkret_wire::{AccountId, ActorId, DidCoreId};
+
+    use super::device_authorization_matches_contact_account;
+
+    #[test]
+    fn contact_device_authorization_preserves_the_exact_account_and_actor_branch() {
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = DidCoreId::new("ak:did_core:web:station-a.example").unwrap();
+        let account = AccountId::new(principal.clone(), station.clone());
+        assert!(device_authorization_matches_contact_account(
+            &ActorId::account(account.clone()).canonical_key().unwrap(),
+            &account,
+        ));
+        let foreign = AccountId::new(
+            principal.clone(),
+            DidCoreId::new("ak:did_core:web:station-b.example").unwrap(),
+        );
+        for actor in [
+            ActorId::account(foreign),
+            ActorId::service(principal.clone()),
+        ] {
+            assert!(!device_authorization_matches_contact_account(
+                &actor.canonical_key().unwrap(),
+                &account,
+            ));
+        }
+        assert!(!device_authorization_matches_contact_account(
+            principal.as_str(),
+            &account,
+        ));
+    }
 }

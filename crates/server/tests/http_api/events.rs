@@ -898,7 +898,7 @@ async fn events_describe_and_single_event_submit_work_body() {
                     "profile": "discussion"
                 }
             },
-            "created_by": fixture_actor_core_id("did:web:alice.example"),
+            "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             "created_at": "2026-05-17T00:00:00.000Z"
         }
     });
@@ -1474,7 +1474,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
     .await;
     let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
     let payload = serde_json::json!({
-        "invitee_id": fixture_actor_core_id("did:web:carol.example"),
+        "invitee_account_id": fixture_account_id(&state, "did:web:carol.example"),
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2099-01-01T00:00:00.000Z"
     });
@@ -1531,7 +1531,12 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent_bod
     assert_eq!(projected.status, "pending");
     assert_eq!(
         projected.invitee_id.as_deref(),
-        Some(fixture_actor_core_id("did:web:carol.example").as_str())
+        Some(
+            fixture_account_id(&state, "did:web:carol.example")
+                .canonical_key()
+                .unwrap()
+                .as_str()
+        )
     );
     assert_eq!(
         projected.introduction_evidence_digest.as_deref(),

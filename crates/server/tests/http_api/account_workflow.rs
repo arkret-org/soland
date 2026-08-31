@@ -157,7 +157,7 @@ async fn create_and_dispatch_local_realm_invite(
         0,
         Vec::new(),
         serde_json::json!({
-            "invitee_id": bob_core.clone(),
+            "invitee_account_id": arkret_wire::AccountId::new(bob_core.clone(), recipient_id.clone()),
             "introduction_evidence_digest": introduction_evidence_digest,
             "expires_at": "2099-01-01T00:00:00.000Z"
         }),
@@ -1087,6 +1087,14 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     let state = soland_test_support::app_state(test_config());
     let alice = dev_token(state.clone()).await;
     let alice_core = fixture_actor_core_id("did:web:alice.example");
+    let alice_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        alice_core.clone(),
+        state.service_core_id().clone(),
+    ));
+    let bob_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id("did:web:bob.example"),
+        state.service_core_id().clone(),
+    ));
     project_test_authorized_device(
         &state,
         "did:web:alice.example",
@@ -1217,8 +1225,8 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .await
         .unwrap();
     assert_eq!(
-        visible_bob["users"][0]["principal_id"],
-        bob_core.as_str(),
+        visible_bob["users"][0]["account_id"],
+        serde_json::to_value(bob_actor.as_account_id().unwrap()).unwrap(),
         "visible directory result: {visible_bob}"
     );
     assert!(visible_bob["users"][0].get("did").is_none());
@@ -1297,7 +1305,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .test_persistence()
         .account_data()
         .get(
-            bob_core.as_str(),
+            &bob_actor.canonical_key().unwrap(),
             arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY,
         )
         .await
@@ -1487,7 +1495,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|member| member["did"] == bob_core.as_str())
+            .any(|member| member["actor_id"] == serde_json::to_value(&bob_actor).unwrap())
     );
 
     let sent_message = submit_message_event(
@@ -1607,12 +1615,12 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert!(
         synced_members
             .iter()
-            .any(|member| member["actor_id"] == alice_core.as_str())
+            .any(|member| member["actor_id"] == serde_json::to_value(&alice_actor).unwrap())
     );
     assert!(
         synced_members
             .iter()
-            .any(|member| member["actor_id"] == bob_core.as_str())
+            .any(|member| member["actor_id"] == serde_json::to_value(&bob_actor).unwrap())
     );
     assert_eq!(
         sync_with_message["realms"][&realm_id]["summary"]["joined_member_count"],
@@ -1764,7 +1772,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|member| member["did"] == "did:web:bob.example")
+            .any(|member| member["actor_id"] == serde_json::to_value(&bob_actor).unwrap())
     );
 
     let deleted = delete_test_realm(&state, &realm_id).await;

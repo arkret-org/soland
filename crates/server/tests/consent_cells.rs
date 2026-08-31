@@ -1,4 +1,6 @@
 use arkret_identifiers::Did;
+use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
+use arkret_wire::{AccountId, DidCoreId, InviteReceiveAction, UnknownInviteAction};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::Value;
@@ -127,86 +129,110 @@ async fn invite_receive_policy_get_set_round_trips() {
     let state = soland_test_support::app_state(test_config());
     let app = service(state.clone());
     let alice_did = "did:web:irp-alice.example";
-    let alice = "ak:did_core:web:irp-alice.example";
-    let mallory = "ak:did_core:web:irp-mallory.example";
+    let alice = AccountId::new(
+        DidCoreId::new("ak:did_core:web:irp-alice.example").unwrap(),
+        state.service_core_id(),
+    );
+    let mallory = DidCoreId::new("ak:did_core:web:irp-mallory.example").unwrap();
     let alice_token = dev_token(&state, &app, alice_did).await;
 
-    let default_policy: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
-        .add_header("Authorization", format!("Bearer {alice_token}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
-            true,
-        )
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(default_policy["subject_id"], alice);
+    let default_policy: InviteReceivePolicy =
+        TestClient::get("http://server/_arkret/self/invite-receive-policy")
+            .add_header("Authorization", format!("Bearer {alice_token}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
+                true,
+            )
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(default_policy.account_id, alice);
     assert!(
-        default_policy["holder_allowed_introduction_kinds"]
-            .as_array()
-            .unwrap()
+        default_policy
+            .holder_allowed_introduction_kinds
             .iter()
             .any(|kind| kind == "consent_grant")
     );
 
-    let custom = serde_json::json!({
-        "schema": default_policy["schema"],
-        "subject_id": alice,
-        "holder_allowed_introduction_kinds": ["consent_grant"],
-        "explicit_address_behavior": "drop",
-        "unknown_invites": "drop",
-        "denied_subject_ids": [mallory],
-    });
-    let stored: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
+    let mut custom = default_policy.clone();
+    custom.holder_allowed_introduction_kinds = vec!["consent_grant".to_owned()];
+    custom.explicit_address_behavior = InviteReceiveAction::Drop;
+    custom.unknown_invites = UnknownInviteAction::Drop;
+    // The policy owner is an Account; this explicitly principal-wide denylist remains DidCore.
+    custom.denied_subject_ids = vec![mallory.clone()];
+    let mut stored_response = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .add_header(
             "Arkret-Operation",
             arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_REPLACE_V1,
             true,
         )
-        .json(&custom)
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(stored["explicit_address_behavior"], "drop");
-    assert_eq!(stored["denied_subject_ids"][0], mallory);
-
-    let reread: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
-        .add_header("Authorization", format!("Bearer {alice_token}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
-            true,
-        )
-        .send(&app)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(reread["explicit_address_behavior"], "drop");
-    assert_eq!(reread["denied_subject_ids"][0], mallory);
-
-    let mismatched = serde_json::json!({
-        "schema": default_policy["schema"],
-        "subject_id": mallory,
-        "holder_allowed_introduction_kinds": ["consent_grant"],
-        "explicit_address_behavior": "quarantine",
-        "unknown_invites": "drop",
-    });
-    let rejected = TestClient::put("http://server/_arkret/self/invite-receive-policy")
-        .add_header("Authorization", format!("Bearer {alice_token}"), true)
-        .add_header(
-            "Arkret-Operation",
-            arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_REPLACE_V1,
-            true,
-        )
-        .json(&mismatched)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&custom).unwrap())
         .send(&app)
         .await;
-    assert_eq!(rejected.status_code.unwrap(), StatusCode::FORBIDDEN);
+    let stored_status = stored_response.status_code.unwrap();
+    let stored_value: Value = stored_response.take_json().await.unwrap();
+    assert_eq!(stored_status, StatusCode::OK, "{stored_value}");
+    let stored: InviteReceivePolicy = serde_json::from_value(stored_value).unwrap();
+    assert_eq!(stored, custom);
+
+    let reread: InviteReceivePolicy =
+        TestClient::get("http://server/_arkret/self/invite-receive-policy")
+            .add_header("Authorization", format!("Bearer {alice_token}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
+                true,
+            )
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(reread, custom);
+
+    for mismatched_account in [
+        AccountId::new(mallory, alice.station_id.clone()),
+        AccountId::new(
+            alice.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+        ),
+    ] {
+        let mismatched = InviteReceivePolicy::spec_default(mismatched_account.clone());
+        let rejected = TestClient::put("http://server/_arkret/self/invite-receive-policy")
+            .add_header("Authorization", format!("Bearer {alice_token}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_REPLACE_V1,
+                true,
+            )
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&mismatched).unwrap())
+            .send(&app)
+            .await;
+        assert_eq!(
+            rejected.status_code.unwrap(),
+            StatusCode::FORBIDDEN,
+            "cannot replace another account's policy: {mismatched_account}"
+        );
+    }
+
+    let unchanged: InviteReceivePolicy =
+        TestClient::get("http://server/_arkret/self/invite-receive-policy")
+            .add_header("Authorization", format!("Bearer {alice_token}"), true)
+            .add_header(
+                "Arkret-Operation",
+                arkret_wire::ServiceOperationId::SELF_INVITE_RECEIVE_POLICY_RESOURCE_GET_V1,
+                true,
+            )
+            .send(&app)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(unchanged, custom);
 }

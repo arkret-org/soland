@@ -171,10 +171,15 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     } else {
         accounts
             .put(&soland_storage::AccountRecord {
-                pk: soland_storage::AccountPk(1),
+                // Demo data already owns pk 1 at a different Station. Let the
+                // store allocate this exact controller Account's local key.
+                pk: soland_storage::AccountPk(0),
                 principal_id,
                 station_id: state.service_core_id().clone(),
-                localpart: "alice".to_owned(),
+                localpart: format!(
+                    "agent-controller-{}",
+                    &hex::encode(Sha256::digest(account_id.to_string().as_bytes()))[..16]
+                ),
                 display_name: Some("Alice".to_owned()),
                 bio: None,
                 avatar_blob_ref: None,
@@ -183,6 +188,12 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
             .await
             .unwrap()
     };
+    let bound_account = accounts.get_by_pk(account_pk).await.unwrap().unwrap();
+    assert_eq!(
+        arkret_wire::AccountId::new(bound_account.principal_id, bound_account.station_id),
+        account_id,
+        "controller session must resolve to its exact Station-local Account"
+    );
     state
         .test_persistence()
         .sessions()
@@ -472,7 +483,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller_id.to_string(),
+                owner: bootstrap.actor_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_access: "since_join".to_owned(),
@@ -615,7 +626,11 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller_id.to_string(),
+                owner: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    controller_id.clone(),
+                    state.service_core_id(),
+                ))
+                .to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_access: "since_join".to_owned(),

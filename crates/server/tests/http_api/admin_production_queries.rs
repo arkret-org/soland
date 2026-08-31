@@ -35,11 +35,47 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
     )
     .await;
 
+    let bob_account = arkret_wire::AccountId::new(
+        fixture_actor_core_id("did:web:bob.example"),
+        state.service_core_id(),
+    );
+    let mut foreign_bob = state
+        .test_persistence()
+        .accounts()
+        .get(&bob_account)
+        .await
+        .unwrap()
+        .unwrap();
+    foreign_bob.pk = soland_storage::AccountPk(0);
+    foreign_bob.station_id = DidCoreId::new("ak:did_core:web:000-foreign-station.example").unwrap();
+    foreign_bob.localpart.clear();
+    foreign_bob.display_name = Some("Foreign Bob must not inherit local lifecycle".to_owned());
+    state
+        .test_persistence()
+        .accounts()
+        .put(&foreign_bob)
+        .await
+        .unwrap();
+
     // Walk the whole collection with limit=1; ids must be strictly
     // ascending (stable sort key) and unique.
     let mut ids = Vec::new();
     let mut cursor: Option<String> = None;
+    let mut seen_cursors = std::collections::BTreeSet::new();
+    let expected_count = state
+        .test_persistence()
+        .accounts()
+        .list()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|account| account.station_id == state.service_core_id())
+        .count();
     loop {
+        assert!(
+            seen_cursors.len() <= expected_count,
+            "cursor walk exceeded the number of accounts: {seen_cursors:?}"
+        );
         let url = match &cursor {
             Some(cursor) => {
                 format!("http://server/_soland/admin/actors?limit=1&cursor={cursor}")
@@ -54,6 +90,7 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
             .await
             .unwrap();
         assert_no_production_gap(&page);
+        assert_eq!(page["total"], expected_count);
         let actors = page["actors"].as_array().expect("typed actors array");
         assert!(actors.len() <= 1);
         for actor in actors {
@@ -61,6 +98,13 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
             // authoritatively by soland (never fabricated defaults).
             assert!(actor["id"].as_str().is_some(), "row without id: {actor}");
             assert!(actor["principal_id"].as_str().is_some());
+            let account: arkret_wire::AccountId =
+                serde_json::from_str(actor["account_id"].as_str().unwrap()).unwrap();
+            assert_eq!(account.station_id, state.service_core_id());
+            assert_eq!(
+                account.principal_id.as_str(),
+                actor["principal_id"].as_str().unwrap()
+            );
             assert!(
                 actor["status"].as_str().is_some(),
                 "lifecycle status must be reported: {actor}"
@@ -78,6 +122,10 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
                     .expect("has_more implies next_cursor")
                     .to_owned(),
             );
+            assert!(
+                seen_cursors.insert(cursor.clone().unwrap()),
+                "cursor repeated without progress: {page}"
+            );
         } else {
             assert!(page["next_cursor"].is_null());
             break;
@@ -87,10 +135,81 @@ async fn admin_actors_query_returns_typed_rows_and_walks_cursor_body() {
     sorted.sort();
     sorted.dedup();
     assert_eq!(ids, sorted, "cursor walk must be sorted and duplicate-free");
+    assert_eq!(ids.len(), expected_count);
     assert!(
         ids.contains(&fixture_actor_core_id("did:web:bob.example").to_string()),
         "registered account missing from actors: {ids:?}"
     );
+
+    let detail: Value = TestClient::get(format!(
+        "http://server/_soland/admin/actors/{}",
+        bob_account.principal_id
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(detail["account_id"], bob_account.to_string());
+    assert_eq!(detail["display_name"], "bob");
+}
+
+#[test]
+fn admin_actors_query_excludes_foreign_only_accounts() {
+    run_on_deep_stack(
+        "admin_actors_query_excludes_foreign_only_accounts",
+        admin_actors_query_excludes_foreign_only_accounts_body,
+    );
+}
+
+async fn admin_actors_query_excludes_foreign_only_accounts_body() {
+    let state = soland_test_support::app_state(test_config());
+    let token = dev_token(state.clone()).await;
+    let alice_account = arkret_wire::AccountId::new(
+        fixture_actor_core_id("did:web:alice.example"),
+        state.service_core_id(),
+    );
+    let mut foreign = state
+        .test_persistence()
+        .accounts()
+        .get(&alice_account)
+        .await
+        .unwrap()
+        .unwrap();
+    foreign.pk = soland_storage::AccountPk(0);
+    foreign.principal_id = fixture_actor_core_id("did:web:foreign-only.example");
+    foreign.station_id = DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap();
+    foreign.localpart.clear();
+    state
+        .test_persistence()
+        .accounts()
+        .put(&foreign)
+        .await
+        .unwrap();
+
+    let page: Value = TestClient::get(
+        "http://server/_soland/admin/actors?filter[search]=web:foreign-only.example&limit=1",
+    )
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await
+    .take_json()
+    .await
+    .unwrap();
+    assert_eq!(page["actors"], serde_json::json!([]));
+    assert_eq!(page["total"], 0);
+    assert_eq!(page["has_more"], false);
+    assert!(page["next_cursor"].is_null());
+
+    let missing = TestClient::get(format!(
+        "http://server/_soland/admin/actors/{}",
+        foreign.principal_id
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+    assert_eq!(missing.status_code, Some(StatusCode::NOT_FOUND));
 }
 
 #[test]
