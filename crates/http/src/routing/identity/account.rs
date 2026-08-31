@@ -903,7 +903,7 @@ async fn add_account_localpart(
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
         .identities()
-        .account_localparts(account_pk.clone())
+        .account_localparts(account_pk)
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
@@ -991,7 +991,7 @@ async fn delete_account_localpart(
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
         .identities()
-        .account_localparts(account_pk.clone())
+        .account_localparts(account_pk)
         .await
         .map_err(localpart_persistence_error)?;
     let removed_primary = before
@@ -999,13 +999,13 @@ async fn delete_account_localpart(
         .any(|record| record.localpart == localpart && record.is_primary);
     state
         .identities()
-        .remove_localpart(account_pk.clone(), &localpart)
+        .remove_localpart(account_pk, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary
         && let Some(replacement) = state
             .identities()
-            .account_localparts(account_pk.clone())
+            .account_localparts(account_pk)
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()

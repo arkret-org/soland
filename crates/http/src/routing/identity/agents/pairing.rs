@@ -185,7 +185,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
-        controller_account_pk: account.account_pk.clone(),
+        controller_account_pk: account.account_pk,
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: public_key_digest.as_str().to_owned(),
@@ -1281,7 +1281,7 @@ pub(super) fn account_notification_context(
             arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone()).ok()?,
             arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?).ok()?,
         )),
-        controller_account_pk: agent_record.controller_account_pk.clone()?,
+        controller_account_pk: agent_record.controller_account_pk?,
         recipient_id: arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?)
             .ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
@@ -1315,7 +1315,7 @@ pub(super) async fn persist_terminal_account_notification(
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
                     recipient_actor_id: context.recipient_actor_id,
-                    controller_account_pk: context.controller_account_pk.clone(),
+                    controller_account_pk: context.controller_account_pk,
                     recipient_id: context.recipient_id.clone(),
                     source_account_artifact_id: context.approval_request_id.to_string(),
                 },

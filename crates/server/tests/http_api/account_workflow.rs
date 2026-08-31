@@ -554,8 +554,6 @@ async fn soft_logged_out_account_refuses_self_reads_while_suspended_stays_valid_
 
     let seed_state = |status: &str| {
         let state = state.clone();
-        let actor = actor.clone();
-        let account_pk = account_pk;
         let status = status.to_owned();
         async move {
             state

@@ -64,6 +64,7 @@ pub(super) async fn preflight_mls_welcome_claim_ledger_reject(
 
 #[cfg(test)]
 mod tests {
+    use super::{AppState, SessionRecord, preflight_mls_welcome_claim_signature_reject};
     use arkret_models_collaboration::events_payloads::{
         MlsRequesterTrustBinding, MlsWelcomePayload,
     };
@@ -72,8 +73,6 @@ mod tests {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use ed25519_dalek::Signer as _;
     use serde_json::json;
-
-    use super::{AppState, SessionRecord, preflight_mls_welcome_claim_signature_reject};
 
     #[tokio::test]
     async fn welcome_signature_preflight_binds_the_actual_actor_and_device_signature() {
