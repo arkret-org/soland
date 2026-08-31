@@ -7,10 +7,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
+pub use soland_storage::FEDERATION_FRONTIER_STATUS_PEER_STALE;
 
 use crate::ServiceResult;
-
-pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "peer_stale";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {

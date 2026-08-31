@@ -2357,6 +2357,9 @@ pub(super) async fn submit_event_value_with_context(
         .map(|record| record.actor_seq)
         .max()
         && parsed.actor_seq < max_seq
+        && !context
+            .internal_admission
+            .is_some_and(InternalEventAdmission::is_peer_replication)
     {
         let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
             SubmitOneError::new(
@@ -3242,7 +3245,13 @@ pub(super) async fn submit_event_value_with_context(
     if let Some(options) = commit_options.as_ref() {
         outbox.extend_from_slice(options.additional_deliveries);
     }
-    let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
+    let frontier_seq = scoped_actor_records
+        .iter()
+        .map(|record| record.actor_seq)
+        .max()
+        .unwrap_or(parsed.actor_seq)
+        .max(parsed.actor_seq);
+    let next_actor_seq = frontier_seq.checked_add(1).ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::CONFLICT,
             "frontier_sequence_exhausted",
@@ -3251,7 +3260,7 @@ pub(super) async fn submit_event_value_with_context(
     })?;
     let mut prospective_frontier_ids = scoped_actor_records
         .iter()
-        .filter(|record| record.actor_seq == parsed.actor_seq)
+        .filter(|record| record.actor_seq == frontier_seq)
         .map(|record| {
             EventId::new(record.event_id.clone()).map_err(|_| {
                 SubmitOneError::new(
@@ -3262,7 +3271,9 @@ pub(super) async fn submit_event_value_with_context(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    prospective_frontier_ids.push(parsed.event_id.clone());
+    if parsed.actor_seq == frontier_seq {
+        prospective_frontier_ids.push(parsed.event_id.clone());
+    }
     prospective_frontier_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     prospective_frontier_ids.dedup();
     let prospective_frontier = super::super::endpoints::build_realm_actor_frontier(
@@ -3382,6 +3393,9 @@ pub(super) async fn submit_event_value_with_context(
         })
         .transpose()?;
     let command = soland_services::events::CommitAcceptedEventCommand {
+        replicated: context
+            .internal_admission
+            .is_some_and(InternalEventAdmission::is_peer_replication),
         membership_compensation_evidence,
         governance_dependencies: governance_dependency.into_iter().collect(),
         device_pairing_authorization: commit_options

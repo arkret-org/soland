@@ -27,6 +27,11 @@ const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
+mod backfill;
+pub(in crate::routing) use backfill::{
+    admit_frontier_backfill_event, verify_frontier_backfill_event,
+};
+
 /// Bind the SDK's online-self publication lane to the exact authenticated
 /// principal authority context. Delayed publication is authorized by its
 /// signed lease and peer publication by federation admission; neither may be
@@ -477,6 +482,13 @@ enum InternalEventBinding {
 }
 
 impl InternalEventAdmission {
+    fn is_peer_replication(&self) -> bool {
+        matches!(
+            self.binding,
+            InternalEventBinding::PeerFederatedEvent { .. }
+                | InternalEventBinding::PeerAgentMembershipCascade { .. }
+        )
+    }
     pub(in crate::routing::events::event_log) fn is_applet_formal(&self) -> bool {
         matches!(self.binding, InternalEventBinding::AppletFormal { .. })
     }

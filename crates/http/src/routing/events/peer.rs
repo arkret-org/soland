@@ -2039,6 +2039,36 @@ pub(in crate::routing) async fn peer_event_visibility(
     Ok(authz.record_visible(record))
 }
 
+/// Freeze the producer's caller-visible policy on the same accepted snapshot
+/// used for reduction. Actor routing retains the complete account/station key.
+pub(in crate::routing) async fn frontier_disclosure_snapshot(
+    state: &AppState,
+    source_id: &str,
+    realm_id: &str,
+    records: &[AcceptedEvent],
+) -> Result<(Vec<AcceptedEvent>, BTreeSet<String>), AppError> {
+    let authz = PeerReadAuthz::build(state, source_id, records).await?;
+    let visible = records
+        .iter()
+        .filter(|record| {
+            super::event_log::canonical_realm_id_for_record(record).as_deref() == Some(realm_id)
+                && authz.record_visible(record)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    // A peer may legitimately lag behind our outbox. Only its own already
+    // admitted, mutually visible actors imply that it must disclose that actor.
+    let mut required = BTreeSet::new();
+    for record in &visible {
+        let actor: arkret_wire::ActorId = serde_json::from_str(&record.actor_id)
+            .map_err(|error| AppError::internal(format!("stored frontier actor: {error}")))?;
+        if actor.route_service_id().as_str() == source_id {
+            required.insert(actor.to_string());
+        }
+    }
+    Ok((visible, required))
+}
+
 /// Authorize a near-current peer query for the exact MLS security scope.
 /// Sidecar and genesis scopes are deliberately not exposed through the
 /// federation surface, matching the self governance-proof visibility rules.

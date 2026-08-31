@@ -756,7 +756,11 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 "realm_already_exists".to_owned(),
             ));
         }
-        soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
+        soland_storage::validate_actor_scope_commit(
+            staged_events.values(),
+            &request.event,
+            request.replicated,
+        )?;
         stage_control_proposal_ack(&mut staged_control_proposal_acks, &request)?;
         stage_event_governance_dependencies(&mut staged_governance_dependencies, &request)?;
         stage_contact_projection(&mut staged_contacts, request.contact_projection.as_ref())?;
@@ -1027,6 +1031,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             soland_storage::validate_actor_scope_commit(
                 staged_events.values(),
                 &event_request.event,
+                event_request.replicated,
             )?;
             stage_control_proposal_ack(&mut staged_control_proposal_acks, &event_request)?;
             stage_event_governance_dependencies(
@@ -1439,6 +1444,59 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn frontier_backfill_accepts_historical_siblings_without_relaxing_self_cas() {
+        let store = SolandMemoryPersistenceStore::new();
+        let realm = realm_id();
+        let actor = "ak:did_core:web:frontier.example";
+        let first = event_request("first".to_owned(), realm.clone(), actor, None);
+        let mut next = event_request("next".to_owned(), realm.clone(), actor, None);
+        let mut envelope: arkret_wire::Event =
+            serde_json::from_value(next.event.envelope.clone()).unwrap();
+        envelope.actor_seq = 1;
+        envelope.prev_refs = vec![arkret_wire::EventId::new(first.event.event_id.clone()).unwrap()];
+        envelope
+            .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        next.event.actor_seq = 1;
+        next.event.event_id = envelope.event_id.to_string();
+        next.event.canonical_digest = envelope
+            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        next.event.canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&envelope.digest_payload().unwrap()).unwrap();
+        next.event.envelope = serde_json::to_value(envelope).unwrap();
+        store.commit_event(first).await.unwrap();
+        store.commit_event(next).await.unwrap();
+        let mut sibling = event_request("sibling".to_owned(), realm.clone(), actor, None);
+        assert_eq!(
+            store
+                .commit_event(sibling.clone())
+                .await
+                .unwrap_err()
+                .conflict_code(),
+            Some(soland_storage::ConflictCode::CasConflict)
+        );
+        sibling.replicated = true;
+        store.commit_event(sibling).await.unwrap();
+        assert_eq!(store.events.data.lock().len(), 3);
+        for index in 0..14 {
+            let mut sibling = event_request(format!("sibling-{index}"), realm.clone(), actor, None);
+            sibling.replicated = true;
+            store.commit_event(sibling).await.unwrap();
+        }
+        let mut overflow = event_request("overflow".to_owned(), realm, actor, None);
+        overflow.replicated = true;
+        assert_eq!(
+            store
+                .commit_event(overflow)
+                .await
+                .unwrap_err()
+                .conflict_code(),
+            Some(soland_storage::ConflictCode::ForkQuarantine)
+        );
+    }
+
     fn event_request(
         event_seed: String,
         realm_id: String,
@@ -1466,6 +1524,7 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
@@ -1938,6 +1997,7 @@ mod tests {
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         EventCommitRequest {
+            replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
@@ -2046,6 +2106,7 @@ mod tests {
         };
         (
             EventCommitRequest {
+                replicated: false,
                 governance_dependencies: Vec::new(),
                 membership_compensation_evidence: None,
                 device_pairing_authorization: None,

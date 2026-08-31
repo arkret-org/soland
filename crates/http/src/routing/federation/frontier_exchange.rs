@@ -2,10 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::AcceptedEvent;
-use soland_services::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
+use soland_services::federation::FEDERATION_FRONTIER_STATUS_PEER_STALE;
 
+use super::frontier_reduction::{self, ReductionPlan};
 use crate::state::AppState;
 
 const EXCHANGE_INTERVAL: Duration = Duration::from_secs(60 * 60);
@@ -58,26 +60,14 @@ impl FrontierExchangeWorker {
             .map_err(|error| error.to_string())?;
         let realms = federation_visible_realms(&records);
         for realm_id in realms {
-            let local_root = match local_frontier_root(&records, &realm_id) {
-                Ok(root) => root,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        realm_id,
-                        worker = "federation_frontier_exchange",
-                        "local frontier root could not be computed"
-                    );
-                    continue;
-                }
-            };
             for peer in &peers {
                 if peer.service_id.as_str() == self.state.service_id() {
                     continue;
                 }
-                let result = self.probe_peer(&peer.service_id, &realm_id).await;
+                let result = self.exchange_peer(&peer.service_id, &realm_id).await;
                 let now = chrono::Utc::now().timestamp();
                 match result {
-                    Ok(remote_root) if remote_root == local_root => {
+                    Ok(Some(remote_root)) => {
                         let record = self
                             .state
                             .federation()
@@ -92,16 +82,7 @@ impl FrontierExchangeWorker {
                             "frontier exchange succeeded"
                         );
                     }
-                    Ok(remote_root) => {
-                        self.record_failure(
-                            &realm_id,
-                            &peer.service_id,
-                            "frontier_root_mismatch",
-                            now,
-                            Some(&remote_root),
-                        )
-                        .await?;
-                    }
+                    Ok(None) => {}
                     Err(error) => {
                         self.record_failure(&realm_id, &peer.service_id, &error, now, None)
                             .await?;
@@ -112,11 +93,93 @@ impl FrontierExchangeWorker {
         Ok(())
     }
 
-    async fn probe_peer(
+    async fn exchange_peer(
         &self,
         peer_id: &arkret_wire::DidCoreId,
         realm_id: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Option<String>, String> {
+        let existing = self
+            .state
+            .federation()
+            .frontier_exchange(realm_id, peer_id)
+            .await
+            .map_err(|error| error.to_string())?;
+        if existing
+            .as_ref()
+            .and_then(|record| record.last_error.as_deref())
+            .is_some_and(|reason| matches!(reason, "witness_disagreement" | "fork_quarantine"))
+        {
+            // Availability is not an authorized resolution of retained evidence.
+            // Do not admit another increment through the backfill recovery rail.
+            return Ok(None);
+        }
+        for _ in 0..3 {
+            let before = self
+                .state
+                .event_queries()
+                .canonical_events()
+                .await
+                .map_err(|error| error.to_string())?;
+            let (visible, required) = crate::routing::events::peer::frontier_disclosure_snapshot(
+                &self.state,
+                peer_id.as_str(),
+                realm_id,
+                &before,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+            let remote = self.probe_peer(peer_id, realm_id).await?;
+            match frontier_reduction::plan(&before, &visible, &remote, &required)? {
+                ReductionPlan::Equal | ReductionPlan::Disjoint => {
+                    return Ok(Some(remote.frontier_root.to_string()));
+                }
+                ReductionPlan::Challenge(actors) => {
+                    let admitted = match self.challenge(peer_id, &remote, &actors).await {
+                        Ok(admitted) => admitted,
+                        Err(error)
+                            if matches!(
+                                error.as_str(),
+                                "temporarily_unavailable:challenge_page_budget"
+                                    | "temporarily_unavailable:challenge_byte_budget"
+                                    | "temporarily_unavailable:dependency_budget"
+                                    | "temporarily_unavailable:admission_round_budget"
+                                    | "temporarily_unavailable:backfill_publication_evidence_unavailable"
+                            ) =>
+                        {
+                            // Local resource or evidence-acquisition limits
+                            // do not establish a peer validation failure.
+                            tracing::debug!(realm_id, peer_id = %peer_id, reason = %error, "frontier reduction deferred pending resources or publication evidence");
+                            return Ok(None);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let after = self
+                        .state
+                        .event_queries()
+                        .canonical_events()
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    if frontier_reduction::snapshot_changed(&before, &after, &admitted, realm_id) {
+                        continue;
+                    }
+                    let actor_keys = actors.iter().map(ToString::to_string).collect();
+                    let sets = frontier_reduction::sibling_sets(&after, realm_id, &actor_keys)?;
+                    tracing::debug!(realm_id, peer_id = %peer_id, positions = sets.len(), "frontier sibling reduction completed without a completeness claim");
+                    return Ok(Some(remote.frontier_root.to_string()));
+                }
+            }
+        }
+        // Local concurrency exhausted this pass's budget. Retry on the next
+        // scheduled pass without charging a failure to an honest remote peer.
+        Ok(None)
+    }
+
+    async fn peer_query<T: serde::Serialize, R: serde::de::DeserializeOwned>(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        path: &str,
+        request: &T,
+    ) -> Result<(R, String, usize), String> {
         let route =
             super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
                 .await
@@ -127,46 +190,279 @@ impl FrontierExchangeWorker {
         ) {
             return Err(format!("trust_domain_policy_denied:{reason}"));
         }
-        let peer_url = route.cache_entry.base_url.trim_end_matches('/');
-        let canonical_target = format!("{}/_arkret/peer/events/frontier", peer_url);
-        let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
-                .map_err(|error| format!("invalid_realm_id:{error}"))?,
-            actor_id: None,
-        };
-        let body = arkret_canonical::canonical_json_bytes(&request)
-            .map_err(|error| format!("canonical_json:{error}"))?;
-        let (parsed_url, client) =
-            crate::security::validate_http_url_for_egress_with_pinned_client(
-                &canonical_target,
-                "federation frontier exchange",
-                self.state.config().development_mode,
-                REQUEST_TIMEOUT,
-            )
-            .map_err(|error| format!("egress_policy_denied:{error}"))?;
+        let target = format!(
+            "{}{}",
+            route.cache_entry.base_url.trim_end_matches('/'),
+            path
+        );
+        let body =
+            arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
+        let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+            &target,
+            "federation frontier reduction",
+            self.state.config().development_mode,
+            REQUEST_TIMEOUT,
+        )
+        .map_err(|error| error.to_string())?;
         let headers = signed_query_headers(
             &self.state,
             peer_id.as_str(),
             route.trust_domain.as_str(),
-            &canonical_target,
+            &target,
             &body,
         );
-        let query_method = reqwest::Method::from_bytes(b"QUERY")
-            .map_err(|error| format!("invalid_query_method:{error}"))?;
-        let response = client
-            .request(query_method, parsed_url)
+        let mut response = client
+            .request(
+                reqwest::Method::from_bytes(b"QUERY").map_err(|error| error.to_string())?,
+                url,
+            )
             .headers(headers)
             .body(body)
             .send()
             .await
             .map_err(|error| format!("network_error:{error}"))?;
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if !status.is_success() {
-            return Err(format!("http_status:{}", status.as_u16()));
+        if !response.status().is_success() {
+            return Err(format!("http_status:{}", response.status().as_u16()));
         }
-        let state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
-            serde_json::from_str(&body).map_err(|_| "json_invalid".to_owned())?;
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("network_error:{error}"))?
+        {
+            if bytes.len() + chunk.len() > 8 * 1024 * 1024 {
+                return Err("schema_violation:response_byte_limit".to_owned());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        let value =
+            serde_json::from_slice(&bytes).map_err(|error| format!("schema_violation:{error}"))?;
+        Ok((value, route.trust_domain.to_string(), bytes.len()))
+    }
+
+    async fn challenge(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        remote: &EventsFrontierFederationPeerState,
+        actors: &[arkret_wire::ActorId],
+    ) -> Result<BTreeSet<String>, String> {
+        use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+        use arkret_models_collaboration::http_bodies::{
+            EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
+        };
+        let actor_set = actors.iter().cloned().collect::<BTreeSet<_>>();
+        let mut pending = Vec::new();
+        let mut bytes = 0;
+        let mut pages = 0;
+        let mut trust_domain = String::new();
+        for actor in actors {
+            let mut cursor = None;
+            let mut cursors = BTreeSet::new();
+            loop {
+                pages += 1;
+                if pages > 64 {
+                    return Err("temporarily_unavailable:challenge_page_budget".to_owned());
+                }
+                let request = EventsQueryPostRequestBody {
+                    realm_ids: vec![remote.realm_id.clone()],
+                    actor_ids: vec![actor.clone()],
+                    after: cursor.clone(),
+                    order: Some("ascending".to_owned()),
+                    limit: Some(256),
+                    ..Default::default()
+                };
+                let (page, domain, size): (EventsQueryOutcome, _, _) = self
+                    .peer_query(peer_id, "/_arkret/peer/events", &request)
+                    .await?;
+                trust_domain = domain;
+                bytes += size;
+                if bytes > 64 * 1024 * 1024 {
+                    return Err("temporarily_unavailable:challenge_byte_budget".to_owned());
+                }
+                for row in page.events {
+                    let event = row.into_event().ok_or_else(|| {
+                        "schema_violation:challenge_requires_full_event".to_owned()
+                    })?;
+                    if event.realm_id != remote.realm_id || event.actor_id != *actor {
+                        return Err("schema_violation:challenge_selector_mismatch".to_owned());
+                    }
+                    pending.push(event);
+                }
+                if !page.has_more {
+                    break;
+                }
+                let next = page
+                    .next_cursor
+                    .ok_or_else(|| "schema_violation:missing_scan_cursor".to_owned())?;
+                if !cursors.insert(next.clone()) {
+                    return Err("schema_violation:repeated_scan_cursor".to_owned());
+                }
+                cursor = Some(arkret_wire::Cursor::new(next).map_err(|error| error.to_string())?);
+            }
+        }
+        // Resolve advertised heads, then verified predecessor dependencies.
+        // A finite selector and byte budget bounds even adversarial DAGs.
+        let mut selectors = remote.head_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let mut dependencies = BTreeSet::new();
+        let mut resolved = BTreeSet::new();
+        let mut admitted = BTreeSet::new();
+        let mut dependency_closure_complete = false;
+        for _ in 0..64 {
+            for event in &pending {
+                crate::routing::events::event_log::verify_frontier_backfill_event(
+                    &self.state,
+                    event,
+                )
+                .await?;
+                resolved.insert(event.event_id.clone());
+                if actor_set.contains(&event.actor_id) || dependencies.contains(&event.event_id) {
+                    dependencies.extend(event.prev_refs.iter().cloned());
+                    selectors.extend(event.prev_refs.iter().cloned());
+                }
+            }
+            selectors.retain(|id| !resolved.contains(id));
+            if selectors.len() > 16_384 {
+                return Err("temporarily_unavailable:dependency_budget".to_owned());
+            }
+            let mut missing = Vec::new();
+            for id in &selectors {
+                if self
+                    .state
+                    .event_queries()
+                    .canonical_event(id.as_str())
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .is_none()
+                {
+                    missing.push(id.clone());
+                } else {
+                    resolved.insert(id.clone());
+                }
+            }
+            if missing.is_empty() {
+                dependency_closure_complete = true;
+                break;
+            }
+            for batch in missing.chunks(256) {
+                let request = PeerEventsResolveRequestBody {
+                    realm_id: remote.realm_id.clone(),
+                    event_ids: batch.to_vec(),
+                    event_digests: Vec::new(),
+                    include_payload: Some(true),
+                    max_response_bytes: Some(8 * 1024 * 1024),
+                    history_traversal_access: None,
+                };
+                let (outcome, domain, size): (PeerEventsResolveOutcome, _, _) = self
+                    .peer_query(peer_id, "/_arkret/peer/events/resolve", &request)
+                    .await?;
+                trust_domain = domain;
+                bytes += size;
+                pages += 1;
+                if pages > 128 || bytes > 64 * 1024 * 1024 {
+                    return Err("temporarily_unavailable:dependency_budget".to_owned());
+                }
+                for event in &outcome.events {
+                    crate::routing::events::event_log::verify_frontier_backfill_event(
+                        &self.state,
+                        event,
+                    )
+                    .await?;
+                }
+                outcome
+                    .validate_for_request(&request)
+                    .map_err(|error| format!("schema_violation:{error}"))?;
+                if !outcome.missing_event_ids.is_empty()
+                    || !outcome.missing_event_digests.is_empty()
+                {
+                    return Err("dependency_missing:advertised_head_or_predecessor".to_owned());
+                }
+                if outcome
+                    .events
+                    .iter()
+                    .any(|event| event.realm_id != remote.realm_id)
+                {
+                    return Err("schema_violation:dependency_realm_mismatch".to_owned());
+                }
+                pending.extend(outcome.events);
+            }
+        }
+        if !dependency_closure_complete {
+            return Err("temporarily_unavailable:dependency_budget".to_owned());
+        }
+        // Dependencies can precede the actor intersection, but unrelated heads
+        // never expand the replication obligation of this exchange.
+        for actor in actors {
+            let upper = remote.actor_seq_upper_bounds[actor];
+            if !pending
+                .iter()
+                .any(|event| event.actor_id == *actor && event.actor_seq == upper)
+            {
+                return Err("schema_violation:advertised_actor_bound_not_disclosed".to_owned());
+            }
+        }
+        pending.retain(|event| {
+            actor_set.contains(&event.actor_id) || dependencies.contains(&event.event_id)
+        });
+        pending.sort_by(|a, b| (a.actor_seq, &a.event_id).cmp(&(b.actor_seq, &b.event_id)));
+        for _ in 0..64 {
+            if pending.is_empty() {
+                return Ok(admitted);
+            }
+            let mut retry = Vec::new();
+            let mut progress = false;
+            for event in pending {
+                match crate::routing::events::event_log::admit_frontier_backfill_event(
+                    &self.state,
+                    peer_id.as_str(),
+                    &trust_domain,
+                    &event,
+                )
+                .await
+                {
+                    Ok(_) => {
+                        admitted.insert(event.event_id.to_string());
+                        progress = true;
+                    }
+                    Err(error) if error.code == "dependency_missing" => retry.push(event),
+                    Err(error) => {
+                        if error.quarantine_event_id.is_some() {
+                            return Err(error.code);
+                        }
+                        return Err(format!("{}:{}", error.code, error.message));
+                    }
+                }
+            }
+            if !progress {
+                return Err("dependency_missing:backfill_admission".to_owned());
+            }
+            pending = retry;
+        }
+        Err("temporarily_unavailable:admission_round_budget".to_owned())
+    }
+
+    async fn probe_peer(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+    ) -> Result<EventsFrontierFederationPeerState, String> {
+        let route =
+            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
+                .await
+                .map_err(|error| format!("service_route_unavailable:{error}"))?;
+        if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
+            peer_id.as_str(),
+            Some(route.trust_domain.as_str()),
+        ) {
+            return Err(format!("trust_domain_policy_denied:{reason}"));
+        }
+        let request = arkret_models_collaboration::event_query::PeerEventsFrontierRequestBody {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .map_err(|error| format!("invalid_realm_id:{error}"))?,
+            actor_id: None,
+        };
+        let (state, ..): (EventsFrontierFederationPeerState, _, _) = self
+            .peer_query(peer_id, "/_arkret/peer/events/frontier", &request)
+            .await?;
         if state.auth_state_root.is_some()
             || state.policy_frontier_root.is_some()
             || state.membership_frontier_root.is_some()
@@ -184,7 +480,7 @@ impl FrontierExchangeWorker {
             &document,
         );
         if result.is_ok() {
-            return result;
+            return Ok(state);
         }
         // A key miss or rotation must refresh the verified route and authority
         // document, never retry against a service-id-only cached public key.
@@ -200,7 +496,8 @@ impl FrontierExchangeWorker {
             realm_id,
             chrono::Utc::now(),
             &document,
-        )
+        )?;
+        Ok(state)
     }
 
     async fn record_failure(
@@ -217,7 +514,7 @@ impl FrontierExchangeWorker {
             .record_frontier_failure(realm_id, peer_id, reason, observed_at)
             .await
             .map_err(|error| error.to_string())?;
-        if record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER {
+        if record.status == FEDERATION_FRONTIER_STATUS_PEER_STALE {
             tracing::error!(
                 realm_id,
                 peer_id = %peer_id,
@@ -291,7 +588,10 @@ fn federation_visible_realms(records: &[AcceptedEvent]) -> BTreeSet<String> {
         .collect()
 }
 
-fn local_frontier_root(records: &[AcceptedEvent], realm_id: &str) -> Result<String, String> {
+pub(super) fn local_frontier_root(
+    records: &[AcceptedEvent],
+    realm_id: &str,
+) -> Result<String, String> {
     let visible_realm_records = records
         .iter()
         .filter(|record| {
@@ -387,7 +687,7 @@ pub async fn inbound_peer_is_stale(
         .frontier_exchange(realm_id, &peer_id)
         .await
         .map(|record| {
-            record.is_some_and(|record| record.status == FEDERATION_FRONTIER_STATUS_STALE_PEER)
+            record.is_some_and(|record| record.status == FEDERATION_FRONTIER_STATUS_PEER_STALE)
         })
         .map_err(|error| error.to_string())
 }
@@ -395,6 +695,59 @@ pub async fn inbound_peer_is_stale(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn frontier_state_reaches_the_inbound_gate_and_recovers_only_from_ordinary_failure() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let peer = arkret_wire::DidCoreId::new("ak:did_core:web:peer.example").unwrap();
+        let realm = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+        for attempt in 1..=3 {
+            state
+                .federation()
+                .record_frontier_failure(realm, &peer, "network_error", attempt)
+                .await
+                .unwrap();
+            assert_eq!(
+                inbound_peer_is_stale(&state, realm, peer.as_str())
+                    .await
+                    .unwrap(),
+                attempt == 3
+            );
+        }
+        state
+            .federation()
+            .record_frontier_success(realm, &peer, "remote-scope-root", 4)
+            .await
+            .unwrap();
+        assert!(
+            !inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+        state
+            .federation()
+            .record_frontier_failure(realm, &peer, "fork_quarantine", 5)
+            .await
+            .unwrap();
+        assert!(
+            inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+        state
+            .federation()
+            .record_frontier_success(realm, &peer, "equal-root", 6)
+            .await
+            .unwrap();
+        assert!(
+            inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+    }
 
     #[test]
     fn frontier_response_validation_requires_bound_peer_and_realm() {

@@ -919,7 +919,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .into_iter()
             .map(CanonicalEventRecord::from)
             .collect::<Vec<_>>();
-            validate_actor_scope_commit(scoped.iter(), &request.event)?;
+            validate_actor_scope_commit(scoped.iter(), &request.event, request.replicated)?;
             let event_pk = sql_query(
                 "INSERT INTO canonical_events \
                  (id, digest_suite, digest, actor_id, actor_seq, realm_id, realm_pk, kind, schema_id, canonical_bytes, envelope, received_at) \

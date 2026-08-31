@@ -885,6 +885,8 @@ use crate::federation::FederationDeliveryRecord;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
+    /// Origin admission was verified; historical sibling union is permitted.
+    pub replicated: bool,
     pub event: AcceptedEvent,
     pub membership_compensation_evidence:
         Option<soland_storage::MembershipCompensationEvidenceRecord>,
@@ -2677,6 +2679,7 @@ mod tests {
         let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
+                replicated: false,
                 membership_compensation_evidence: None,
                 governance_dependencies: Vec::new(),
                 device_pairing_authorization: None,

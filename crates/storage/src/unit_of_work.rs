@@ -90,6 +90,8 @@ pub struct AccountDataCasCommit {
 
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
+    /// Origin admission was verified; historical sibling union is permitted.
+    pub replicated: bool,
     pub event: CanonicalEventRecord,
     /// Transport-only membership compensation evidence committed in the same
     /// atomic unit as the Event. It never enters `event.canonical_bytes`.
@@ -778,6 +780,7 @@ pub trait EventCommitUnitOfWork: Send + Sync {
 pub fn validate_actor_scope_commit<'a>(
     existing: impl IntoIterator<Item = &'a CanonicalEventRecord>,
     event: &CanonicalEventRecord,
+    replicated: bool,
 ) -> PersistenceResult<()> {
     let Some(realm_id) = event.realm_id.as_deref() else {
         return Err(crate::PersistenceError::Conflict(
@@ -791,7 +794,7 @@ pub fn validate_actor_scope_commit<'a>(
         })
         .collect::<Vec<_>>();
     if let Some(max_seq) = scoped.iter().map(|record| record.actor_seq).max() {
-        if event.actor_seq < max_seq {
+        if event.actor_seq < max_seq && !replicated {
             return Err(crate::PersistenceError::Conflict("cas_conflict".to_owned()));
         }
         if event.actor_seq > max_seq.saturating_add(1) {

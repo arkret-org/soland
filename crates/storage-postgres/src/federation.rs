@@ -600,21 +600,8 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         frontier_root: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let existing = self
-            .get(realm_id, peer_id)
+        self.transition(realm_id, peer_id, observed_at, Some(frontier_root), None)
             .await
-            .map_err(PersistenceError::database)?;
-        let record = frontier_exchange_success_record(
-            existing,
-            realm_id,
-            peer_id,
-            frontier_root,
-            observed_at,
-        );
-        self.put_record(&record)
-            .await
-            .map_err(PersistenceError::database)?;
-        Ok(record)
     }
 
     async fn record_failure(
@@ -624,16 +611,8 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         reason: &str,
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord> {
-        let existing = self
-            .get(realm_id, peer_id)
+        self.transition(realm_id, peer_id, observed_at, None, Some(reason))
             .await
-            .map_err(PersistenceError::database)?;
-        let record =
-            frontier_exchange_failure_record(existing, realm_id, peer_id, reason, observed_at);
-        self.put_record(&record)
-            .await
-            .map_err(PersistenceError::database)?;
-        Ok(record)
     }
 
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
@@ -654,11 +633,45 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     }
 }
 impl PgFederationFrontierExchangeStore {
-    async fn put_record(&self, record: &FederationFrontierExchangeRecord) -> PersistenceResult<()> {
+    async fn transition(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        observed_at: i64,
+        root: Option<&str>,
+        reason: Option<&str>,
+    ) -> PersistenceResult<FederationFrontierExchangeRecord> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
+        let realm_id = realm_id.to_owned();
+        let peer_id = peer_id.clone();
+        let root = root.map(ToOwned::to_owned);
+        let reason = reason.map(ToOwned::to_owned);
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            crate::realm_identity::ensure_realm_pk(conn, &realm_id).await?;
+            // Serialize read/classify/write, including the first absent row.
+            // Otherwise a concurrent success can erase confirmed evidence.
+            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+                .bind::<Text, _>(format!("frontier:{realm_id}:{}", peer_id.as_str()))
+                .execute(conn).await?;
+            let existing = sql_query("SELECT realm_id, peer_id, status, consecutive_failures, last_success_at, last_failure_at, last_frontier_root, last_error, updated_at FROM federation_frontier_exchange WHERE realm_id = $1 AND peer_id = $2")
+                .bind::<Text, _>(&realm_id).bind::<Text, _>(peer_id.as_str())
+                .get_result::<FederationFrontierExchangeRow>(conn).await.optional()?
+                .map(FederationFrontierExchangeRecord::try_from).transpose()?;
+            let record = match reason {
+                Some(reason) => frontier_exchange_failure_record(existing, &realm_id, &peer_id, &reason, observed_at),
+                None => frontier_exchange_success_record(existing, &realm_id, &peer_id, root.as_deref().expect("success requires observed root"), observed_at),
+            };
+            Self::put_record(conn, &record).await?;
+            Ok(record)
+        }).await.map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn put_record(
+        conn: &mut AsyncPgConnection,
+        record: &FederationFrontierExchangeRecord,
+    ) -> PersistenceResult<()> {
         sql_query(
             "INSERT INTO federation_frontier_exchange \
              (realm_id, peer_id, status, consecutive_failures, last_success_at, \

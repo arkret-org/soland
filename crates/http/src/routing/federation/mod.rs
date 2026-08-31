@@ -3,6 +3,7 @@ use salvo::prelude::*;
 #[allow(clippy::module_inception)]
 pub(crate) mod federation;
 pub mod frontier_exchange;
+mod frontier_reduction;
 pub(crate) mod move_seal;
 pub mod outbox;
 pub mod outbox_operator;

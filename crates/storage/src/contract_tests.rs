@@ -1391,6 +1391,7 @@ fn contract_ghost(
 fn contract_applet_event_request(event: CanonicalEventRecord) -> EventCommitRequest {
     let control_proposal_ack = contract_control_proposal_ack(&event, event.received_at);
     EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -2188,6 +2189,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let event = canonical_wire_event_record("", &principal_id, &realm_id, 0, now);
     let event_id = event.event_id.clone();
     let request = EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -2303,6 +2305,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         canonical_wire_event_record("", &principal_id, &first_approval_realm, 0, now);
     let first_approval_event_id = first_approval_event.event_id.clone();
     let approval_request = |event: CanonicalEventRecord, realm_id: String| EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -2422,6 +2425,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let pairing_event_id = pairing_event.event_id.clone();
     let pairing_ack = contract_control_proposal_ack(&pairing_event, now);
     let pairing_commit = EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: Some(DevicePairingAuthorizationCommit {
@@ -2545,6 +2549,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
         updated_at: now,
     };
     let contact_commit = EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -2642,6 +2647,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let failed_contact_commit = stores
         .unit_of_work
         .commit_event(EventCommitRequest {
+            replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
@@ -2696,6 +2702,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_event = canonical_wire_event_record("", &principal_id, &realm_id, 4, now);
     let rollback_event_id = rollback_event.event_id.clone();
     let failed = EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -5048,6 +5055,7 @@ fn contract_device_revoke_fixture(
     let ingress = ControlProposalIngress::AckRequired(control_proposal_ack);
     (
         EventCommitRequest {
+            replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
@@ -5475,6 +5483,7 @@ fn consent_commit_request(
     consent_projection: ConsentProjectionCommit,
 ) -> EventCommitRequest {
     EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,

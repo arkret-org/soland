@@ -272,7 +272,11 @@ pub struct FederationOutboxStateDepth {
 }
 pub const FEDERATION_FRONTIER_STALE_FAILURES: i32 = 3;
 pub const FEDERATION_FRONTIER_STATUS_HEALTHY: &str = "healthy";
-pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "stale_peer";
+pub const FEDERATION_FRONTIER_STATUS_PEER_STALE: &str = "peer_stale";
+
+fn confirmed_frontier_evidence(reason: &str) -> bool {
+    matches!(reason, "witness_disagreement" | "fork_quarantine")
+}
 #[async_trait]
 pub trait FederationFrontierExchangeStore: Send + Sync {
     async fn get(
@@ -308,15 +312,28 @@ pub fn frontier_exchange_success_record(
     frontier_root: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
+    let unresolved = existing
+        .as_ref()
+        .and_then(|record| record.last_error.as_deref())
+        .is_some_and(confirmed_frontier_evidence);
     FederationFrontierExchangeRecord {
         realm_id: realm_id.to_owned(),
         peer_id: peer_id.clone(),
-        status: FEDERATION_FRONTIER_STATUS_HEALTHY.to_owned(),
+        status: if unresolved {
+            FEDERATION_FRONTIER_STATUS_PEER_STALE
+        } else {
+            FEDERATION_FRONTIER_STATUS_HEALTHY
+        }
+        .to_owned(),
         consecutive_failures: 0,
         last_success_at: Some(observed_at),
-        last_failure_at: existing.and_then(|record| record.last_failure_at),
+        last_failure_at: existing.as_ref().and_then(|record| record.last_failure_at),
         last_frontier_root: Some(frontier_root.to_owned()),
-        last_error: None,
+        last_error: if unresolved {
+            existing.and_then(|record| record.last_error)
+        } else {
+            None
+        },
         updated_at: observed_at,
     }
 }
@@ -328,12 +345,21 @@ pub fn frontier_exchange_failure_record(
     reason: &str,
     observed_at: i64,
 ) -> FederationFrontierExchangeRecord {
-    let failures = existing
+    let confirmed = confirmed_frontier_evidence(reason);
+    let unresolved = existing
         .as_ref()
-        .map(|record| record.consecutive_failures.saturating_add(1))
-        .unwrap_or(1);
-    let status = if failures >= FEDERATION_FRONTIER_STALE_FAILURES {
-        FEDERATION_FRONTIER_STATUS_STALE_PEER
+        .and_then(|record| record.last_error.as_deref())
+        .is_some_and(confirmed_frontier_evidence);
+    let failures = if confirmed {
+        0
+    } else {
+        existing
+            .as_ref()
+            .map(|record| record.consecutive_failures.saturating_add(1))
+            .unwrap_or(1)
+    };
+    let status = if confirmed || unresolved || failures >= FEDERATION_FRONTIER_STALE_FAILURES {
+        FEDERATION_FRONTIER_STATUS_PEER_STALE
     } else {
         FEDERATION_FRONTIER_STATUS_HEALTHY
     };
@@ -344,8 +370,14 @@ pub fn frontier_exchange_failure_record(
         consecutive_failures: failures,
         last_success_at: existing.as_ref().and_then(|record| record.last_success_at),
         last_failure_at: Some(observed_at),
-        last_frontier_root: existing.and_then(|record| record.last_frontier_root),
-        last_error: Some(reason.to_owned()),
+        last_frontier_root: existing
+            .as_ref()
+            .and_then(|record| record.last_frontier_root.clone()),
+        last_error: if unresolved {
+            existing.and_then(|record| record.last_error)
+        } else {
+            Some(reason.to_owned())
+        },
         updated_at: observed_at,
     }
 }

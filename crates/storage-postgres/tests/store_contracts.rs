@@ -43,6 +43,67 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configu
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
 
 #[tokio::test]
+async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
+    use soland_storage::FederationFrontierExchangeStore;
+    use soland_storage_postgres::PgFederationFrontierExchangeStore;
+    let pool = test_pool()
+        .await
+        .expect("frontier regression requires a real temporary PostgreSQL database");
+    let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+        arkret_canonical::DigestSuite::Sha256,
+        [0x93; 32],
+    ));
+    let peer = arkret_wire::DidCoreId::new(format!(
+        "ak:did_core:web:frontier-{}.example",
+        uuid::Uuid::new_v4()
+    ))
+    .unwrap();
+    let store = PgFederationFrontierExchangeStore { pool: pool.clone() };
+    for attempt in 1..=3 {
+        let record = store
+            .record_failure(realm.as_str(), &peer, "network_error", attempt)
+            .await
+            .unwrap();
+        assert_eq!(
+            record.status,
+            if attempt == 3 {
+                "peer_stale"
+            } else {
+                "healthy"
+            }
+        );
+    }
+    let reopened = PgFederationFrontierExchangeStore { pool: pool.clone() };
+    assert_eq!(
+        reopened
+            .get(realm.as_str(), &peer)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "peer_stale"
+    );
+    assert_eq!(
+        reopened
+            .record_success(realm.as_str(), &peer, "remote-root", 4)
+            .await
+            .unwrap()
+            .status,
+        "healthy"
+    );
+    let (evidence, success) = tokio::join!(
+        store.record_failure(realm.as_str(), &peer, "witness_disagreement", 5),
+        reopened.record_success(realm.as_str(), &peer, "another-scope-root", 6),
+    );
+    evidence.unwrap();
+    success.unwrap();
+    let restarted = PgFederationFrontierExchangeStore { pool };
+    let record = restarted.get(realm.as_str(), &peer).await.unwrap().unwrap();
+    assert_eq!(record.status, "peer_stale");
+    assert_eq!(record.last_error.as_deref(), Some("witness_disagreement"));
+}
+
+#[tokio::test]
 async fn postgres_structured_projection_and_invite_identities_round_trip_when_configured() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{
@@ -357,6 +418,7 @@ fn franking_event_request(
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     soland_storage::EventCommitRequest {
+        replicated: false,
         governance_dependencies: Vec::new(),
         membership_compensation_evidence: None,
         device_pairing_authorization: None,
@@ -2130,6 +2192,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     PgEventCommitUnitOfWork::new(pool.clone())
         .commit_event(EventCommitRequest {
+            replicated: false,
             governance_dependencies: Vec::new(),
             membership_compensation_evidence: None,
             device_pairing_authorization: None,
@@ -2406,6 +2469,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         .commit_event_batch(EventBatchCommitRequest {
             events: vec![
                 EventCommitRequest {
+                    replicated: false,
                     governance_dependencies: Vec::new(),
                     membership_compensation_evidence: None,
                     device_pairing_authorization: None,
@@ -2420,6 +2484,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
                     outbox: Vec::new(),
                 },
                 EventCommitRequest {
+                    replicated: false,
                     governance_dependencies: Vec::new(),
                     membership_compensation_evidence: None,
                     device_pairing_authorization: None,
@@ -2823,6 +2888,7 @@ mod control_move_ingress_negatives {
             ingress: Option<arkret_state::state::store::ControlProposalIngress>,
         ) -> EventCommitRequest {
             EventCommitRequest {
+                replicated: false,
                 governance_dependencies: Vec::new(),
                 membership_compensation_evidence: None,
                 device_pairing_authorization: None,

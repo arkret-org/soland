@@ -122,6 +122,7 @@ fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
+        replicated: command.replicated,
         event: persistence_canonical_event(command.event),
         membership_compensation_evidence: command.membership_compensation_evidence,
         governance_dependencies: command.governance_dependencies,
