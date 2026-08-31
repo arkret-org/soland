@@ -141,6 +141,23 @@ async fn seed_agent_grant_session(
     let controller = "did:web:alice.example";
     let controller_token = format!("agent-grant-controller-{slug}");
     super::agents::seed_controller_session(&state, &controller_token, controller).await;
+    let controller_account_id =
+        arkret_wire::AccountId::new(fixture_actor_core_id(controller), state.service_core_id());
+    let controller_account = state
+        .test_persistence()
+        .accounts()
+        .get(&controller_account_id)
+        .await
+        .unwrap()
+        .expect("the controller session is bound to this exact Station Account");
+    assert_eq!(
+        controller_account.principal_id,
+        controller_account_id.principal_id
+    );
+    assert_eq!(
+        controller_account.station_id,
+        controller_account_id.station_id
+    );
     super::agents::seed_agent_provision_prerequisites(&state, controller).await;
     let controller_authority =
         super::agents::seed_active_controller_device_generation(&state, controller).await;
@@ -245,7 +262,7 @@ async fn seed_agent_grant_session(
         .unwrap(),
         approval_notification_id: new_prefixed_uuid7("ak:notification:"),
         approval_requested_at: now,
-        controller_account_pk: soland_storage::AccountPk(1),
+        controller_account_pk: controller_account.pk,
         recipient_id: state.service_id().clone(),
         runtime_key_binding_digest: binding_digest.as_str().to_owned(),
         runtime_public_key_digest: request
@@ -386,6 +403,18 @@ async fn seed_agent_grant_session(
             .await
             .unwrap(),
         "runtime activation must match the pending intent"
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .agents()
+            .get(outcome.agent_id.as_str())
+            .await
+            .unwrap()
+            .unwrap()
+            .controller_account_pk,
+        Some(controller_account.pk),
+        "runtime approval must not substitute a demo Account at another Station",
     );
 
     // The Account Authority introspection mock: vouches for a SessionGrant

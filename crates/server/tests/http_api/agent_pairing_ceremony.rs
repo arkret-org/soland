@@ -279,7 +279,10 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     )
     .unwrap();
     authorize.prev_refs = vec![genesis_event_id.clone()];
-    authorize.executed_by = Some(arkret_wire::ActorId::service(controller_core.clone()));
+    authorize.executed_by = Some(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        controller_core.clone(),
+        service_core.clone(),
+    )));
     authorize.authorization_ref = Some(record.controller_authorization_ref.clone().into());
     authorize.seal_basis = Some(genesis_seal.seal_basis());
     authorize

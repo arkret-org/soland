@@ -204,6 +204,7 @@ mod tests {
         );
         account.pk = soland_storage::AccountPk(92);
         account.account_id.station_id = state.service_core_id();
+        account.localpart = "local-account".to_owned();
         state.identities().save_account(account).await.unwrap();
         let actors = demo_actors(&state).await;
         assert_eq!(
