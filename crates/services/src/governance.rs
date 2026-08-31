@@ -146,7 +146,6 @@ pub trait GovernanceRecordsPort: Send + Sync {
         owner: &str,
     ) -> ServiceResult<Vec<PolicyDocumentRecord>>;
     async fn policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>>;
-    async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>>;
     async fn retention_policy(
         &self,
         realm_id: &str,
@@ -480,10 +479,6 @@ impl GovernanceService {
         self.records.policy_documents().await
     }
 
-    pub async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
-        self.records.active_policy_documents().await
-    }
-
     pub async fn store_retention_policy(
         &self,
         record: &RetentionPolicyRecord,
@@ -660,9 +655,6 @@ mod tests {
             Ok(Vec::new())
         }
         async fn policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
-            Ok(Vec::new())
-        }
-        async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
             Ok(Vec::new())
         }
         async fn retention_policy(

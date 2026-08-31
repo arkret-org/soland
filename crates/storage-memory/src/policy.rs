@@ -39,13 +39,4 @@ impl PolicyDocumentStore for MemoryPolicyDocumentStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
         Ok(self.data.lock().values().cloned().collect())
     }
-
-    async fn list_active(&self) -> PersistenceResult<Vec<PolicyDocumentRecord>> {
-        let guard = self.data.lock();
-        Ok(guard
-            .values()
-            .filter(|record| record.active)
-            .cloned()
-            .collect())
-    }
 }
