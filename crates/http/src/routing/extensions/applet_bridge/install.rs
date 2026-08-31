@@ -248,7 +248,8 @@ pub(super) fn validate_admin_install_events(
                     && constraint.constraint_subkind
                         == Some(GrantConstraintSubkind::AppletAuthority)
                     && constraint.applet_id.as_ref() == Some(&expected_applet_id)
-                    && constraint.executed_by.as_ref() == Some(&package.service_id)
+                    && constraint.executed_by.as_ref()
+                        == Some(&arkret_wire::ActorId::service(package.service_id.clone()))
                     && constraint.registration_epoch.as_ref() == Some(&package.registration_epoch)
             })
             .count();
@@ -275,6 +276,18 @@ pub(super) fn validate_admin_install_events(
     })
 }
 
+fn validate_bot_actor_station(
+    bot_actor_id: &ActorId,
+    target_station_id: &arkret_identifiers::DidCoreId,
+) -> Result<(), AppError> {
+    if bot_actor_id.route_service_id() != target_station_id {
+        return Err(AppError::param_invalid(
+            "Applet bot actor is not bound to the target Station",
+        ));
+    }
+    Ok(())
+}
+
 fn validate_bot_managed_actor_unit(
     state: &AppState,
     commit: &AppletInstallRequestBody,
@@ -292,11 +305,7 @@ fn validate_bot_managed_actor_unit(
     let expected_applet_id = package.applet_id.clone();
     let service_actor_id = ActorId::service(package.service_id.clone());
     let bot_actor_id = package.bot_actor_id.clone();
-    if bot_actor_id.route_service_id() != &basis.target_station_id {
-        return Err(AppError::param_invalid(
-            "Applet bot actor is not bound to the target Station",
-        ));
-    }
+    validate_bot_actor_station(&bot_actor_id, &basis.target_station_id)?;
     if provision_event.kind.as_str() != "ak.applet.managed_actor.provision"
         || provision_event.actor_id != service_actor_id
         || provision_event.applet_id.as_ref() != Some(&expected_applet_id)
@@ -1022,7 +1031,7 @@ fn install_execution_steps(
             Some(json!({
                 "applet_id": record.applet_id.as_str(),
                 "grant_id": grant_id.as_str(),
-                "executed_by": package.service_id.to_string(),
+                "executed_by": arkret_wire::ActorId::service(package.service_id.clone()),
                 "registration_epoch": package.registration_epoch.to_string(),
             })),
         ));
@@ -1583,6 +1592,30 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn bot_install_rejects_the_same_principal_at_another_station() {
+        let principal_id = DidCoreId::new("ak:did_core:web:bot.example").unwrap();
+        let target_station_id = DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let foreign_station_id = DidCoreId::new("ak:did_core:web:other-station.example").unwrap();
+        let local_actor = ActorId::account(arkret_wire::AccountId::new(
+            principal_id.clone(),
+            target_station_id.clone(),
+        ));
+        let foreign_actor = ActorId::account(arkret_wire::AccountId::new(
+            principal_id,
+            foreign_station_id,
+        ));
+
+        validate_bot_actor_station(&local_actor, &target_station_id).unwrap();
+        assert_eq!(
+            local_actor.signing_principal_id(),
+            foreign_actor.signing_principal_id()
+        );
+        let error = validate_bot_actor_station(&foreign_actor, &target_station_id)
+            .expect_err("the same bot principal cannot borrow another Station's install");
+        assert_eq!(error.wire_code(), "param_invalid");
+    }
+
     /// Minimal production-mode (`development_mode == false`) AppState for
     /// exercising the controller-proof verifier against the built-in
     /// `did:key` resolver. Mirrors `routing/events/operations/policy_tests.rs`
@@ -1676,10 +1709,10 @@ mod tests {
             service_did.clone(),
             controller_id.clone(),
             "https://test-applet.example".to_owned(),
-            arkret_wire::ActorId::hosted_principal(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
                 service_id,
-            ),
+            )),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],
@@ -1804,13 +1837,13 @@ mod tests {
             service_did,
             DidCoreId::new("ak:did_core:web:test-registry.example".to_owned()).unwrap(),
             "https://test-applet.example".to_owned(),
-            arkret_wire::ActorId::hosted_principal(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
                 arkret_wire::project_did_to_core_id(
                     &Did::new("did:web:test-applet.example".to_owned()).unwrap(),
                 )
                 .unwrap(),
-            ),
+            )),
             vec!["arkret.portal".to_owned()],
             AppletWireNamespaces {
                 handles: vec![AppletNamespaceEntry::exclusive("bridge.test".to_owned())],

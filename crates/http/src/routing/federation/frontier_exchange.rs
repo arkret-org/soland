@@ -286,7 +286,7 @@ fn local_frontier_root(records: &[AcceptedEvent], realm_id: &str) -> Result<Stri
     heads.dedup();
     let realm_frontier =
         crate::routing::events::frontier::typed_realm_frontier([(realm_id.to_owned(), heads)]);
-    let actor_bounds = crate::routing::events::frontier::typed_actor_upper_bounds(actor_frontier);
+    let actor_bounds = crate::routing::events::frontier::typed_actor_upper_bounds(actor_frontier)?;
     crate::routing::events::frontier::frontier_root(&realm_frontier, &actor_bounds)
         .map(|root| root.to_string())
 }
@@ -304,6 +304,12 @@ fn validate_frontier_response(
     }
     if state.signature.is_empty() {
         return Err("signature_missing".to_owned());
+    }
+    let heads = BTreeMap::from([(state.realm_id.clone(), state.head_ids.clone())]);
+    let computed =
+        crate::routing::events::frontier::frontier_root(&heads, &state.actor_seq_upper_bounds)?;
+    if computed != state.frontier_root {
+        return Err("frontier_root_mismatch".to_owned());
     }
     Ok(state.frontier_root.to_string())
 }
@@ -335,7 +341,7 @@ mod tests {
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "head_ids": [],
             "issuer_id": "ak:did_core:webvh:z6mkpeer",
-            "frontier_root": format!("sha256:{}", "a".repeat(64)),
+            "frontier_root": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "observed_at": "2026-01-01T00:00:00.000Z",
             "signature": {"value": "c2ln"}
         });
@@ -357,6 +363,37 @@ mod tests {
             )
             .unwrap_err(),
             "issuer_mismatch"
+        );
+        let mut tampered = state.clone();
+        tampered.actor_seq_upper_bounds.insert(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+            )),
+            9,
+        );
+        assert_eq!(
+            validate_frontier_response(
+                &tampered,
+                state.issuer_id.as_str(),
+                state.realm_id.as_str()
+            )
+            .unwrap_err(),
+            "frontier_root_mismatch"
+        );
+        let mut tampered = state.clone();
+        tampered.head_ids.push(arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x42; 32],
+        ));
+        assert_eq!(
+            validate_frontier_response(
+                &tampered,
+                state.issuer_id.as_str(),
+                state.realm_id.as_str()
+            )
+            .unwrap_err(),
+            "frontier_root_mismatch"
         );
     }
 

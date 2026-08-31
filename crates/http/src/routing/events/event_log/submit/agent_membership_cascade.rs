@@ -146,12 +146,12 @@ fn frozen_controller_membership(
         .collect::<Result<Vec<_>, _>>()?;
     if agent_ids
         .iter()
-        .any(|actor| !matches!(actor, arkret_wire::ActorId::HostedPrincipal { .. }))
+        .any(|actor| !matches!(actor, arkret_wire::ActorId::Account { .. }))
     {
         return Err(cascade_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "internal_error",
-            "frozen Agent membership must bind a hosted-principal ActorId",
+            "frozen Agent membership must bind an account ActorId",
         ));
     }
     agent_ids.sort_by_cached_key(ToString::to_string);
@@ -1674,14 +1674,14 @@ mod tests {
     #[test]
     fn exact_agent_set_requires_the_canonical_sorted_complete_set() {
         let expected = vec![
-            arkret_wire::ActorId::hosted_principal(
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 core("ak:did_core:web:agent-a.example"),
                 core("ak:did_core:web:station.example"),
-            ),
-            arkret_wire::ActorId::hosted_principal(
+            )),
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 core("ak:did_core:web:agent-b.example"),
                 core("ak:did_core:web:station.example"),
-            ),
+            )),
         ];
         assert!(require_exact_agent_set(&expected, &expected).is_ok());
         assert!(require_exact_agent_set(&expected[..1], &expected).is_err());
@@ -1690,10 +1690,10 @@ mod tests {
                 .is_err()
         );
         let mut different_station = expected.clone();
-        different_station[0] = arkret_wire::ActorId::hosted_principal(
+        different_station[0] = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             core("ak:did_core:web:agent-a.example"),
             core("ak:did_core:web:other-station.example"),
-        );
+        ));
         assert!(require_exact_agent_set(&different_station, &expected).is_err());
     }
 

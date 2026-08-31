@@ -212,11 +212,11 @@ async fn agent_record_is_desired_sidecar_member(
     if &account != controller {
         return Ok(false);
     }
-    let agent_actor = arkret_wire::ActorId::hosted_principal(
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(agent_id)
             .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?,
         account.station_id,
-    );
+    ));
     Ok(
         realm_member_joined(state, realm_id, &agent_actor.to_string()) && {
             let projection = state.projections().snapshot();

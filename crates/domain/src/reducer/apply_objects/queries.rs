@@ -276,8 +276,9 @@ impl ProjectionState {
     /// verify the durable provision/accountability binding owned by the
     /// identity service.
     pub fn effective_agent_membership_base(&self, realm_id: &str, agent_id: &str) -> bool {
-        let Ok(arkret_wire::ActorId::HostedPrincipal { principal_id, .. }) =
-            serde_json::from_str::<arkret_wire::ActorId>(agent_id)
+        let Ok(arkret_wire::ActorId::Account {
+            account_id: arkret_wire::AccountId { principal_id, .. },
+        }) = serde_json::from_str::<arkret_wire::ActorId>(agent_id)
         else {
             return false;
         };

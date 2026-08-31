@@ -34,19 +34,20 @@ use serde_json::Value;
 
 /// One actor row in the admin actors projection.
 ///
-/// Sourced from the account store joined with the lifecycle registry and the
-/// admin-principal configuration. `id` is the canonical actor identifier and
-/// is always present.
+/// Sourced only from accounts owned by the serving Station, joined with its
+/// lifecycle registry and admin-principal configuration. Foreign Station
+/// accounts never enter this deployment-local projection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminActor {
-    /// Canonical actor identifier.
+    /// Principal core identifier within this Station's admin operation scope.
+    /// Not a globally scoped ActorId; the Station is fixed by this endpoint.
     pub id: String,
     pub principal_id: DidCoreId,
-    /// Durable service-local opaque account row id, stable across
-    /// principal identifier changes. Account-lifecycle admin endpoints address
-    /// accounts by principal identifier, not by this id.
+    /// Canonical JSON of the complete protocol AccountId pair. This is not an
+    /// opaque database primary key. The deployment-local account-lifecycle
+    /// admin endpoints address this Station's accounts by principal identifier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

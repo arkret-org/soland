@@ -672,11 +672,10 @@ fn managed_actor_provision_event(
         external_ref,
     };
     payload.validate().expect("fixture managed-actor payload");
-    let mut event = arkret_wire::test_support::raw_event_at(
+    let mut event = arkret_wire::test_support::raw_event_for_actor_at(
         "ak.applet.managed_actor.provision",
         ScopeRef::Realm { realm_id },
-        package.service_id.clone(),
-        actor_station_id.clone(),
+        arkret_wire::ActorId::service(package.service_id.clone()),
         actor_seq,
         Hlc::new(format!(
             "{:012x}-0100-a11ce001",
@@ -775,13 +774,10 @@ async fn signed_ghost_provision_body(
     } else {
         "ak:grant:AXBcp13trH3bPXvj0eHppCpGqJZWL9yqE3cf2Tl43vyk".to_owned()
     };
-    let actor_station_id = arkret_identifiers::DidCoreId::new(
-        install["bot_actor_station_id"]
-            .as_str()
-            .expect("install outcome has actor Station")
-            .to_owned(),
-    )
-    .unwrap();
+    let bot_actor_id: arkret_wire::ActorId =
+        serde_json::from_value(install["bot_actor_id"].clone())
+            .expect("install outcome has a complete bot ActorId");
+    let actor_station_id = bot_actor_id.route_service_id().clone();
     let registration_ref = EventId::new(
         install["registration_event_ref"]
             .as_str()
@@ -875,13 +871,12 @@ async fn signed_ghost_provision_body(
     let grant_binding = grant.canonical_proof_binding_bytes().unwrap();
     grant.proof.jws =
         arkret_signatures::jws::sign_jws_ed25519(&grant_binding, &signing_key).unwrap();
-    let mut accountability_event = arkret_wire::test_support::raw_event_at(
+    let mut accountability_event = arkret_wire::test_support::raw_event_for_actor_at(
         arkret_wire::EventKind::IdentityAccountabilityGrant.as_str(),
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        package.service_id.clone(),
-        actor_station_id.clone(),
+        arkret_wire::ActorId::service(package.service_id.clone()),
         3,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0102-a11ce001",
@@ -1070,7 +1065,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let realm_id = demo_realm_id();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.install.{suffix}");
-    let package = signed_applet_package(&applet_id, &namespace);
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
     ingest_applet_service_id_document(&state, &package).await;
 
     let install = install_applet_package(
@@ -1084,8 +1079,9 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     assert_eq!(install["applet_id"], json!(applet_id));
-    let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
-    assert_eq!(bot_actor_id, package.bot_actor_id.to_string());
+    let bot_actor_id: arkret_wire::ActorId =
+        serde_json::from_value(install["bot_actor_id"].clone()).unwrap();
+    assert_eq!(bot_actor_id, package.bot_actor_id);
 
     let projection_events = state
         .test_persistence()
@@ -1199,9 +1195,12 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     )
     .expect("stored PCR Ack is cryptographically bound to the exact host notary");
 
-    let bot_view = extension_actor_view(&app, &bot_actor_id).await;
+    let bot_view = extension_actor_view(&app, bot_actor_id.signing_principal_id().as_str()).await;
     assert_eq!(bot_view["exists"], json!(true));
-    assert_eq!(bot_view["actor_id"], json!(bot_actor_id));
+    assert_eq!(
+        bot_view["actor_id"],
+        json!(bot_actor_id.signing_principal_id())
+    );
 }
 
 /// Run the two closed-aggregate scenarios on a realistic server-sized stack.
@@ -1248,7 +1247,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
     let suffix = fixture_suffix();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.provision.{suffix}");
-    let package = signed_applet_package(&applet_id, &namespace);
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
     ingest_applet_service_id_document(&state, &package).await;
     let realm_id = demo_realm_id();
     let install = install_applet_package(
@@ -1265,6 +1264,10 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
     let ghost_actor = managed_actor_fixture(&namespace, "u123", &package.service_id);
     ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
+    let ghost_account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        ghost_actor.actor_id.clone(),
+        state.service_core_id(),
+    ));
     let mut rejected_body = signed_ghost_provision_body(
         &app,
         &state,
@@ -1394,7 +1397,7 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
         StatusCode::CREATED,
         "provision response: {provision}"
     );
-    assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
+    assert_eq!(provision["ghost_actor_id"], json!(ghost_account_actor));
     assert_eq!(provision["display_name"], json!("Alice on Slack"));
     let profile_event_ref = provision["profile_event_ref"].as_str().unwrap();
     let accountability_grant_ref = provision["accountability_grant_ref"].as_str().unwrap();
@@ -1422,10 +1425,10 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
         .unwrap()
         .expect("profile event is durable");
     assert_eq!(profile_event.kind, "ak.profile.create");
-    assert_eq!(profile_event.actor_id, ghost_actor_id);
+    assert_eq!(profile_event.actor_id, ghost_account_actor.to_string());
     assert_eq!(
         profile_event.envelope["executed_by"],
-        json!(package.service_id.to_string())
+        json!(arkret_wire::ActorId::service(package.service_id.clone()))
     );
     assert_eq!(
         profile_event.envelope["authorization_ref"],
@@ -1460,7 +1463,10 @@ async fn applet_ghost_actor_provision_writes_durable_four_event_unit_scenario() 
         .unwrap()
         .expect("accountability grant event is durable");
     assert_eq!(grant_event.kind, "ak.identity.accountability_grant");
-    assert_eq!(grant_event.actor_id, package.service_id.to_string());
+    assert_eq!(
+        grant_event.actor_id,
+        arkret_wire::ActorId::service(package.service_id.clone()).to_string()
+    );
     assert_eq!(
         grant_event.envelope["payload"]["issuer_id"],
         json!(package.service_id.to_string())
@@ -1575,7 +1581,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let suffix = fixture_suffix();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
-    let package = signed_applet_package(&applet_id, &namespace);
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
     ingest_applet_service_id_document(&state, &package).await;
     let realm_id = demo_realm_id();
     let install = install_applet_package_with_approved_actions(
@@ -1624,7 +1630,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let suffix = fixture_suffix();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.namespace.{suffix}");
-    let package = signed_applet_package(&applet_id, &namespace);
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
     ingest_applet_service_id_document(&state, &package).await;
     let realm_id = demo_realm_id();
     let install = install_applet_package(
@@ -2087,7 +2093,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     let suffix = fixture_suffix();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
-    let package = signed_applet_package(&applet_id, &namespace);
+    let package = signed_applet_package(&applet_id, &namespace, &state.service_core_id());
     ingest_applet_service_id_document(&state, &package).await;
     let realm_id = demo_realm_id();
     let install = install_applet_package(
@@ -2101,13 +2107,18 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     .await;
     assert_eq!(install["effective_status"], json!("installed"));
     allow_service_message_plaintext(&state, demo_realm_id()).await;
-    let bot_actor_id = install["bot_actor_id"].as_str().unwrap().to_owned();
+    let bot_actor_id: arkret_wire::ActorId =
+        serde_json::from_value(install["bot_actor_id"].clone()).unwrap();
     let message_grant_ref =
         capability_grant_ref_for_action(&install, &package.requested_scopes, "ak.message.create");
 
     let ghost_actor = managed_actor_fixture(&namespace, "ext-user-x", &package.service_id);
     ingest_managed_actor_current_document(&state, &ghost_actor).await;
     let ghost_actor_id = ghost_actor.actor_id.to_string();
+    let ghost_account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        ghost_actor.actor_id.clone(),
+        state.service_core_id(),
+    ));
     let body = signed_ghost_provision_body(
         &app,
         &state,
@@ -2137,7 +2148,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
         StatusCode::CREATED,
         "provision response: {provision}"
     );
-    assert_eq!(provision["ghost_actor_id"], json!(ghost_actor_id));
+    assert_eq!(provision["ghost_actor_id"], json!(ghost_account_actor));
 
     let transaction_text = format!("hi from outside {suffix}");
     let transaction_idempotency_key = format!("tx-{suffix}");
@@ -2334,9 +2345,14 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|ghost| ghost["ghost_actor_id"] == json!(ghost_actor_id))
+        .find(|ghost| ghost["ghost_actor_id"] == json!(ghost_account_actor))
         .expect("ghost remains in the revoked applet record");
-    assert!(bot_actor_id.starts_with("ak:did_core:webvh:"));
+    assert!(
+        bot_actor_id
+            .signing_principal_id()
+            .as_str()
+            .starts_with("ak:did_core:webvh:")
+    );
 }
 
 fn capability_grant_ref_for_action(
@@ -2381,7 +2397,11 @@ async fn tsp_local_stub_routes_are_not_mounted() {
     );
 }
 
-fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
+fn signed_applet_package(
+    applet_id: &str,
+    namespace: &str,
+    target_station_id: &arkret_identifiers::DidCoreId,
+) -> AppletPackage {
     let controller_did = Did::new("did:web:registry.example".to_owned()).unwrap();
     let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let service_did = Did::new(format!(
@@ -2399,7 +2419,10 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         service_did.clone(),
         controller_id.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
-        arkret_wire::ActorId::hosted_principal(bot_actor_id, service_id),
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            bot_actor_id,
+            target_station_id.clone(),
+        )),
         vec!["arkret.portal".to_owned()],
         AppletWireNamespaces {
             actors: vec![AppletNamespaceEntry::exclusive(format!(
@@ -2666,7 +2689,7 @@ async fn signed_install_events(
             constraints: vec![
                 GrantConstraint::applet_authority(
                     package.applet_id.clone(),
-                    package.service_id.clone(),
+                    arkret_wire::ActorId::service(package.service_id.clone()),
                     package.registration_epoch.clone(),
                 ),
                 {
@@ -2804,13 +2827,12 @@ async fn signed_install_events(
         &service_signing_key,
     )
     .unwrap();
-    let mut bot_accountability_grant_event = arkret_wire::test_support::raw_event_at(
+    let mut bot_accountability_grant_event = arkret_wire::test_support::raw_event_for_actor_at(
         arkret_wire::EventKind::IdentityAccountabilityGrant.as_str(),
         ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
-        package.service_id.clone(),
-        actor_station_id.clone(),
+        arkret_wire::ActorId::service(package.service_id.clone()),
         1,
         Hlc::new(format!("{millis:012x}-0102-a11ce001")).unwrap(),
         serde_json::to_value(accountability_grant).unwrap(),

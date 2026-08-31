@@ -190,10 +190,10 @@ pub(crate) async fn managed_agent_pcr_event_matches_accepted_delegation(
                 .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| format!("accepted managed Agent controller is invalid: {error}"))?;
-    let controller_actor = arkret_wire::ActorId::hosted_principal(
+    let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         controller_id,
         event.actor_id.route_service_id().clone(),
-    );
+    ));
     Ok(record.principal_control_realm_id == event.realm_id.as_str()
         && event.executed_by.as_ref() == Some(&controller_actor)
         && event.authorization_ref.as_deref() == Some(record.controller_authorization_ref.as_str())

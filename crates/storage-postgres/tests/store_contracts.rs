@@ -1401,11 +1401,11 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
     let notification_id =
         arkret_wire::NotificationId::new(format!("ak:notification:{notification_uuid}")).unwrap();
     let controller_account_pk = soland_storage::AccountPk(1);
-    let recipient_actor_id = arkret_wire::ActorId::hosted_principal(
+    let recipient_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:notification-{run_id}.example"))
             .unwrap(),
         arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-    );
+    ));
     let recipient_id =
         arkret_wire::DidCoreId::new(format!("ak:did_core:web:controller-{run_id}.example"))
             .unwrap();
@@ -2307,7 +2307,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
 
     let delayed = restarted_store
         .get_peer_claim(
-            &format!("did:web:{namespace}.example"),
+            &format!("ak:did_core:web:{namespace}.example"),
             &format!("local-last-resort:{namespace}-03"),
         )
         .await
@@ -2322,7 +2322,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
 
     let terminal = restarted_store
         .get_peer_claim(
-            &format!("did:web:{namespace}.example"),
+            &format!("ak:did_core:web:{namespace}.example"),
             &format!("local-last-resort:{namespace}-04"),
         )
         .await
@@ -2337,7 +2337,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     assert!(
         restarted_store
             .get_peer_claim(
-                &format!("did:web:{namespace}.example"),
+                &format!("ak:did_core:web:{namespace}.example"),
                 &format!("local-last-resort:{namespace}-05"),
             )
             .await

@@ -171,10 +171,15 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
     } else {
         accounts
             .put(&soland_storage::AccountRecord {
-                pk: soland_storage::AccountPk(1),
+                // Demo data already owns pk 1 at a different Station. Let the
+                // store allocate this exact controller Account's local key.
+                pk: soland_storage::AccountPk(0),
                 principal_id,
                 station_id: state.service_core_id().clone(),
-                localpart: "alice".to_owned(),
+                localpart: format!(
+                    "agent-controller-{}",
+                    &hex::encode(Sha256::digest(account_id.to_string().as_bytes()))[..16]
+                ),
                 display_name: Some("Alice".to_owned()),
                 bio: None,
                 avatar_blob_ref: None,
@@ -183,6 +188,12 @@ pub(crate) async fn seed_controller_session(state: &AppState, token: &str, actor
             .await
             .unwrap()
     };
+    let bound_account = accounts.get_by_pk(account_pk).await.unwrap().unwrap();
+    assert_eq!(
+        arkret_wire::AccountId::new(bound_account.principal_id, bound_account.station_id),
+        account_id,
+        "controller session must resolve to its exact Station-local Account"
+    );
     state
         .test_persistence()
         .sessions()
@@ -472,7 +483,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller_id.to_string(),
+                owner: bootstrap.actor_id.to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_access: "since_join".to_owned(),
@@ -615,7 +626,11 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .put(
             &realm_id,
             &soland_storage::RealmMetaRecord {
-                owner: controller_id.to_string(),
+                owner: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    controller_id.clone(),
+                    state.service_core_id(),
+                ))
+                .to_string(),
                 deleted: false,
                 discoverability: "private".to_owned(),
                 history_access: "since_join".to_owned(),
@@ -808,9 +823,16 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
     assert_eq!(requested_scope_digest, expected_scope_digest);
+    let controller_actor = arkret_wire::ActorId::account(controller_authority.clone());
+    let actor_frontier_request =
+        arkret_models_collaboration::event_query::EventsFrontierRequestBody {
+            actor_id: controller_actor.clone(),
+            realm_id: Some(controller_realm_id.clone()),
+        };
     let actor_frontier_value: Value =
         TestClient::query("http://server/_arkret/self/events/frontier")
-            .json(&serde_json::json!({"actor_id": controller_id, "realm_id": controller_realm_id}))
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&actor_frontier_request).unwrap())
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app)
             .await
@@ -827,10 +849,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         panic!("combined Realm+actor selector must return realm_actor frontier");
     };
     assert_eq!(actor_frontier.realm_id, controller_realm_id);
-    assert_eq!(
-        actor_frontier.actor_id.signing_principal_id(),
-        &controller_id
-    );
+    assert_eq!(actor_frontier.actor_id, controller_actor);
     let next_actor_seq = actor_frontier.next_actor_seq;
     let now =
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
@@ -868,7 +887,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
     pcr_genesis.created_at = now;
     pcr_genesis.requirements.schema_profile_refs =
         vec![arkret_wire::ProfileRef::new(arkret_wire::SchemaId::REALM_V1).unwrap()];
-    pcr_genesis.executed_by = Some(arkret_wire::ActorId::service(controller_id.clone()));
+    pcr_genesis.executed_by = Some(controller_actor);
     pcr_genesis.authorization_ref = Some(controller_authorization_ref.clone().into());
     pcr_genesis.refs.clear();
     pcr_genesis
@@ -889,7 +908,15 @@ async fn provision_agent_sdk_commit_attempt_inner(
     let pcr_genesis = pcr_genesis.into_event();
     let principal_control_realm_id = pcr_genesis.realm_id.clone();
     let mut frontier_response = TestClient::query("http://server/_arkret/self/seals/frontier")
-        .json(&serde_json::json!({"realm_id": controller_realm_id}))
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(
+                &arkret_models_collaboration::event_query::SealFrontierRequestBody {
+                    realm_id: controller_realm_id.clone(),
+                },
+            )
+            .unwrap(),
+        )
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -916,10 +943,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         arkret_models_identity::handle::HandleVisibility::Private,
         None,
         arkret_bootstrap::AgentProvisionIntentOptions {
-            controller_station_id: arkret_identifiers::DidCoreId::new(
-                state.service_id().to_owned(),
-            )
-            .unwrap(),
+            controller_station_id: controller_authority.station_id.clone(),
             created_at: now,
             seal_basis: Some(frontier.seal_basis()),
         },

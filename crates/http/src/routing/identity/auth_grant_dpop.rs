@@ -735,7 +735,7 @@ pub(crate) async fn authenticated_session_account_id(
         .session_grant
         .as_ref()
         .map(|grant| &grant.account_id);
-    let persisted_account = match session.account_pk.clone() {
+    let persisted_account = match session.account_pk {
         Some(account_pk) => Some(
             state
                 .identities()

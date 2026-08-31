@@ -13,7 +13,7 @@
 //! been productionised yet). Wire contract lives in
 //! `soland_contracts::admin` — see that module for the frozen rules.
 //!
-//! Pagination: rows are sorted by a stable key (actors: DID; capabilities:
+//! Pagination: rows are sorted by a stable key (actors: this Station's principal; capabilities:
 //! grant id; devices: device id; audit: newest first, audit id as tiebreak).
 //! `next_cursor` is the last row id of the page; resume looks the id up
 //! again, so the cursor stays valid across inserts. A cursor that no longer
@@ -115,14 +115,20 @@ async fn query_audit_trail(
 // ---------------------------------------------------------------------------
 
 /// Build the production [`AdminActor`] projection for one account record.
-/// `device_counts` / `realm_counts` are precomputed maps keyed by principal id.
+/// Only this Station's accounts belong to its deployment-local admin surface.
+/// `device_counts` uses the Station-local inventory principal key;
+/// `realm_counts` uses full Actor keys from the federated Realm directory.
 pub(super) fn admin_actor_row(
     state: &AppState,
     account: &soland_services::identity::AccountProfileState,
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
 ) -> Option<AdminActor> {
+    if account.account_id.station_id != state.service_core_id() {
+        return None;
+    }
     let principal_id = account.principal_id.clone();
+    let actor_key = arkret_wire::ActorId::account(account.account_id.clone()).to_string();
     let status = state.account_lifecycle_status(principal_id.as_str());
     let deactivation_federation_incomplete = (status == AccountStatus::Deactivated).then(|| {
         !crate::routing::identity::account::deactivation_peer_service_targets_for_account(
@@ -158,7 +164,7 @@ pub(super) fn admin_actor_row(
             .get(principal_id.as_str())
             .copied()
             .or(Some(0)),
-        realm_count: realm_counts.get(principal_id.as_str()).copied().or(Some(0)),
+        realm_count: realm_counts.get(&actor_key).copied().or(Some(0)),
     })
 }
 
@@ -174,21 +180,25 @@ pub(super) async fn actor_count_maps(
     {
         *device_counts.entry(actor).or_default() += 1;
     }
-    let mut realm_counts: BTreeMap<String, u64> = BTreeMap::new();
-    let realm_snapshot: Vec<_> = {
-        let realms = state.realm_directory().snapshot();
-        realms
-            .search(Default::default())
-            .into_iter()
-            .cloned()
-            .collect()
-    };
-    for realm in realm_snapshot {
-        for member in &realm.members {
-            *realm_counts.entry(member.to_string()).or_default() += 1;
+    let realm_counts = realm_membership_counts(&state.projections().snapshot());
+    (device_counts, realm_counts)
+}
+
+fn realm_membership_counts(
+    projection: &soland_domain::reducer::ProjectionState,
+) -> BTreeMap<String, u64> {
+    let realm_ids: std::collections::BTreeSet<_> = projection
+        .members
+        .keys()
+        .map(|(realm_id, _)| realm_id)
+        .collect();
+    let mut counts = BTreeMap::new();
+    for realm_id in realm_ids {
+        for member in projection.members_of_realm(realm_id) {
+            *counts.entry(member.member.clone()).or_default() += 1;
         }
     }
-    (device_counts, realm_counts)
+    counts
 }
 
 #[salvo::oapi::endpoint(
@@ -671,6 +681,64 @@ pub(super) async fn admin_list_devices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_actor_projection_is_station_local_and_counts_exact_actor_membership() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let local_account =
+            arkret_wire::AccountId::new(principal_id.clone(), state.service_core_id());
+        let foreign_account = arkret_wire::AccountId::new(
+            principal_id.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+        );
+        let mut account = soland_services::identity::AccountProfileState {
+            pk: soland_storage::AccountPk(1),
+            account_id: local_account.clone(),
+            principal_id: principal_id.clone(),
+            localpart: "alice".to_owned(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: chrono::Utc::now(),
+        };
+        let device_counts = BTreeMap::from([(principal_id.to_string(), 1)]);
+        let mut projection = soland_domain::reducer::ProjectionState::default();
+        for (realm_id, member_account, membership) in [
+            ("realm-a", local_account.clone(), "join"),
+            ("realm-b", local_account.clone(), "join"),
+            ("realm-c", local_account.clone(), "leave"),
+            ("realm-d", foreign_account.clone(), "join"),
+        ] {
+            let member = arkret_wire::ActorId::account(member_account).to_string();
+            projection.members.insert(
+                (realm_id.to_owned(), member.clone()),
+                soland_domain::reducer::SolandMembershipState {
+                    member,
+                    realm_id: realm_id.to_owned(),
+                    state: membership.to_owned(),
+                    role: "member".to_owned(),
+                    membership_event_ref: None,
+                    invited_at: None,
+                    joined_at: chrono::Utc::now(),
+                    updated_at: chrono::Utc::now(),
+                    reason: None,
+                },
+            );
+        }
+        let realm_counts = realm_membership_counts(&projection);
+        let row = admin_actor_row(&state, &account, &device_counts, &realm_counts).unwrap();
+        assert_eq!(row.id, principal_id.to_string());
+        assert_eq!(row.account_id, Some(local_account.to_string()));
+        assert_eq!(row.device_count, Some(1));
+        assert_eq!(row.realm_count, Some(2));
+
+        account.account_id = foreign_account;
+        assert!(admin_actor_row(&state, &account, &device_counts, &realm_counts).is_none());
+    }
 
     #[test]
     fn paginate_by_id_walks_pages_and_flags_has_more() {

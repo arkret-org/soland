@@ -229,10 +229,10 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
 #[test]
 fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let (mut state, _hlc, base) = seed_state("since_join");
-    let bob_actor = arkret_wire::ActorId::hosted_principal(
+    let bob_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(BOB).unwrap(),
         arkret_wire::DidCoreId::new(ALICE).unwrap(),
-    );
+    ));
     let bob = bob_actor.to_string();
     let mut member = state
         .members
@@ -287,10 +287,10 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
     let alice = account_actor_string(ALICE);
     assert!(state.effective_agent_membership_base(REALM, &bob));
     assert!(!state.effective_agent_membership_base(REALM, BOB));
-    let foreign_actor = arkret_wire::ActorId::hosted_principal(
+    let foreign_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(BOB).unwrap(),
         arkret_wire::DidCoreId::new("ak:did_core:web:other-station").unwrap(),
-    );
+    ));
     assert!(!state.effective_agent_membership_base(REALM, &foreign_actor.to_string()));
     state
         .members

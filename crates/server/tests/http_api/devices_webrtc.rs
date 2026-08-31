@@ -11,6 +11,14 @@ fn canonical_request_body<T: serde::Serialize>(value: &T) -> Vec<u8> {
     arkret_canonical::canonical_json_bytes(value).expect("canonical request body")
 }
 
+fn local_media_actor(state: &AppState, principal: &str) -> arkret_wire::ActorId {
+    // These media fixtures register local Accounts, not remote principal projections.
+    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(principal),
+        state.service_core_id(),
+    ))
+}
+
 async fn post_authenticated_canonical<T: serde::Serialize>(
     state: AppState,
     token: &str,
@@ -654,6 +662,10 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
+        true
+    );
     // Brand-new call: no durable call cells exist yet (the initiator redeems a
     // media token before writing its first `ak.call.state` event). With no
     // committed `session_focus`, the issuer admits the requested focus as long
@@ -676,7 +688,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": local_media_actor(&state, "did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "arkret_native_blue"
         })))
@@ -707,6 +719,11 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
         demo_realm_id()
     );
     assert_eq!(token_response["participant_binding"]["call_id"], session_id);
+    assert_eq!(
+        token_response["participant_binding"]["actor_id"],
+        serde_json::to_value(local_media_actor(&state, "did:web:alice.example")).unwrap(),
+        "the signed participant binding must retain the exact Station account"
+    );
     assert_eq!(
         token_response["participant_binding"]["device_id"],
         "ak:device:01904100-0000-7000-8000-a11ce0000001"
@@ -805,7 +822,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": local_media_actor(&state, "did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "arkret_native_blue"
         })))
@@ -854,7 +871,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": call_id,
-            "actor_id": fixture_actor_core_id(actor),
+            "actor_id": local_media_actor(&state, actor),
             "device_id": device_id,
             "focus_id": "livekit_green"
         })))
@@ -878,7 +895,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": call_id,
-            "actor_id": fixture_actor_core_id(actor),
+            "actor_id": local_media_actor(&state, actor),
             "device_id": device_id,
             "focus_id": "livekit_green"
         })))
@@ -917,6 +934,10 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
+        true
+    );
     let session_id = authored_call_id();
     // §6 — grant ak.call.join so the join gate passes and the focus/issuer
     // mismatch errors (not capability_denied) are what surfaces.
@@ -938,7 +959,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": local_media_actor(&state, "did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "livekit_green"
         })))
@@ -967,7 +988,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": local_media_actor(&state, "did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "arkret_native_blue"
         })))
@@ -1007,7 +1028,7 @@ async fn rtc_media_token_rejects_non_member_actor_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:bob.example"),
+            "actor_id": local_media_actor(&state, "did:web:bob.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-b0b000000001",
             "focus_id": "livekit_green"
         })))
@@ -1046,7 +1067,7 @@ async fn rtc_media_token_requires_call_join_capability_body() {
     let exchange_body = serde_json::json!({
         "realm_id": demo_realm_id(),
         "call_id": session_id,
-        "actor_id": fixture_actor_core_id(bob),
+        "actor_id": local_media_actor(&state, bob),
         "device_id": bob_device,
         "focus_id": "livekit_green"
     });
@@ -1147,6 +1168,10 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
     let state = soland_test_support::app_state(livekit_test_config());
     install_media_service_epoch(&state, good_media_service_epoch(&state));
     let token = dev_token(state.clone()).await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
+        true
+    );
     let session_id = authored_call_id();
     // §6 — token exchange requires ak.call.join.
     grant_call_capability(
@@ -1165,7 +1190,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": local_media_actor(&state, "did:web:alice.example"),
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "focus_id": "livekit_green",
             "desired_media": {"audio": true, "video": true, "screen": false}
@@ -1300,7 +1325,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
     install_media_service_epoch(&state, good_media_service_epoch(&state));
     let _alice_token = dev_token(state.clone()).await;
     let bob = "did:web:bob.example";
-    let bob_core = fixture_actor_core_id(bob);
+    let bob_actor = local_media_actor(&state, bob);
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
     add_test_realm_member(&state, demo_realm_id(), bob);
@@ -1322,7 +1347,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": bob_core,
+            "actor_id": bob_actor,
             "device_id": bob_device,
             "focus_id": "livekit_green"
         })))
@@ -1341,7 +1366,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         &session_id,
         None,
         vec![serde_json::json!({
-            "actor_id": bob_core,
+            "actor_id": bob_actor,
             "action": "ban",
             "removed_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         })],
@@ -1355,7 +1380,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         .body(canonical_request_body(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": session_id,
-            "actor_id": bob_core,
+            "actor_id": bob_actor,
             "device_id": bob_device,
             "focus_id": "livekit_green"
         })))
@@ -1369,8 +1394,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
 /// authz engine, mirroring what the capability-grant projection would fold in.
 fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
-    let grant = soland_http::authz::install_projected_grant(
-        state.test_authz(),
+    let mut grant = soland_http::authz::projected_grant_fixture(
         realm_id.to_owned(),
         fixture_actor_core_id("did:web:alice.example").to_string(),
         fixture_actor_core_id(subject).to_string(),
@@ -1378,6 +1402,8 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
         vec![action.to_owned()],
         vec![],
     );
+    grant.issuer_id = local_media_actor(state, "did:web:alice.example");
+    grant.subject_id = local_media_actor(state, subject);
     state.test_authz().upsert_projected_grant(grant);
 }
 

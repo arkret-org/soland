@@ -46,13 +46,13 @@ use soland_services::delivery::BlobState as BlobRecord;
 use tokio::io::AsyncReadExt as _;
 
 use super::blob::{
-    MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_upload_outcome,
-    encrypted_blob_encryption_metadata_for_purpose, enforce_blob_quota, is_valid_blob_purpose,
-    plaintext_blob_data_class,
+    MAX_BLOB_UPLOAD_BYTES, blob_purpose_requires_encryption, blob_session_has_realm_membership,
+    blob_upload_outcome, encrypted_blob_encryption_metadata_for_purpose, enforce_blob_quota,
+    is_valid_blob_purpose, plaintext_blob_data_class,
 };
 use super::{
     auth_or_render, is_valid_sha256_digest, now, realm_allows_plaintext_service_for_data_class,
-    realm_has_member, render_error,
+    render_error,
 };
 use crate::state::AppState;
 
@@ -651,7 +651,7 @@ async fn tus_finalize(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     let Some(meta) = load_gated(state, res, &id, &session.actor).await else {
         return;
     };
-    complete_resumable_upload(state, &session.actor, &id, &meta, res).await;
+    complete_resumable_upload(state, &session, &id, &meta, res).await;
 }
 
 #[handler]
@@ -678,11 +678,12 @@ async fn tus_delete(depot: &mut Depot, req: &mut Request, res: &mut Response) {
 
 async fn complete_resumable_upload(
     state: &AppState,
-    actor: &str,
+    session: &soland_services::identity::SessionIdentityState,
     id: &str,
     meta: &StagedUpload,
     res: &mut Response,
 ) {
+    let actor = session.actor.as_str();
     if meta.offset_bytes != meta.declared_size_bytes {
         render_error(
             res,
@@ -738,7 +739,15 @@ async fn complete_resumable_upload(
                 );
                 return;
             }
-            if !realm_has_member(state, &realm_id, actor).await {
+            let is_member = match blob_session_has_realm_membership(state, &realm_id, session).await
+            {
+                Ok(is_member) => is_member,
+                Err(error) => {
+                    render_error(res, error.http_status(), error.wire_code(), &error.message);
+                    return;
+                }
+            };
+            if !is_member {
                 render_error(
                     res,
                     StatusCode::FORBIDDEN,

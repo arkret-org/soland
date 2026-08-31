@@ -401,10 +401,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "service_id": "ak:did_core:web:applet.example",
                 "controller_id": "ak:did_core:web:applet.example",
                 "base_url": "https://applet.example/runtime",
-                "bot_actor_id": arkret_wire::ActorId::hosted_principal(
+                "bot_actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     arkret_wire::DidCoreId::new("ak:did_core:web:applet.bot.example").unwrap(),
                     arkret_wire::DidCoreId::new("ak:did_core:web:applet.example").unwrap(),
-                ),
+                )),
                 "protocols": ["http_custom"],
                 "namespaces": {
                     "actors": [],

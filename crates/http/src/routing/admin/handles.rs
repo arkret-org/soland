@@ -97,7 +97,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     for account in accounts {
         let localparts = state
             .identities()
-            .account_localparts(account.pk.clone())
+            .account_localparts(account.pk)
             .await
             .unwrap_or_default();
         for localpart in localparts {
@@ -406,24 +406,23 @@ async fn reassign_handle(
 
     // Detach the handle from its current holder, if a different account
     // still carries the localpart.
-    if previous_subject_id != new_subject_id {
-        if let Some(owner) = state
+    if previous_subject_id != new_subject_id
+        && let Some(owner) = state
             .identities()
             .localpart_owner(&localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-        {
-            state
-                .identities()
-                .remove_localpart(owner.account_pk, &localpart)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?;
-        }
+    {
+        state
+            .identities()
+            .remove_localpart(owner.account_pk, &localpart)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
     }
 
     state
         .identities()
-        .add_localpart(target.pk.clone(), &localpart, true)
+        .add_localpart(target.pk, &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
 

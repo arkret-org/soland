@@ -909,8 +909,10 @@ async fn produce_current_agent_signer_evidence(
         &runtime.signing_key_binding,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let agent_actor =
-        arkret_wire::ActorId::hosted_principal(agent_id.clone(), state.service_core_id().clone());
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        state.service_core_id().clone(),
+    ));
     if authorize_event.realm_id != realm_id
         || authorize_event.actor_id != agent_actor
         || payload.verification_method != *verification_method
@@ -1196,8 +1198,10 @@ async fn accepted_current_lifecycle(
     agent_id: &DidCoreId,
     realm_id: &RealmId,
 ) -> Result<AcceptedLifecycle, AgentSignerEvidenceQueryFailureReason> {
-    let agent_actor =
-        arkret_wire::ActorId::hosted_principal(agent_id.clone(), state.service_core_id().clone());
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        state.service_core_id().clone(),
+    ));
     let records = state
         .event_queries()
         .accepted_events()

@@ -4,6 +4,13 @@
 
 use super::common::*;
 
+fn directory_account(
+    principal: &str,
+    station_id: arkret_wire::DidCoreId,
+) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(fixture_actor_core_id(principal), station_id)
+}
+
 #[test]
 fn sync_and_directory_share_demo_realm() {
     run_on_deep_stack(
@@ -131,8 +138,11 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     // canonical `<localpart>:<domain>` form (handle-claim.schema.json) and
     // no longer carry `handle_uri` / `presence` / `organization_id`.
     assert_eq!(
-        users["users"][0]["principal_id"],
-        fixture_actor_core_id("did:web:alice.example").as_str()
+        users["users"][0]["account_id"],
+        serde_json::json!(directory_account(
+            "did:web:alice.example",
+            soland_test_support::fixture_station_id()
+        ))
     );
     assert_eq!(users["users"][0]["handle"], "alice:server.test");
     assert!(users["users"][0].get("handle_uri").is_none());
@@ -160,11 +170,14 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         "ak.find.directory.read.list_handles_for_subject.v1"
     ));
 
-    let alice_core = fixture_actor_core_id("did:web:alice.example");
+    let alice_account = directory_account(
+        "did:web:alice.example",
+        soland_test_support::fixture_station_id(),
+    );
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject_id": alice_core,
+                "account_id": alice_account,
                 "intent": "display",
                 "limit": 10
             }))
@@ -173,12 +186,18 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(subject_handles["subject_id"], alice_core.as_str());
+    assert_eq!(
+        subject_handles["account_id"],
+        serde_json::json!(alice_account)
+    );
     assert_eq!(subject_handles["primary_handle"], "alice:server.test");
     assert_eq!(subject_handles["has_more"], false);
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject_id"], alice_core.as_str());
+    assert_eq!(
+        claims[0]["subject_account_id"],
+        serde_json::json!(alice_account)
+    );
     assert_eq!(claims[0]["handle"], "alice:server.test");
 
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
@@ -233,6 +252,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     );
 
     let token = dev_token_for_device(state.clone(), did, device, "Alice").await;
+    let subject_account = directory_account(did, state.service_core_id());
     let viewer: Value = TestClient::get("http://server/_arkret/self/account/viewer")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -245,25 +265,25 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
         "registered-handle:local.host"
     );
     assert_eq!(
-        viewer["primary_handle_claim"]["subject_id"],
-        fixture_actor_core_id(did).as_str()
+        viewer["primary_handle_claim"]["subject_account_id"],
+        serde_json::json!(subject_account)
     );
 
     let subject_handles: Value =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject_id": fixture_actor_core_id(did),
+                "account_id": subject_account,
                 "intent": "display",
                 "limit": 10
             }))
-            .send(&app_from_state(state))
+            .send(&app_from_state(state.clone()))
             .await
             .take_json()
             .await
             .unwrap();
     assert_eq!(
-        subject_handles["subject_id"],
-        fixture_actor_core_id(did).as_str()
+        subject_handles["account_id"],
+        serde_json::json!(subject_account)
     );
     assert_eq!(
         subject_handles["primary_handle"],
@@ -271,8 +291,31 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     );
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
-    assert_eq!(claims[0]["subject_id"], fixture_actor_core_id(did).as_str());
+    assert_eq!(
+        claims[0]["subject_account_id"],
+        serde_json::json!(subject_account)
+    );
     assert_eq!(claims[0]["handle"], "registered-handle:local.host");
+
+    let foreign_account = directory_account(
+        did,
+        arkret_wire::DidCoreId::new("ak:did_core:web:another-station.example").unwrap(),
+    );
+    let mut foreign_response = TestClient::post(
+        "http://server/_arkret/find/directory/list-handles-for-subject",
+    )
+    .json(&serde_json::json!({"account_id": foreign_account, "intent": "display", "limit": 10}))
+    .send(&app_from_state(state))
+    .await;
+    assert_eq!(foreign_response.status_code, Some(StatusCode::OK));
+    let foreign: Value = foreign_response.take_json().await.unwrap();
+    assert_eq!(foreign["account_id"], serde_json::json!(foreign_account));
+    assert_eq!(
+        foreign["claims"],
+        serde_json::json!([]),
+        "a same-principal foreign Account cannot borrow the local handle claim"
+    );
+    assert!(foreign["primary_handle"].is_null());
 }
 
 #[test]
@@ -288,6 +331,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
     config.public_base_url = "https://local.host".to_owned();
     let state = soland_test_support::app_state(config);
     let subject_id = fixture_actor_core_id("did:web:device-only.example");
+    let subject_account = arkret_wire::AccountId::new(subject_id.clone(), state.service_core_id());
     let device_id = "ak:device:01904100-0000-7000-8000-00000000d001";
     let now = chrono::Utc::now();
     let device = soland_storage::DeviceInventoryRecord {
@@ -314,7 +358,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
     let mut response =
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
-                "subject_id": subject_id,
+                "account_id": subject_account,
                 "intent": "display",
                 "limit": 10
             }))
@@ -323,7 +367,7 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
 
     assert_eq!(response.status_code.unwrap().as_u16(), 200);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["subject_id"], subject_id.as_str());
+    assert_eq!(body["account_id"], serde_json::json!(subject_account));
     assert!(body["claims"].as_array().unwrap().is_empty());
     assert!(body["primary_handle"].is_null());
     assert_eq!(body["has_more"], false);
@@ -360,7 +404,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     .await;
     let allow_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",
-        "subject_id": fixture_actor_core_id("did:web:bob.example"),
+        "account_id": directory_account("did:web:bob.example", state.service_core_id()),
         "holder_allowed_introduction_kinds": [
             "locator_ref",
             "consent_grant",
@@ -418,15 +462,18 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     let body: Value = resolved.take_json().await.unwrap();
     assert_eq!(resolved_status, StatusCode::OK, "resolve response: {body}");
     assert_eq!(
-        body["principal_id"],
-        fixture_actor_core_id("did:web:bob.example").as_str()
+        body["account_id"],
+        serde_json::json!(directory_account(
+            "did:web:bob.example",
+            state.service_core_id()
+        ))
     );
     assert_eq!(body["handle"], "bob-example:local.host");
-    assert_eq!(body["audience"], realm_id);
+    assert_eq!(body["claims"][0]["audience"], realm_id);
 
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",
-        "subject_id": fixture_actor_core_id("did:web:bob.example"),
+        "account_id": directory_account("did:web:bob.example", state.service_core_id()),
         "holder_allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm", "handle_claim"],
         "explicit_address_behavior": "quarantine",
         "handle_claim_behavior": "drop",
@@ -508,7 +555,7 @@ async fn directory_demo_projection_rejects_outside_development_mode_body() {
         ("resolve-handle", serde_json::json!({"handle": "alice"})),
         (
             "list-handles-for-subject",
-            serde_json::json!({"subject_id": fixture_actor_core_id("did:web:alice.example")}),
+            serde_json::json!({"account_id": directory_account("did:web:alice.example", soland_test_support::fixture_station_id())}),
         ),
     ];
 
@@ -689,7 +736,10 @@ async fn directory_resolve_realm_returns_spec_title_field_body() {
         .await
         .unwrap();
 
-    assert_eq!(resolved["realm_preview"]["realm_id"], realm_id);
+    assert_eq!(
+        resolved["realm_preview"]["realm_id"], realm_id,
+        "{resolved}"
+    );
     assert_eq!(resolved["realm_preview"]["title"], "Spec title realm");
     assert!(
         resolved["realm_preview"].get("name").is_none(),
@@ -769,11 +819,19 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
 
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    assert_eq!(
+        add_test_realm_member(&state, demo_realm_id(), "did:web:alice.example")["ok"],
+        true
+    );
     let backfill: Value = TestClient::query("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_ids": [demo_realm_id()]
-        }))
+        .add_header("content-type", "application/json", true)
+        .body(
+            arkret_canonical::canonical_json_bytes(&serde_json::json!({
+                "realm_ids": [demo_realm_id()]
+            }))
+            .unwrap(),
+        )
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -781,17 +839,21 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
         .unwrap();
     // backfill pagination field is `has_more` (discovery-directory.md §9;
     // profiles-presence.md §4.1 references it and does not define `limited`).
-    assert_eq!(backfill["has_more"], false);
+    assert_eq!(backfill["has_more"], false, "{backfill}");
 
     // An authz check resolves the actor's effective grants from the accepted
     // governance basis, so a Realm with no sealed basis denies every action.
     seed_demo_realm_basis(&state).await;
+    let alice_actor = arkret_wire::ActorId::account(directory_account(
+        "did:web:alice.example",
+        state.service_core_id(),
+    ));
     // service-http-binding.md account_auth: `self` authorization queries are
     // user-session operations, so the contract check must be authenticated.
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": alice_actor,
             "action": "ak.strand.read",
             "resource": {"kind": "realm", "realm_id": demo_realm_id()}
         }))
@@ -804,7 +866,7 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
     assert!(authz["matched_grants"].is_array());
     assert_eq!(
         authz["policy_results"][0]["actor_id"],
-        fixture_actor_core_id("did:web:alice.example").as_str()
+        serde_json::json!(alice_actor)
     );
     assert_eq!(authz["policy_results"][0]["action"], "ak.strand.read");
     assert_eq!(authz["policy_results"][0]["realm_id"], demo_realm_id());
@@ -815,7 +877,7 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
         .json(&serde_json::json!({
             "realm_id": demo_realm_id(),
             "call_id": "ak:call:AS8XThowW7JnZc80U10gJh-_lqkA-iSQ-LAvBXj6_9O5",
-            "actor_id": fixture_actor_core_id("did:web:alice.example"),
+            "actor_id": alice_actor,
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             // media-operations.schema.json: mode is required.
             "mode": "turn"
@@ -825,10 +887,7 @@ async fn broader_protocol_surface_returns_contract_shapes_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(
-        ice["actor_id"],
-        fixture_actor_core_id("did:web:alice.example").as_str()
-    );
+    assert_eq!(ice["actor_id"], serde_json::json!(alice_actor));
     assert!(ice["ice_servers"].is_array());
     assert!(ice["signature"].is_object());
 }

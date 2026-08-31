@@ -1012,11 +1012,11 @@ pub(super) async fn get_agent(
     // author complete revocation coverage. The effective authz index supplies
     // optional display metadata, but pending or expired grants must not
     // disappear from the controller's revocation surface.
-    let agent_actor = arkret_wire::ActorId::hosted_principal(
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(agent_id.clone())
             .map_err(|error| AppError::internal(format!("invalid agent id: {error}")))?,
         state.service_core_id().clone(),
-    );
+    ));
     let effective_grants = state
         .authorization()
         .grants_for_subject_all_realms(&agent_actor)

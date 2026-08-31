@@ -994,21 +994,13 @@ async fn peer_events_frontier(
                 .map_err(|_| AppError::internal("stored frontier event_id is invalid"))
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let typed_actor_frontier = actor_frontier
-        .iter()
-        .map(|(actor_id, seq)| {
-            Ok((
-                serde_json::from_str::<arkret_wire::ActorId>(actor_id)
-                    .map_err(|_| AppError::internal("stored frontier actor_id is invalid"))?,
-                *seq,
-            ))
-        })
-        .collect::<Result<BTreeMap<_, _>, AppError>>()?;
+    let typed_actor_frontier =
+        super::frontier::typed_actor_upper_bounds(actor_frontier).map_err(AppError::internal)?;
     let typed_realm_frontier =
         super::frontier::typed_realm_frontier([(realm_id.as_str().to_owned(), heads.clone())]);
-    let typed_actor_bounds = super::frontier::typed_actor_upper_bounds(actor_frontier.clone());
-    let frontier_root = super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_bounds)
-        .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
+    let frontier_root =
+        super::frontier::frontier_root(&typed_realm_frontier, &typed_actor_frontier)
+            .map_err(|error| AppError::internal(format!("frontier_root: {error}")))?;
     let projection = state.projections().snapshot();
     let (auth_state_root, policy_frontier_root, membership_frontier_root) =
         if let Some(actor_id) = frontier_actor_id.as_ref() {
@@ -1246,7 +1238,7 @@ struct PeerMembership {
 
 #[derive(Clone, Debug)]
 struct PendingPeerInvite {
-    invitee_id: String,
+    invitee_account_id: arkret_wire::AccountId,
     invited_at: DateTime<Utc>,
 }
 
@@ -1334,7 +1326,7 @@ impl PeerReadAuthz {
                     self.pending_realm_invites.insert(
                         (realm_id, invite_id.to_owned()),
                         PendingPeerInvite {
-                            invitee_id: invitee_account.to_string(),
+                            invitee_account_id: invitee_account,
                             invited_at: record_event_time(record),
                         },
                     );
@@ -1354,11 +1346,12 @@ impl PeerReadAuthz {
                 else {
                     return;
                 };
-                if record.actor_id != invite.invitee_id {
+                let invitee = arkret_wire::ActorId::account(invite.invitee_account_id).to_string();
+                if record.actor_id != invitee {
                     return;
                 }
                 self.realm_members.entry(realm_id).or_default().insert(
-                    invite.invitee_id,
+                    invitee,
                     PeerMembership {
                         joined_at: record_event_time(record),
                         invited_at: Some(invite.invited_at),
@@ -1493,8 +1486,7 @@ impl PeerReadAuthz {
             return;
         };
         let Some(actor_id) = payload
-            .get("actor_id")
-            .or_else(|| payload.get("actor"))
+            .get("member_id")
             .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
         else {
             return;
@@ -1564,13 +1556,13 @@ impl PeerReadAuthz {
         let Some(circle_id) = payload.get("circle_id").and_then(Value::as_str) else {
             return;
         };
-        let Some(actor) = payload
-            .get("actor")
-            .and_then(Value::as_str)
-            .or_else(|| payload.get("actor_id").and_then(Value::as_str))
+        let Some(actor_id) = payload
+            .get("member_id")
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok())
         else {
             return;
         };
+        let actor = actor_id.to_string();
         let state = payload
             .get("state")
             .and_then(Value::as_str)
@@ -1581,7 +1573,7 @@ impl PeerReadAuthz {
                 let previous = self
                     .circle_members
                     .get(circle_id)
-                    .and_then(|members| members.get(actor));
+                    .and_then(|members| members.get(&actor));
                 let membership = PeerMembership {
                     joined_at: previous
                         .map(|member| member.joined_at)
@@ -1598,7 +1590,7 @@ impl PeerReadAuthz {
                     .circle_members
                     .entry(circle_id.to_owned())
                     .or_default()
-                    .get_mut(actor)
+                    .get_mut(&actor)
                 {
                     member
                         .invited_at
@@ -1607,7 +1599,7 @@ impl PeerReadAuthz {
             }
             "leave" | "ban" | "removed" | "banned" | "left" => {
                 if let Some(members) = self.circle_members.get_mut(circle_id) {
-                    members.remove(actor);
+                    members.remove(&actor);
                     if members.is_empty() {
                         self.circle_members.remove(circle_id);
                     }
@@ -2140,4 +2132,99 @@ pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> App
 
 fn render_app_error(res: &mut Response, error: AppError) {
     render_error(res, error.http_status(), error.wire_code(), &error.message);
+}
+
+#[cfg(test)]
+mod membership_identity_tests {
+    use super::*;
+
+    fn account(station: &str) -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            DidCoreId::new(station).unwrap(),
+        )
+    }
+
+    fn record(kind: &str, actor: &arkret_wire::ActorId, payload: Value) -> AcceptedEvent {
+        AcceptedEvent {
+            event_id: "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into(),
+            actor_id: actor.to_string(),
+            actor_seq: 0,
+            realm_id: Some("ak:realm:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD".into()),
+            kind: kind.into(),
+            schema_id: String::new(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: String::new(),
+            canonical_bytes: Vec::new(),
+            envelope: json!({"payload": payload}),
+            received_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn accepted_membership_rebuild_keeps_station_accounts_and_circle_keys_exact() {
+        let source = "ak:did_core:web:source.example";
+        let local = arkret_wire::ActorId::account(account(source));
+        let foreign = arkret_wire::ActorId::account(account("ak:did_core:web:other.example"));
+        let mut authz = PeerReadAuthz {
+            source_id: source.into(),
+            realm_meta: BTreeMap::new(),
+            realm_members: BTreeMap::new(),
+            pending_realm_invites: BTreeMap::new(),
+            circles: BTreeMap::new(),
+            circle_members: BTreeMap::new(),
+        };
+        let mut member = record(
+            "ak.member.state",
+            &local,
+            json!({"member_id": foreign, "membership": "join"}),
+        );
+        let realm = member.realm_id.clone().unwrap();
+        authz.apply_member_record(&member);
+        assert!(authz.realm_members.is_empty());
+        member.envelope["payload"] = json!({"actor_id": local, "membership": "join"});
+        authz.apply_member_record(&member);
+        assert!(
+            authz.realm_members.is_empty(),
+            "retired member carrier must not grant access"
+        );
+        member.envelope["payload"] = json!({"member_id": local, "membership": "join"});
+        authz.apply_member_record(&member);
+        assert!(authz.realm_members[&realm].contains_key(&local.to_string()));
+        assert!(!authz.realm_members[&realm].contains_key(&foreign.to_string()));
+
+        let circle = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
+        for actor in [&local, &foreign] {
+            authz.apply_circle_member_record(&record(
+                "ak.circle.member.state",
+                actor,
+                json!({"circle_id": circle, "member_id": actor, "membership": "join"}),
+            ));
+        }
+        assert_eq!(authz.circle_members[circle].len(), 2);
+        authz.apply_circle_member_record(&record(
+            "ak.circle.member.state",
+            &foreign,
+            json!({"circle_id": circle, "member_id": foreign, "membership": "leave"}),
+        ));
+        assert!(authz.circle_members[circle].contains_key(&local.to_string()));
+        assert!(!authz.circle_members[circle].contains_key(&foreign.to_string()));
+
+        authz.apply_invite_record(&record(
+            "ak.invite.create",
+            &local,
+            json!({"invite_id": "invite", "invitee_account_id": account(source)}),
+        ));
+        authz.apply_invite_record(&record(
+            "ak.invite.accept",
+            &local,
+            json!({"invite_id": "invite"}),
+        ));
+        assert!(
+            authz.realm_members[&realm][&local.to_string()]
+                .invited_at
+                .is_some()
+        );
+        assert_eq!(authz.realm_members[&realm].len(), 1);
+    }
 }

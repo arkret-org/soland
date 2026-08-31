@@ -555,6 +555,11 @@ async fn push_profile_and_moderation_contracts_work_body() {
     );
 
     let reporter_id = fixture_actor_core_id(ALICE);
+    let reporter_actor_key = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(ALICE),
+        state.service_core_id(),
+    ))
+    .to_string();
     let actor_records = state
         .test_persistence()
         .events()
@@ -562,7 +567,7 @@ async fn push_profile_and_moderation_contracts_work_body() {
         .await
         .unwrap()
         .into_iter()
-        .filter(|record| record.actor_id == reporter_id.as_str())
+        .filter(|record| record.actor_id == reporter_actor_key)
         .collect::<Vec<_>>();
     let actor_seq = actor_records
         .iter()
@@ -596,6 +601,9 @@ async fn push_profile_and_moderation_contracts_work_body() {
         arkret_models_collaboration::governance::moderation::ModerationReportRequestBody {
             report_event: arkret_wire::EventInitialSubmission::online(report_event),
         };
+    report_request
+        .validate(arkret_canonical::DigestSuite::Sha256)
+        .expect("report payload keeps its principal carrier inside a complete Actor Event");
     let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
@@ -631,8 +639,8 @@ async fn push_profile_and_moderation_contracts_work_body() {
 /// "an opaque policy clears server-visible presence and suppresses server-visible
 /// typing" — asserted the exact server-side plaintext filtering
 /// `profiles-presence.md` §3.4 forbids: `ak.presence.visibility` is a
-/// *sender-side* principal-private policy that MUST NOT become a plaintext
-/// projection of the Sync Service. Its enforcement point moved to the sender,
+/// *sender-side* account-private policy that MUST NOT become a plaintext
+/// projection at the Station. Its enforcement point moved to the sender,
 /// which decides whether
 /// to encrypt for the scope at all. So the surviving server-side premise is the
 /// inverse: whatever this key holds, it neither gates nor rewrites the Signal
@@ -1003,15 +1011,24 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
     .await;
     assert_eq!(allowed.status_code, Some(StatusCode::OK));
 
-    let grant = soland_http::authz::install_projected_grant(
-        state.test_authz(),
+    let mut grant = soland_http::authz::projected_grant_fixture(
         demo_realm_id().to_owned(),
-        fixture_actor_core_id(bob).to_string(),
+        fixture_actor_core_id(ALICE).to_string(),
         fixture_actor_core_id(bob).to_string(),
         demo_realm_id().to_owned(),
         vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
+    // This is an accepted account-to-account grant, not a service principal
+    // grant. Complete the typed projection before installing it in the index.
+    grant.issuer_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(ALICE),
+        state.service_core_id(),
+    ));
+    grant.subject_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(bob),
+        state.service_core_id(),
+    ));
     state.test_authz().upsert_projected_grant(grant);
     let granted = post_signal(
         state.clone(),

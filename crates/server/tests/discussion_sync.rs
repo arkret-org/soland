@@ -122,8 +122,21 @@ async fn dev_token(state: AppState, actor: &str, device_suffix: &str) -> String 
 /// `POST /_arkret/self/events` path.
 async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: &str) -> String {
     let realm_id =
-        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
-            .await;
+        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event_with_history_access(
+            state,
+            owner,
+            title,
+            history_access.parse().expect("fixture history policy"),
+        )
+        .await;
+    assert_eq!(
+        state
+            .test_projection()
+            .lock()
+            .realm_history_access(&realm_id),
+        Some(history_access.to_owned()),
+        "the accepted bootstrap cell must carry the requested initial history policy"
+    );
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_id = arkret_identifiers::DidCoreId::new(core_actor_id(owner)).unwrap();
     let now = chrono::Utc::now();
@@ -143,9 +156,8 @@ async fn seed_realm(state: &AppState, owner: &str, title: &str, history_access: 
         .lock()
         .realm_join_rules
         .insert(realm_id.clone(), "public".to_owned());
-    // The genesis helper persists the bootstrap unit but only materializes
-    // genesis cells. Membership authorization requires the exact Actor index;
-    // the principal-only Realm directory above is discovery data, not authority.
+    // Membership authorization requires the exact Actor index; the
+    // principal-only Realm directory above is discovery data, not authority.
     state.test_projection().lock().members.insert(
         (realm_id.clone(), owner_actor.clone()),
         SolandMembershipState {

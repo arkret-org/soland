@@ -34,17 +34,19 @@ async fn get_actor(
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let actor_id = actor_id.into_inner();
+    let principal_id = arkret_wire::DidCoreId::new(actor_id.clone()).map_err(|_| {
+        soland_http::error::AppError::param_invalid("invalid local account principal")
+    })?;
+    let account_id = arkret_wire::AccountId::new(principal_id, state.service_core_id());
 
     let account = state
         .identities()
-        .accounts()
+        .account(&account_id)
         .await
         .map_err(|error| {
-            tracing::error!(%error, "failed to list accounts");
+            tracing::error!(%error, "failed to load local account");
             soland_http::error::AppError::internal("account store unavailable")
         })?
-        .into_iter()
-        .find(|account| account.principal_id.as_str() == actor_id)
         .ok_or_else(|| soland_http::error::AppError::not_found("actor not found"))?;
     let (device_counts, realm_counts) = queries::actor_count_maps(state).await;
     let actor = queries::admin_actor_row(state, &account, &device_counts, &realm_counts)

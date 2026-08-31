@@ -903,7 +903,7 @@ async fn add_account_localpart(
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
         .identities()
-        .account_localparts(account_pk.clone())
+        .account_localparts(account_pk)
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
@@ -991,7 +991,7 @@ async fn delete_account_localpart(
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
         .identities()
-        .account_localparts(account_pk.clone())
+        .account_localparts(account_pk)
         .await
         .map_err(localpart_persistence_error)?;
     let removed_primary = before
@@ -999,13 +999,13 @@ async fn delete_account_localpart(
         .any(|record| record.localpart == localpart && record.is_primary);
     state
         .identities()
-        .remove_localpart(account_pk.clone(), &localpart)
+        .remove_localpart(account_pk, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary
         && let Some(replacement) = state
             .identities()
-            .account_localparts(account_pk.clone())
+            .account_localparts(account_pk)
             .await
             .map_err(localpart_persistence_error)?
             .into_iter()
@@ -1859,21 +1859,17 @@ async fn direct_conversation_resolve(
         && let Some(bindings) = state.contacts().direct_bindings_for_pair(&pair_key)
         && let Some(record) = bindings.any_endorsed()
     {
-        let (group_state_ref, group_state_digest) =
-            direct_group_state_for_realm(state, &record.realm_id)
-                .await?
-                .unzip();
+        let group_state_ref = direct_group_state_for_realm(state, &record.realm_id).await?;
         return json_ok(DirectConversationResolveOutcome::Suspended {
             coordinates: direct_coordinates(pair_key_hash, &record)?,
             blockers: vec![DirectConversationSendBlocker::PairMaterializationConflict],
             group_state_ref,
-            group_state_digest,
         });
     }
     if let Some(binding) = raw_binding {
         let coordinates = direct_coordinates(pair_key_hash, &binding)?;
         let group_state = direct_group_state_for_realm(state, &binding.realm_id).await?;
-        let (group_state_ref, group_state_digest) = group_state.clone().unzip();
+        let group_state_ref = group_state.clone();
         let projection = state.projections().snapshot();
         if projection.realm_is_destroyed(&binding.realm_id)
             || projection.realm_is_tombstoned(&binding.realm_id)
@@ -1882,7 +1878,6 @@ async fn direct_conversation_resolve(
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::RealmTerminalFault],
                 group_state_ref,
-                group_state_digest,
             });
         }
         if contact
@@ -1893,7 +1888,6 @@ async fn direct_conversation_resolve(
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
                 group_state_ref,
-                group_state_digest,
             });
         }
         if !direct_binding_matches_projection(state, &binding) {
@@ -1901,7 +1895,6 @@ async fn direct_conversation_resolve(
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
                 group_state_ref,
-                group_state_digest,
             });
         }
         if projection
@@ -1915,7 +1908,6 @@ async fn direct_conversation_resolve(
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PeerNotJoinedMls],
                 group_state_ref,
-                group_state_digest,
             });
         }
         if state.account_lifecycle_state(&session.actor) != "active"
@@ -1926,7 +1918,6 @@ async fn direct_conversation_resolve(
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::PolicyStale],
                 group_state_ref,
-                group_state_digest,
             });
         }
         let mut send_blockers = Vec::new();
@@ -1986,18 +1977,16 @@ async fn direct_conversation_resolve(
         }
         send_blockers.sort_by_key(|blocker| format!("{blocker:?}"));
         send_blockers.dedup();
-        let Some((group_state_ref, group_state_digest)) = group_state else {
+        let Some(group_state_ref) = group_state else {
             return json_ok(DirectConversationResolveOutcome::Suspended {
                 coordinates,
                 blockers: vec![DirectConversationSendBlocker::MlsReconcileRequired],
                 group_state_ref: None,
-                group_state_digest: None,
             });
         };
         return json_ok(DirectConversationResolveOutcome::Found {
             coordinates,
             group_state_ref,
-            group_state_digest,
             send_blockers,
         });
     }
@@ -2023,10 +2012,8 @@ async fn direct_conversation_resolve(
             })?
         {
             let coordinates = direct_slot_coordinates(pair_key_hash, &slot)?;
-            let (group_state_ref, group_state_digest) =
-                direct_group_state_for_realm(state, coordinates.realm_id.as_str())
-                    .await?
-                    .unzip();
+            let group_state_ref =
+                direct_group_state_for_realm(state, coordinates.realm_id.as_str()).await?;
             if contact
                 .as_ref()
                 .is_some_and(|contact| contact.status != "accepted")
@@ -2035,13 +2022,11 @@ async fn direct_conversation_resolve(
                     coordinates,
                     blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
                     group_state_ref,
-                    group_state_digest,
                 });
             }
             return json_ok(DirectConversationResolveOutcome::Provisional {
                 coordinates,
                 group_state_ref,
-                group_state_digest,
             });
         }
     }
@@ -2249,8 +2234,8 @@ async fn account_device_summary(
         Vec::new()
     };
     revocation_states.sort_by(|left, right| {
-        (left.acceptance_seq(), left.proposal_digest().as_str())
-            .cmp(&(right.acceptance_seq(), right.proposal_digest().as_str()))
+        (left.acceptance_seq(), left.proposal_event_id().as_str())
+            .cmp(&(right.acceptance_seq(), right.proposal_event_id().as_str()))
     });
     let has_revoked = revocation_states
         .iter()
@@ -2321,7 +2306,7 @@ fn device_revocation_gate_record(
     let soland_storage::DeviceRevocationTargetRecord {
         selector,
         proposal_event_id,
-        proposal_digest,
+        proposal_digest: _,
         accepted_at,
         acceptance_seq,
         control_proposal_ack,
@@ -2344,9 +2329,6 @@ fn device_revocation_gate_record(
             EventId::new(proposal_event_id.clone()).map_err(|error| {
                 AppError::internal(format!("stored revoke proposal Event invalid: {error}"))
             })?,
-            Hash::new(proposal_digest.clone()).map_err(|error| {
-                AppError::internal(format!("stored revoke proposal digest invalid: {error}"))
-            })?,
         ))
     })();
 
@@ -2356,7 +2338,7 @@ fn device_revocation_gate_record(
             decisions,
             decision_overdue,
         } => Some(common.and_then(
-            |(account_id, device_id, authorize_event_id, proposal_event_id, digest)| {
+            |(account_id, device_id, authorize_event_id, proposal_event_id)| {
                 let (decision_state, decisions, fault_reason) = if decision_overdue {
                     (
                         DeviceRevocationDecisionState::Overdue,
@@ -2379,7 +2361,6 @@ fn device_revocation_gate_record(
                     target_device_authorize_event_id: authorize_event_id,
                     target_device_generation_ref: selector.target_device_generation_ref,
                     proposal_event_id,
-                    proposal_digest: digest,
                     accepted_at,
                     acceptance_seq,
                     control_proposal_ack,
@@ -2399,7 +2380,7 @@ fn device_revocation_gate_record(
             covering_seal_id,
             sealed_at,
         } => Some(common.and_then(
-            |(account_id, device_id, authorize_event_id, proposal_event_id, digest)| {
+            |(account_id, device_id, authorize_event_id, proposal_event_id)| {
                 let state = DeviceRevokedState {
                     schema: DeviceRevocationStateSchema::V1,
                     account_id,
@@ -2407,7 +2388,6 @@ fn device_revocation_gate_record(
                     target_device_authorize_event_id: authorize_event_id,
                     target_device_generation_ref: selector.target_device_generation_ref,
                     proposal_event_id,
-                    proposal_digest: digest,
                     accepted_at,
                     acceptance_seq,
                     control_proposal_ack,

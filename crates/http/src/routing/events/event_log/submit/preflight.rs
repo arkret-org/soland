@@ -84,7 +84,7 @@ mod tests {
         let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
         let station = state.service_core_id();
         let account = ActorId::account(AccountId::new(principal.clone(), station.clone()));
-        let hosted = ActorId::hosted_principal(principal.clone(), station);
+        let service = ActorId::service(principal.clone());
         let foreign = ActorId::account(AccountId::new(
             principal.clone(),
             DidCoreId::new("ak:did_core:web:station-b.example").unwrap(),
@@ -167,7 +167,7 @@ mod tests {
             .await,
             None
         );
-        for wrong_actor in [&foreign, &hosted] {
+        for wrong_actor in [&foreign, &service] {
             assert_eq!(
                 preflight_mls_welcome_claim_signature_reject(
                     &state,

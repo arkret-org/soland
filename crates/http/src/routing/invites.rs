@@ -451,8 +451,14 @@ async fn receive_private_invite_delivery(
     // material itself: the invite token is transport material, never an Invite
     // read-model field (governance-objects.md §5.3), so it travels on the
     // actor-private account-data carrier instead.
-    let credential_delivered =
-        deliver_invite_credential(state, &subject, &inviter_id, body, &realm_id).await?;
+    let credential_delivered = deliver_invite_credential(
+        state,
+        &delivery.invite_address.account_id,
+        &inviter_id,
+        body,
+        &realm_id,
+    )
+    .await?;
 
     let status = if duplicate { "duplicate" } else { "accepted" };
     super::append_audit_log(
@@ -584,7 +590,10 @@ async fn require_dispatchable_invite_event(
     let session_station = DidCoreId::new(session.audience.clone())
         .map_err(|error| AppError::internal(format!("session audience is invalid: {error}")))?;
     let session_actor = if session.agent_session.is_some() {
-        arkret_wire::ActorId::hosted_principal(session_principal, session_station)
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            session_principal,
+            session_station,
+        ))
     } else {
         let account_pk = session
             .account_pk
@@ -851,18 +860,20 @@ async fn persist_private_invite_projection(
 /// deterministic derivation cannot race it.
 async fn deliver_invite_credential(
     state: &AppState,
-    subject: &str,
+    account_id: &arkret_wire::AccountId,
     inviter_id: &str,
     body: &Value,
     realm_id: &str,
 ) -> Result<bool, AppError> {
+    if account_id.station_id != state.service_core_id() {
+        return Err(AppError::param_invalid(
+            "invite subject belongs to another Station",
+        ));
+    }
+    let subject_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let subject_exists = state
         .identities()
-        .account(&arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(subject.to_owned())
-                .map_err(|_| AppError::param_invalid("invalid invite subject"))?,
-            state.service_core_id().clone(),
-        ))
+        .account(account_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
@@ -915,7 +926,11 @@ async fn deliver_invite_credential(
         })
         .transpose()?
         .unwrap_or_else(|| created_at + Duration::days(7));
-    let invite_token = crate::routing::generate_invite_token(invite_id.as_str(), realm_id, subject);
+    let invite_token = crate::routing::generate_invite_token(
+        invite_id.as_str(),
+        realm_id,
+        &account_id.to_string(),
+    );
 
     let received_at = now();
     let new_entry = InviteDeliveryEntry {
@@ -932,7 +947,7 @@ async fn deliver_invite_credential(
     let mut attempt = 0;
     let record = loop {
         let existing = account_data
-            .entry(subject, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+            .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         let existing_cell = existing
@@ -947,7 +962,7 @@ async fn deliver_invite_credential(
             AppError::internal(format!("invite delivery cell serialize: {error}"))
         })?;
         let record = AccountDataState {
-            actor_id: subject.to_owned(),
+            actor_id: subject_actor.clone(),
             account_data_key: AccountDataKey::ACCOUNT_INVITE_DELIVERY.to_owned(),
             revision: existing.as_ref().map_or(1, |record| record.revision + 1),
             payload,
@@ -974,7 +989,7 @@ async fn deliver_invite_credential(
     };
     fanout_actor_private_update(
         state,
-        subject,
+        account_id.principal_id.as_str(),
         ActorPrivateDeviceUpdate::AccountData {
             sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
@@ -1195,9 +1210,8 @@ async fn persist_invite_quarantine_entry(
         .filter(|value| !value.trim().is_empty())
         .map(|value| arkret_wire::EventId::new(value.to_owned()))
         .transpose()
-        .map_err(|error| AppError::param_invalid(format!("invalid invite event id: {error}")))?;
-    let invite_event_digest =
-        crate::util::canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid invite event id: {error}")))?
+        .ok_or_else(|| AppError::param_invalid("invite Event id is required for quarantine"))?;
     let request_digest = crate::util::canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
@@ -1205,7 +1219,7 @@ async fn persist_invite_quarantine_entry(
         "account_id": account_id,
         "source_id": source_id,
         "idempotency_key": delivery.idempotency_key,
-        "invite_event_digest": invite_event_digest,
+        "invite_event_id": invite_event_id,
     }))?;
     let parse_digest = |value: String| {
         Hash::new(value)
@@ -1230,7 +1244,6 @@ async fn persist_invite_quarantine_entry(
             TrustTier::Low => InviteTrustTier::Low,
         },
         invite_event_id: invite_event_id.clone(),
-        invite_event_digest: parse_digest(invite_event_digest.clone())?,
         request_digest: parse_digest(request_digest)?,
         idempotency_key_digest: parse_digest(idempotency_key_digest)?,
         received_at,
@@ -1309,7 +1322,6 @@ async fn persist_invite_quarantine_entry(
             "source_id": source_id,
             "inviter_id": inviter_id,
             "invite_event_id": invite_event_id,
-            "invite_event_digest": invite_event_digest,
             "expires_at": expires_at,
         }),
         "accepted",
@@ -2534,7 +2546,7 @@ mod invite_locator_security_tests {
         assert!(
             deliver_invite_credential(
                 &state,
-                PRODUCTION_HOLDER,
+                &delivery.invite_address.account_id,
                 PRODUCTION_INVITER,
                 &body,
                 PRODUCTION_REALM,
@@ -2544,7 +2556,11 @@ mod invite_locator_security_tests {
         );
         let cell = state
             .account_data()
-            .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+            .entry(
+                &arkret_wire::ActorId::account(delivery.invite_address.account_id.clone())
+                    .to_string(),
+                AccountDataKey::ACCOUNT_INVITE_DELIVERY,
+            )
             .await
             .expect("invite delivery cell")
             .expect("invite delivery write");
@@ -2555,6 +2571,40 @@ mod invite_locator_security_tests {
             &cell.payload,
         )
         .await;
+        assert!(
+            state
+                .account_data()
+                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let foreign = arkret_wire::AccountId::new(
+            delivery.invite_address.account_id.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        assert!(
+            deliver_invite_credential(
+                &state,
+                &foreign,
+                PRODUCTION_INVITER,
+                &body,
+                PRODUCTION_REALM
+            )
+            .await
+            .is_err()
+        );
+        assert!(
+            state
+                .account_data()
+                .entry(
+                    &arkret_wire::ActorId::account(foreign).to_string(),
+                    AccountDataKey::ACCOUNT_INVITE_DELIVERY
+                )
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -2634,10 +2684,14 @@ mod invite_locator_security_tests {
                 }
             }
         });
+        let account_id = arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:carol.example").unwrap(),
+            state.service_core_id().clone(),
+        );
         assert!(
             !deliver_invite_credential(
                 &state,
-                "ak:did_core:web:carol.example",
+                &account_id,
                 "ak:did_core:web:alice.example",
                 &body,
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
@@ -2649,7 +2703,7 @@ mod invite_locator_security_tests {
             state
                 .account_data()
                 .entry(
-                    "ak:did_core:web:carol.example",
+                    &arkret_wire::ActorId::account(account_id).to_string(),
                     AccountDataKey::ACCOUNT_INVITE_DELIVERY
                 )
                 .await

@@ -123,7 +123,15 @@ async fn rsvp_projects_exactly_the_registered_cell_write_body() {
     let token = dev_token(state.clone()).await;
     seed_demo_realm_basis(&state).await;
 
-    let event = rsvp_event("ak:event:AUBglcng-HKFdf7edtewVHONWoiEiwNde7AEyCp1tNHI", 1);
+    let mut event = rsvp_event("ak:event:AUBglcng-HKFdf7edtewVHONWoiEiwNde7AEyCp1tNHI", 1);
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        demo_realm_id(),
+        &mut event,
+    )
+    .await;
     // The write set is the receiver's own registry projection of `kind +
     // payload` (`event-and-patch.md` §2.4.2) — the same evaluator admission
     // runs — not anything the envelope carries.

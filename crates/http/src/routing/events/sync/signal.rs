@@ -523,7 +523,21 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     {
         return Err(signal_invalid("signal sender lacks the moderation action"));
     }
-    if matches!(sender_actor, arkret_wire::ActorId::HostedPrincipal { .. }) {
+    // The identity variant does not distinguish human and Agent accounts.
+    // Use accepted membership/provisioning facts; lookup failure must not
+    // downgrade an Agent to the ordinary device verifier.
+    let is_agent = projection
+        .agent_membership_binding(envelope.realm_id.as_str(), &sender_actor.to_string())
+        .is_some()
+        || (sender_actor.route_service_id().as_str() == state.service_id().as_str()
+            && crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+                state,
+                &sender_actor,
+            )
+            .await
+            .map_err(|_| signal_rail_unavailable("resolve the Signal sender provisioning"))?
+            .is_some());
+    if is_agent {
         verify_signal_agent_proof(state, envelope, &sender_actor).await?;
     } else {
         verify_signal_device_proof(state, envelope, &sender_actor).await?;
@@ -810,10 +824,10 @@ mod tests {
             principal.clone(),
             arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
         ));
-        let hosted = arkret_wire::ActorId::hosted_principal(principal, station.clone());
+        let service = arkret_wire::ActorId::service(principal);
         assert!(require_local_signal_device_account(&local, station.as_str()).is_ok());
         assert!(require_local_signal_device_account(&foreign, station.as_str()).is_err());
-        assert!(require_local_signal_device_account(&hosted, station.as_str()).is_err());
+        assert!(require_local_signal_device_account(&service, station.as_str()).is_err());
     }
 
     #[test]

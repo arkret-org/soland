@@ -364,7 +364,7 @@ pub(crate) async fn dispatch_message_notifications(
             continue;
         };
         // AKP-0016 §9.4.5 — agent third-party mention gate.
-        if matches!(&subject_actor, arkret_wire::ActorId::HostedPrincipal { station_id, .. } if *station_id == state.service_core_id())
+        if matches!(&subject_actor, arkret_wire::ActorId::Account { account_id: arkret_wire::AccountId { station_id, .. } } if *station_id == state.service_core_id())
             && let Ok(Some(agent_record)) = state
                 .agent_pairings()
                 .agent(subject_actor.signing_principal_id().as_str())
@@ -648,7 +648,10 @@ mod tests {
     fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
         let principal = arkret_wire::DidCoreId::new(principal).unwrap();
         if principal.as_str() == "ak:did_core:web:agents.example:alice-summary" {
-            arkret_wire::ActorId::hosted_principal(principal, crate::test_event::station_id())
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                principal,
+                crate::test_event::station_id(),
+            ))
         } else {
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 principal,

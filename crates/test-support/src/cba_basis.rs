@@ -597,6 +597,41 @@ pub async fn seed_event_derived_realm_genesis_event(
     subject: &str,
     title: &str,
 ) -> String {
+    seed_event_derived_realm_genesis_event_with_history_access(
+        state,
+        subject,
+        title,
+        arkret_wire::HistoryAccess::SinceJoin,
+    )
+    .await
+}
+
+/// Initialize the history ratchet in the signed founding unit, not in a
+/// service-local metadata mirror or a later, forbidden widening update.
+pub async fn seed_event_derived_realm_genesis_event_with_history_access(
+    state: &AppState,
+    subject: &str,
+    title: &str,
+    history_access: arkret_wire::HistoryAccess,
+) -> String {
+    seed_event_derived_realm_genesis_event_with_visibility(
+        state,
+        subject,
+        title,
+        history_access,
+        arkret_wire::Discoverability::InviteOnly,
+    )
+    .await
+}
+
+/// Initialize visibility facets in the accepted founding unit.
+pub async fn seed_event_derived_realm_genesis_event_with_visibility(
+    state: &AppState,
+    subject: &str,
+    title: &str,
+    history_access: arkret_wire::HistoryAccess,
+    discoverability: arkret_wire::Discoverability,
+) -> String {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
         .expect("fixture genesis timestamp")
         .with_timezone(&chrono::Utc);
@@ -627,7 +662,16 @@ pub async fn seed_event_derived_realm_genesis_event(
     )
     .expect("fixture genesis Event");
     let realm = RealmId::from_event_id(&event.event_id);
-    persist_and_project_realm_genesis_event(state, &realm, title, subject, event).await;
+    persist_and_project_realm_genesis_event_with_history_access(
+        state,
+        &realm,
+        title,
+        subject,
+        event,
+        history_access,
+        discoverability,
+    )
+    .await;
     realm.to_string()
 }
 
@@ -637,6 +681,27 @@ async fn persist_and_project_realm_genesis_event(
     profile_title: &str,
     subject: &str,
     event: arkret_wire::Event,
+) {
+    persist_and_project_realm_genesis_event_with_history_access(
+        state,
+        realm,
+        profile_title,
+        subject,
+        event,
+        arkret_wire::HistoryAccess::SinceJoin,
+        arkret_wire::Discoverability::InviteOnly,
+    )
+    .await;
+}
+
+async fn persist_and_project_realm_genesis_event_with_history_access(
+    state: &AppState,
+    realm: &RealmId,
+    profile_title: &str,
+    subject: &str,
+    event: arkret_wire::Event,
+    history_access: arkret_wire::HistoryAccess,
+    discoverability: arkret_wire::Discoverability,
 ) {
     let realm_id = realm.as_str();
     let actor_id = event.actor_id.clone();
@@ -669,11 +734,11 @@ async fn persist_and_project_realm_genesis_event(
         ),
         (
             arkret_wire::EventKind::RealmHistoryAccess,
-            serde_json::json!({"from": null, "to": "since_join"}),
+            serde_json::json!({"from": null, "to": history_access}),
         ),
         (
             arkret_wire::EventKind::RealmDiscovery,
-            serde_json::json!({"value": "invite_only"}),
+            serde_json::json!({"value": discoverability}),
         ),
         (
             arkret_wire::EventKind::MemberState,

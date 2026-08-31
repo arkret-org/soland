@@ -1117,7 +1117,7 @@ mod authority_cycle_tests {
                 "constraint_kind": "authority_control",
                 "constraint_subkind": "applet_authority",
                 "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000aa",
-                "executed_by": "ak:did_core:web:alice.example",
+                "executed_by": {"kind": "service", "service_id": "ak:did_core:web:alice.example"},
                 "registration_epoch": format!("sha256:{}", "a".repeat(64))
             }]),
         ] {

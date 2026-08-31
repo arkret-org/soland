@@ -231,16 +231,20 @@ mod tests {
             )
             .await
         );
-        let hosted = arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone());
-        let mut ambiguous_row = row;
-        ambiguous_row.member = hosted.to_string();
+        let same_account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            station.clone(),
+        ));
+        let mut repeated_row = row;
+        repeated_row.member = same_account.to_string();
         state
             .test_projection()
             .lock()
             .members
-            .insert((realm.clone(), hosted.to_string()), ambiguous_row);
+            .insert((realm.clone(), same_account.to_string()), repeated_row);
         assert!(
-            super::joined_actor_for_principal_route(&state, &realm, principal, station).is_none()
+            super::joined_actor_for_principal_route(&state, &realm, principal, station)
+                == Some(same_account)
         );
     }
 }

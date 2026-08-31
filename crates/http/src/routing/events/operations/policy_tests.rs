@@ -26,7 +26,10 @@ fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
     };
     let principal = arkret_wire::DidCoreId::new(principal).unwrap();
     if principal.as_str() == AGENT_CORE_ID {
-        arkret_wire::ActorId::hosted_principal(principal, crate::test_event::station_id())
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            crate::test_event::station_id(),
+        ))
     } else {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             principal,

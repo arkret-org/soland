@@ -20,9 +20,9 @@ pub fn admitted_cascade_agent_id(
         serde_json::from_value(record.envelope.clone()).map_err(|error| {
             PersistenceError::SchemaViolation(format!("invalid Agent cascade Event: {error}"))
         })?;
-    let arkret_wire::ActorId::HostedPrincipal { .. } = &event.actor_id else {
+    let arkret_wire::ActorId::Account { .. } = &event.actor_id else {
         return Err(PersistenceError::Conflict(
-            "Agent cascade requires a hosted principal actor".to_owned(),
+            "Agent cascade requires an account actor".to_owned(),
         ));
     };
     if record.actor_id != event.actor_id.to_string()

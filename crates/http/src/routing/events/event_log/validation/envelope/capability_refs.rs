@@ -1065,10 +1065,10 @@ mod constraint_tests {
         const SERVICE: &str = "ak:did_core:web:applet.example";
         const TARGET_PS: &str = "ak:did_core:web:principal.example";
         let mut applet_grant = grant(Vec::new());
-        let subject = arkret_wire::ActorId::hosted_principal(
+        let subject = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new(SERVICE.to_owned()).unwrap(),
             arkret_wire::DidCoreId::new(TARGET_PS.to_owned()).unwrap(),
-        );
+        ));
         applet_grant.subject_id = subject.clone();
         let grant_id = applet_grant.grant_id.clone();
         let grants = std::collections::BTreeMap::from([(grant_id.clone(), applet_grant)]);
@@ -1081,10 +1081,10 @@ mod constraint_tests {
         assert!(
             effective_historical_grants_for_subject(
                 &grants,
-                &arkret_wire::ActorId::hosted_principal(
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     arkret_wire::DidCoreId::new(SERVICE).unwrap(),
                     arkret_wire::DidCoreId::new("ak:did_core:web:wrong-principal.example").unwrap(),
-                ),
+                )),
                 REALM,
                 now,
             )

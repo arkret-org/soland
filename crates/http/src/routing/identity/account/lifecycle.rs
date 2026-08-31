@@ -227,12 +227,12 @@ async fn run_account_deactivation_fanout(
     let identity_link_cache_invalidated = state
         .invalidate_cached_handle_claims_for_subject(principal_id)
         .await;
-    let account_actor = arkret_wire::ActorId::hosted_principal(
+    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(principal_id.to_owned()).map_err(|error| {
             AppError::internal(format!("invalid account principal id: {error}"))
         })?,
         state.service_core_id().clone(),
-    );
+    ));
     let capability_cache_invalidated = state
         .authorization()
         .mark_projected_grants_revoked_for_subject(&account_actor);

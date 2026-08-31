@@ -86,10 +86,30 @@ pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: 
     })
 }
 
+/// Invite membership exemptions belong to the authenticated exact Account,
+/// never another Station's account or a service actor with the same signer.
+fn invite_event_account<'a>(
+    object: &serde_json::Map<String, Value>,
+    actor: &'a arkret_wire::ActorId,
+) -> Option<&'a arkret_wire::AccountId> {
+    let author = object
+        .get("actor_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())?;
+    if author != *actor {
+        return None;
+    }
+    actor.as_account_id()
+}
+
+fn invite_account_matches(stored: &str, account: &arkret_wire::AccountId) -> bool {
+    serde_json::from_str::<arkret_wire::AccountId>(stored).is_ok_and(|invitee| invitee == *account)
+}
+
 pub(super) async fn member_join_accepts_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     realm_id: &str,
 ) -> bool {
     // Invitation acceptance has one canonical wire event. A bare
@@ -101,6 +121,9 @@ pub(super) async fn member_join_accepts_pending_invite(
     {
         return false;
     }
+    let Some(account) = invite_event_account(object, actor) else {
+        return false;
+    };
     let Some(payload) = object.get("payload") else {
         return false;
     };
@@ -118,7 +141,12 @@ pub(super) async fn member_join_accepts_pending_invite(
     let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
         return false;
     };
-    if invite.status != "pending" || invite.invitee_id.as_deref() != Some(actor) {
+    if !matches!(invite.status.as_str(), "pending" | "claimed")
+        || !invite
+            .invitee_id
+            .as_deref()
+            .is_some_and(|invitee| invite_account_matches(invitee, account))
+    {
         return false;
     }
     if invite
@@ -133,7 +161,7 @@ pub(super) async fn member_join_accepts_pending_invite(
 pub(super) async fn invitee_cancels_pending_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     realm_id: &str,
 ) -> bool {
     if object.get("kind").and_then(Value::as_str)
@@ -141,6 +169,9 @@ pub(super) async fn invitee_cancels_pending_invite(
     {
         return false;
     }
+    let Some(account) = invite_event_account(object, actor) else {
+        return false;
+    };
     let Some(payload) = object.get("payload") else {
         return false;
     };
@@ -155,7 +186,10 @@ pub(super) async fn invitee_cancels_pending_invite(
     };
     if invite.realm_id != realm_id
         || !matches!(invite.status.as_str(), "pending" | "claimed")
-        || invite.invitee_id.as_deref() != Some(actor)
+        || !invite
+            .invitee_id
+            .as_deref()
+            .is_some_and(|invitee| invite_account_matches(invitee, account))
     {
         return false;
     }
@@ -171,17 +205,25 @@ pub(super) async fn invitee_cancels_pending_invite(
 pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
-    actor: &str,
+    actor: &arkret_wire::ActorId,
     realm_id: &str,
 ) -> bool {
     if object.get("kind").and_then(Value::as_str) != Some(arkret_wire::event_kind_str::INVITE_CLAIM)
     {
         return false;
     }
+    let Some(account) = invite_event_account(object, actor) else {
+        return false;
+    };
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    if payload.get("subject_id").and_then(Value::as_str) != Some(actor) {
+    if !payload
+        .get("subject_account_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok())
+        .is_some_and(|subject| subject == *account)
+    {
         return false;
     }
     let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
@@ -196,7 +238,10 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     if invite.realm_id != realm_id {
         return false;
     }
-    let actor_is_invitee = invite.invitee_id.as_deref() == Some(actor);
+    let actor_is_invitee = invite
+        .invitee_id
+        .as_deref()
+        .is_some_and(|invitee| invite_account_matches(invitee, account));
     let is_pending_third_party = invite.status == "pending" && invite.third_party_invite.is_some();
     let is_duplicate_claim_by_invitee = invite.status == "claimed" && actor_is_invitee;
     if !is_pending_third_party && !is_duplicate_claim_by_invitee {
@@ -209,7 +254,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     invite
         .invitee_id
         .as_deref()
-        .is_none_or(|invitee_id| invitee_id == actor)
+        .is_none_or(|invitee_id| invite_account_matches(invitee_id, account))
 }
 
 /// Quick existence probe against the in-memory `state.realms` index used
@@ -411,5 +456,97 @@ mod tests {
             json!(arkret_wire::EventKind::InviteAccept.as_str()),
         );
         assert!(!member_self_knock(&object, ALICE));
+    }
+
+    #[tokio::test]
+    async fn invite_membership_exemptions_require_the_exact_authenticated_account() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let actor = account_actor(ALICE);
+        let account = actor.as_account_id().unwrap();
+        let other = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            account.principal_id.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        let service = arkret_wire::ActorId::service(account.principal_id.clone());
+        let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+        let timestamp = now();
+        let mut invite = soland_services::events::RealmInviteState {
+            invite_id: invite_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            inviter_id: account_actor(BOB).as_account_id().unwrap().to_string(),
+            invitee_id: Some(account.to_string()),
+            introduction_evidence_digest: None,
+            third_party_invite: None,
+            invite_token: String::new(),
+            status: "pending".to_owned(),
+            claim_nonces: Default::default(),
+            expires_at: Some(timestamp + chrono::Duration::hours(1)),
+            created_at: timestamp,
+            updated_at: None,
+        };
+        for status in ["pending", "claimed"] {
+            invite.status = status.to_owned();
+            state.realm_invites().put(invite.clone()).await.unwrap();
+            for kind in ["ak.invite.accept", "ak.invite.cancel"] {
+                let object = json!({
+                    "kind": kind,
+                    "actor_id": actor,
+                    "payload": {"invite_id": invite_id}
+                })
+                .as_object()
+                .unwrap()
+                .clone();
+                for caller in [&actor, &other, &service] {
+                    let accepted = if kind == "ak.invite.accept" {
+                        member_join_accepts_pending_invite(&state, &object, caller, realm_id).await
+                    } else {
+                        invitee_cancels_pending_invite(&state, &object, caller, realm_id).await
+                    };
+                    assert_eq!(accepted, caller == &actor, "{kind}: {caller}");
+                    let mut other_event = object.clone();
+                    other_event.insert("actor_id".to_owned(), json!(caller));
+                    let own_event_accepted = if kind == "ak.invite.accept" {
+                        member_join_accepts_pending_invite(&state, &other_event, caller, realm_id)
+                            .await
+                    } else {
+                        invitee_cancels_pending_invite(&state, &other_event, caller, realm_id).await
+                    };
+                    assert_eq!(own_event_accepted, caller == &actor, "own {kind}: {caller}");
+                }
+            }
+        }
+
+        // A claimed 3PID invite uses the schema's typed subject_account_id;
+        // both a different Station and the retired scalar field fail closed.
+        let mut claim = json!({
+            "kind": "ak.invite.claim",
+            "actor_id": actor,
+            "payload": {"invite_id": invite_id, "subject_account_id": account}
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+        assert!(
+            invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
+                .await
+        );
+        claim.get_mut("payload").unwrap()["subject_account_id"] = json!(other.as_account_id());
+        assert!(
+            !invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
+                .await
+        );
+        claim.insert(
+            "payload".to_owned(),
+            json!({"invite_id": invite_id, "subject_id": ALICE}),
+        );
+        assert!(
+            !invite_claim_actor_claims_pending_third_party_invite(&state, &claim, &actor, realm_id)
+                .await
+        );
+        assert!(!invite_account_matches(ALICE, account));
     }
 }

@@ -38,7 +38,7 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state_body() {
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Hydration target",
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -160,7 +160,7 @@ async fn current_board_and_strand_projection_survives_since_join_history_cut_bod
                 "realm_id": realm_id,
                 "kind": "board",
                 "title": "Pre-join release board",
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -185,7 +185,7 @@ async fn current_board_and_strand_projection_survives_since_join_history_cut_bod
             "object": {
                 "realm_id": realm_id,
                 "metadata": { "title": "Pre-join current card" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         vec![board_event_id.as_str()],
@@ -279,7 +279,7 @@ async fn projection_strands_endpoint_reports_lifecycle_state_body() {
                         "rank": "r007",
                     },
                 },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -359,7 +359,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state_body() {
                 "realm_id": realm_id,
                 "morph_kind": "task",
                 "metadata": { "title": "Hydration morph" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -513,16 +513,16 @@ async fn projection_morphs_endpoint_filters_circle_scope_body() {
                 mls_group_ref: None,
                 state: soland_domain::reducer::CircleLifecycleState::Active,
                 state_changed_at: None,
-                created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
+                created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
                 created_at: now,
                 updated_by: None,
                 updated_at: None,
                 members: std::collections::BTreeSet::from([
-                    fixture_actor_core_id("did:web:alice.example").to_string(),
+                    fixture_account_actor(&state, "did:web:alice.example").to_string(),
                 ]),
             },
         );
-        let alice_actor_id = fixture_actor_core_id("did:web:alice.example").to_string();
+        let alice_actor_id = fixture_account_actor(&state, "did:web:alice.example").to_string();
         projection.circle_memberships.insert(
             (circle_id.to_owned(), alice_actor_id.clone()),
             soland_domain::reducer::CircleMembershipState {
@@ -554,7 +554,7 @@ async fn projection_morphs_endpoint_filters_circle_scope_body() {
                     encrypted_content: None,
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
-                    created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
+                    created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
                     created_at: now,
                     history_basis_seals: Vec::new(),
                     updated_by: None,
@@ -641,7 +641,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
                 "fields": {
                     "document": initial_body
                 },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -668,7 +668,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
             "object": {
                 "realm_id": realm_id,
                 "metadata": { "title": "Incident target" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         vec![create_event_id.as_str()],
@@ -894,7 +894,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
             fields: Default::default(),
             state: soland_domain::reducer::ObjectLifecycleState::Active,
             state_changed_at: None,
-            created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
+            created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
             created_at: now,
             history_basis_seals: Vec::new(),
             updated_by: None,
@@ -954,7 +954,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs_body() {
                 encrypted_content: None,
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
-                created_by: fixture_actor_core_id("did:web:alice.example").to_string(),
+                created_by: fixture_account_actor(&state, "did:web:alice.example").to_string(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
                 updated_by: None,
@@ -1064,7 +1064,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
                 "realm_id": realm_id,
                 "kind": "list",
                 "title": "Doomed Space",
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -1145,7 +1145,7 @@ async fn projection_endpoints_hide_terminal_state_by_default_body() {
             "object": {
                 "realm_id": realm_id,
                 "metadata": { "title": "Doomed Strand" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         vec![tombstone_space_event_id.as_str()],
@@ -1243,7 +1243,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events_body() {
                 "realm_id": demo_realm_id(),
                 "kind": "list",
                 "title": "Persistent Space",
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         Vec::new(),
@@ -1322,7 +1322,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events_body() {
             "object": {
                 "realm_id": demo_realm_id(),
                 "metadata": { "title": "Persistent Strand" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         vec![archive_space_event_id.as_str()],
@@ -1388,7 +1388,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events_body() {
                 "realm_id": demo_realm_id(),
                 "morph_kind": "task",
                 "metadata": { "title": "Persistent Morph" },
-                "created_by": fixture_actor_core_id("did:web:alice.example"),
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
         vec![redact_strand_event_id.as_str()],

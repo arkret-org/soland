@@ -1846,7 +1846,7 @@ mod seal_delta_tests {
                     "schema": "ak.schema.capability.v1",
                     "realm_id": realm_id,
                     "issuer_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(issuer, state.service_core_id().clone())),
-                    "subject": arkret_wire::ActorId::hosted_principal(subject, state.service_core_id().clone()),
+                    "subject": arkret_wire::ActorId::account(arkret_wire::AccountId::new(subject, state.service_core_id().clone())),
                     "actions": ["ak.strand.read"],
                     "resources": [{
                         "kind": "realm",

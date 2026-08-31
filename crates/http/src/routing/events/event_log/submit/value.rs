@@ -1874,7 +1874,6 @@ async fn validate_membership_compensation_live_state(
                 "membership compensation join Event is unavailable",
             )
         })?;
-    let accepted_join_digest = accepted_join.canonical_digest.clone();
     let accepted_join_event =
         serde_json::from_value::<Event>(accepted_join.envelope).map_err(|error| {
             SubmitOneError::new(
@@ -1888,8 +1887,7 @@ async fn validate_membership_compensation_live_state(
         .iter()
         .find_map(|proof| proof.as_producer())
         .map(|proof| &proof.verification_method);
-    if accepted_join_digest != core.join_event_digest.as_str()
-        || accepted_join_event.kind != arkret_wire::EventKind::MemberState
+    if accepted_join_event.kind != arkret_wire::EventKind::MemberState
         || accepted_join_event.realm_id != core.resource_id
         || evidence.join_accepted_proof.issuer_id
             != *accepted_join_event.actor_id.route_service_id()

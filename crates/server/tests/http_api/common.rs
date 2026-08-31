@@ -142,7 +142,7 @@ pub(crate) fn demo_realm_id() -> &'static str {
 pub(crate) const SOLAND_TEST_TURN_SHARED_SECRET: &str = "soland-test-turn-shared-secret-0123456789";
 pub(crate) const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 pub(crate) static TEST_EVENT_SEQ: AtomicU64 = AtomicU64::new(10_000);
-static DEMO_REALM_ACTOR_FRONTIER_EVENT_ID: OnceLock<String> = OnceLock::new();
+static DEMO_REALM_ACTOR_FRONTIER: OnceLock<(String, u64)> = OnceLock::new();
 static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
     let key = SigningKey::from_bytes(&[21_u8; 32]);
     format!(
@@ -155,11 +155,23 @@ pub(crate) fn test_event_signer_did() -> &'static str {
     TEST_EVENT_SIGNER_DID.as_str()
 }
 
-/// Project a fixture's DID onto the stable core id that account-data AAD,
-/// key derivation and owner projections are bound to.
+/// Project a fixture's DID onto its signing principal. Account-scoped payloads
+/// and projection keys use the complete Account/Actor helpers below.
 pub(crate) fn fixture_actor_core_id(actor: &str) -> DidCoreId {
     arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).expect("fixture actor DID"))
         .expect("fixture actor DID projects to a core id")
+}
+
+/// Exact local Account used by a fixture whose Station is the supplied app.
+pub(crate) fn fixture_account_id(state: &AppState, principal_did: &str) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(
+        fixture_actor_core_id(principal_did),
+        state.service_core_id(),
+    )
+}
+
+pub(crate) fn fixture_account_actor(state: &AppState, principal_did: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(fixture_account_id(state, principal_did))
 }
 /// Render a timestamp exactly as the SDK's canonical wire serializer does
 /// (fixed milliseconds, `Z` suffix). The canonical deserializer rejects every
@@ -790,8 +802,28 @@ pub(crate) async fn seed_test_realm(
     invitees: &[&str],
 ) -> Value {
     let realm_id =
-        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event(state, owner, title)
-            .await;
+        soland_test_support::cba_basis::seed_event_derived_realm_genesis_event_with_visibility(
+            state,
+            owner,
+            title,
+            arkret_wire::HistoryAccess::SinceJoin,
+            serde_json::from_value(serde_json::json!(discoverability))
+                .expect("fixture Realm discoverability"),
+        )
+        .await;
+    assert_eq!(
+        state
+            .test_projection()
+            .lock()
+            .realm_null_subject_cell_value(
+                &realm_id,
+                arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
+            )
+            .and_then(|value| value.get("value").and_then(Value::as_str).or_else(|| value.as_str()))
+            .map(ToOwned::to_owned),
+        Some(discoverability.to_owned()),
+        "accepted bootstrap discovery must match the fixture's requested visibility"
+    );
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did =
         arkret_wire::project_did_to_core_id(&Did::new(owner.to_owned()).unwrap()).unwrap();
@@ -2120,7 +2152,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
 /// [`test_realm_uncovered_basis_seal`].
 pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
     let seal_id = seed_test_realm_basis_seal(state, demo_realm_id(), "did:web:alice.example").await;
-    let frontier_event_id = state
+    let frontier = state
         .test_persistence()
         .events()
         .realm_events_newest_first(demo_realm_id())
@@ -2136,15 +2168,12 @@ pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::Seal
                 .to_string()
         })
         .max_by_key(|record| record.actor_seq)
-        .expect("demo Realm bootstrap has an Alice frontier Event")
-        .event_id;
-    if let Some(existing) = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.get() {
-        assert_eq!(
-            existing, &frontier_event_id,
-            "demo bootstrap frontier is stable"
-        );
+        .expect("demo Realm bootstrap has an Alice frontier Event");
+    let frontier = (frontier.event_id, frontier.actor_seq);
+    if let Some(existing) = DEMO_REALM_ACTOR_FRONTIER.get() {
+        assert_eq!(existing, &frontier, "demo bootstrap frontier is stable");
     } else {
-        let _ = DEMO_REALM_ACTOR_FRONTIER_EVENT_ID.set(frontier_event_id);
+        let _ = DEMO_REALM_ACTOR_FRONTIER.set(frontier);
     }
     seal_id
 }
@@ -2940,19 +2969,25 @@ pub(crate) fn signed_redaction_event(
 }
 
 /// Lifecycle/projection scenarios number their authoring operations from one,
-/// while the wire actor chain starts at sequence zero.
+/// after the actual accepted bootstrap frontier of this exact Account.
 fn fixture_actor_seq(authoring_step: u64) -> u64 {
     authoring_step
-        .checked_add(7)
+        .checked_add(
+            DEMO_REALM_ACTOR_FRONTIER
+                .get()
+                .expect("demo bootstrap frontier is seeded")
+                .1,
+        )
         .expect("HTTP fixture authoring sequence")
 }
 
 fn fixture_prev_refs(prev_refs: Vec<&str>) -> Vec<&str> {
     if prev_refs.is_empty() {
         vec![
-            DEMO_REALM_ACTOR_FRONTIER_EVENT_ID
+            DEMO_REALM_ACTOR_FRONTIER
                 .get()
                 .expect("seed_demo_realm_basis must run before authoring demo Realm Events")
+                .0
                 .as_str(),
         ]
     } else {

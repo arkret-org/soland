@@ -533,20 +533,14 @@ async fn validate_event_envelope_with_ingress(
         && realm_create_actor_is_creator(object, actor_id.as_str())
         && (actor_id == session_actor_id || managed_agent_delegation)
         && (!realm_exists || historical_realm_create);
-    let is_invite_acceptance_join = member_join_accepts_pending_invite(
-        state,
-        object,
-        session_actor_id.as_str(),
-        realm_id.as_str(),
-    )
-    .await;
+    let is_invite_acceptance_join =
+        member_join_accepts_pending_invite(state, object, &session_actor, realm_id.as_str()).await;
     let is_invitee_invite_cancel =
-        invitee_cancels_pending_invite(state, object, session_actor_id.as_str(), realm_id.as_str())
-            .await;
+        invitee_cancels_pending_invite(state, object, &session_actor, realm_id.as_str()).await;
     let is_third_party_invite_claim = invite_claim_actor_claims_pending_third_party_invite(
         state,
         object,
-        session_actor_id.as_str(),
+        &session_actor,
         realm_id.as_str(),
     )
     .await;

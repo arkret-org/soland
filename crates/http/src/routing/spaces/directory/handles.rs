@@ -147,7 +147,12 @@ pub(super) async fn membership_builder_resolve_allowed(
     let Some(realm_id) = request.realm_id.as_ref().map(RealmId::as_str) else {
         return false;
     };
-    super::realm_has_member(state, realm_id, &session.actor).await
+    let Ok(actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return false;
+    };
+    super::realm_has_member(state, realm_id, &actor.to_string()).await
 }
 
 pub(super) async fn contact_request_resolve_allowed(
@@ -727,6 +732,7 @@ pub(super) async fn list_handles_for_subject(
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
     let filter_digest = arkret_server::cursor_filter_digest(&json!({
         "operation": arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT_V1,
+        "account_id": subject_account_id,
         "realm_id": body.realm_id.as_ref(),
         "intent": body.intent.as_deref(),
         "requester_id": body.requester_id.as_ref(),
@@ -1082,6 +1088,62 @@ pub(super) fn primary_handle_from_subject_claims(claims: &[Value]) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn membership_builder_requires_the_credentials_exact_station_membership() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = "ak:realm:AfTcej7ZFNg8uTbkOiUJT0KN1F_c9l1fmtil65CUwncm";
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let foreign_station = DidCoreId::new("ak:did_core:web:foreign.example").unwrap();
+        let observed_at = now();
+        let mut session = SessionRecord {
+            account_pk: None,
+            token_hash: "directory-membership-test".to_owned(),
+            actor: principal.to_string(),
+            device_id: "ak:device:019a0000-0000-7000-8000-000000000001".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: observed_at + chrono::Duration::hours(1),
+            created_at: observed_at,
+            revoked_at: None,
+        };
+        let request: DirectoryResolveHandleRequestBody = serde_json::from_value(json!({
+            "handle": "bob:local.example",
+            "intent": "invite",
+            "requester_id": principal,
+            "realm_id": realm_id
+        }))
+        .unwrap();
+        let add_member = |station| {
+            let actor = arkret_wire::ActorId::account(AccountId::new(principal.clone(), station));
+            let actor_key = actor.to_string();
+            state.test_projection().lock().members.insert(
+                (realm_id.to_owned(), actor_key.clone()),
+                soland_domain::reducer::SolandMembershipState {
+                    member: actor_key,
+                    realm_id: realm_id.to_owned(),
+                    state: "join".to_owned(),
+                    role: "member".to_owned(),
+                    membership_event_ref: None,
+                    invited_at: None,
+                    joined_at: observed_at,
+                    updated_at: observed_at,
+                    reason: None,
+                },
+            );
+        };
+        add_member(foreign_station.clone());
+        assert!(!membership_builder_resolve_allowed(&state, Some(&session), &request).await);
+        add_member(state.service_core_id());
+        assert!(membership_builder_resolve_allowed(&state, Some(&session), &request).await);
+        session.audience = foreign_station.to_string();
+        assert!(!membership_builder_resolve_allowed(&state, Some(&session), &request).await);
+    }
 
     #[test]
     fn handle_lookup_preserves_colon_authority() {

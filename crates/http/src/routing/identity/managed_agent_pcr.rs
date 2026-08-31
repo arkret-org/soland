@@ -382,11 +382,11 @@ fn managed_agent_actor_for_account(
     record: &AgentPrincipalRecord,
     account: &AccountId,
 ) -> Result<ActorId, AppError> {
-    Ok(ActorId::hosted_principal(
+    Ok(ActorId::account(arkret_wire::AccountId::new(
         DidCoreId::new(record.id.clone())
             .map_err(|_| schema_error("stored Agent principal is invalid"))?,
         account.station_id.clone(),
-    ))
+    )))
 }
 
 pub(crate) async fn managed_agent_record_for_actor(
@@ -987,10 +987,10 @@ mod tests {
 
     #[test]
     fn accepted_agent_genesis_matches_full_hosted_actor_and_original_envelope() {
-        let actor = super::ActorId::hosted_principal(
+        let actor = super::ActorId::account(arkret_wire::AccountId::new(
             super::DidCoreId::new(AGENT).unwrap(),
             super::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        );
+        ));
         let mut event = soland_services::events::AcceptedEvent {
             event_id: String::new(),
             actor_id: actor.to_string(),
@@ -1005,10 +1005,10 @@ mod tests {
             received_at: chrono::Utc::now(),
         };
         assert!(super::managed_agent_genesis_matches(&event, &actor, PCR));
-        let foreign = super::ActorId::hosted_principal(
+        let foreign = super::ActorId::account(arkret_wire::AccountId::new(
             actor.signing_principal_id().clone(),
             super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        );
+        ));
         assert!(!super::managed_agent_genesis_matches(&event, &foreign, PCR));
         event.envelope["actor_id"] = serde_json::json!(foreign);
         assert!(!super::managed_agent_genesis_matches(&event, &actor, PCR));
@@ -1079,10 +1079,10 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
-        let foreign_actor = super::ActorId::hosted_principal(
+        let foreign_actor = super::ActorId::account(arkret_wire::AccountId::new(
             actor.signing_principal_id().clone(),
             super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-        );
+        ));
         assert!(
             super::managed_agent_record_for_actor(&state, &foreign_actor)
                 .await

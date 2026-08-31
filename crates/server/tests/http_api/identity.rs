@@ -86,25 +86,22 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         principal_did.clone(),
         verification_method.clone(),
     );
-    let mut signed = Vec::new();
-    for event in [genesis, authorize] {
-        let created_at = event.created_at;
-        let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
-            event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .expect("fixture envelope finalizes");
-        arkret_signatures::sign_event(
-            &mut event,
-            &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-        )
-        .unwrap();
-        signed.push(event.into_event());
-    }
-    let [genesis, authorize]: [arkret_wire::Event; 2] =
-        signed.try_into().expect("both fixtures signed");
+    // The basis builder already persisted the signed genesis. Preserve that
+    // accepted Event verbatim; only the new authorization enters authoring.
+    let created_at = authorize.created_at;
+    let mut authorize = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        authorize,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture authorization finalizes");
+    arkret_signatures::sign_event(
+        &mut authorize,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .unwrap();
+    let authorize = authorize.into_event();
     state
         .test_persistence()
         .events()
@@ -308,22 +305,32 @@ fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor() {
 async fn actor_profile_resolve_uses_one_failure_for_unknown_or_unavailable_actor_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    let body: Value = TestClient::post("http://server/_arkret/self/actor-profiles/query")
+    let unknown_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id("did:web:unknown.example"),
+        state.service_core_id(),
+    ));
+    let request = arkret_models_identity::actor_profile_operations::ActorProfileResolveRequest::new(
+        RealmId::new(demo_realm_id()).unwrap(),
+        vec![unknown_actor.clone()],
+    );
+    let mut response = TestClient::post("http://server/_arkret/self/actor-profiles/query")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "realm_id": demo_realm_id(),
-            "actor_ids": [fixture_actor_core_id("did:web:unknown.example")]
-        }))
+        .add_header("content-type", "application/json", true)
+        .body(canonical_request_body(&request))
         .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
+        .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(
+        status,
+        Some(StatusCode::OK),
+        "actor profile response: {body}"
+    );
     assert_eq!(body["profiles"], serde_json::json!([]));
     assert_eq!(body["failures"][0]["reason"], "profile_unavailable");
     assert_eq!(
         body["failures"][0]["actor_id"],
-        fixture_actor_core_id("did:web:unknown.example").as_str()
+        serde_json::to_value(unknown_actor).unwrap()
     );
 }
 
@@ -612,9 +619,11 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = soland_test_support::app_state(config);
     let key = arkret_models_identity::service_identity::ServiceRegistrationKey::new(
-        arkret_wire::ServiceKind::PushGateway,
-        arkret_models_identity::service_identity::CanonicalServiceUrl::new("https://push.example/")
-            .unwrap(),
+        arkret_wire::ServiceKind::Station,
+        arkret_models_identity::service_identity::CanonicalServiceUrl::new(
+            "https://station.example/",
+        )
+        .unwrap(),
     )
     .unwrap();
     let provider_endpoint = url::Url::parse("https://soland.example/").unwrap();
@@ -688,7 +697,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks_body() {
     );
 
     let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
-        "http://server/_arkret/root/identity/service-registrations?service_kind=push_gateway&public_base_url=https%3A%2F%2Fpush.example%2F",
+        "http://server/_arkret/root/identity/service-registrations?service_kind=station&public_base_url=https%3A%2F%2Fstation.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
     .send(&app_from_state(state.clone()))

@@ -98,17 +98,19 @@ pub(super) async fn require_controller_principal_control_realm(
             .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
             .with_reason_code("self_realm_metadata_missing")
         })?;
-    reconcile_self_realm_owner_projection(state, &realm_id, &controller_id, &meta)?;
+    reconcile_self_realm_owner_projection(state, &realm_id, authority, &meta)?;
     Ok(realm_id)
 }
 
 fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
-    controller_id: &arkret_wire::DidCoreId,
+    controller_account: &arkret_wire::AccountId,
     meta: &soland_services::events::RealmMetadata,
 ) -> Result<(), AppError> {
-    if meta.owner != controller_id.as_str() {
+    let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
+    let controller_key = controller_actor.to_string();
+    if meta.owner != controller_key {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "self Realm owner does not match the authenticated controller",
@@ -119,7 +121,7 @@ fn reconcile_self_realm_owner_projection(
 
     if !state.projections().reconcile_realm_owner(
         realm_id,
-        controller_id.as_str(),
+        &controller_key,
         meta.deleted,
         meta.created_at,
         meta.updated_at,
@@ -382,12 +384,16 @@ mod tests {
             arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
                 .unwrap();
         let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let controller_account =
+            arkret_wire::AccountId::new(controller_id, state.service_core_id());
+        let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
+        let controller_key = controller_actor.to_string();
 
         reconcile_self_realm_owner_projection(
             &state,
             realm_id,
-            &controller_id,
-            &realm_meta(controller_id.as_str()),
+            &controller_account,
+            &realm_meta(&controller_key),
         )
         .expect("durable owner should repair the missing projection");
 
@@ -397,10 +403,10 @@ mod tests {
                 .realm_states
                 .get(realm_id)
                 .and_then(|realm| realm.owner.as_deref()),
-            Some(controller_id.as_str())
+            Some(controller_key.as_str())
         );
         assert!(!projection.issuer_has_projected_capability(
-            &arkret_wire::ActorId::service(controller_id.clone()),
+            &controller_actor,
             realm_id,
             CapabilityActionId::MESSAGE_CREATE,
             realm_id,
@@ -415,11 +421,17 @@ mod tests {
             arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
                 .unwrap();
         let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let controller_account =
+            arkret_wire::AccountId::new(controller_id, state.service_core_id());
+        let other_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixturebob").unwrap(),
+            state.service_core_id(),
+        ));
         let error = reconcile_self_realm_owner_projection(
             &state,
             "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF",
-            &controller_id,
-            &realm_meta("ak:did_core:webvh:z6mkfixturebob"),
+            &controller_account,
+            &realm_meta(&other_actor.to_string()),
         )
         .expect_err("mismatched durable ownership must not be overwritten");
 
@@ -427,6 +439,62 @@ mod tests {
         assert_eq!(
             error.reason_code.as_deref(),
             Some("self_realm_owner_mismatch")
+        );
+    }
+
+    #[test]
+    fn self_realm_owner_reconciliation_never_borrows_another_station_account() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let realm_id = "ak:realm:AfnUfJvZuZpWOPXnnKIwf1dg2Dee77NZ0MxYh1uFxCLF";
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let controller_account =
+            arkret_wire::AccountId::new(principal.clone(), state.service_core_id());
+        let local_actor = arkret_wire::ActorId::account(controller_account.clone()).to_string();
+        let foreign_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ))
+        .to_string();
+        for invalid_owner in [foreign_actor.as_str(), principal.as_str()] {
+            let error = reconcile_self_realm_owner_projection(
+                &state,
+                realm_id,
+                &controller_account,
+                &realm_meta(invalid_owner),
+            )
+            .expect_err("foreign or principal-only metadata cannot authorize this Account");
+            assert_eq!(
+                error.reason_code.as_deref(),
+                Some("self_realm_owner_mismatch")
+            );
+            assert!(
+                !state
+                    .projections()
+                    .snapshot()
+                    .realm_states
+                    .contains_key(realm_id)
+            );
+        }
+        let meta = realm_meta(&local_actor);
+        assert!(state.projections().reconcile_realm_owner(
+            realm_id,
+            &foreign_actor,
+            meta.deleted,
+            meta.created_at,
+            meta.updated_at,
+        ));
+        let error =
+            reconcile_self_realm_owner_projection(&state, realm_id, &controller_account, &meta)
+                .expect_err("existing foreign Account ownership must not be overwritten");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some("self_realm_owner_mismatch")
+        );
+        assert_eq!(
+            state.projections().snapshot().realm_states[realm_id]
+                .owner
+                .as_deref(),
+            Some(foreign_actor.as_str()),
         );
     }
 

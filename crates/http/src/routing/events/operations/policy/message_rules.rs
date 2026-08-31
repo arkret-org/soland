@@ -310,7 +310,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     };
     let agent_id = agent_actor.signing_principal_id().as_str();
     let expected = &record.principal_control_realm_id;
-    if !realm_ids_match(operation.realm_id.as_str(), &expected) {
+    if !realm_ids_match(operation.realm_id.as_str(), expected) {
         return Err("principal_control_realm_mismatch");
     }
     if kind == arkret_wire::EventKind::RealmCreate.as_str() {
@@ -336,9 +336,9 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
             .map_err(|_| "managed_agent_initial_resolution_unavailable")?;
         crate::routing::identity::managed_agent_pcr::validate_agent_pcr_genesis_object(
             object,
-            &agent_id,
+            agent_id,
             controller_id.signing_principal_id().as_str(),
-            &expected,
+            expected,
             state.config().trust_domain.as_str(),
             &initial_resolution,
         )
@@ -374,54 +374,6 @@ fn managed_agent_control_actor(
 
 pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
     a == b
-}
-
-#[cfg(test)]
-mod managed_agent_actor_tests {
-    use super::*;
-
-    #[test]
-    fn genesis_profile_and_control_selectors_preserve_full_actor() {
-        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
-        let actor = arkret_wire::ActorId::hosted_principal(
-            principal.clone(),
-            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
-        );
-        assert_eq!(
-            managed_agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
-            actor
-        );
-        assert_eq!(
-            managed_agent_control_actor(
-                &actor,
-                &serde_json::json!({"object":{"actor_id":actor}}),
-                false
-            )
-            .unwrap(),
-            actor
-        );
-        assert_eq!(
-            managed_agent_control_actor(&actor, &serde_json::json!({"agent_id":principal}), true)
-                .unwrap(),
-            actor
-        );
-        assert!(
-            managed_agent_control_actor(
-                &actor,
-                &serde_json::json!({"object":{"actor_id":principal}}),
-                false
-            )
-            .is_err()
-        );
-        assert!(
-            managed_agent_control_actor(
-                &actor,
-                &serde_json::json!({"agent_id":"ak:did_core:web:other.example"}),
-                true
-            )
-            .is_err()
-        );
-    }
 }
 
 /// constraint-schema.md §14.2 — enforce the message edit / redact temporal
@@ -622,4 +574,52 @@ pub async fn validate_content_encryption_floor(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod managed_agent_actor_tests {
+    use super::*;
+
+    #[test]
+    fn genesis_profile_and_control_selectors_preserve_full_actor() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:agent.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        assert_eq!(
+            managed_agent_control_actor(&actor, &serde_json::json!({"object":{}}), false).unwrap(),
+            actor
+        );
+        assert_eq!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"object":{"actor_id":actor}}),
+                false
+            )
+            .unwrap(),
+            actor
+        );
+        assert_eq!(
+            managed_agent_control_actor(&actor, &serde_json::json!({"agent_id":principal}), true)
+                .unwrap(),
+            actor
+        );
+        assert!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"object":{"actor_id":principal}}),
+                false
+            )
+            .is_err()
+        );
+        assert!(
+            managed_agent_control_actor(
+                &actor,
+                &serde_json::json!({"agent_id":"ak:did_core:web:other.example"}),
+                true
+            )
+            .is_err()
+        );
+    }
 }

@@ -585,37 +585,14 @@ async fn peer_claim_keypackage(
     req: &mut Request,
 ) -> JsonResult<PeerKeyPackagesClaimOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = req
-        .parse_json::<PeerKeyPackagesClaimRequestBody>()
-        .await
-        .map_err(|_| AppError::json_invalid("invalid peer KeyPackage claim request body"))?;
-    // Service authentication is deliberately first so an unauthenticated
-    // caller cannot probe whether a target principal or KeyPackage exists.
-    crate::routing::events::peer::validate_peer_request(state, req, true).await?;
-    let transport = peer_claim_transport_binding(state, req)?;
-    if body.service_binding.source_id != transport.source_id
-        || body.service_binding.destination_id != transport.destination_id
-    {
-        return Err(peer_claim_schema_violation(
-            "request service_binding must equal the authenticated HTTP service coordinates",
-        ));
-    }
-    let claim_request_id = body.claim_request_id.as_str();
-    if peer_required_header(req, "idempotency-key")? != claim_request_id {
-        return Err(peer_claim_schema_violation(
-            "Idempotency-Key must equal claim_request_id",
-        ));
-    }
-    body.validate_shape()
-        .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
-    validate_peer_claim_time_window(&body)?;
-
-    claim_keypackage_at_destination(state, &body).await
+    let (body, authorization) = verify_peer_claim_source_attestation(state, req).await?;
+    claim_keypackage_at_destination(state, &body, authorization).await
 }
 
 async fn claim_keypackage_at_destination(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
+    authorization: VerifiedClaimAuthorization,
 ) -> JsonResult<PeerKeyPackagesClaimOutcome> {
     let body_value = serde_json::to_value(body)
         .map_err(|error| AppError::internal(format!("KeyPackage claim serialize: {error}")))?;
@@ -623,6 +600,7 @@ async fn claim_keypackage_at_destination(
     let claim_request_id = body.claim_request_id.as_str();
     let request_digest = arkret_canonical::canonical_sha256(&body_value)
         .map_err(|error| AppError::internal(format!("peer claim digest: {error}")))?;
+    authorization.validate_request(body, &request_digest)?;
     revoke_expired_peer_claims(state).await?;
     if let Some(existing) = state
         .mls_key_packages()
@@ -644,18 +622,12 @@ async fn claim_keypackage_at_destination(
     }
 
     let policy_authorized = peer_claim_policy_authorized(state, body, &source_id).await?;
-    let participant_authorized = if policy_authorized {
-        verify_peer_claim_participant_authorization(state, body).await?
-    } else {
-        false
-    };
-    if !policy_authorized || !participant_authorized {
+    if !policy_authorized {
         tracing::warn!(
             %source_id,
             requester_id = %body.requester_id,
             target_principal_id = %body.target_principal_id,
             policy_authorized,
-            participant_authorized,
             "peer KeyPackage claim authorization rejected"
         );
         record_peer_claim_failed(state, body, &source_id, &request_digest).await?;
@@ -1007,6 +979,85 @@ struct PeerClaimHttpTransportBinding {
     destination_id: arkret_wire::DidCoreId,
 }
 
+/// Private, exact-body authority carried only from successful source admission.
+/// Peer HTTP signatures attest source-local participant verification; the
+/// destination must never substitute its own same-principal device directory.
+struct VerifiedClaimAuthorization {
+    request_digest: String,
+}
+
+impl VerifiedClaimAuthorization {
+    fn for_verified_request(body: &PeerKeyPackagesClaimRequestBody) -> Result<Self, AppError> {
+        Ok(Self {
+            request_digest: arkret_canonical::canonical_sha256(body).map_err(|error| {
+                AppError::internal(format!("claim authorization digest: {error}"))
+            })?,
+        })
+    }
+
+    fn validate_request(
+        &self,
+        body: &PeerKeyPackagesClaimRequestBody,
+        request_digest: &str,
+    ) -> Result<(), AppError> {
+        if self.request_digest != request_digest {
+            return Err(peer_claim_schema_violation(
+                "claim changed after source authentication",
+            ));
+        }
+        validate_peer_claim_time_window(body)
+    }
+}
+
+async fn verify_peer_claim_source_attestation(
+    state: &AppState,
+    req: &mut Request,
+) -> Result<(PeerKeyPackagesClaimRequestBody, VerifiedClaimAuthorization), AppError> {
+    // Authenticate before any target lookup to preserve opaque peer admission.
+    crate::routing::events::peer::validate_peer_request(state, req, true).await?;
+    // Decode exactly the body whose digest the source signature authenticated;
+    // callers cannot pair a verified request with a separately supplied DTO.
+    let body = req
+        .parse_json::<PeerKeyPackagesClaimRequestBody>()
+        .await
+        .map_err(|_| AppError::json_invalid("invalid peer KeyPackage claim request body"))?;
+    let transport = peer_claim_transport_binding(state, req)?;
+    if body.service_binding.source_id != transport.source_id
+        || body.service_binding.destination_id != transport.destination_id
+    {
+        return Err(peer_claim_schema_violation(
+            "request service_binding must equal the authenticated HTTP service coordinates",
+        ));
+    }
+    if peer_required_header(req, "idempotency-key")? != body.claim_request_id.as_str() {
+        return Err(peer_claim_schema_violation(
+            "Idempotency-Key must equal claim_request_id",
+        ));
+    }
+    body.validate_shape()
+        .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
+    if let PeerKeyPackageRequesterAuthorization::Device {
+        verification_method,
+        requester_device_id,
+        ..
+    } = &body.requester_authorization
+        && !verification_method_binds_core_device(
+            verification_method,
+            &body.requester_id,
+            requester_device_id,
+        )
+    {
+        return Err(peer_claim_schema_violation(
+            "requester device verification method must bind requester_id and requester_device_id",
+        ));
+    }
+    validate_peer_claim_time_window(&body)?;
+    // The authenticated canonical body is the attestation. This function does
+    // not resolve a remote participant through a local principal-keyed facet.
+    let authorization = VerifiedClaimAuthorization::for_verified_request(&body)?;
+    Ok((body, authorization))
+}
+
 fn peer_claim_transport_binding(
     state: &AppState,
     req: &Request,
@@ -1078,10 +1129,13 @@ fn verification_method_binds_core_device(
         .is_ok_and(|core| core == *principal_id)
 }
 
-async fn verify_peer_claim_participant_authorization(
+async fn verify_local_claim_participant_authorization(
     state: &AppState,
     body: &PeerKeyPackagesClaimRequestBody,
 ) -> Result<bool, AppError> {
+    if body.service_binding.source_id != state.service_core_id() {
+        return Ok(false);
+    }
     let authorization = &body.requester_authorization;
     let reject = |reason: &'static str| {
         tracing::warn!(
@@ -1146,11 +1200,15 @@ async fn verify_peer_claim_participant_authorization(
         ..
     } = authorization
     {
-        let agent = state
-            .agent_pairings()
-            .agent(requester_agent_id.as_str())
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
+        let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            requester_agent_id.clone(),
+            body.service_binding.source_id.clone(),
+        ));
+        let agent = crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
+            state,
+            &agent_actor,
+        )
+        .await?;
         let Some(agent) = agent else {
             return reject("native_agent_missing");
         };
@@ -1792,10 +1850,10 @@ async fn validate_local_welcome_recipient_authorization(
             },
             MlsClaimTrustBinding::AgentKeyAuthorizeEventId(_),
         ) => {
-            let actor = arkret_wire::ActorId::hosted_principal(
+            let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 recipient_agent_id.clone(),
                 welcome.claim_receipt.destination_id.clone(),
-            );
+            ));
             if crate::routing::identity::managed_agent_pcr::managed_agent_record_for_actor(
                 state, &actor,
             )
@@ -2016,13 +2074,19 @@ async fn claim_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
+    let session_actor =
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
     if !matches!(
         &body.requester_authorization,
         PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
-    ) && body.requester_id.as_str() != session.actor
+    ) && session_actor
+        != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            body.requester_id.clone(),
+            body.service_binding.source_id.clone(),
+        ))
     {
         return Err(AppError::capability_denied(
-            "requester_id must match the calling session",
+            "requester account must match the calling session and source Station",
         ));
     }
     body.validate_shape()
@@ -2050,11 +2114,12 @@ async fn claim_keypackage(
             ));
         }
     }
-    if !verify_peer_claim_participant_authorization(state, &peer_body).await? {
+    if !verify_local_claim_participant_authorization(state, &peer_body).await? {
         return Err(AppError::capability_denied(
             "requester_id authorization is not current at the source service",
         ));
     }
+    let authorization = VerifiedClaimAuthorization::for_verified_request(&peer_body)?;
     if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
         let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             body.requester_id.clone(),
@@ -2139,7 +2204,7 @@ async fn claim_keypackage(
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .with_wire_code("dependency_unavailable"));
     }
-    claim_keypackage_at_destination(state, &peer_body)
+    claim_keypackage_at_destination(state, &peer_body, authorization)
         .await
         .map(|Json(outcome)| Json(outcome.into()))
 }
@@ -4991,6 +5056,7 @@ mod trust_binding_tests {
     fn signed_welcome_ledger_payload(
         state: &AppState,
         actor: arkret_wire::ActorId,
+        native_agent: bool,
     ) -> arkret_models_collaboration::events_payloads::MlsWelcomePayload {
         use arkret_models_collaboration::events_payloads::{
             MlsRequesterTrustBinding, MlsWelcomePayload,
@@ -5010,24 +5076,23 @@ mod trust_binding_tests {
         let authorization =
             arkret_wire::EventId::new("ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM")
                 .unwrap();
-        welcome.claim_envelope.trust_binding =
-            if matches!(actor, arkret_wire::ActorId::HostedPrincipal { .. }) {
-                welcome.sender_device_id = None;
-                MlsRequesterTrustBinding::RequesterNativeAgent {
-                    requester_agent_id: actor.signing_principal_id().clone(),
-                    requester_agent_verification_method: arkret_wire::DidUrl::new(
-                        "did:web:requester.example#signing-key",
-                    )
-                    .unwrap(),
-                    requester_agent_key_authorize_event_id: authorization,
-                }
-            } else {
-                welcome.sender_device_id = Some(device.clone());
-                MlsRequesterTrustBinding::RequesterDevice {
-                    requester_device_id: device,
-                    requester_device_authorize_event_id: authorization,
-                }
-            };
+        welcome.claim_envelope.trust_binding = if native_agent {
+            welcome.sender_device_id = None;
+            MlsRequesterTrustBinding::RequesterNativeAgent {
+                requester_agent_id: actor.signing_principal_id().clone(),
+                requester_agent_verification_method: arkret_wire::DidUrl::new(
+                    "did:web:requester.example#signing-key",
+                )
+                .unwrap(),
+                requester_agent_key_authorize_event_id: authorization,
+            }
+        } else {
+            welcome.sender_device_id = Some(device.clone());
+            MlsRequesterTrustBinding::RequesterDevice {
+                requester_device_id: device,
+                requester_device_authorize_event_id: authorization,
+            }
+        };
         welcome.claim_envelope.requester_actor_id = actor.clone();
         welcome.claim_envelope.created_at = at;
         welcome.claim_envelope.signature.kid =
@@ -5083,16 +5148,12 @@ mod trust_binding_tests {
             } else {
                 state.service_core_id()
             };
-            for hosted in [false, true] {
-                let actor = if hosted {
-                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
-                } else {
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        principal.clone(),
-                        station.clone(),
-                    ))
-                };
-                let welcome = signed_welcome_ledger_payload(&state, actor.clone());
+            for native_agent in [false, true] {
+                let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    principal.clone(),
+                    station.clone(),
+                ));
+                let welcome = signed_welcome_ledger_payload(&state, actor.clone(), native_agent);
                 let payload = serde_json::to_value(&welcome).unwrap();
                 let realm = welcome.claim_envelope.intended_realm_id.as_str();
                 let result = if federated {
@@ -5110,20 +5171,13 @@ mod trust_binding_tests {
                 assert_eq!(
                     result,
                     Err("peer_claim_welcome_pending"),
-                    "a valid signed receipt must reach the missing ledger: federated={federated}, hosted={hosted}"
+                    "a valid signed receipt must reach the missing ledger: federated={federated}, native_agent={native_agent}"
                 );
                 let wrong_station = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     principal.clone(),
                     arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap(),
                 ));
-                let wrong_branch = if hosted {
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        principal.clone(),
-                        station.clone(),
-                    ))
-                } else {
-                    arkret_wire::ActorId::hosted_principal(principal.clone(), station.clone())
-                };
+                let wrong_branch = arkret_wire::ActorId::service(principal.clone());
                 for wrong_actor in [&wrong_station, &wrong_branch] {
                     let result = if federated {
                         validate_federated_welcome_peer_claim(
@@ -5144,8 +5198,140 @@ mod trust_binding_tests {
         }
     }
 
+    fn signed_claim_authorization_fixture(
+        source: arkret_wire::DidCoreId,
+        destination: arkret_wire::DidCoreId,
+        key: &ed25519_dalek::SigningKey,
+    ) -> PeerKeyPackagesClaimRequestBody {
+        let signed_at = arkret_canonical::normalize_timestamp_canonical(now());
+        let mut body: PeerKeyPackagesClaimRequestBody = serde_json::from_value(serde_json::json!({
+            "claim_request_id": URL_SAFE_NO_PAD.encode([71_u8; 16]),
+            "target_principal_id": "ak:did_core:web:claim-target.example",
+            "target_device_ids": ["ak:device:01904100-0000-7000-8000-000000000002"],
+            "requester_id": "ak:did_core:web:claim-requester.example",
+            "intended_realm_id": "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju",
+            "mls_group_id": "claim-authorization-fixture",
+            "claim_purpose": "realm_membership",
+            "required_capabilities": ["ak.content.v1"],
+            "expires_at": signed_at + chrono::Duration::minutes(4),
+            "service_binding": {"source_id": source, "destination_id": destination},
+            "requester_authorization": {
+                "kind": "device",
+                "verification_method": "did:web:claim-requester.example#ak:device:01904100-0000-7000-8000-000000000001",
+                "requester_device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                "device_authorize_event_id": "ak:event:ARELvWOpF6BRrks3DlbQy-9XIE6aAQQumDQp7fA4ApeM",
+                "signed_at": signed_at,
+                "signature": {
+                    "kid": "did:web:claim-requester.example#ak:device:01904100-0000-7000-8000-000000000001",
+                    "signature_algorithm": "Ed25519",
+                    "sig": "AA"
+                }
+            }
+        })).unwrap();
+        let bytes = keypackage_claim_authorization_signing_bytes(
+            &body.unsigned_request(),
+            &body.service_binding,
+            &body.requester_authorization,
+        )
+        .unwrap();
+        let PeerKeyPackageRequesterAuthorization::Device { signature, .. } =
+            &mut body.requester_authorization
+        else {
+            unreachable!();
+        };
+        signature.sig =
+            arkret_wire::Base64UrlString::new(URL_SAFE_NO_PAD.encode(key.sign(&bytes).to_bytes()))
+                .unwrap();
+        body.validate_shape().unwrap();
+        body
+    }
+
     #[test]
-    fn welcome_receipt_requester_preserves_account_station_and_hosted_branch() {
+    fn verified_claim_context_rejects_body_changes_and_expired_authorization() {
+        let source = arkret_wire::DidCoreId::new("ak:did_core:web:source.example").unwrap();
+        let destination =
+            arkret_wire::DidCoreId::new("ak:did_core:web:destination.example").unwrap();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[71_u8; 32]);
+        let body = signed_claim_authorization_fixture(source, destination, &key);
+        let authorization = VerifiedClaimAuthorization::for_verified_request(&body).unwrap();
+        let digest = arkret_canonical::canonical_sha256(&body).unwrap();
+        authorization.validate_request(&body, &digest).unwrap();
+        let mut tampered = body.clone();
+        tampered.service_binding.source_id =
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-source.example").unwrap();
+        assert!(
+            authorization
+                .validate_request(
+                    &tampered,
+                    &arkret_canonical::canonical_sha256(&tampered).unwrap()
+                )
+                .is_err()
+        );
+        tampered = body;
+        tampered.expires_at = now() - chrono::Duration::seconds(1);
+        let expired = VerifiedClaimAuthorization::for_verified_request(&tampered).unwrap();
+        assert!(
+            expired
+                .validate_request(
+                    &tampered,
+                    &arkret_canonical::canonical_sha256(&tampered).unwrap()
+                )
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn local_claim_verifier_never_lends_same_principal_device_to_foreign_station() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[71_u8; 32]);
+        let local = signed_claim_authorization_fixture(
+            state.service_core_id(),
+            state.service_core_id(),
+            &key,
+        );
+        let PeerKeyPackageRequesterAuthorization::Device {
+            requester_device_id,
+            device_authorize_event_id,
+            ..
+        } = &local.requester_authorization
+        else {
+            unreachable!();
+        };
+        state.identities().save_device_if_absent(soland_services::identity::DeviceIdentity {
+            actor_id: local.requester_id.to_string(),
+            device_id: requester_device_id.to_string(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_public_key": arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes()),
+                "device_authorize_event_id": device_authorize_event_id
+            }),
+            created_at: now(), updated_at: now(), revoked_at: None,
+        }).await.unwrap();
+        assert!(
+            verify_local_claim_participant_authorization(&state, &local)
+                .await
+                .unwrap()
+        );
+        // Even a valid signature by this local device cannot lend its accepted
+        // authorization to a request belonging to another Station account.
+        let foreign = signed_claim_authorization_fixture(
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-station.example").unwrap(),
+            state.service_core_id(),
+            &key,
+        );
+        assert!(
+            !verify_local_claim_participant_authorization(&state, &foreign)
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn welcome_receipt_requester_preserves_account_station_and_identity() {
         let principal = arkret_wire::DidCoreId::new("ak:did_core:web:requester.example").unwrap();
         let source = arkret_wire::DidCoreId::new("ak:did_core:web:source.example").unwrap();
         let other = arkret_wire::DidCoreId::new("ak:did_core:web:other.example").unwrap();
@@ -5153,18 +5339,29 @@ mod trust_binding_tests {
             principal.clone(),
             source.clone(),
         ));
-        let hosted = arkret_wire::ActorId::hosted_principal(principal.clone(), source.clone());
+        let other_principal =
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-requester.example").unwrap();
+        let other_account = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            other_principal.clone(),
+            source.clone(),
+        ));
         assert!(welcome_requester_matches_receipt(
             &account, &account, &principal, &source
         ));
         assert!(welcome_requester_matches_receipt(
-            &hosted, &hosted, &principal, &source
+            &other_account,
+            &other_account,
+            &other_principal,
+            &source
         ));
         assert!(!welcome_requester_matches_receipt(
             &account, &account, &principal, &other
         ));
         assert!(!welcome_requester_matches_receipt(
-            &account, &hosted, &principal, &source
+            &account,
+            &other_account,
+            &principal,
+            &source
         ));
     }
 
