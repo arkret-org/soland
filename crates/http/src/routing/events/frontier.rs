@@ -3,9 +3,8 @@
 use std::collections::BTreeMap;
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{Did, DidCoreId, EventId, Hash, RealmId};
+use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_wire::ActorId;
-use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 /// Convert a per-realm frontier table to the typed
@@ -79,72 +78,37 @@ pub(crate) fn frontier_root(
     .map_err(|error| error.to_string())
 }
 
-/// Canonical payload signed by the issuing service for a federation frontier
-/// probe. Actor-scoped authorization roots are optional for generic
-/// federation probes, but when requested they are bound into the same signed
-/// payload and cannot be substituted independently.
-pub(crate) fn frontier_signature_payload(
-    realm_id: Option<&RealmId>,
-    issuer_id: &DidCoreId,
-    observed_at: DateTime<Utc>,
-    frontier_root: &Hash,
-    auth_state_root: Option<&Hash>,
-    policy_frontier_root: Option<&Hash>,
-    membership_frontier_root: Option<&Hash>,
-) -> Value {
-    json!({
-        "domain": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_SIGNATURE_V1,
-        "frontier_root": frontier_root.as_str(),
-        "auth_state_root": auth_state_root.map(Hash::as_str),
-        "policy_frontier_root": policy_frontier_root.map(Hash::as_str),
-        "membership_frontier_root": membership_frontier_root.map(Hash::as_str),
-        "realm_id": realm_id.map(RealmId::as_str),
-        "issuer_id": issuer_id.as_str(),
-        "observed_at": arkret_canonical::format_timestamp_canonical(observed_at),
-    })
-}
-
-/// Build an Ed25519 detached-JWS signature envelope for the canonical
-/// frontier signature payload.
+/// Sign the SDK-owned transcript using an actual published assertion method.
 pub(crate) fn sign_frontier_root(
-    issuer_id: &DidCoreId,
-    signer_did: &Did,
-    realm_id: Option<&RealmId>,
-    observed_at: DateTime<Utc>,
-    frontier_root: &Hash,
-    auth_state_root: Option<&Hash>,
-    policy_frontier_root: Option<&Hash>,
-    membership_frontier_root: Option<&Hash>,
+    frontier: &arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState,
+    verification_method: &arkret_wire::DidUrl,
     signing_key: &ed25519_dalek::SigningKey,
-) -> Result<Value, String> {
-    let signed_payload = frontier_signature_payload(
-        realm_id,
-        issuer_id,
-        observed_at,
-        frontier_root,
-        auth_state_root,
-        policy_frontier_root,
-        membership_frontier_root,
-    );
+) -> Result<BTreeMap<String, Value>, String> {
+    let signed_payload = frontier
+        .signature_payload()
+        .map_err(|error| error.to_string())?;
     let canonical_bytes =
         canonical::canonical_json_bytes(&signed_payload).map_err(|error| error.to_string())?;
     let payload_digest = canonical::sha256_digest(&canonical_bytes);
     let jws = arkret_signatures::jws::sign_jws_ed25519(&canonical_bytes, signing_key)
         .map_err(|error| error.to_string())?;
-
-    Ok(json!({
+    let envelope = json!({
         "typ": arkret_wire::DomainSeparationId::EVENTS_FRONTIER_SIGNATURE_V1,
         "scheme": "ed25519-detached-jws",
-        "verification_method": format!("{}#frontier-key", signer_did.as_str()),
+        "verification_method": verification_method,
         "payload_digest": payload_digest,
-        "created_at": arkret_canonical::format_timestamp_canonical(observed_at),
+        "created_at": frontier.observed_at,
         "jws": jws,
         "signed_payload": signed_payload,
-    }))
+    });
+    serde_json::from_value(envelope).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
+    use arkret_identifiers::{Did, DidCoreId};
+    use chrono::Utc;
+
     use super::*;
 
     fn realm() -> RealmId {
@@ -228,22 +192,28 @@ mod tests {
         let auth_root = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let policy_root = Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap();
         let membership_root = Hash::new(format!("sha256:{}", "3".repeat(64))).unwrap();
-        let signature = sign_frontier_root(
-            &alice_core(),
-            &alice(),
-            Some(&realm()),
-            observed_at,
-            &root,
-            Some(&auth_root),
-            Some(&policy_root),
-            Some(&membership_root),
-            &signing_key,
-        )
-        .unwrap();
+        let response = arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState {
+            realm_id: realm(),
+            head_ids: frontier[&realm()].clone(),
+            max_hlc: Some("01970e589d21-0004-a13f9c2e".to_owned()),
+            frontier_root: root.clone(),
+            auth_state_root: Some(auth_root.clone()),
+            policy_frontier_root: Some(policy_root.clone()),
+            membership_frontier_root: Some(membership_root.clone()),
+            actor_seq_upper_bounds: actors,
+            witness_receipts: vec![],
+            observed_at: canonical::format_timestamp_canonical(observed_at),
+            issuer_id: alice_core(),
+            signature: BTreeMap::new(),
+        };
+        let method = arkret_wire::DidUrl::new(format!("{}#service-key", alice())).unwrap();
+        let signature =
+            serde_json::to_value(sign_frontier_root(&response, &method, &signing_key).unwrap())
+                .unwrap();
         assert!(signature.get("alg").is_none());
         assert_eq!(
             signature["verification_method"],
-            "did:web:alice.example#frontier-key"
+            "did:web:alice.example#service-key"
         );
         assert!(
             signature["jws"]
@@ -251,6 +221,10 @@ mod tests {
                 .is_some_and(|jws| jws.contains(".."))
         );
         assert_eq!(signature["signed_payload"]["frontier_root"], root.as_str());
+        assert_eq!(
+            signature["signed_payload"]["max_hlc"],
+            response.max_hlc.unwrap()
+        );
         assert_eq!(
             signature["signed_payload"]["auth_state_root"],
             auth_root.as_str()

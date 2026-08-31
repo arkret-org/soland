@@ -167,7 +167,40 @@ impl FrontierExchangeWorker {
         }
         let state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
             serde_json::from_str(&body).map_err(|_| "json_invalid".to_owned())?;
-        validate_frontier_response(&state, peer_id.as_str(), realm_id)
+        if state.auth_state_root.is_some()
+            || state.policy_frontier_root.is_some()
+            || state.membership_frontier_root.is_some()
+        {
+            return Err("unexpected_actor_frontier_roots".to_owned());
+        }
+        let document =
+            crate::jws_verify::resolve_did_document_async(&self.state, &route.cache_entry.did)
+                .await?;
+        let result = validate_frontier_response(
+            &state,
+            peer_id.as_str(),
+            realm_id,
+            chrono::Utc::now(),
+            &document,
+        );
+        if result.is_ok() {
+            return result;
+        }
+        // A key miss or rotation must refresh the verified route and authority
+        // document, never retry against a service-id-only cached public key.
+        let refreshed =
+            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", true)
+                .await?;
+        let document =
+            crate::jws_verify::resolve_did_document_async(&self.state, &refreshed.cache_entry.did)
+                .await?;
+        validate_frontier_response(
+            &state,
+            peer_id.as_str(),
+            realm_id,
+            chrono::Utc::now(),
+            &document,
+        )
     }
 
     async fn record_failure(
@@ -295,6 +328,8 @@ fn validate_frontier_response(
     state: &arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState,
     peer_id: &str,
     realm_id: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    document: &arkret_models_identity::DidDocument,
 ) -> Result<String, String> {
     if state.realm_id.as_str() != realm_id {
         return Err("realm_id_mismatch".to_owned());
@@ -302,15 +337,41 @@ fn validate_frontier_response(
     if state.issuer_id.as_str() != peer_id {
         return Err("issuer_mismatch".to_owned());
     }
-    if state.signature.is_empty() {
-        return Err("signature_missing".to_owned());
-    }
     let heads = BTreeMap::from([(state.realm_id.clone(), state.head_ids.clone())]);
     let computed =
         crate::routing::events::frontier::frontier_root(&heads, &state.actor_seq_upper_bounds)?;
     if computed != state.frontier_root {
         return Err("frontier_root_mismatch".to_owned());
     }
+    let bytes = state
+        .signature_binding_bytes(now)
+        .map_err(|error| error.to_string())?;
+    if arkret_wire::project_did_to_core_id(&document.id).map_err(|error| error.to_string())?
+        != state.issuer_id
+    {
+        return Err("frontier_document_issuer_mismatch".to_owned());
+    }
+    let method = arkret_wire::DidUrl::new(
+        state.signature["verification_method"]
+            .as_str()
+            .ok_or_else(|| "frontier_verification_method_missing".to_owned())?
+            .to_owned(),
+    )
+    .map_err(|error| error.to_string())?;
+    let jws = state.signature["jws"]
+        .as_str()
+        .ok_or_else(|| "frontier_jws_missing".to_owned())?;
+    arkret_identity::verify_jws_with_document_relationship(
+        &bytes,
+        jws,
+        &method,
+        &document.id,
+        document,
+        arkret_identity::DidVerificationRelationship::AssertionMethod,
+    )
+    .map_err(|error| format!("frontier_signature_invalid:{error}"))?;
+    // This worker compares only the issuer's frontier. Optional witness receipts
+    // are not consumed or counted as independent witness/quorum evidence here.
     Ok(state.frontier_root.to_string())
 }
 
@@ -337,64 +398,123 @@ mod tests {
 
     #[test]
     fn frontier_response_validation_requires_bound_peer_and_realm() {
-        let body = serde_json::json!({
-            "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
-            "head_ids": [],
-            "issuer_id": "ak:did_core:webvh:z6mkpeer",
-            "frontier_root": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-            "observed_at": "2026-01-01T00:00:00.000Z",
-            "signature": {"value": "c2ln"}
-        });
-        let state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
-            serde_json::from_value(body).expect("valid peer state fixture");
-        assert!(
-            validate_frontier_response(
-                &state,
-                "ak:did_core:webvh:z6mkpeer",
-                "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"
-            )
-            .is_ok()
-        );
+        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let method = arkret_wire::DidUrl::new("did:web:peer.example#service-key").unwrap();
+        let now = chrono::DateTime::parse_from_rfc3339("2026-08-31T00:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let document: arkret_models_identity::DidDocument = serde_json::from_value(serde_json::json!({
+            "id": "did:web:peer.example",
+            "verificationMethod": [{
+                "id": method, "controller": "did:web:peer.example", "type": "Multikey",
+                "publicKeyMultibase": arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+            }],
+            "assertionMethod": [method]
+        })).unwrap();
+        let mut state: arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState =
+            serde_json::from_value(serde_json::json!({
+                "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
+                "head_ids": [], "issuer_id": "ak:did_core:web:peer.example",
+                "frontier_root": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "observed_at": "2026-08-31T00:00:00.000Z", "signature": {}
+            })).unwrap();
+        state.signature =
+            crate::routing::events::frontier::sign_frontier_root(&state, &method, &key).unwrap();
+        let validate = |candidate: &arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState| {
+            validate_frontier_response(candidate, state.issuer_id.as_str(), state.realm_id.as_str(), now, &document)
+        };
+        assert!(validate(&state).is_ok());
+        assert!(state.signature["signed_payload"]["max_hlc"].is_null());
+        assert!(state.signature["signed_payload"]["auth_state_root"].is_null());
         assert_eq!(
             validate_frontier_response(
                 &state,
-                "ak:did_core:webvh:z6mkother",
-                "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K"
+                "ak:did_core:web:other.example",
+                state.realm_id.as_str(),
+                now,
+                &document
             )
             .unwrap_err(),
             "issuer_mismatch"
         );
-        let mut tampered = state.clone();
-        tampered.actor_seq_upper_bounds.insert(
-            arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
-                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-            )),
-            9,
-        );
-        assert_eq!(
-            validate_frontier_response(
-                &tampered,
-                state.issuer_id.as_str(),
-                state.realm_id.as_str()
-            )
-            .unwrap_err(),
-            "frontier_root_mismatch"
-        );
+
         let mut tampered = state.clone();
         tampered.head_ids.push(arkret_wire::EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x42; 32],
         ));
-        assert_eq!(
-            validate_frontier_response(
-                &tampered,
-                state.issuer_id.as_str(),
-                state.realm_id.as_str()
-            )
-            .unwrap_err(),
-            "frontier_root_mismatch"
+        assert_eq!(validate(&tampered).unwrap_err(), "frontier_root_mismatch");
+        let heads = BTreeMap::from([(tampered.realm_id.clone(), tampered.head_ids.clone())]);
+        tampered.frontier_root = crate::routing::events::frontier::frontier_root(
+            &heads,
+            &tampered.actor_seq_upper_bounds,
+        )
+        .unwrap();
+        tampered.signature.insert(
+            "signed_payload".to_owned(),
+            tampered.signature_payload().unwrap(),
         );
+        let bytes =
+            arkret_canonical::canonical_json_bytes(&tampered.signature["signed_payload"]).unwrap();
+        tampered.signature.insert(
+            "payload_digest".to_owned(),
+            arkret_canonical::sha256_digest(bytes).into(),
+        );
+        assert!(
+            validate(&tampered)
+                .unwrap_err()
+                .contains("frontier_signature_invalid")
+        );
+
+        let mut tampered = state.clone();
+        tampered.max_hlc = Some("01970e589d21-0004-a13f9c2e".to_owned());
+        assert!(validate(&tampered).is_err());
+        let mut tampered = state.clone();
+        tampered.signature = BTreeMap::from([("value".to_owned(), "c2ln".into())]);
+        assert!(validate(&tampered).is_err());
+        assert!(
+            validate_frontier_response(
+                &state,
+                state.issuer_id.as_str(),
+                state.realm_id.as_str(),
+                now + chrono::Duration::seconds(301),
+                &document
+            )
+            .is_err()
+        );
+
+        let mut rotated = document.clone();
+        rotated
+            .raw_properties
+            .insert("assertionMethod".to_owned(), serde_json::json!([]));
+        assert!(
+            validate_frontier_response(
+                &state,
+                state.issuer_id.as_str(),
+                state.realm_id.as_str(),
+                now,
+                &rotated
+            )
+            .is_err()
+        );
+        let mut removed_key = document.clone();
+        removed_key.verification_methods.clear();
+        assert!(
+            validate_frontier_response(
+                &state,
+                state.issuer_id.as_str(),
+                state.realm_id.as_str(),
+                now,
+                &removed_key
+            )
+            .is_err()
+        );
+
+        let mut receipts = state.clone();
+        receipts
+            .witness_receipts
+            .push(BTreeMap::from([("unverified".to_owned(), true.into())]));
+        assert_eq!(validate(&receipts).unwrap(), validate(&state).unwrap());
     }
 
     #[test]
