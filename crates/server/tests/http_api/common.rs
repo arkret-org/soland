@@ -155,11 +155,23 @@ pub(crate) fn test_event_signer_did() -> &'static str {
     TEST_EVENT_SIGNER_DID.as_str()
 }
 
-/// Project a fixture's DID onto the stable core id that account-data AAD,
-/// key derivation and owner projections are bound to.
+/// Project a fixture's DID onto its signing principal. Account-scoped payloads
+/// and projection keys use the complete Account/Actor helpers below.
 pub(crate) fn fixture_actor_core_id(actor: &str) -> DidCoreId {
     arkret_wire::project_did_to_core_id(&Did::new(actor.to_owned()).expect("fixture actor DID"))
         .expect("fixture actor DID projects to a core id")
+}
+
+/// Exact local Account used by a fixture whose Station is the supplied app.
+pub(crate) fn fixture_account_id(state: &AppState, principal_did: &str) -> arkret_wire::AccountId {
+    arkret_wire::AccountId::new(
+        fixture_actor_core_id(principal_did),
+        state.service_core_id(),
+    )
+}
+
+pub(crate) fn fixture_account_actor(state: &AppState, principal_did: &str) -> arkret_wire::ActorId {
+    arkret_wire::ActorId::account(fixture_account_id(state, principal_did))
 }
 /// Render a timestamp exactly as the SDK's canonical wire serializer does
 /// (fixed milliseconds, `Z` suffix). The canonical deserializer rejects every
