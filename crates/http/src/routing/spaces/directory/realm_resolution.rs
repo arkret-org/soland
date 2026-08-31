@@ -578,13 +578,19 @@ pub(super) fn organization_preview_with_spaces(
     organization_preview_from_value(organization, state)
 }
 
-pub(super) fn actor_preview_from_value(actor: &Value) -> Result<ActorPreview, AppError> {
+pub(super) fn actor_preview_from_value(
+    state: &AppState,
+    actor: &Value,
+) -> Result<ActorPreview, AppError> {
     let actor_id = actor
         .get("actor_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("directory actor preview missing actor_id"))?;
     Ok(ActorPreview {
-        actor_id: directory_actor_core_id(actor_id)?,
+        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            directory_actor_core_id(actor_id)?,
+            state.service_core_id(),
+        )),
         handle: actor
             .get("handle")
             .and_then(Value::as_str)
@@ -904,6 +910,25 @@ use arkret_identifiers::DidCoreId;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn actor_preview_binds_the_local_account_station() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let row = json!({"actor_id": "ak:did_core:web:alice.example", "display_name": "Alice"});
+        let preview = actor_preview_from_value(&state, &row).unwrap();
+        let account = preview.actor_id.as_account_id().unwrap();
+        assert_eq!(
+            account.principal_id.as_str(),
+            "ak:did_core:web:alice.example"
+        );
+        assert_eq!(account.station_id, state.service_core_id());
+        let encoded = serde_json::to_value(&preview).unwrap();
+        assert!(encoded["actor_id"].is_object());
+        assert!(actor_preview_from_value(&state, &json!({"actor_id": "not-a-DID"})).is_err());
+    }
 
     #[test]
     fn realm_alias_cell_value_reads_declaration_and_tombstone() {

@@ -30,7 +30,7 @@ pub(super) async fn search_actors(
         if actor_visible_to(state, &actor, session.as_ref()).await
             && query_matches(&actor, body.query.as_deref())
         {
-            results.push(actor_preview_from_value(&actor)?);
+            results.push(actor_preview_from_value(state, &actor)?);
         }
     }
     let has_more = results.len() > limit;

@@ -56,6 +56,11 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
 
     let accounts = state.identities().accounts().await.unwrap_or_default();
     for account in accounts {
+        if account.account_id.station_id != state.service_core_id()
+            || account.account_id.principal_id != account.principal_id
+        {
+            continue;
+        }
         if actors
             .iter()
             .any(|actor| actor["actor_id"].as_str() == Some(account.principal_id.as_str()))
@@ -159,4 +164,54 @@ pub fn checked_limit(limit: Option<usize>) -> Result<usize, AppError> {
         return Err(AppError::param_invalid("limit must be between 1 and 100"));
     }
     Ok(limit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn demo_actor_rows_never_relabel_a_foreign_account_as_local() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal =
+            arkret_wire::DidCoreId::new("ak:did_core:web:foreign-only.example").unwrap();
+        let mut account = soland_services::identity::AccountProfileState {
+            pk: soland_storage::AccountPk(91),
+            account_id: arkret_wire::AccountId::new(
+                principal.clone(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+            ),
+            principal_id: principal.clone(),
+            localpart: "foreign-only".to_owned(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: now(),
+        };
+        state
+            .identities()
+            .save_account(account.clone())
+            .await
+            .unwrap();
+        assert!(
+            !demo_actors(&state)
+                .await
+                .iter()
+                .any(|row| row["actor_id"].as_str() == Some(principal.as_str()))
+        );
+        account.pk = soland_storage::AccountPk(92);
+        account.account_id.station_id = state.service_core_id();
+        state.identities().save_account(account).await.unwrap();
+        let actors = demo_actors(&state).await;
+        assert_eq!(
+            actors
+                .iter()
+                .filter(|row| row["actor_id"].as_str() == Some(principal.as_str()))
+                .count(),
+            1
+        );
+    }
 }

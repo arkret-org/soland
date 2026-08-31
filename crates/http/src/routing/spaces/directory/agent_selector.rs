@@ -34,14 +34,26 @@ pub(super) async fn selector_resolution_allowed(
     if request.requester_id.as_str() != session.actor {
         return false;
     }
-    if request.requester_id.as_str() == controller_subject {
+    let Ok(requester_actor) =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, session)
+    else {
+        return false;
+    };
+    let Ok(controller_principal) = directory_actor_core_id(controller_subject) else {
+        return false;
+    };
+    let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        controller_principal,
+        state.service_core_id(),
+    ));
+    if requester_actor == controller_actor {
         return true;
     }
     let Some(realm_id) = request.realm_id.as_ref().map(RealmId::as_str) else {
         return false;
     };
-    super::realm_has_member(state, realm_id, &session.actor).await
-        && super::realm_has_member(state, realm_id, controller_subject).await
+    super::realm_has_member(state, realm_id, &requester_actor.to_string()).await
+        && super::realm_has_member(state, realm_id, &controller_actor.to_string()).await
 }
 
 pub(super) fn selector_claim_audience(
@@ -205,10 +217,20 @@ pub(super) async fn resolve_agent_selector(
         return Err(selector_not_found());
     }
     let subject = matches[0].id.as_str();
+    let controller_account =
+        crate::routing::identity::managed_agent_pcr::managed_agent_controller_account(
+            state, matches[0],
+        )
+        .await
+        .map_err(|_| selector_not_found())?;
+    let subject_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        directory_actor_core_id(subject)?,
+        controller_account.station_id,
+    ));
     if body
         .expected_actor_id
         .as_ref()
-        .is_some_and(|expected| expected.as_str() != subject)
+        .is_some_and(|expected| expected != &subject_actor)
     {
         return Err(selector_not_found());
     }
@@ -227,4 +249,73 @@ pub(super) async fn resolve_agent_selector(
         AppError::internal(format!("agent selector response validation failed: {err}"))
     })?;
     json_ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn selector_shared_realm_checks_full_local_accounts() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let principal = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let controller = DidCoreId::new("ak:did_core:web:controller.example").unwrap();
+        let realm = RealmId::new("ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL").unwrap();
+        let mut session = SessionRecord {
+            account_pk: None,
+            token_hash: "selector-test".to_owned(),
+            actor: principal.to_string(),
+            device_id: "test-device".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now() + chrono::Duration::hours(1),
+            created_at: now(),
+            revoked_at: None,
+        };
+        let request: DirectoryResolveAgentSelectorRequestBody = serde_json::from_value(json!({
+            "controller_handle": "controller:example.com", "agent_slug": "assistant",
+            "intent": "lookup", "realm_id": realm, "requester_id": principal,
+        }))
+        .unwrap();
+        for actor in [principal, controller.clone()] {
+            let member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                actor,
+                state.service_core_id(),
+            ));
+            let payload =
+                arkret_models_collaboration::governance::membership_invite::MembershipPayload::join(
+                    realm.clone(),
+                    member,
+                    "test",
+                );
+            let operation = arkret_event_draft::test_support::raw_projected_operation(
+                arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000001")
+                    .unwrap(),
+                realm.clone(),
+                arkret_wire::EventKind::MemberState.as_str(),
+                payload.to_value().unwrap(),
+            );
+            state
+                .test_projection()
+                .lock()
+                .restore_accepted_membership(&operation, now());
+        }
+        assert!(
+            selector_resolution_allowed(&state, Some(&session), controller.as_str(), &request)
+                .await
+        );
+        session.audience = "ak:did_core:web:foreign.example".to_owned();
+        assert!(
+            !selector_resolution_allowed(&state, Some(&session), controller.as_str(), &request)
+                .await
+        );
+        assert!(
+            !selector_resolution_allowed(&state, Some(&session), &session.actor, &request).await
+        );
+    }
 }

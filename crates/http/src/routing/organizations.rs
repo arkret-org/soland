@@ -6,7 +6,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_wire::DidCoreId;
+use arkret_models_collaboration::events_payloads::ModerationPolicyTarget;
+use arkret_wire::{ActorId, DidCoreId};
 use chrono::Utc;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
@@ -432,14 +433,16 @@ pub(crate) async fn record_realm_organizations_from_event(
     realm_id: &str,
     envelope: &Value,
 ) {
-    let Some(created_by) = envelope
+    let Some(actor) = envelope
         .get("actor_id")
-        .and_then(Value::as_str)
-        .and_then(|actor_id| DidCoreId::new(actor_id.to_owned()).ok())
+        .and_then(|actor| serde_json::from_value::<ActorId>(actor.clone()).ok())
     else {
         tracing::warn!(%realm_id, "Realm organization projection lacks a valid actor_id");
         return;
     };
+    // This placeholder's created_by is a display/discovery principal, not
+    // policy authority. Decode the complete Event Actor before projecting it.
+    let created_by = actor.signing_principal_id();
     let Some(object) = envelope
         .pointer("/payload/object")
         .and_then(Value::as_object)
@@ -455,7 +458,7 @@ pub(crate) async fn record_realm_organizations_from_event(
     };
     for organization_principal_id in organization_ids {
         let org_id = organization_principal_id.to_string();
-        if let Err(error) = ensure_organization_placeholder(state, &org_id, &created_by).await {
+        if let Err(error) = ensure_organization_placeholder(state, &org_id, created_by).await {
             tracing::warn!(%error, organization_id = %org_id, "failed to persist organization placeholder from Realm event");
             continue;
         }
@@ -566,7 +569,7 @@ pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str)
 pub(crate) async fn organization_policy_blocks_join(
     state: &AppState,
     realm_id: &str,
-    actor: &str,
+    actor: &ActorId,
 ) -> bool {
     if let Err(error) = refresh_organization_projection(state).await {
         tracing::warn!(%error, "failed to refresh organization projection for join policy");
@@ -729,7 +732,7 @@ fn policy_rules(policy: &Value) -> Vec<Value> {
     rules
 }
 
-fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
+fn policy_denies_join_actor(policy: &Value, actor: &ActorId) -> bool {
     policy_rules(policy).iter().any(|rule| {
         let action = rule
             .get("action")
@@ -738,16 +741,15 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
         if !matches!(action, "deny_join" | "deny_restricted_join") {
             return false;
         }
-        target_actor_id(rule).is_some_and(|actor_id| actor_id == actor)
+        target_actor_id(rule).is_some_and(|actor_id| &actor_id == actor)
     })
 }
 
-fn target_actor_id(value: &Value) -> Option<&str> {
-    value
-        .get("target")
-        .and_then(Value::as_object)
-        .and_then(|target| target.get("actor_id"))
-        .and_then(Value::as_str)
+fn target_actor_id(value: &Value) -> Option<ActorId> {
+    match serde_json::from_value::<ModerationPolicyTarget>(value.get("target")?.clone()).ok()? {
+        ModerationPolicyTarget::Actor { actor_id } => Some(actor_id),
+        _ => None,
+    }
 }
 
 fn normalized_organization_id(raw: &str) -> Result<String, AppError> {
@@ -776,6 +778,89 @@ fn safe_id_fragment(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn account_at(station: &str) -> ActorId {
+        ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            DidCoreId::new(format!("ak:did_core:web:{station}.example")).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn organization_actor_deny_preserves_station_and_actor_kind() {
+        let actor = account_at("station-a");
+        let foreign = account_at("station-b");
+        let service = ActorId::service(actor.signing_principal_id().clone());
+        for action in ["deny_join", "deny_restricted_join"] {
+            let policy = json!({"rules": [{
+                "target": {"kind": "actor", "actor_id": actor},
+                "action": action
+            }]});
+            assert!(policy_denies_join_actor(&policy, &actor));
+            assert!(!policy_denies_join_actor(&policy, &foreign));
+            assert!(!policy_denies_join_actor(&policy, &service));
+        }
+    }
+
+    #[test]
+    fn organization_actor_deny_rejects_legacy_or_mistagged_targets() {
+        let actor = account_at("station-a");
+        for target in [
+            json!({"kind": "actor", "actor_id": actor.signing_principal_id()}),
+            json!({"kind": "actor", "actor_id": actor.to_string()}),
+            json!({"kind": "service", "actor_id": actor}),
+            json!({"actor_id": actor}),
+        ] {
+            let policy = json!({"rules": [{"target": target, "action": "deny_join"}]});
+            assert!(!policy_denies_join_actor(&policy, &actor));
+        }
+    }
+
+    #[tokio::test]
+    async fn organization_display_projection_decodes_the_formal_event_actor() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let actor = account_at("station-a");
+        let realm_id = "ak:realm:AabIzZyp4D-JzV77DNQ7bIKd7oGAuDD9keT1CyIv6SC6";
+        let organization_id = "ak:did_core:web:organization.example";
+        record_realm_organizations_from_event(
+            &state,
+            realm_id,
+            &json!({
+                "actor_id": actor,
+                "payload": {"object": {"owning_organization_ids": [organization_id]}}
+            }),
+        )
+        .await;
+        let record = state
+            .governance()
+            .organization(organization_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&record.created_by, actor.signing_principal_id());
+
+        let rejected_id = "ak:did_core:web:rejected-organization.example";
+        record_realm_organizations_from_event(
+            &state,
+            realm_id,
+            &json!({
+                "actor_id": actor.signing_principal_id(),
+                "payload": {"object": {"owning_organization_ids": [rejected_id]}}
+            }),
+        )
+        .await;
+        assert!(
+            state
+                .governance()
+                .organization(rejected_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[test]
     fn declared_organization_ids_accept_only_the_canonical_typed_array() {

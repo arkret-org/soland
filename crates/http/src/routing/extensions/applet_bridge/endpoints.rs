@@ -623,6 +623,9 @@ async fn revoke_install_endpoint(
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &revoke.effective_scope)?;
     require_realm_admin(state, &session, &revoke.effective_scope).await?;
+    let admin_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let admin_actor_key = admin_actor.to_string();
 
     // A durable execution owns the idempotency decision. Exact replay resumes
     // its persisted submissions even when the live projection has moved since
@@ -630,7 +633,7 @@ async fn revoke_install_endpoint(
     let stored_outcome = load_stored_revoke_outcome(
         record.revoke_execution.as_ref(),
         state.service_id(),
-        &session.actor,
+        &admin_actor_key,
         &idempotency_key,
         &request_digest,
     )?;
@@ -646,7 +649,7 @@ async fn revoke_install_endpoint(
             return Err(AppError::conflict("revoke plan changed; preview again")
                 .with_wire_code("failed_precondition"));
         }
-        validate_revoke_submissions(&session.actor, &recomputed.revoke_plan, &revoke)?;
+        validate_revoke_submissions(&admin_actor, &recomputed.revoke_plan, &revoke)?;
     }
 
     let mut outcome =
@@ -694,7 +697,7 @@ async fn revoke_install_endpoint(
             persist_revoke_execution(
                 state,
                 &mut record,
-                &session.actor,
+                &admin_actor_key,
                 &idempotency_key,
                 &request_digest,
                 &request_value,
@@ -761,7 +764,7 @@ async fn revoke_install_endpoint(
                 persist_revoke_execution(
                     state,
                     &mut record,
-                    &session.actor,
+                    &admin_actor_key,
                     &idempotency_key,
                     &request_digest,
                     &request_value,
@@ -775,7 +778,7 @@ async fn revoke_install_endpoint(
         persist_revoke_execution(
             state,
             &mut record,
-            &session.actor,
+            &admin_actor_key,
             &idempotency_key,
             &request_digest,
             &request_value,
@@ -812,7 +815,7 @@ async fn revoke_install_endpoint(
     persist_revoke_execution(
         state,
         &mut record,
-        &session.actor,
+        &admin_actor_key,
         &idempotency_key,
         &request_digest,
         &request_value,
@@ -939,8 +942,7 @@ fn build_revoke_plan(
     }
     capability_revocations
         .sort_by(|left, right| left.grant_id.as_str().cmp(right.grant_id.as_str()));
-    membership_removals
-        .sort_by(|left, right| left.member_id.as_str().cmp(right.member_id.as_str()));
+    membership_removals.sort_by(|left, right| left.member_id.cmp(&right.member_id));
     let plan = AppletRevokePlan {
         applet_id: record.applet_id.clone(),
         effective_scope: preview.effective_scope.clone(),
@@ -966,7 +968,7 @@ fn build_revoke_plan(
 }
 
 fn validate_revoke_submissions(
-    admin_actor: &str,
+    admin_actor: &arkret_wire::ActorId,
     plan: &AppletRevokePlan,
     revoke: &AppletRevokeRequestBody,
 ) -> Result<(), AppError> {
@@ -979,7 +981,7 @@ fn validate_revoke_submissions(
     for submission in &revoke.capability_revoke_events {
         let event = &submission.event;
         if event.kind != EventKind::CapabilityRevoke
-            || event.actor_id.signing_principal_id().as_str() != admin_actor
+            || &event.actor_id != admin_actor
             || event.scope_ref != plan.effective_scope
         {
             return Err(AppError::param_invalid(
@@ -1014,7 +1016,7 @@ fn validate_revoke_submissions(
         .iter()
         .map(|intent| {
             (
-                intent.member_id.as_str().to_owned(),
+                intent.member_id.clone(),
                 match intent.membership {
                     AppletManagedMembershipRemoval::Leave => "leave",
                     AppletManagedMembershipRemoval::Remove => "remove",
@@ -1027,7 +1029,7 @@ fn validate_revoke_submissions(
     for submission in &revoke.membership_state_events {
         let event = &submission.event;
         if event.kind != EventKind::MemberState
-            || event.actor_id.signing_principal_id().as_str() != admin_actor
+            || &event.actor_id != admin_actor
             || event.scope_ref != plan.effective_scope
         {
             return Err(AppError::param_invalid(
@@ -1036,9 +1038,12 @@ fn validate_revoke_submissions(
         }
         let payload = &event.payload;
         let member_id = payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::param_invalid("membership payload lacks actor_id"))?;
+            .get("member_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+            .ok_or_else(|| {
+                AppError::param_invalid("membership payload lacks a complete member_id Actor")
+            })?;
         let membership = payload
             .get("membership")
             .and_then(Value::as_str)
@@ -1050,7 +1055,7 @@ fn validate_revoke_submissions(
                 "membership transition or reason does not match the plan",
             ));
         }
-        if !submitted_members.insert((member_id.to_owned(), membership.to_owned())) {
+        if !submitted_members.insert((member_id, membership.to_owned())) {
             return Err(AppError::param_invalid(
                 "duplicate membership revoke target",
             ));
@@ -1932,10 +1937,96 @@ async fn third_party_locations_endpoint(
 mod revoke_saga_tests {
     use super::*;
 
+    fn admin_actor(station: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:admin-a.example").unwrap(),
+            arkret_wire::DidCoreId::new(station).unwrap(),
+        ))
+    }
+
+    #[test]
+    fn revoke_submissions_bind_the_full_admin_and_member_actors() {
+        let actor = admin_actor("ak:did_core:web:service-a.example");
+        let member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:bot.example").unwrap(),
+            actor.route_service_id().clone(),
+        ));
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(
+                "ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL",
+            )
+            .unwrap(),
+        };
+        let event = arkret_wire::Event::new(
+            EventKind::MemberState.as_str(),
+            scope.clone(),
+            actor.clone(),
+            1,
+            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
+            json!({"member_id": member, "membership": "leave", "reason": "requested_by_admin"}),
+        )
+        .unwrap();
+        let plan: AppletRevokePlan = serde_json::from_value(json!({
+            "applet_id": "ak:applet:01904100-0000-7000-8000-000000000001",
+            "effective_scope": scope,
+            "registration_epoch": format!("sha256:{}", "a".repeat(64)),
+            "reason_code": "requested_by_admin",
+            "revoke_mode": "revoke_runtime_only",
+            "capability_revocations": [],
+            "membership_removals": [{"event_kind": "ak.member.state", "member_id": member, "membership": "leave", "reason_code": "requested_by_admin"}],
+            "widget_token_refs": [], "delegated_session_refs": []
+        })).unwrap();
+        let mut request = AppletRevokeRequestBody {
+            revoke_plan_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            effective_scope: scope,
+            reason_code: plan.reason_code.clone(),
+            revoke_mode: plan.revoke_mode,
+            capability_revoke_events: Vec::new(),
+            membership_state_events: vec![arkret_wire::EventInitialSubmission::online(event)],
+            proof: None,
+        };
+        assert!(validate_revoke_submissions(&actor, &plan, &request).is_ok());
+        assert!(
+            validate_revoke_submissions(
+                &admin_actor("ak:did_core:web:service-b.example"),
+                &plan,
+                &request,
+            )
+            .is_err()
+        );
+        let original = request.membership_state_events[0].event.payload.clone();
+        for wrong in [
+            json!(member.signing_principal_id()),
+            json!(arkret_wire::ActorId::service(
+                member.signing_principal_id().clone()
+            )),
+            json!(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                member.signing_principal_id().clone(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:service-b.example").unwrap(),
+            ))),
+        ] {
+            request.membership_state_events[0]
+                .event
+                .payload
+                .insert("member_id".to_owned(), wrong);
+            assert!(validate_revoke_submissions(&actor, &plan, &request).is_err());
+        }
+        request.membership_state_events[0].event.payload = original;
+        request.membership_state_events[0]
+            .event
+            .payload
+            .remove("member_id");
+        request.membership_state_events[0]
+            .event
+            .payload
+            .insert("actor_id".to_owned(), json!(member));
+        assert!(validate_revoke_submissions(&actor, &plan, &request).is_err());
+    }
+
     fn completed_execution() -> Value {
         json!({
             "principal_id": "ak:did_core:web:service-a.example",
-            "admin_actor_id": "ak:did_core:web:admin-a.example",
+            "admin_actor_id": admin_actor("ak:did_core:web:service-a.example").to_string(),
             "idempotency_key": "revoke-key",
             "request_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "outcome": {
@@ -1953,7 +2044,7 @@ mod revoke_saga_tests {
         let outcome = load_stored_revoke_outcome(
             Some(&execution),
             "ak:did_core:web:service-a.example",
-            "ak:did_core:web:admin-a.example",
+            &admin_actor("ak:did_core:web:service-a.example").to_string(),
             "revoke-key",
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         )

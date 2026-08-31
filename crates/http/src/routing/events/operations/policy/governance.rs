@@ -108,7 +108,7 @@ pub(super) async fn validate_member_state_policy(
             && crate::routing::organizations::organization_policy_blocks_join(
                 state,
                 operation.realm_id.as_str(),
-                member.signing_principal_id().as_str(),
+                member,
             )
             .await
         {

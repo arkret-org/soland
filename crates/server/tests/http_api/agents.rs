@@ -333,7 +333,10 @@ pub(crate) async fn seed_active_controller_device_generation(
             principal_id: controller_id.clone(),
             principal_did: actor.clone(),
             station_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
-            notary: principal_control_notary(account_id.clone(), actor.as_str()),
+            notary: principal_control_notary(
+                arkret_wire::AccountId::new(controller_id.clone(), state.service_core_id()),
+                actor.as_str(),
+            ),
             initial_resolution: initial_resolution.clone(),
             genesis_salt: arkret_wire::GenesisSalt::new(
                 "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
