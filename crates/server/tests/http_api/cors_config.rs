@@ -534,7 +534,7 @@ async fn runtime_service_id_is_used_across_public_metadata_body() {
     assert_eq!(
         add_test_realm_member(
             &state,
-            state.development_demo_realm_id(),
+            state.development_demo_realm_id().as_str(),
             "did:web:alice.example"
         )["ok"],
         true

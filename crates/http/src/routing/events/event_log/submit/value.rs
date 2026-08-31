@@ -105,8 +105,8 @@ pub(super) enum SubmitMode<'a> {
     PrepareInternal(&'a mut Option<soland_services::events::CommitAcceptedEventCommand>),
 }
 
-/// Classify a failed origin-selector derivation on the origin Principal
-/// Server's own `/_arkret/self/*` write path.
+/// Classify a failed origin-selector derivation on the origin Station's own `/_arkret/self/*` write
+/// path.
 ///
 /// The derivation-domain section of `device-lifecycle.md` separates this surface from
 /// the peer gate: locally the write MUST fail closed with `device_unauthorized`

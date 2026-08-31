@@ -66,10 +66,9 @@ async fn submit(
         })?;
     // `identity/account-lifecycle.md` requires every `proofs[]` entry to verify
     // and at least one of them to come from the issuer's currently valid
-    // verification method. An erasure receipt is issued by a peer Principal
-    // Server, so each proof is verified against the DID document its own
-    // verification method resolves to; a proof from a co-signing party is
-    // still verified, but only an issuer-controlled one satisfies the
+    // verification method. An erasure receipt is issued by a peer Station, so each proof is
+    // verified against the DID document its own verification method resolves to; a proof from a
+    // co-signing party is still verified, but only an issuer-controlled one satisfies the
     // authority requirement.
     let mut issuer_signed = false;
     for proof in &body.package.receipt.proofs {

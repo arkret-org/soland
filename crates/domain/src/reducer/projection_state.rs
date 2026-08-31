@@ -634,8 +634,8 @@ impl ProjectionState {
 
     fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
         // Actor-private routes are deliberately absent from `cells`: that map
-        // feeds Realm CBA/Seal/state-root resolution. The recipient Principal
-        // Server keeps this revision-CAS value only in its private projection.
+        // feeds Realm CBA/Seal/state-root resolution. The recipient Station keeps this revision-CAS
+        // value only in its private projection.
         self.push_routes.insert(subject, value);
     }
 

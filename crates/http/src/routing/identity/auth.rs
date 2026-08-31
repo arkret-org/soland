@@ -101,11 +101,10 @@ pub(super) fn protocol_account_router() -> Router {
 pub(super) fn local_router() -> Router {
     // Device logout is the spec op `ak.gate.account.command.logout.v1`, served at
     // the canonical `/_arkret/gate/account/logout` (see `protocol_account_router`).
-    // Deployment gateways route that longer prefix to soland (the Principal
-    // Server) even though `/_arkret/gate/` otherwise goes to the Account Authority process, so
-    // no `/_soland/gate/auth/logout` product alias is needed.
-    // ② (api-conventions.md §3.3): no local credential issuance endpoint is
-    // mounted under `session-grants`. dev-login remains the only local
+    // Deployment gateways route that longer prefix to soland (the Station) even though
+    // `/_arkret/gate/` otherwise goes to the Account Authority process, so no `/_soland/gate/
+    // auth/logout` product alias is needed. ② (api-conventions.md §3.3): no local credential
+    // issuance endpoint is mounted under `session-grants`. dev-login remains the only local
     // development session issuer; production clients present the grant + DPoP
     // directly to `/_arkret/self/*`.
     Router::with_path("auth")

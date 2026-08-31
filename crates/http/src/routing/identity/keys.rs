@@ -618,11 +618,10 @@ async fn keys_claim(
 /// Server-to-server bearer gate for the device signing-key directory read.
 ///
 /// Reuses the deployment's `SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER`: the Auth
-/// Server (coauth) already holds this static bearer for the same Principal
-/// Server (it registers embedded `did:webvh` records with it), so the directory
-/// read it issues while verifying a device holder proof rides the same trust
-/// edge without minting a second credential. Compared in constant-ish form via
-/// SHA-256 digests of both sides.
+/// Server (coauth) already holds this static bearer for the same Station (it registers embedded
+/// `did:webvh` records with it), so the directory read it issues while verifying a device holder
+/// proof rides the same trust edge without minting a second credential. Compared in constant-ish
+/// form via SHA-256 digests of both sides.
 fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<(), AppError> {
     let Some(expected) = state
         .config()

@@ -736,7 +736,7 @@ mod tests {
         )
         .unwrap();
         validate_account_data_holder(&event, &actor).unwrap();
-        event.payload["holder_id"] = json!(principal);
+        event.payload.insert("holder_id".into(), json!(principal));
         validate_account_data_holder(&event, &actor).unwrap();
         event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             principal,
@@ -749,7 +749,10 @@ mod tests {
             "policy_violation"
         );
         event.actor_id = actor.clone();
-        event.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        event.payload.insert(
+            "holder_id".into(),
+            json!("ak:did_core:web:other-holder.example"),
+        );
         assert_eq!(
             validate_account_data_holder(&event, &actor)
                 .unwrap_err()
