@@ -28,8 +28,6 @@ use soland_domain::capability::validate_resource_pattern;
 use soland_services::authorization::AuthorizationService;
 
 pub(crate) const REASON_CAPABILITY_ACTION_UNKNOWN: &str = "capability_action_unknown";
-pub(crate) const REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE: &str =
-    "capability_action_registry_unavailable";
 const REASON_CAPABILITY_ACTION_INVALID: &str = "capability_action_invalid";
 const REASON_CAPABILITY_ACTION_WILDCARD_FORBIDDEN: &str = "capability_action_wildcard_forbidden";
 const REASON_CAPABILITY_GRANT_ACTION_UNKNOWN: &str = "capability_grant_action_unknown";
@@ -522,11 +520,9 @@ fn validate_registered_capability_action(
     action: &str,
     unknown_reason: &'static str,
 ) -> Result<(), &'static str> {
-    match arkret_schema::embedded_capability_action(action) {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(unknown_reason),
-        Err(_) => Err(REASON_CAPABILITY_ACTION_REGISTRY_UNAVAILABLE),
-    }
+    arkret_schema::capability_action(action)
+        .map(|_| ())
+        .ok_or(unknown_reason)
 }
 
 /// Pick the resulting decision over a set of satisfied grants.

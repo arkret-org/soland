@@ -131,7 +131,7 @@ async fn health_and_describe_work_body() {
     );
     assert_eq!(
         describe["limits"]["registries"]["versions"]["event_kind"],
-        artifacts::event_kind_registry()["version"]
+        artifacts::registry_summary()["versions"]["event_kind"]
     );
     assert_eq!(
         describe["limits"]["plaintext_visible_service_capability"]["supported"],

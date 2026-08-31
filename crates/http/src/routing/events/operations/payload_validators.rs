@@ -1,16 +1,11 @@
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::governance::membership_invite::validate_invite_create_wire_keys;
-use arkret_schema::event_payload_validator_catalog;
 use serde_json::Value;
 
 use super::*;
 
 pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<(), &'static str> {
     let wire_payload = operation.payload.clone();
-    event_payload_validator_catalog()
-        .map_err(|_| "operation payload validator catalog is unavailable")?
-        .validate_payload(arkret_wire::event_kind_str::INVITE_CREATE, &wire_payload)
-        .map_err(|_| "operation payload violates SDK artifact schema")?;
     validate_invite_create_wire_keys(&wire_payload)
         .map_err(|_| "operation payload carries unsupported fields")?;
     operation
@@ -22,13 +17,6 @@ pub(crate) fn validate_invite_create_payload(operation: &Operation) -> Result<()
 pub(crate) fn validate_invite_third_party_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    event_payload_validator_catalog()
-        .map_err(|_| "operation payload validator catalog is unavailable")?
-        .validate_payload(
-            arkret_wire::event_kind_str::INVITE_THIRD_PARTY,
-            &operation.payload,
-        )
-        .map_err(|_| "operation payload violates SDK artifact schema")?;
     let payload = operation
         .typed_payload::<arkret_wire::event_spec::InviteThirdParty>()
         .map_err(|_| "operation payload violates SDK artifact schema")?;
@@ -104,11 +92,8 @@ pub fn validate_message_operation_payload(operation: &Operation) -> Result<(), &
         || operation.payload.get("encrypted_content").is_some();
     if encrypted {
         // The encrypted content envelope SHAPE is owned by the registered spec schema
-        // `ak.schema.encrypted_envelope.v1` (referenced from
-        // `message_create_payload` and enforced via
-        // `event_payload_validator_catalog()?.validate_payload`). The spec
-        // schema is the single source of truth — we only assert presence here
-        // and never re-derive a divergent hand-written envelope shape.
+        // `ak.schema.encrypted_envelope.v1`. Its SDK model owns the closed
+        // shape; this kind-specific check only enforces the carrier choice.
         if operation.payload.get("encrypted_content").is_none()
             && operation.payload.get("content").is_none()
         {

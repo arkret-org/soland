@@ -2386,7 +2386,7 @@ mod tests {
         let superseded_observation =
             observe_validation(&superseded_result, "organization_registration_revoked");
 
-        let embedded = arkret_schema::embedded_json_artifact(
+        let embedded = arkret_schema_conformance::spec_json_artifact(
             "fixtures/organization-registration-fixture.json",
         )
         .unwrap();

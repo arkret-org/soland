@@ -129,10 +129,6 @@ impl From<soland_storage::PersistenceError> for ServiceError {
 
 pub type ServiceResult<T> = Result<T, ServiceError>;
 
-pub fn validate_embedded_artifacts() -> Result<(), soland_domain::artifacts::ArtifactError> {
-    soland_domain::artifacts::validate_embedded_artifacts()
-}
-
 #[cfg(test)]
 mod boundary_tests {
     #[test]

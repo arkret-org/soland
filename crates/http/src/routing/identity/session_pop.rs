@@ -10,7 +10,7 @@
 //!   `created`/`expires` window (≤300s, ±30s skew, same scale as the federation rail) and the
 //!   `keyid` binding. Any failure is rejected as `unauthenticated`.
 //! - On a high-security deployment (`sovereign_enclave_enabled`), protected self-surface operations
-//!   are classified from the embedded operation registry and MUST be PoP-presented; unknown
+//!   are classified from generated operation descriptors and MUST be PoP-presented; unknown
 //!   operations fail closed. Explicit public-projection exceptions are treated as unauthenticated
 //!   when no valid proof is present.
 //! - The session key the signature verifies against is sourced per inbound credential: for the ②
@@ -21,9 +21,6 @@
 //!
 //! Session credential validation itself still runs in the per-handler
 //! `AuthArgs::authenticated_session`; this hoop only adds the RFC 9421 layer.
-
-use std::collections::BTreeSet;
-use std::sync::OnceLock;
 
 use arkret_signatures::http_signature::{
     Component, ContentDigest, SignatureVerificationPolicy, public_key_from_bytes,
@@ -45,14 +42,6 @@ use crate::state::AppState;
 const MAX_SIGNATURE_WINDOW_SECONDS: i64 = 300;
 /// Accepted clock skew around `created` / `expires` (±30s, federation scale).
 const MAX_CLOCK_SKEW_SECONDS: i64 = 30;
-
-#[derive(Debug)]
-struct SessionPopPolicy {
-    bindings: Vec<(String, String, String)>,
-    public_projection_operations: BTreeSet<String>,
-}
-
-static SESSION_POP_POLICY: OnceLock<SessionPopPolicy> = OnceLock::new();
 
 /// Hoop mounted on the `self` surface. Continues the chain on success, renders
 /// the canonical error envelope and stops on PoP failure.
@@ -257,7 +246,7 @@ async fn session_signing_key_jwk(
 }
 
 /// Whether an unsigned request must be rejected on a high-security deployment.
-/// The classifier comes from the embedded operation registry; an unknown self
+/// The classifier comes from generated operation descriptors; an unknown self
 /// operation fails closed.
 fn pop_required(state: &AppState, req: &Request) -> bool {
     if !state.config().sovereign_enclave_enabled || req.method() == salvo::http::Method::OPTIONS {
@@ -270,70 +259,25 @@ fn pop_required(state: &AppState, req: &Request) -> bool {
 }
 
 fn is_history_response_capability_request(req: &Request) -> bool {
-    let policy = session_pop_policy();
-    policy.bindings.iter().any(|(method, path, operation_id)| {
-        method == req.method().as_str()
-            && path_template_matches(path, req.uri().path())
-            && matches!(
-                operation_id.as_str(),
-                arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_READ_LIST_V1
-                    | arkret_wire::ServiceOperationId::SELF_HISTORY_KEY_RESPONSES_COMMAND_ACK_V1
-            )
-    })
+    [
+        arkret_wire::ServiceOperationId::SelfHistoryKeyResponsesReadListV1,
+        arkret_wire::ServiceOperationId::SelfHistoryKeyResponsesCommandAckV1,
+    ]
+    .into_iter()
+    .any(|operation| request_matches_operation(req, operation))
 }
 
 fn is_public_projection_request(req: &Request) -> bool {
-    let policy = session_pop_policy();
-    policy.bindings.iter().any(|(method, path, operation_id)| {
-        method == req.method().as_str()
-            && path_template_matches(path, req.uri().path())
-            && policy.public_projection_operations.contains(operation_id)
-    })
+    arkret_schema::UNAUTHENTICATED_PUBLIC_PROJECTION_OPERATIONS
+        .iter()
+        .copied()
+        .any(|operation| request_matches_operation(req, operation))
 }
 
-fn session_pop_policy() -> &'static SessionPopPolicy {
-    SESSION_POP_POLICY.get_or_init(|| {
-        let bundle = arkret_schema::SpecArtifactBundle::load_embedded()
-            .expect("embedded operation registry must load");
-        let operation_registry = bundle
-            .operation_registry
-            .as_object()
-            .expect("embedded operation registry must be an object");
-        let policy = operation_registry
-            .get("high_security_session_authentication_policy")
-            .and_then(serde_json::Value::as_object)
-            .expect("embedded operation registry must declare high-security session policy");
-        let public_projection_operations = policy
-            .get("unauthenticated_public_projection_operations")
-            .and_then(serde_json::Value::as_array)
-            .expect("high-security session policy public operation list must be an array")
-            .iter()
-            .map(|value| {
-                value
-                    .as_str()
-                    .expect("public projection operation id must be a string")
-                    .to_owned()
-            })
-            .collect();
-        let bindings = operation_registry
-            .get("operations")
-            .and_then(serde_json::Value::as_array)
-            .expect("embedded operation registry operations must be an array")
-            .iter()
-            .filter_map(|row| {
-                let operation_id = row.get("operation_id")?.as_str()?;
-                if !operation_id.starts_with("ak.self.") {
-                    return None;
-                }
-                let (method, path) = row.get("http")?.as_str()?.split_once(' ')?;
-                Some((method.to_owned(), path.to_owned(), operation_id.to_owned()))
-            })
-            .collect();
-        SessionPopPolicy {
-            bindings,
-            public_projection_operations,
-        }
-    })
+fn request_matches_operation(req: &Request, operation: arkret_wire::ServiceOperationId) -> bool {
+    let descriptor = operation.descriptor();
+    descriptor.http_method == req.method().as_str()
+        && path_template_matches(descriptor.http_path, req.uri().path())
 }
 
 fn path_template_matches(template: &str, actual: &str) -> bool {
@@ -466,22 +410,10 @@ mod tests {
     }
 
     #[test]
-    fn embedded_policy_has_explicit_public_projection_exceptions() {
-        let policy = session_pop_policy();
-        assert!(
-            policy
-                .public_projection_operations
-                .contains("ak.self.events.read.describe.v1")
-        );
-        assert!(
-            policy
-                .public_projection_operations
-                .contains("ak.self.account.read.describe.v1")
-        );
-        assert!(
-            !policy
-                .public_projection_operations
-                .contains("ak.self.events.read.scan.v1")
-        );
+    fn generated_policy_has_explicit_public_projection_exceptions() {
+        let policy = arkret_schema::UNAUTHENTICATED_PUBLIC_PROJECTION_OPERATIONS;
+        assert!(policy.contains(&arkret_wire::ServiceOperationId::SelfEventsReadDescribeV1));
+        assert!(policy.contains(&arkret_wire::ServiceOperationId::SelfAccountReadDescribeV1));
+        assert!(!policy.contains(&arkret_wire::ServiceOperationId::SelfEventsReadScanV1));
     }
 }

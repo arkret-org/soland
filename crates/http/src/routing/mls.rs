@@ -3310,7 +3310,7 @@ mod recipient_durable_receipt_tests {
 
     #[test]
     fn receipt_digest_uses_decoded_welcome_bytes_not_event_envelope() {
-        let fixture = arkret_schema::embedded_json_artifact(
+        let fixture = arkret_schema_conformance::spec_json_artifact(
             "fixtures/keypackage-pairwise-welcome-fixture.json",
         )
         .expect("embedded pairwise Welcome fixture");
@@ -5062,7 +5062,7 @@ mod trust_binding_tests {
             MlsRequesterTrustBinding, MlsWelcomePayload,
         };
 
-        let fixture = arkret_schema::embedded_json_artifact(
+        let fixture = arkret_schema_conformance::spec_json_artifact(
             "fixtures/keypackage-pairwise-welcome-fixture.json",
         )
         .unwrap();

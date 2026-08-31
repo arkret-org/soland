@@ -86,7 +86,7 @@ fn validator_accepts_dotted_patch_path_keys() {
 
 #[test]
 fn event_schema_rejects_unknown_arkret_camel_case_property() {
-    let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
+    let catalog = arkret_schema_conformance::event_payload_validator_catalog().unwrap();
     let payload = json!({
         "realm_id": "ak:realm:ARLbXJMwpJkX1X9nXmxj2Yv0DAzpbSmEiyQvmERDGGOt",
         "strand_id": "ak:strand:AdkuCk9s9aVgrLhlJ7RStI9OuRZNs0l_4p5_NBH_a-SY",

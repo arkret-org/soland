@@ -1511,14 +1511,12 @@ pub(crate) async fn actor_has_call_capability(
     let (owner, members) = call_authz_principals(state, realm_id).await;
     let actor_key = actor.to_string();
     let root_controller_holds_action = owner.as_deref() == Some(actor_key.as_str())
-        && arkret_schema::embedded_capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
-            .ok()
-            .flatten()
+        && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
             .is_some_and(|owner_action| {
                 owner_action
                     .grant_authority_actions
                     .iter()
-                    .any(|covered| covered == action)
+                    .any(|covered| *covered == action)
             });
     if root_controller_holds_action {
         return true;

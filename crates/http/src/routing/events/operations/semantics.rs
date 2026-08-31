@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
-use arkret_schema::event_payload_validator_catalog;
 use serde_json::Value;
 
 use super::*;
@@ -333,10 +332,8 @@ pub(crate) fn validate_operation_schema_from_sdk_artifact(
     kind: &arkret_wire::EventKind,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    event_payload_validator_catalog()
-        .map_err(|_| "operation payload validator catalog unavailable")?
-        .validate_payload(kind.as_str(), &operation.payload)
-        .map_err(|_| "operation payload violates SDK artifact schema")?;
+    arkret_event_draft::validate_event_payload(kind, &operation.payload)
+        .map_err(|_| "operation payload violates its typed SDK contract")?;
     if *kind == arkret_wire::EventKind::SchemaDefine {
         arkret_schema::validate_schema_definition_payload(&operation.payload)
             .map_err(|_| "operation payload violates SDK validator profile")?;

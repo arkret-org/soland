@@ -40,7 +40,7 @@ arkret-models-identity = { workspace = true, features = ["openapi"] }
 arkret-models-integration = { workspace = true, features = ["openapi"] }
 arkret-policy.workspace = true
 arkret-rate-limit.workspace = true
-arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
+arkret-schema = { workspace = true }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "service-identity", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["openapi"] }
@@ -79,6 +79,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+arkret-schema-conformance = { workspace = true }
 arkret-event-draft = { workspace = true, features = ["test-support"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 rustls.workspace = true

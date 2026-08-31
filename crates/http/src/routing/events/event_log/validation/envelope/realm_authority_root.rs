@@ -28,9 +28,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<(), EventValidationError> {
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
-    let root_control_only = arkret_schema::embedded_capability_action(kind)
-        .ok()
-        .flatten()
+    let root_control_only = arkret_schema::capability_action(kind)
         .is_some_and(|descriptor| descriptor.root_control_only);
     if root_control_only
         && authorization_ref.as_deref() != Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL)

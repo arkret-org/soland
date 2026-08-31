@@ -6,7 +6,6 @@ use soland_http::config::{AppConfig, StartupOverrides};
 use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
 use soland_http::state::AppState;
-use soland_services::validate_embedded_artifacts;
 use soland_storage_postgres::Db;
 use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
@@ -78,23 +77,6 @@ async fn run() -> anyhow::Result<()> {
     // flushes pending writes; storing it in `_file_guard` defers that drop
     // until `main` returns.
     let _tracing_guards = init_tracing(&config)?;
-
-    // Fail fast at startup if a bundled Arkret artifact is malformed, or if the
-    // Draft 2020-12 schema catalog does not compile as a whole, instead of
-    // crashing the first request that touches the offending OnceLock or Event.
-    if let Err(error) = validate_embedded_artifacts() {
-        tracing::error!(
-            artifact = error.label,
-            detail = %error.detail,
-            spec_artifacts_dir = ?soland_services::protocol_artifacts::spec_artifacts_dir(),
-            "startup artifact gate failed; refusing to serve protocol traffic"
-        );
-        return Err(error.into());
-    }
-    tracing::info!(
-        spec_artifacts_dir = ?soland_services::protocol_artifacts::spec_artifacts_dir(),
-        "protocol schema catalog compiled at startup"
-    );
 
     // Connect the database and resolve this deployment's own service identity
     // before anything derived from it is constructed. The DID remains runtime

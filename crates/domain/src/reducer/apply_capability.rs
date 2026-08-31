@@ -305,26 +305,21 @@ fn validate_nonhuman_subject_grant_constraints(
     };
     let has_finite_expiry = body_effective_expires_at(body).is_some();
     for action in actions.iter().filter_map(Value::as_str) {
-        let descriptor = arkret_schema::embedded_capability_action(action)
-            .ok()
-            .flatten();
+        let descriptor = arkret_schema::capability_action(action);
         let (risk_tier, required_constraints) = match descriptor {
-            Some(descriptor) => (
-                descriptor.risk_tier,
-                descriptor.required_constraints.as_slice(),
-            ),
+            Some(descriptor) => (descriptor.risk_tier, descriptor.required_constraints),
             // Unregistered action: registry_rules default it to high.
-            None => (CapabilityRiskTier::High, &[] as &[String]),
+            None => (CapabilityRiskTier::High, &[] as &[&str]),
         };
         let expiry_required = risk_tier == CapabilityRiskTier::High
             || required_constraints
                 .iter()
-                .any(|constraint| constraint == "expires_at");
+                .any(|constraint| *constraint == "expires_at");
         if expiry_required && !has_finite_expiry {
             return Err("agent_grant_expiry_required");
         }
         for required in required_constraints {
-            if required == "expires_at" {
+            if *required == "expires_at" {
                 continue;
             }
             if !grant_has_constraint(body, required) {

@@ -67,7 +67,7 @@ fn generate_openapi_doc(router: &Router, artifact_registry_summary: Value) -> Va
             "authz_constraint_kinds": ["allowed_object_facets"],
         }),
     );
-    install_event_read_query_bindings(&mut doc);
+    install_generated_query_operations(router, &mut doc);
     install_operation_selector_parameters(&mut doc);
     doc
 }
@@ -144,71 +144,57 @@ fn stable_endpoint_operation_id(operation_id: &str) -> &str {
         .map_or(operation_id, |(endpoint_id, _)| endpoint_id)
 }
 
-/// salvo-oapi 0.95.2 can emit an OpenAPI 3.2 document, while its typed
-/// `PathItemType` still predates the 3.2 `query` member. Runtime routing comes
-/// from Salvo's native `Router::query`; copy the corresponding QUERY Operation
-/// Objects from the SDK's embedded canonical OpenAPI artifact.
-fn install_event_read_query_bindings(doc: &mut Value) {
-    let canonical_yaml = arkret_schema::embedded_openapi_yaml()
-        .expect("embedded canonical OpenAPI artifact must load");
-    let canonical: Value = serde_saphyr::from_str(canonical_yaml)
-        .expect("embedded canonical OpenAPI artifact must parse");
-    let canonical_components = canonical["components"]
-        .as_object()
-        .expect("canonical OpenAPI components must be an object");
+/// salvo-oapi can emit an OpenAPI 3.2 document, while its typed `PathItemType`
+/// still predates the 3.2 `query` member. The spec code generator therefore
+/// emits only the canonical QUERY Operation Objects and their referenced local
+/// components as Rust expressions. We merge an operation only when the live
+/// router exposes the same path with QUERY, and reject any live QUERY route
+/// absent from that generated catalog.
+fn install_generated_query_operations(router: &Router, doc: &mut Value) {
+    let registered = collect_registered_routes(router)
+        .unwrap_or_else(|error| panic!("failed to walk router for QUERY OpenAPI: {error:#}"));
+    let mut operations = arkret_schema::openapi_query_operations()
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    for (path, methods) in &registered {
+        if !methods.contains("query") {
+            continue;
+        }
+        let operation = operations.remove(path.as_str()).unwrap_or_else(|| {
+            panic!("live QUERY route {path} has no generated canonical OpenAPI operation")
+        });
+        doc["paths"][path]["query"] = operation;
+    }
+
     let generated_components = doc["components"]
         .as_object_mut()
         .expect("generated OpenAPI components must be an object");
-    for (section_name, canonical_section) in canonical_components {
-        let Some(canonical_entries) = canonical_section.as_object() else {
-            continue;
-        };
-        let generated_section = generated_components
+    let supplement = arkret_schema::openapi_query_components();
+    for (section_name, section) in supplement
+        .as_object()
+        .expect("generated QUERY OpenAPI components must be an object")
+    {
+        let destination = generated_components
             .entry(section_name.clone())
             .or_insert_with(|| json!({}))
             .as_object_mut()
-            .expect("OpenAPI component section must be an object");
-        for (name, component) in canonical_entries {
-            generated_section.insert(name.clone(), component.clone());
+            .expect("generated OpenAPI component section must be an object");
+        for (name, component) in section
+            .as_object()
+            .expect("generated QUERY OpenAPI component section must be an object")
+        {
+            destination
+                .entry(name.clone())
+                .or_insert_with(|| component.clone());
         }
     }
-    for path in [
-        "/_arkret/self/events/describe",
-        "/_arkret/self/events/frontier",
-        "/_arkret/self/seals/frontier",
-        "/_arkret/self/events",
-        "/_arkret/self/events/resolve",
-        "/_arkret/peer/events/frontier",
-        "/_arkret/peer/seals/frontier",
-        "/_arkret/peer/events",
-        "/_arkret/peer/events/resolve",
-    ] {
-        let operation = canonical["paths"][path]["query"].clone();
-        assert!(
-            operation.is_object(),
-            "canonical OpenAPI missing QUERY {path}"
-        );
-        doc["paths"][path]["query"] = operation;
-    }
-    for path in [
-        "/_arkret/self/seals/mls-governance-proof",
-        "/_arkret/peer/seals/mls-governance-proof",
-        "/_arkret/peer/mls/group-state-material",
-    ] {
-        let operation = canonical["paths"][path]["post"].clone();
-        assert!(
-            operation.is_object(),
-            "canonical OpenAPI missing POST {path}"
-        );
-        doc["paths"][path]["post"] = operation;
-    }
 }
-
-type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;
 
 /// Walk the live salvo router and collect every registered `path -> methods`
 /// pair. This is the single source of truth for the 404/405 known-route table
 /// and is independent of OpenAPI generation.
+type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;
+
 fn collect_registered_routes(router: &Router) -> anyhow::Result<RegisteredRoutes> {
     fn walk(
         router: &Router,
@@ -330,8 +316,11 @@ pub fn product_openapi_surface_doc() -> Value {
     let generated = OpenApi::new("Arkret Service API", env!("CARGO_PKG_VERSION"))
         .openapi_version(OpenApiVersion::Version3_2)
         .merge_router(&router);
-    serde_json::to_value(generated)
-        .unwrap_or_else(|error| panic!("failed to serialize product OpenAPI surface: {error:#}"))
+    let mut document = serde_json::to_value(generated)
+        .unwrap_or_else(|error| panic!("failed to serialize product OpenAPI surface: {error:#}"));
+    install_generated_query_operations(&router, &mut document);
+    install_operation_selector_parameters(&mut document);
+    document
 }
 
 /// Return the exact path/method registry from the state-independent portion of

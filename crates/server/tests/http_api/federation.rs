@@ -1393,8 +1393,10 @@ fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64)
 }
 
 fn mls_welcome_payload() -> Value {
-    arkret_schema::embedded_json_artifact("fixtures/keypackage-pairwise-welcome-fixture.json")
-        .expect("embedded pairwise Welcome fixture")["schema_validation_cases"][0]["instance"]
+    arkret_schema_conformance::spec_json_artifact(
+        "fixtures/keypackage-pairwise-welcome-fixture.json",
+    )
+    .expect("embedded pairwise Welcome fixture")["schema_validation_cases"][0]["instance"]
         .clone()
 }
 

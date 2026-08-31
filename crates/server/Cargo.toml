@@ -72,6 +72,7 @@ url = "2.5"
 uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+arkret-schema-conformance = { workspace = true }
 arkret.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
@@ -82,7 +83,7 @@ arkret-models-crypto.workspace = true
 arkret-models-discovery.workspace = true
 arkret-models-integration.workspace = true
 arkret-policy.workspace = true
-arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
+arkret-schema = { workspace = true }
 bs58 = { workspace = true }
 floria-contracts = { workspace = true }
 hex = { workspace = true }

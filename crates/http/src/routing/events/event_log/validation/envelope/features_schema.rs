@@ -199,30 +199,19 @@ pub(crate) fn validate_event_time_fields(
 }
 
 pub(crate) fn validate_event_schema_and_payload(
-    state: &AppState,
+    _state: &AppState,
     kind: &str,
     _schema_id: &str,
     envelope: &Value,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if !state.config().development_mode {
-        let registry = artifacts::protocol_schema_registry().map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("event schema registry is unavailable: {error}"),
-            )
-        })?;
-        registry
-            .validate_value(arkret_wire::SchemaId::EVENT_V1, envelope)
-            .map_err(|error| {
-                event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    format!("event envelope violates ak.schema.event.v1: {error}"),
-                )
-            })?;
-    }
+    serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("event envelope violates its typed wire contract: {error}"),
+        )
+    })?;
 
     let payload = object.get("payload").ok_or_else(|| {
         event_validation_error(
@@ -242,31 +231,14 @@ pub(crate) fn validate_event_schema_and_payload(
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }
-    let catalog = arkret_schema::event_payload_validator_catalog().map_err(|error| {
+    let typed_kind = arkret_wire::EventKind::from(kind);
+    arkret_event_draft::validate_event_payload(&typed_kind, payload).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            format!("event payload validator catalog unavailable: {error}"),
+            format!("event payload violates its typed SDK contract: {error}"),
         )
     })?;
-    // A few active standard kinds are validated by dedicated sibling schemas
-    // instead of an event-payload def (`ak.read_cursor.advance`,
-    // `ak.relation.tombstone`, `ak.moderation.franking_proof` — see the SDK's
-    // KINDS_WITHOUT_EVENT_PAYLOAD_VALIDATOR guard). The catalog fails closed
-    // on them, so only dispatch kinds it actually covers; the uncovered kinds
-    // keep their manual operation-semantics validators downstream. New kinds
-    // cannot slip through silently: the SDK's
-    // catalog_covers_every_active_standard_kind test forces every new active
-    // kind to either resolve a validator or be an explicit exception.
-    if catalog.has_payload_validator(kind) {
-        catalog.validate_payload(kind, payload).map_err(|error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("event payload violates the registered payload schema: {error}"),
-            )
-        })?;
-    }
     if kind == arkret_wire::EventKind::SchemaDefine.as_str() {
         arkret_schema::validate_schema_definition_payload(payload).map_err(|error| {
             event_validation_error(

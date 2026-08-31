@@ -1188,19 +1188,14 @@ pub(super) fn registration_epoch_producer_signing_key(
 
 fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), AppError> {
     for action in &package.requested_scopes {
-        match arkret_schema::embedded_capability_action(action) {
-            Ok(Some(_)) => {}
-            Ok(None) => {
+        match arkret_schema::capability_action(action) {
+            Some(_) => {}
+            None => {
                 return Err(AppError::param_invalid(format!(
                     "applet package requested_scopes contains unknown capability action: {action}"
                 ))
                 .with_wire_code("schema_violation")
                 .with_reason_detail("capability_action_unknown"));
-            }
-            Err(error) => {
-                return Err(AppError::internal(format!(
-                    "capability action registry unavailable while validating applet package: {error}"
-                )));
             }
         }
     }

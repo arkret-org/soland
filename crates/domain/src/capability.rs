@@ -185,11 +185,9 @@ fn validate_capability_action(action: &str) -> Result<(), &'static str> {
     if !saw_segment {
         return Err("capability_grant_action_invalid");
     }
-    match arkret_schema::embedded_capability_action(action) {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err("capability_grant_action_unknown"),
-        Err(_) => Err("capability_action_registry_unavailable"),
-    }
+    arkret_schema::capability_action(action)
+        .map(|_| ())
+        .ok_or("capability_grant_action_unknown")
 }
 
 pub fn validate_resource_pattern(pattern: &str) -> Result<(), &'static str> {

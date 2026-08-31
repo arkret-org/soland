@@ -110,7 +110,7 @@ mod tests {
             updated_at: at,
             revoked_at: None,
         }).await.unwrap();
-        let fixture = arkret_schema::embedded_json_artifact(
+        let fixture = arkret_schema_conformance::spec_json_artifact(
             "fixtures/keypackage-pairwise-welcome-fixture.json",
         )
         .unwrap();
