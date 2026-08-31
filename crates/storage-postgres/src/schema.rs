@@ -236,7 +236,7 @@ diesel::table! {
         position -> Int8,
         scope_ref -> Jsonb,
         sender_actor_id -> Text,
-        sender_device_id -> Text,
+        sender_device_id -> Nullable<Text>,
         signal_class -> Text,
         envelope_digest -> Text,
         envelope -> Jsonb,

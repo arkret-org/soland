@@ -29,8 +29,8 @@ struct SignalRelayRow {
     scope_ref: Value,
     #[diesel(sql_type = Text)]
     sender_actor_id: String,
-    #[diesel(sql_type = Text)]
-    sender_device_id: String,
+    #[diesel(sql_type = sql_types::Nullable<Text>)]
+    sender_device_id: Option<String>,
     #[diesel(sql_type = Text)]
     signal_class: String,
     #[diesel(sql_type = Text)]
@@ -138,7 +138,7 @@ impl SignalRelayStore for PgSignalRelayStore {
         .bind::<BigInt, _>(position)
         .bind::<Jsonb, _>(&scope_ref)
         .bind::<Text, _>(&record.sender_actor_id)
-        .bind::<Text, _>(&record.sender_device_id)
+        .bind::<sql_types::Nullable<Text>, _>(record.sender_device_id.as_deref())
         .bind::<Text, _>(&signal_class)
         .bind::<Text, _>(&record.envelope_digest)
         .bind::<Jsonb, _>(&envelope)

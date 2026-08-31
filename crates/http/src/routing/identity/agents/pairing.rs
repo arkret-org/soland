@@ -748,6 +748,13 @@ pub(super) async fn agent_key_pair(
         state,
     )
     .await?;
+    if agent_record.authorized_public_key_digest.as_deref()
+        == Some(body.signing_key_binding.public_key_digest.as_str())
+    {
+        return Err(pairing_failed_precondition(
+            "runtime replacement must use a different raw Ed25519 signing key; same-key authority changes use re-authorization",
+        ));
+    }
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
     crate::routing::identity::agent_pcr::validate_agent_controller_binding(
         state,

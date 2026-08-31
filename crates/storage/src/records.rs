@@ -941,7 +941,8 @@ pub struct SignalRelayRecord {
     /// delivered only to that Circle's eligible devices.
     pub scope_ref: arkret_wire::ScopeRef,
     pub sender_actor_id: String,
-    pub sender_device_id: String,
+    /// Present for an ordinary account-device sender and absent for an Agent.
+    pub sender_device_id: Option<String>,
     /// The only server-visible product classification (`setup` / `moderation`
     /// / `session`).
     pub signal_class: arkret_wire::SignalClass,

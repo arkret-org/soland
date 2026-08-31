@@ -407,7 +407,7 @@ fn signal_record(
         realm_id: realm_id.clone(),
         scope_ref: arkret_wire::ScopeRef::Realm { realm_id },
         sender_actor_id: sender.clone(),
-        sender_device_id: arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap(),
+        sender_device_id: Some(arkret_identifiers::DeviceId::new(BOB_DEVICE.to_owned()).unwrap()),
         seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
             .unwrap(),
         signal_class: arkret_wire::SignalClass::Session,
@@ -447,7 +447,7 @@ fn signal_record(
         realm_id: realm_id_str.to_owned(),
         scope_ref: envelope.scope_ref.clone(),
         sender_actor_id: sender.to_string(),
-        sender_device_id: envelope.sender_device_id.as_str().to_owned(),
+        sender_device_id: envelope.sender_device_id.as_ref().map(ToString::to_string),
         signal_class: envelope.signal_class,
         envelope_digest: envelope.envelope_digest().unwrap().as_str().to_owned(),
         sent_at: envelope.sent_at,

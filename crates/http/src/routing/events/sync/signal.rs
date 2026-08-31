@@ -99,7 +99,7 @@ pub(super) async fn submit_signal(
             realm_id: realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
             sender_actor_id: sender_actor.to_string(),
-            sender_device_id: envelope.sender_device_id.as_str().to_owned(),
+            sender_device_id: envelope.sender_device_id.as_ref().map(ToString::to_string),
             signal_class: envelope.signal_class,
             envelope_digest: envelope_digest.clone(),
             sent_at: envelope.sent_at,
@@ -206,18 +206,13 @@ async fn admit_signal(
         return Err(signal_invalid("signal envelope is already expired"));
     }
 
-    // The sending device is the authenticated one. A Signal proof names the
-    // device, so a session may not relay another device's envelope.
+    // The complete sender actor is always the authenticated one. Endpoint
+    // authority is checked by the selected closed branch below.
     let authenticated_actor =
         crate::routing::identity::session_actor::validated_session_actor(state, session).await?;
     if envelope.sender_actor_id != authenticated_actor {
         return Err(AppError::capability_denied(
             "signal sender_actor_id must match the bearer session actor",
-        ));
-    }
-    if envelope.sender_device_id.as_str() != session.device_id {
-        return Err(AppError::capability_denied(
-            "signal sender_device_id must match the bearer session device",
         ));
     }
 
@@ -272,14 +267,21 @@ async fn admit_signal(
         ));
     }
 
-    // The current Signal carrier requires an ordinary account's DeviceId.
-    // Agent/minimal endpoint identity must not be synthesized as a device.
-    if session.agent_session.is_some() {
-        return Err(signal_proof_invalid(
-            "Signal has no registered Agent sender carrier",
-        ));
+    match (&envelope.sender_device_id, &session.agent_session) {
+        (Some(device_id), None) if device_id.as_str() == session.device_id => {
+            verify_signal_device_proof(state, envelope, &actor).await
+        }
+        (None, Some(_)) => verify_signal_agent_proof(state, session, envelope, &actor).await,
+        (Some(_), Some(_)) => Err(signal_proof_invalid(
+            "Agent Signal sender must omit sender_device_id",
+        )),
+        (None, None) => Err(signal_proof_invalid(
+            "ordinary Signal sender must carry sender_device_id",
+        )),
+        (Some(_), None) => Err(AppError::capability_denied(
+            "signal sender_device_id must match the bearer session device",
+        )),
     }
-    verify_signal_device_proof(state, envelope, &actor).await
 }
 
 /// `signal.md` §3(2) — live send eligibility for the envelope's scope.
@@ -313,6 +315,9 @@ async fn verify_signal_device_proof(
     envelope: &SignalEnvelope,
     actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
+    let sender_device_id = envelope.sender_device_id.as_ref().ok_or_else(|| {
+        signal_proof_invalid("ordinary Signal sender must carry sender_device_id")
+    })?;
     // This identity adapter owns only this Station's account device directory.
     // A peer's account must not borrow a local same-principal device record.
     require_local_signal_device_account(actor, state.service_id())?;
@@ -336,14 +341,14 @@ async fn verify_signal_device_proof(
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
             envelope.sender_actor_id.signing_principal_id().as_str(),
-            envelope.sender_device_id.as_str(),
+            sender_device_id.as_str(),
         )
         .await
         .map_err(|error| {
             tracing::error!(
                 %error,
                 actor = %envelope.sender_actor_id,
-                device = %envelope.sender_device_id,
+                device = %sender_device_id,
                 "failed to resolve the signal sender device signing key"
             );
             signal_rail_unavailable("resolve the device signing directory")
@@ -365,7 +370,7 @@ async fn verify_signal_device_proof(
     if crate::routing::identity::device_signing::current_device_authorization(
         state,
         actor,
-        &envelope.sender_device_id,
+        sender_device_id,
         &facet,
     )
     .await
@@ -400,10 +405,194 @@ async fn verify_signal_device_proof(
         tracing::warn!(
             %error,
             actor = %envelope.sender_actor_id,
-            device = %envelope.sender_device_id,
+            device = %sender_device_id,
             "signal device proof verification failed"
         );
         signal_proof_invalid("signal device proof verification failed")
+    })
+}
+
+async fn verify_signal_agent_proof(
+    state: &AppState,
+    session: &SessionIdentityState,
+    envelope: &SignalEnvelope,
+    actor: &arkret_wire::ActorId,
+) -> Result<(), AppError> {
+    let agent_session = session
+        .agent_session
+        .as_ref()
+        .filter(|agent| agent.freshness_state == arkret_wire::FreshnessState::Fresh)
+        .ok_or_else(|| signal_proof_invalid("Agent Signal requires a fresh Agent session"))?;
+    let _ = agent_session;
+    let grant = session.session_grant.as_ref().ok_or_else(|| {
+        signal_proof_invalid("Agent Signal requires a typed session-grant authority binding")
+    })?;
+    let arkret_models_identity::session_credential::SessionGrantHolderBinding::AgentRuntime {
+        agent_id,
+        device_id,
+        agent_key_authorization_ref,
+        verification_method,
+    } = &grant.holder_binding
+    else {
+        return Err(signal_proof_invalid(
+            "Agent Signal cannot use a human-device session grant",
+        ));
+    };
+    if agent_id != actor.signing_principal_id()
+        || device_id.as_str() != session.device_id
+        || verification_method != &envelope.proof.verification_method
+    {
+        return Err(signal_proof_invalid(
+            "Agent Signal does not match its typed session-grant key binding",
+        ));
+    }
+
+    let public_key_value: serde_json::Value = serde_json::from_str(
+        session
+            .session_public_key
+            .as_deref()
+            .ok_or_else(|| signal_proof_invalid("Agent session public key is unavailable"))?,
+    )
+    .map_err(|_| signal_proof_invalid("Agent session public key is invalid"))?;
+    verify_signal_agent_current_authority(
+        state,
+        envelope,
+        actor,
+        Some((
+            agent_key_authorization_ref,
+            verification_method,
+            arkret_signatures::PublicKeyMaterial::Jwk {
+                value: public_key_value,
+            },
+        )),
+    )
+    .await
+}
+
+async fn verify_signal_agent_current_authority(
+    state: &AppState,
+    envelope: &SignalEnvelope,
+    actor: &arkret_wire::ActorId,
+    session_binding: Option<(
+        &arkret_wire::EventId,
+        &arkret_wire::DidUrl,
+        arkret_signatures::PublicKeyMaterial,
+    )>,
+) -> Result<(), AppError> {
+    let agent_id = actor.signing_principal_id();
+    let agent_record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
+        .await
+        .map_err(|_| signal_rail_unavailable("resolve the Signal Agent provisioning"))?
+        .ok_or_else(|| signal_proof_invalid("Signal sender is not an accepted Agent"))?;
+    if agent_record.state
+        != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+    {
+        return Err(signal_proof_invalid("Signal Agent is not active"));
+    }
+    crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+        state,
+        &agent_record,
+        chrono::Utc::now(),
+    )
+    .await?;
+    let controller_account =
+        crate::routing::identity::agent_pcr::agent_controller_account(state, &agent_record).await?;
+    let controller_actor = arkret_wire::ActorId::account(controller_account);
+    if !realm_has_member(
+        state,
+        envelope.realm_id.as_str(),
+        &controller_actor.to_string(),
+    )
+    .await
+    {
+        return Err(signal_proof_invalid(
+            "Signal Agent controller is not a current Realm member",
+        ));
+    }
+    let runtime = agent_record
+        .runtime_bindings()
+        .map_err(|_| signal_proof_invalid("Signal Agent runtime binding is inconsistent"))?
+        .active_binding
+        .ok_or_else(|| signal_proof_invalid("Signal Agent has no active runtime binding"))?;
+    if runtime.verification_method != envelope.proof.verification_method {
+        return Err(signal_proof_invalid(
+            "Signal Agent proof method differs from the active runtime binding",
+        ));
+    }
+    if let Some((agent_key_authorization_ref, verification_method, _)) = &session_binding
+        && (runtime.authorized_event_ref != **agent_key_authorization_ref
+            || runtime.verification_method != **verification_method)
+    {
+        return Err(signal_proof_invalid(
+            "Signal Agent session names a stale runtime authorization",
+        ));
+    }
+
+    let active_authorizations = state
+        .projections()
+        .snapshot()
+        .active_agent_key_authorizations(agent_id.as_str());
+    if active_authorizations.is_empty() {
+        return Err(signal_proof_invalid(
+            "Signal Agent has no current accepted key authorization",
+        ));
+    }
+    for (method, authorization_ref) in active_authorizations {
+        let authorization = state
+            .event_queries()
+            .canonical_event(&authorization_ref)
+            .await
+            .map_err(|_| signal_rail_unavailable("resolve Agent key authorization"))?
+            .ok_or_else(|| signal_proof_invalid("Agent key authorization is unavailable"))?;
+        let payload = authorization
+            .envelope
+            .get("payload")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| signal_proof_invalid("Agent key authorization payload is invalid"))?;
+        if authorization.kind != arkret_wire::EventKind::AgentKeyAuthorize.as_str()
+            || payload.get("agent_id").and_then(serde_json::Value::as_str)
+                != Some(agent_id.as_str())
+            || payload
+                .get("verification_method")
+                .and_then(serde_json::Value::as_str)
+                != Some(method.as_str())
+            || method != runtime.verification_method
+            || payload
+                .get("public_key_digest")
+                .and_then(serde_json::Value::as_str)
+                != Some(runtime.public_key_digest.as_str())
+        {
+            return Err(signal_proof_invalid(
+                "Agent has conflicting current runtime key authorizations",
+            ));
+        }
+    }
+
+    let public_key = match session_binding {
+        Some((_, _, public_key)) => public_key,
+        None => arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: arkret_canonical::base64url_decode(
+                runtime.signing_key_binding.public_key.key.as_str(),
+            )
+            .map_err(|_| signal_proof_invalid("Agent runtime public key is invalid"))?,
+        },
+    };
+    if public_key
+        .raw_ed25519_digest()
+        .map_err(|_| signal_proof_invalid("Agent session public key is invalid"))?
+        != runtime.public_key_digest
+    {
+        return Err(signal_proof_invalid(
+            "Agent session public key differs from the active runtime binding",
+        ));
+    }
+    arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
+        tracing::warn!(
+            %error,
+            actor = %envelope.sender_actor_id,
+            "signal Agent proof verification failed"
+        );
+        signal_proof_invalid("signal Agent proof verification failed")
     })
 }
 
@@ -475,7 +664,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
             realm_id: envelope.realm_id.as_str().to_owned(),
             scope_ref: envelope.scope_ref.clone(),
             sender_actor_id: sender_actor.to_string(),
-            sender_device_id: envelope.sender_device_id.as_str().to_owned(),
+            sender_device_id: envelope.sender_device_id.as_ref().map(ToString::to_string),
             signal_class: envelope.signal_class,
             envelope_digest,
             sent_at: envelope.sent_at,
@@ -499,14 +688,16 @@ pub(crate) async fn admit_outbound_signal(
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
     let actor = &envelope.sender_actor_id;
-    require_local_signal_device_account(actor, state.service_id())?;
     admit_signal_outer(state, state.service_id(), envelope).await?;
     if !remote_recipient_services(state, envelope).contains(destination_id) {
         return Err(signal_invalid(
             "Signal destination has no current eligible member",
         ));
     }
-    verify_signal_device_proof(state, envelope, actor).await
+    match envelope.sender_device_id.as_ref() {
+        Some(_) => verify_signal_device_proof(state, envelope, actor).await,
+        None => verify_signal_agent_current_authority(state, envelope, actor, None).await,
+    }
 }
 
 #[cfg(feature = "test-support")]
@@ -530,7 +721,7 @@ async fn admit_signal_outer(
     envelope.validate_structural().map_err(structural_error)?;
     if envelope.sender_actor_id.as_account_id().is_none() {
         return Err(signal_proof_invalid(
-            "Signal requires an ordinary account-device sender",
+            "Signal requires an account-backed ordinary or Agent sender",
         ));
     }
     arkret_signatures::proof::validate_ed25519_detached_jws_shape(&envelope.proof.jws)
@@ -542,14 +733,6 @@ async fn admit_signal_outer(
 
     let projection = state.projections().snapshot();
     let sender_actor = envelope.sender_actor_id.clone();
-    if projection
-        .agent_membership_binding(envelope.realm_id.as_str(), &sender_actor.to_string())
-        .is_some()
-    {
-        return Err(signal_proof_invalid(
-            "Signal has no registered Agent sender carrier",
-        ));
-    }
     if sender_actor.route_service_id().as_str() != source_id {
         return Err(signal_invalid(
             "Signal sender route does not match the authenticated source Station",
@@ -859,7 +1042,9 @@ pub(crate) async fn pending_signals_for_subscriber(
                 continue;
             }
             // A device never receives its own Signal back.
-            if record.sender_actor_id == actor_key && record.sender_device_id == session.device_id {
+            if record.sender_actor_id == actor_key
+                && record.sender_device_id.as_deref() == Some(session.device_id.as_str())
+            {
                 continue;
             }
             if !signal_visible_to_subscriber(state, &record, &actor_key) {

@@ -2450,7 +2450,9 @@ pub(crate) fn signed_signal_envelope(
             fixture_actor_core_id(sender_actor),
             soland_test_support::fixture_station_id(),
         )),
-        sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
+        sender_device_id: Some(
+            arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
+        ),
         seal_ref: seal_ref.clone(),
         signal_class,
         sent_at,

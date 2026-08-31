@@ -465,7 +465,7 @@ CREATE TABLE public.signal_relay (
     position bigint NOT NULL,
     scope_ref jsonb NOT NULL,
     sender_actor_id text NOT NULL,
-    sender_device_id text NOT NULL,
+    sender_device_id text,
     signal_class text NOT NULL,
     envelope_digest text NOT NULL,
     envelope jsonb NOT NULL,
