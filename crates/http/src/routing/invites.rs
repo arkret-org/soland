@@ -1195,9 +1195,8 @@ async fn persist_invite_quarantine_entry(
         .filter(|value| !value.trim().is_empty())
         .map(|value| arkret_wire::EventId::new(value.to_owned()))
         .transpose()
-        .map_err(|error| AppError::param_invalid(format!("invalid invite event id: {error}")))?;
-    let invite_event_digest =
-        crate::util::canonical_digest(body.get("invite_event").unwrap_or(&Value::Null))?;
+        .map_err(|error| AppError::param_invalid(format!("invalid invite event id: {error}")))?
+        .ok_or_else(|| AppError::param_invalid("invite Event id is required for quarantine"))?;
     let request_digest = crate::util::canonical_digest(body)?;
     let idempotency_key_digest =
         format!("sha256:{}", sha256_hex(delivery.idempotency_key.as_bytes()));
@@ -1205,7 +1204,7 @@ async fn persist_invite_quarantine_entry(
         "account_id": account_id,
         "source_id": source_id,
         "idempotency_key": delivery.idempotency_key,
-        "invite_event_digest": invite_event_digest,
+        "invite_event_id": invite_event_id,
     }))?;
     let parse_digest = |value: String| {
         Hash::new(value)
@@ -1230,7 +1229,6 @@ async fn persist_invite_quarantine_entry(
             TrustTier::Low => InviteTrustTier::Low,
         },
         invite_event_id: invite_event_id.clone(),
-        invite_event_digest: parse_digest(invite_event_digest.clone())?,
         request_digest: parse_digest(request_digest)?,
         idempotency_key_digest: parse_digest(idempotency_key_digest)?,
         received_at,
@@ -1309,7 +1307,6 @@ async fn persist_invite_quarantine_entry(
             "source_id": source_id,
             "inviter_id": inviter_id,
             "invite_event_id": invite_event_id,
-            "invite_event_digest": invite_event_digest,
             "expires_at": expires_at,
         }),
         "accepted",

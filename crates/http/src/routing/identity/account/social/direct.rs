@@ -94,7 +94,7 @@ pub(crate) fn direct_binding_matches_projection(
 pub(crate) async fn direct_group_state_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Result<Option<(arkret_wire::EventId, arkret_wire::Hash)>, AppError> {
+) -> Result<Option<arkret_wire::EventId>, AppError> {
     let realm_id = arkret_wire::RealmId::new(realm_id.to_owned()).map_err(|error| {
         AppError::internal(format!("direct conversation Realm id is invalid: {error}"))
     })?;
@@ -149,10 +149,7 @@ pub(crate) async fn direct_group_state_for_realm(
             "current MLS group-state Event binding is invalid",
         ));
     }
-    let digest = arkret_wire::Hash::new(record.canonical_digest).map_err(|error| {
-        AppError::internal(format!("stored MLS group-state digest is invalid: {error}"))
-    })?;
-    Ok(Some((event_ref, digest)))
+    Ok(Some(event_ref))
 }
 
 fn direct_binding_payload_from_operation(
