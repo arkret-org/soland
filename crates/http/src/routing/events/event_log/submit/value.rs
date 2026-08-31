@@ -2630,12 +2630,8 @@ pub(super) async fn submit_event_value_with_context(
         // Recipient trust is checked by the claim ledger only after the exact
         // destination receipt has been authenticated, never by a local DID lookup.
         if context.internal_admission.is_none()
-            && let Some(reason) = preflight_mls_welcome_claim_ledger_reject(
-                state,
-                parsed.actor_id.as_str(),
-                operation,
-            )
-            .await
+            && let Some(reason) =
+                preflight_mls_welcome_claim_ledger_reject(state, &parsed.actor, operation).await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
@@ -2652,7 +2648,7 @@ pub(super) async fn submit_event_value_with_context(
             state,
             session,
             envelope_object,
-            parsed.actor_id.as_str(),
+            &parsed.actor,
             operation,
             context.internal_admission,
         )

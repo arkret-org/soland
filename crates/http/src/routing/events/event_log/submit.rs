@@ -2925,7 +2925,7 @@ pub(crate) async fn submit_federation_events(
                 state,
                 &source_id,
                 &binding_realm,
-                &actor,
+                &event_actor,
                 payload,
             )
             .await

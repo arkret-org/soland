@@ -235,8 +235,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     } else {
         None
     };
-    let stream_deadline = tokio::time::Instant::now() + Duration::from_millis(max_duration_ms);
+    let stream_deadline = tokio::time::Instant::now()
+        + events_subscribe_wait(session.as_ref(), Utc::now(), max_duration_ms);
     let session_for_stream = session.clone();
+    let grant_for_stream = soland_http::util::dpop_token(req).map(str::to_owned);
     let subscribe_scope_key_for_stream = subscribe_scope_key.clone();
     let filter_digest_for_stream = filter_digest.clone();
 
@@ -244,6 +246,11 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
     let body_stream = async_stream::stream! {
         let mut replayed_event_ids = BTreeSet::new();
         let mut replay_cursor = None;
+
+        if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+            yield Ok::<Bytes, std::io::Error>(ndjson_line(&json!({"kind": "unauthorized"})));
+            return;
+        }
 
         if let Some((events, has_more)) = actor_replay {
             if has_more {
@@ -259,6 +266,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     yield Ok(ndjson_line(&json!({"kind": "resync_required"})));
                     return;
                 };
+                if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                    yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                    return;
+                }
                 yield Ok(ndjson_line(&frame));
             }
         }
@@ -319,6 +330,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     yield Ok(ndjson_line(&json!({"kind": "resync_required"})));
                     return;
                 };
+                if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                    yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                    return;
+                }
                 yield Ok(ndjson_line(&frame));
             }
             if has_more {
@@ -336,6 +351,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
         if catchup && replay_cursor.is_none()
             && let Some(cursor) = after_token.as_ref()
         {
+            if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                return;
+            }
             let frontier = json!({
                 "kind": "frontier",
                 "cursor": cursor,
@@ -346,6 +365,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
         // Completion follows either replay data or the empty-replay frontier.
         if let Some(cursor) = replay_cursor.as_ref() {
+            if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                return;
+            }
             let catchup_complete = json!({
                 "kind": "catchup_complete",
                 "cursor": cursor,
@@ -363,8 +386,8 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
             tokio::select! {
                 biased;
                 _ = tokio::time::sleep_until(stream_deadline) => {
-                    // Final heartbeat then close.
-                    let close_frame = json!({"kind": "heartbeat"});
+                    let expired = session_for_stream.as_ref().is_some_and(|session| session.expires_at <= Utc::now());
+                    let close_frame = json!({"kind": if expired { "unauthorized" } else { "heartbeat" }});
                     yield Ok(ndjson_line(&close_frame));
                     break;
                 }
@@ -422,10 +445,6 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                     if !actor_filter.is_empty() && !actor_filter.contains(&event_envelope.actor_id.to_string()) {
                                         continue;
                                     }
-                                    if actor_only && authorize_actor_only_selectors(&state, session_for_stream.as_ref(), &actor_filter).await.is_err() {
-                                        yield Ok(ndjson_line(&json!({"kind": "unauthorized", "realm_id": realm_id})));
-                                        return;
-                                    }
                                     let Some(frame) = events_event_frame(&realm_id, &live_cursor, &event_envelope) else {
                                         continue;
                                     };
@@ -459,6 +478,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                 }
                                 EventNotificationKind::Account { .. } => continue,
                             };
+                            if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                                yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                                return;
+                            }
                             yield Ok(ndjson_line(&frame));
                             if terminal {
                                 break;
@@ -489,6 +512,10 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                     }
                 }
                 _ = heartbeat.tick() => {
+                    if !events_stream_authorized(&state, session_for_stream.as_ref(), grant_for_stream.as_deref(), actor_only, &actor_filter).await {
+                        yield Ok(ndjson_line(&json!({"kind": "unauthorized"})));
+                        return;
+                    }
                     let frame = json!({"kind": "heartbeat"});
                     yield Ok(ndjson_line(&frame));
                 }
@@ -498,6 +525,50 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
 
     let _ = res.add_header("content-type", "application/x-ndjson", true);
     res.stream(body_stream.boxed());
+}
+
+fn events_subscribe_wait(
+    session: Option<&SessionIdentityState>,
+    at: DateTime<Utc>,
+    max_duration_ms: u64,
+) -> Duration {
+    let requested = Duration::from_millis(max_duration_ms);
+    session.map_or(requested, |session| {
+        requested.min((session.expires_at - at).to_std().unwrap_or_default())
+    })
+}
+
+async fn events_stream_authorized(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    grant_jwt: Option<&str>,
+    actor_only: bool,
+    actors: &BTreeSet<String>,
+) -> bool {
+    let Some(session) = session else {
+        return !actor_only;
+    };
+    let at = Utc::now();
+    if session.expires_at <= at {
+        return false;
+    }
+    let deadline =
+        tokio::time::Instant::now() + (session.expires_at - at).to_std().unwrap_or_default();
+    let authorization = async {
+        crate::routing::identity::auth::revalidate_stream_session(state, session, grant_jwt)
+            .await
+            .map_err(|_| ())?;
+        if actor_only {
+            authorize_actor_only_selectors(state, Some(session), actors)
+                .await
+                .map_err(|_| ())?;
+        }
+        Ok::<(), ()>(())
+    };
+    matches!(
+        tokio::time::timeout_at(deadline, authorization).await,
+        Ok(Ok(()))
+    ) && session.expires_at > Utc::now()
 }
 
 fn events_event_frame(
@@ -1619,6 +1690,185 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.wire_code(), "unauthorized");
+    }
+
+    fn stream_test_state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig {
+                development_mode: true,
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        )
+    }
+
+    async fn stream_test_session(state: &AppState) -> SessionIdentityState {
+        let account_id = arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(TEST_ACTOR_CORE).unwrap(),
+            state.service_core_id(),
+        );
+        let account_pk = soland_storage::AccountPk(1);
+        state
+            .identities()
+            .save_account(soland_services::identity::AccountProfileState {
+                pk: account_pk,
+                principal_id: account_id.principal_id.clone(),
+                account_id,
+                localpart: "alice".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        let session = SessionIdentityState {
+            token_hash: crate::routing::identity::auth::session_credential_hash(
+                "stream-test",
+                state.service_id(),
+            ),
+            account_pk: Some(account_pk),
+            actor: TEST_ACTOR_CORE.to_owned(),
+            device_id: "ak:device:0196419b-0000-7000-8000-000000000001".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: Utc::now() + chrono::Duration::minutes(5),
+            created_at: Utc::now(),
+            revoked_at: None,
+        };
+        state
+            .identities()
+            .save_device(soland_services::identity::SaveDeviceCommand {
+                actor_id: session.actor.clone(),
+                device_id: session.device_id.clone(),
+                display_name: None,
+                device: soland_services::identity::DeviceIdentity {
+                    actor_id: session.actor.clone(),
+                    device_id: session.device_id.clone(),
+                    display_name: None,
+                    verification_state: "verified".to_owned(),
+                    payload: json!({"device_id": session.device_id}),
+                    created_at: session.created_at,
+                    updated_at: session.created_at,
+                    revoked_at: None,
+                },
+            })
+            .await
+            .unwrap();
+        state
+            .sessions()
+            .create_session(session.clone())
+            .await
+            .unwrap();
+        session
+    }
+
+    async fn stream_test_response(state: &AppState, after: Option<&str>) -> Response {
+        let actor = selector_at(state.service_id()).to_string();
+        let mut url = url::Url::parse("http://server/").unwrap();
+        url.query_pairs_mut()
+            .extend_pairs([("actor_ids", actor.as_str()), ("max_duration_ms", "60000")]);
+        if let Some(after) = after {
+            url.query_pairs_mut()
+                .extend_pairs([("catchup", "true"), ("after", after)]);
+        }
+        let router = salvo::Router::new()
+            .hoop(salvo::affix_state::inject(state.clone()))
+            .get(events_subscribe);
+        salvo::test::TestClient::get(url.as_str())
+            .add_header("authorization", "Bearer stream-test", true)
+            .send(&salvo::Service::new(router))
+            .await
+    }
+
+    async fn next_stream_test_frame(response: &mut Response) -> Value {
+        let frame = response.body.next().await.unwrap().unwrap();
+        serde_json::from_slice(&frame.into_data().unwrap()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn events_stream_closes_at_original_session_expiry() {
+        let state = stream_test_state();
+        let mut session = stream_test_session(&state).await;
+        session.expires_at = Utc::now() + chrono::Duration::seconds(1);
+        state
+            .sessions()
+            .create_session(session.clone())
+            .await
+            .unwrap();
+        assert_eq!(
+            events_subscribe_wait(Some(&session), session.expires_at, 60_000),
+            Duration::ZERO
+        );
+        let mut response = stream_test_response(&state, None).await;
+        let frame = tokio::time::timeout(
+            Duration::from_secs(3),
+            next_stream_test_frame(&mut response),
+        )
+        .await
+        .expect("session expiry must close an idle stream before its requested duration");
+        assert_eq!(frame["kind"], "unauthorized", "{frame}");
+        assert!(
+            Utc::now() >= session.expires_at,
+            "a current session must not be rejected before expiry",
+        );
+        assert!(response.body.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn actor_catchup_stops_when_session_is_revoked_between_frames() {
+        let state = stream_test_state();
+        let session = stream_test_session(&state).await;
+        let actor = selector_at(state.service_id());
+        let created_at = Utc::now() - chrono::Duration::minutes(1);
+        let mut ids = Vec::new();
+        for index in 0..3 {
+            let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+                arkret_wire::EventKind::ProfileUpdate.as_str(),
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: RealmId::new(TEST_REALM).unwrap(),
+                },
+                actor.clone(),
+                index as u64 + 1,
+                arkret_wire::Hlc::new(format!("019f00000000-000{index}-00000001")).unwrap(),
+                json!({"display_name": format!("profile {index}")}),
+                created_at + chrono::Duration::seconds(index),
+            )
+            .unwrap();
+            crate::test_event::attach_fixture_producer_proof(
+                &mut event,
+                arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
+            );
+            put_durable_event(
+                &state,
+                event.event_id.as_str(),
+                event.kind.as_str(),
+                serde_json::to_value(&event).unwrap(),
+                event.created_at,
+            )
+            .await;
+            ids.push(event.event_id.to_string());
+        }
+        let digest = events_subscribe_filter_digest(&[], &BTreeSet::from([actor.to_string()]));
+        let after = sync_token_for_events_query(&state, Some(&session), &digest, &ids[0]).await;
+        let mut response = stream_test_response(&state, Some(&after)).await;
+        let first = next_stream_test_frame(&mut response).await;
+        assert_eq!(first["kind"], "event", "{first}");
+        assert_eq!(first["payload"]["event_id"], ids[1]);
+        state
+            .sessions()
+            .revoke_session(&session.token_hash, Utc::now())
+            .await
+            .unwrap();
+        let next = next_stream_test_frame(&mut response).await;
+        assert_eq!(
+            next["kind"], "unauthorized",
+            "revoked catch-up must not expose the next event: {next}"
+        );
+        assert!(response.body.next().await.is_none());
     }
 
     #[test]

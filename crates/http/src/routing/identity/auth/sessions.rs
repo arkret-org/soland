@@ -155,6 +155,78 @@ async fn bind_session_account(
         })
 }
 
+/// Recheck an established HTTP stream without replaying its consumed DPoP proof.
+/// The original credential bounds the stream; a later lookup cannot replace its
+/// account, holder, scope or expiry with a different authorization.
+pub(crate) async fn revalidate_stream_session(
+    state: &AppState,
+    original: &SessionRecord,
+    grant_jwt: Option<&str>,
+) -> Result<(), (StatusCode, &'static str, &'static str)> {
+    let rejected = (
+        StatusCode::UNAUTHORIZED,
+        "unauthenticated",
+        "stream session authorization is no longer current",
+    );
+    if original.expires_at <= now() || original.revoked_at.is_some() {
+        return Err(rejected);
+    }
+    let mut current = if let Some(context) = original.session_grant.as_ref() {
+        let grant_jwt = grant_jwt.ok_or(rejected)?;
+        let grant =
+            super::super::auth_grant_dpop::introspect_session_grant_cached(state, grant_jwt, false)
+                .await?;
+        if grant.id != context.grant_id
+            || grant.account_id != context.account_id
+            || grant.issuer_id != context.issuer_id
+            || grant.credential_class != context.credential_class
+            || grant.holder_binding != context.holder_binding
+            || grant.device_binding != context.device_binding
+            || grant.cnf_jkt != context.cnf_jkt
+            || grant.scopes != context.scopes
+            || grant.audience_id.as_str() != original.audience
+            || grant.expires_at != original.expires_at
+            || Some(grant.session_public_key.as_str()) != original.session_public_key.as_deref()
+        {
+            return Err(rejected);
+        }
+        let (device_id, agent_session) =
+            super::super::auth_grant_dpop::grant_session_binding(&grant)?;
+        super::super::auth_grant_dpop::session_from_verified_grant(
+            state,
+            grant_jwt,
+            grant,
+            device_id,
+            agent_session,
+        )
+    } else {
+        state
+            .sessions()
+            .session(&original.token_hash)
+            .await
+            .map_err(|_| rejected)?
+            .ok_or(rejected)?
+    };
+    if current.actor != original.actor
+        || current.device_id != original.device_id
+        || current.audience != original.audience
+        || current.audience != *state.service_id()
+        || current.revoked_at.is_some()
+        || current.expires_at <= now()
+    {
+        return Err(rejected);
+    }
+    if is_device_revoked(state, &current.actor, &current.device_id).await {
+        return Err(rejected);
+    }
+    enforce_session_device_revocation_gate(state, &current).await?;
+    bind_session_account(state, &mut current).await?;
+    if current.account_pk != original.account_pk {
+        return Err(rejected);
+    }
+    Ok(())
+}
+
 fn is_recovery_session_grant(session: &SessionRecord) -> bool {
     session.session_grant.as_ref().is_some_and(|grant| {
         grant.credential_class

@@ -145,7 +145,7 @@ async fn install_preview_endpoint(
     let session = aa.authenticated_session(state, req).await?;
     let preview = body.into_inner();
     let session_actor =
-        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+        crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
     let basis = &preview.authoring_request_basis;
     if basis.target_station_id.as_str() != state.service_id()
         || basis.install_actor_id != session_actor

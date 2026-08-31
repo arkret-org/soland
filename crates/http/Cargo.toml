@@ -80,6 +80,7 @@ zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 arkret-event-draft = { workspace = true, features = ["test-support"] }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-domain.workspace = true
