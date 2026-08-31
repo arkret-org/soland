@@ -221,18 +221,7 @@ async fn admit_signal(
         ));
     }
 
-    // (4) — `aead_profile` MUST name an ACTIVE row of the MLS ciphersuite
-    // registry. The stronger rule (equality with the ciphersuite the group at
-    // `key_ref.group_state_ref` actually negotiated) needs accepted MLS group
-    // state that this service does not retain; with exactly one active v1
-    // suite the two coincide today, and a reserved or unregistered suite fails
-    // closed here either way.
-    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile) {
-        return Err(signal_invalid(format!(
-            "signal aead_profile '{}' is not an active MLS ciphersuite",
-            envelope.encrypted_payload.aead_profile
-        )));
-    }
+    verify_signal_mls_basis(state, envelope).await?;
 
     let realm_id = envelope.realm_id.as_str();
     let actor =
@@ -283,15 +272,14 @@ async fn admit_signal(
         ));
     }
 
-    // (4) — resolve the signer through the authenticated principal's identity
-    // model. Agent endpoints use their accepted `ak.agent.key.authorize`
-    // binding; ordinary principals use the accepted device directory. The
-    // shared outer shape remains `{actor}#{device_id}` in both branches.
+    // The current Signal carrier requires an ordinary account's DeviceId.
+    // Agent/minimal endpoint identity must not be synthesized as a device.
     if session.agent_session.is_some() {
-        verify_signal_agent_proof(state, envelope, &actor).await
-    } else {
-        verify_signal_device_proof(state, envelope, &actor).await
+        return Err(signal_proof_invalid(
+            "Signal has no registered Agent sender carrier",
+        ));
     }
+    verify_signal_device_proof(state, envelope, &actor).await
 }
 
 /// `signal.md` §3(2) — live send eligibility for the envelope's scope.
@@ -328,6 +316,22 @@ async fn verify_signal_device_proof(
     // This identity adapter owns only this Station's account device directory.
     // A peer's account must not borrow a local same-principal device record.
     require_local_signal_device_account(actor, state.service_id())?;
+    // Account shape alone does not distinguish an Agent. Accepted local
+    // provisioning must never be downgraded into an ordinary device lookup.
+    if state
+        .projections()
+        .snapshot()
+        .agent_membership_binding(envelope.realm_id.as_str(), &actor.to_string())
+        .is_some()
+        || crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
+            .await
+            .map_err(|_| signal_rail_unavailable("resolve the Signal sender provisioning"))?
+            .is_some()
+    {
+        return Err(signal_proof_invalid(
+            "Signal has no registered Agent sender carrier",
+        ));
+    }
     let facet =
         crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
             state,
@@ -347,9 +351,29 @@ async fn verify_signal_device_proof(
     if !matches!(
         facet.status,
         arkret_models_crypto::keys::DeviceStatus::Active
-    ) {
+    ) || facet.device_authorize_event_id.is_none()
+        || !facet
+            .authorized_generation_ref
+            .is_some_and(|generation| generation >= 1)
+    {
         return Err(signal_proof_invalid(
             "signal sender device is not active and authorized",
+        ));
+    }
+    // Current authorization includes the exact accepted Event/generation,
+    // pending revocation, and the original authorization's time window.
+    if crate::routing::identity::device_signing::current_device_authorization(
+        state,
+        actor,
+        &envelope.sender_device_id,
+        &facet,
+    )
+    .await
+    .map_err(|_| signal_rail_unavailable("resolve current device authorization"))?
+    .is_none()
+    {
+        return Err(signal_proof_invalid(
+            "signal device authorization is not currently effective",
         ));
     }
     // §1 — `verification_method` is the directory lookup key and the SDK's
@@ -399,64 +423,6 @@ fn require_local_signal_device_account(
     }
 }
 
-async fn verify_signal_agent_proof(
-    state: &AppState,
-    envelope: &SignalEnvelope,
-    actor: &arkret_wire::ActorId,
-) -> Result<(), AppError> {
-    let sender_actor_id = envelope.sender_actor_id.signing_principal_id().clone();
-    let record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, actor)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
-            signal_rail_unavailable("resolve the Agent signing authorization")
-        })?
-        .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
-    if record.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active {
-        return Err(signal_proof_invalid("Signal sender Agent is not active"));
-    }
-    let binding = record
-        .authorized_signing_key_binding
-        .as_ref()
-        .ok_or_else(|| signal_proof_invalid("Signal sender Agent has no active signing key"))?;
-    if binding.agent_id != sender_actor_id
-        || binding.verification_method != envelope.proof.verification_method
-        || record.authorized_event_ref.as_deref()
-            != Some(binding.agent_key_authorize_event_id.as_str())
-        || binding
-            .expires_at
-            .is_some_and(|expires_at| expires_at <= chrono::Utc::now())
-    {
-        return Err(signal_proof_invalid(
-            "Signal proof does not match the current Agent key authorization",
-        ));
-    }
-    let active = state
-        .projections()
-        .snapshot()
-        .active_agent_key_authorizations(sender_actor_id.as_str());
-    if !active.iter().any(|(key_id, event_id)| {
-        key_id == binding.agent_key_id.as_str()
-            && event_id == binding.agent_key_authorize_event_id.as_str()
-    }) {
-        return Err(signal_proof_invalid(
-            "Signal sender Agent key is revoked, superseded, or conflicted",
-        ));
-    }
-    let bytes = arkret_canonical::base64url_decode(binding.public_key.key.as_str())
-        .map_err(|_| signal_proof_invalid("Signal sender Agent key is malformed"))?;
-    let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes };
-    arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
-        tracing::warn!(
-            %error,
-            actor = %envelope.sender_actor_id,
-            device = %envelope.sender_device_id,
-            "Signal Agent proof verification failed"
-        );
-        signal_proof_invalid("Signal Agent proof verification failed")
-    })
-}
-
 /// Admit one item from an authenticated single-hop peer relay.
 ///
 /// Every item-level failure is returned only to the caller for audit logging;
@@ -468,77 +434,13 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     source_id: &str,
     envelope: &SignalEnvelope,
 ) -> Result<(), AppError> {
-    envelope.validate_structural().map_err(structural_error)?;
-    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile) {
-        return Err(signal_invalid("signal aead_profile is not active"));
-    }
-
+    admit_signal_outer(state, source_id, envelope).await?;
+    // The authenticated source Station owns current ordinary-device admission.
+    // Destination transport admission cannot authenticate a foreign producer
+    // using a local same-principal directory or an MLS public-tree lookup.
+    // Recipients still authenticate the original proof before consuming it.
     let projection = state.projections().snapshot();
-    let sender_actor = envelope.sender_actor_id.clone();
-    if sender_actor.route_service_id().as_str() != source_id {
-        return Err(signal_invalid(
-            "Signal sender route does not match the authenticated source Station",
-        ));
-    }
-    let membership_key = (
-        envelope.realm_id.as_str().to_owned(),
-        sender_actor.to_string(),
-    );
-    projection
-        .members
-        .get(&membership_key)
-        .filter(|membership| membership.state == "join")
-        .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
-
-    let seal = state
-        .projections()
-        .seal_by_id(&envelope.seal_ref)
-        .map_err(|_| signal_rail_unavailable("resolve the signal seal basis"))?
-        .ok_or_else(|| signal_invalid("signal seal_ref does not resolve"))?;
-    if seal.realm_id != envelope.realm_id {
-        return Err(signal_invalid(
-            "signal seal_ref belongs to a different Realm",
-        ));
-    }
-    if let Some(circle_id) = envelope.scope_ref.circle_id()
-        && (!projection
-            .circle_membership(circle_id.as_str(), &sender_actor.to_string())
-            .is_some_and(|membership| membership.state == "join")
-            || !projection
-                .circle_scope_visible_to_actor(circle_id.as_str(), &sender_actor.to_string()))
-    {
-        return Err(signal_invalid(
-            "signal sender is not eligible for the Circle scope",
-        ));
-    }
-    if envelope.signal_class == SignalClass::Moderation
-        && !crate::routing::interop::webrtc::actor_has_call_capability(
-            state,
-            envelope.realm_id.as_str(),
-            &sender_actor,
-            arkret_wire::CapabilityActionId::CALL_MODERATE,
-        )
-        .await
-    {
-        return Err(signal_invalid("signal sender lacks the moderation action"));
-    }
-    // The identity variant does not distinguish human and Agent accounts.
-    // Use accepted membership/provisioning facts; lookup failure must not
-    // downgrade an Agent to the ordinary device verifier.
-    let is_agent = projection
-        .agent_membership_binding(envelope.realm_id.as_str(), &sender_actor.to_string())
-        .is_some()
-        || (sender_actor.route_service_id().as_str() == state.service_id().as_str()
-            && crate::routing::identity::agent_pcr::agent_record_for_actor(state, &sender_actor)
-                .await
-                .map_err(|_| signal_rail_unavailable("resolve the Signal sender provisioning"))?
-                .is_some());
-    if is_agent {
-        verify_signal_agent_proof(state, envelope, &sender_actor).await?;
-    } else {
-        verify_signal_device_proof(state, envelope, &sender_actor).await?;
-    }
-
+    let sender_actor = &envelope.sender_actor_id;
     let local_service_id = state.service_id().as_str();
     let has_local_recipient = projection.members.values().any(|membership| {
         membership.realm_id == envelope.realm_id.as_str()
@@ -590,6 +492,114 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     Ok(())
 }
 
+/// Revalidate current source authority immediately before signing a peer request.
+pub(crate) async fn admit_outbound_signal(
+    state: &AppState,
+    destination_id: &str,
+    envelope: &SignalEnvelope,
+) -> Result<(), AppError> {
+    let actor = &envelope.sender_actor_id;
+    require_local_signal_device_account(actor, state.service_id())?;
+    admit_signal_outer(state, state.service_id(), envelope).await?;
+    if !remote_recipient_services(state, envelope).contains(destination_id) {
+        return Err(signal_invalid(
+            "Signal destination has no current eligible member",
+        ));
+    }
+    verify_signal_device_proof(state, envelope, actor).await
+}
+
+#[cfg(feature = "test-support")]
+impl AppState {
+    #[doc(hidden)]
+    pub async fn test_admit_outbound_signal(
+        &self,
+        destination_id: &str,
+        envelope: &SignalEnvelope,
+    ) -> Result<(), AppError> {
+        admit_outbound_signal(self, destination_id, envelope).await
+    }
+}
+
+/// Server-visible checks shared by source dispatch and destination admission.
+async fn admit_signal_outer(
+    state: &AppState,
+    source_id: &str,
+    envelope: &SignalEnvelope,
+) -> Result<(), AppError> {
+    envelope.validate_structural().map_err(structural_error)?;
+    if envelope.sender_actor_id.as_account_id().is_none() {
+        return Err(signal_proof_invalid(
+            "Signal requires an ordinary account-device sender",
+        ));
+    }
+    arkret_signatures::proof::validate_ed25519_detached_jws_shape(&envelope.proof.jws)
+        .map_err(|_| signal_proof_invalid("signal producer proof encoding is invalid"))?;
+    if envelope.expires_at <= chrono::Utc::now() {
+        return Err(signal_invalid("signal envelope is already expired"));
+    }
+    verify_signal_mls_basis(state, envelope).await?;
+
+    let projection = state.projections().snapshot();
+    let sender_actor = envelope.sender_actor_id.clone();
+    if projection
+        .agent_membership_binding(envelope.realm_id.as_str(), &sender_actor.to_string())
+        .is_some()
+    {
+        return Err(signal_proof_invalid(
+            "Signal has no registered Agent sender carrier",
+        ));
+    }
+    if sender_actor.route_service_id().as_str() != source_id {
+        return Err(signal_invalid(
+            "Signal sender route does not match the authenticated source Station",
+        ));
+    }
+    let membership_key = (
+        envelope.realm_id.as_str().to_owned(),
+        sender_actor.to_string(),
+    );
+    projection
+        .members
+        .get(&membership_key)
+        .filter(|membership| membership.state == "join")
+        .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
+
+    let seal = state
+        .projections()
+        .seal_by_id(&envelope.seal_ref)
+        .map_err(|_| signal_rail_unavailable("resolve the signal seal basis"))?
+        .ok_or_else(|| signal_invalid("signal seal_ref does not resolve"))?;
+    if seal.realm_id != envelope.realm_id {
+        return Err(signal_invalid(
+            "signal seal_ref belongs to a different Realm",
+        ));
+    }
+    if let Some(circle_id) = envelope.scope_ref.circle_id()
+        && (!projection
+            .circle_membership(circle_id.as_str(), &sender_actor.to_string())
+            .is_some_and(|membership| membership.state == "join")
+            || !projection
+                .circle_scope_visible_to_actor(circle_id.as_str(), &sender_actor.to_string()))
+    {
+        return Err(signal_invalid(
+            "signal sender is not eligible for the Circle scope",
+        ));
+    }
+    if envelope.signal_class == SignalClass::Moderation
+        && !crate::routing::interop::webrtc::actor_has_call_capability(
+            state,
+            envelope.realm_id.as_str(),
+            &sender_actor,
+            arkret_wire::CapabilityActionId::CALL_MODERATE,
+        )
+        .await
+    {
+        return Err(signal_invalid("signal sender lacks the moderation action"));
+    }
+    Ok(())
+}
+
 /// How many Realm members other than the sender could observe this Signal.
 ///
 /// Reported as `dispatched_recipient_count`. It is an eligibility count, not a
@@ -619,14 +629,95 @@ fn mls_ciphersuite_is_active(canonical_id: &str) -> bool {
         .any(|suite| suite.canonical_id == canonical_id && suite.status == "active")
 }
 
+/// Check the accepted outer MLS basis, without a public tree or device lookup.
+async fn verify_signal_mls_basis(
+    state: &AppState,
+    envelope: &SignalEnvelope,
+) -> Result<(), AppError> {
+    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile) {
+        return Err(signal_invalid("signal aead_profile is not active"));
+    }
+    let group_id = envelope
+        .scope_ref
+        .canonical_mls_group_id()
+        .map_err(|error| signal_invalid(format!("signal MLS scope: {error}")))?;
+    let current = state
+        .mls_commits()
+        .commit(&envelope.scope_ref, &group_id)
+        .await
+        .map_err(|_| signal_rail_unavailable("resolve the signal MLS basis"))?
+        .ok_or_else(|| signal_invalid("signal scope has no accepted MLS state"))?;
+    let current_ref = current
+        .accepted_commit_ref
+        .as_deref()
+        .unwrap_or(&current.genesis_event_ref);
+    if current.frontier_contested
+        || current.effective_scope != envelope.scope_ref
+        || current.epoch != envelope.encrypted_payload.epoch
+        || current_ref != envelope.encrypted_payload.key_ref.group_state_ref
+        || current.governance_binding.effective_scope() != &envelope.scope_ref
+        || current.governance_binding.mls_group_id() != group_id
+        || current.governance_binding.next_epoch() != current.epoch
+    {
+        return Err(signal_invalid(
+            "signal MLS basis is stale, mismatched, or contested",
+        ));
+    }
+    if state
+        .projections()
+        .snapshot()
+        .pending_mls_removals
+        .iter()
+        .any(|removal| {
+            removal.realm_id == envelope.realm_id.as_str()
+                && removal.circle_id.as_deref()
+                    == envelope.scope_ref.circle_id().map(|id| id.as_str())
+        })
+    {
+        return Err(signal_invalid(
+            "signal MLS basis has pending removal obligations",
+        ));
+    }
+    let genesis = state
+        .event_queries()
+        .canonical_event(&current.genesis_event_ref)
+        .await
+        .map_err(|_| signal_rail_unavailable("resolve the signal MLS genesis"))?
+        .ok_or_else(|| signal_invalid("signal MLS genesis is unavailable"))?;
+    let payload = genesis
+        .envelope
+        .get("payload")
+        .ok_or_else(|| signal_invalid("signal MLS genesis payload is unavailable"))?;
+    if genesis.kind != arkret_wire::EventKind::MlsGenesis.as_str()
+        || genesis.realm_id.as_deref() != Some(envelope.realm_id.as_str())
+        || crate::routing::mls::payload_fields::mls_group_id(payload) != Some(group_id.as_str())
+        || payload
+            .get("cipher_suite")
+            .and_then(serde_json::Value::as_str)
+            != Some(envelope.encrypted_payload.aead_profile.as_str())
+        || crate::routing::mls::payload_fields::group_state_effective_scope(payload)
+            .and_then(|value| serde_json::from_value::<arkret_wire::ScopeRef>(value).ok())
+            .as_ref()
+            != Some(&envelope.scope_ref)
+    {
+        return Err(signal_invalid(
+            "signal MLS genesis does not bind the scope and cipher suite",
+        ));
+    }
+    Ok(())
+}
+
 /// Map the SDK's structural rejection onto the registered wire code. The TTL
-/// ceiling has its own code (`signal_ttl_out_of_range`); everything else is a
-/// malformed envelope.
+/// and byte ceilings retain their registered codes; other violations are
+/// malformed envelopes.
 fn structural_error(error: arkret_wire::WireError) -> AppError {
     let error_code = error.error_code();
     let message = error.to_string();
     if error_code == Some(arkret_wire::ErrorCode::SignalTtlOutOfRange) {
         return AppError::new(ErrorCode::SignalTtlOutOfRange, message);
+    }
+    if error_code == Some(arkret_wire::ErrorCode::PayloadTooLarge) {
+        return AppError::new(ErrorCode::PayloadTooLarge, message);
     }
     signal_invalid(message)
 }
@@ -854,6 +945,16 @@ mod tests {
             "signal expires_at must be strictly after sent_at".to_owned(),
         ));
         assert_eq!(error.wire_code(), "param_invalid");
+    }
+
+    #[test]
+    fn signal_byte_overflow_retains_the_registered_wire_code() {
+        let error = structural_error(arkret_wire::WireError::ProtocolCode {
+            code: arkret_wire::ErrorCode::PayloadTooLarge,
+            message: "signal envelope exceeds 65536 canonical bytes".to_owned(),
+        });
+        assert_eq!(error.wire_code(), "payload_too_large");
+        assert_eq!(error.http_status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[test]

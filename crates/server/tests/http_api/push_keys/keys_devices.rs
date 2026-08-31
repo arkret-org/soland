@@ -1248,6 +1248,89 @@ fn keys_query_hides_revoked_device() {
     );
 }
 
+#[test]
+fn keys_query_attestation_cannot_extend_the_accepted_authorization_window() {
+    run_on_deep_stack(
+        "keys_query_attestation_cannot_extend_the_accepted_authorization_window",
+        keys_query_authorization_window_body,
+    );
+}
+
+async fn keys_query_authorization_window_body() {
+    let state = soland_test_support::app_state(test_config());
+    let alice = "did:web:alice.example";
+    let alice_core = core_principal(alice);
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let key = SigningKey::from_bytes(&[204u8; 32]);
+    seed_local_key_account(&state, &alice_core).await;
+    project_test_authorized_device(&state, alice, device_id, &key).await;
+    let bob = dev_token_for_device(
+        state.clone(),
+        "did:web:bob.example",
+        "ak:device:01904100-0000-7000-8000-b0b000000001",
+        "Bob Desktop",
+    )
+    .await;
+    add_test_realm_member(&state, demo_realm_id(), alice);
+    add_test_realm_member(&state, demo_realm_id(), "did:web:bob.example");
+    let query = || async {
+        let mut response = TestClient::post("http://server/_arkret/self/keys/query")
+            .add_header("authorization", format!("Bearer {bob}"), true)
+            .json(&keys_query_request(&state, &[(&alice_core, &[device_id])]))
+            .send(&app_from_state(state.clone()))
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        response.take_json::<Value>().await.unwrap()
+    };
+    let baseline = query().await;
+    let row = &account_device_rows(&baseline, "device_keys", &state, &alice_core)[device_id];
+    let attestation: arkret_models_crypto::QueryDeviceRecord =
+        serde_json::from_value(row.clone()).unwrap();
+    let core = &attestation.device_projection_attestation.attestation;
+    assert_eq!((core.expires_at - core.attested_at).num_seconds(), 300);
+    let current_time = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let expiry = current_time + chrono::Duration::seconds(60);
+    set_test_device_authorization_window(
+        &state,
+        alice,
+        device_id,
+        &key,
+        current_time - chrono::Duration::minutes(1),
+        Some(expiry),
+    )
+    .await;
+    let bounded = query().await;
+    let row = &account_device_rows(&bounded, "device_keys", &state, &alice_core)[device_id];
+    let attestation: arkret_models_crypto::QueryDeviceRecord =
+        serde_json::from_value(row.clone()).unwrap();
+    assert_eq!(
+        attestation
+            .device_projection_attestation
+            .attestation
+            .expires_at,
+        expiry
+    );
+    for (not_before, expires_at) in [
+        (current_time + chrono::Duration::minutes(1), None),
+        (
+            current_time - chrono::Duration::minutes(2),
+            Some(current_time - chrono::Duration::minutes(1)),
+        ),
+    ] {
+        set_test_device_authorization_window(
+            &state, alice, device_id, &key, not_before, expires_at,
+        )
+        .await;
+        let rejected = query().await;
+        assert!(
+            account_device_rows(&rejected, "device_keys", &state, &alice_core)
+                .get(device_id)
+                .is_none(),
+            "ineffective authorization must not become an Active attestation: {rejected}"
+        );
+    }
+}
+
 async fn keys_query_hides_revoked_device_body() {
     let state = soland_test_support::app_state(test_config());
     let alice_core = core_principal("did:web:alice.example");

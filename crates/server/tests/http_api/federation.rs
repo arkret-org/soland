@@ -11,6 +11,474 @@ use super::common::*;
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
 const PEER_SOURCE_ID: &str = "ak:did_core:web:remote.example";
 const PEER_MEMBERSHIP_FRONTIER: &str = "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD";
+const SIGNAL_PEER_SOURCE_DID: &str =
+    "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:signal-source.example";
+
+fn signal_member(state: &AppState, actor: &arkret_wire::ActorId) {
+    let now = Utc::now();
+    state.test_projection().lock().members.insert(
+        (demo_realm_id().to_owned(), actor.to_string()),
+        soland_domain::reducer::SolandMembershipState {
+            member: actor.to_string(),
+            realm_id: demo_realm_id().to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            membership_event_ref: None,
+            invited_at: None,
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
+}
+
+fn resign_signal(envelope: &mut arkret_wire::SignalEnvelope, key: &SigningKey) {
+    envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
+    envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
+    envelope.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+        key.clone(),
+        envelope.proof.verification_method.as_str().to_owned(),
+    )
+    .sign_detached_jws(&envelope.proof_binding_bytes().unwrap());
+}
+
+async fn post_peer_signal_value(state: &AppState, body: Value) -> salvo::http::Response {
+    let target = format!(
+        "{}/_arkret/peer/signal",
+        state.config().public_base_url.trim_end_matches('/'),
+    );
+    let headers = signed_federation_push_headers_same_trust(
+        SIGNAL_PEER_SOURCE_DID,
+        state.service_id(),
+        state.config().trust_domain.as_str(),
+        &target,
+        &body,
+    );
+    let bytes = arkret_canonical::canonical_json_bytes(&body).unwrap();
+    let mut request = TestClient::post(&target)
+        .add_header("content-type", "application/json", true)
+        .add_header("content-length", bytes.len().to_string(), true);
+    for (name, value) in headers {
+        request = request.add_header(name, value, true);
+    }
+    request
+        .body(bytes)
+        .send(&app_from_state(state.clone()))
+        .await
+}
+
+#[test]
+fn signal_peer_roles_deliver_without_foreign_directory_and_keep_transport_gates() {
+    run_on_deep_stack(
+        "signal_peer_roles_deliver_without_foreign_directory_and_keep_transport_gates",
+        signal_peer_roles_body,
+    );
+}
+
+async fn signal_peer_roles_body() {
+    const ALICE: &str = "did:web:alice.example";
+    const DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    const BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
+    let source = test_state_with_service_id(SIGNAL_PEER_SOURCE_DID);
+    let destination = soland_test_support::app_state(test_config());
+    destination.install_federation_peer_verification_method_key(
+        None,
+        &format!("{SIGNAL_PEER_SOURCE_DID}#federation-fanout-key"),
+        development_service_signing_key(source.service_id()).verifying_key(),
+    );
+    assert_ne!(source.service_id(), destination.service_id());
+    let sender = fixture_account_actor(&source, ALICE);
+    let receiver = fixture_account_actor(&destination, "did:web:bob.example");
+    signal_member(&source, &sender);
+    signal_member(&source, &receiver);
+    signal_member(&destination, &sender);
+    add_test_realm_member(&destination, demo_realm_id(), "did:web:bob.example");
+    let (alice_token, key) =
+        seed_signal_sender_device(&source, ALICE, DEVICE, "Source Alice").await;
+    let (bob_token, _) =
+        seed_signal_sender_device(&destination, "did:web:bob.example", BOB_DEVICE, "Bob").await;
+    // The shared Realm has one genesis identity, authored at destination.
+    // Changing Station does not authorize re-creating that Realm at source.
+    let seal_ref = seed_signal_basis_seal(&destination, demo_realm_id(), ALICE).await;
+    source
+        .test_put_seal(
+            &destination.test_seal(&seal_ref).unwrap().unwrap(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+    for event in destination
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(demo_realm_id())
+        .await
+        .unwrap()
+    {
+        source.test_persistence().events().put(event).await.unwrap();
+    }
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new(demo_realm_id()).unwrap(),
+    };
+    seed_signal_mls_basis(&source, &scope).await;
+    let mut envelope = signed_signal_envelope(
+        demo_realm_id(),
+        scope.clone(),
+        ALICE,
+        DEVICE,
+        &seal_ref,
+        arkret_wire::SignalClass::Session,
+        Utc::now(),
+        30,
+        "remote-signal",
+        &key,
+    );
+    envelope.sender_actor_id = sender.clone();
+    resign_signal(&mut envelope, &key);
+
+    // A same-principal local account is not evidence for the remote AccountId.
+    let (local_alice_token, _) =
+        seed_signal_sender_device(&destination, ALICE, DEVICE, "Local Alice").await;
+    let mut local_device = destination
+        .test_persistence()
+        .devices()
+        .get(fixture_actor_core_id(ALICE).as_str(), DEVICE)
+        .await
+        .unwrap()
+        .unwrap();
+    local_device.verification_state = "unverified".to_owned();
+    destination
+        .test_persistence()
+        .devices()
+        .put(&local_device)
+        .await
+        .unwrap();
+    assert!(
+        destination
+            .test_admit_outbound_signal(source.service_id(), &envelope)
+            .await
+            .is_err()
+    );
+    assert_ne!(
+        post_signal(destination.clone(), &local_alice_token, &envelope)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+
+    let mut local_result = post_signal(source.clone(), &alice_token, &envelope).await;
+    let status = local_result.status_code;
+    let local_body: Value = local_result.take_json().await.unwrap();
+    assert_eq!(
+        status,
+        Some(StatusCode::OK),
+        "source admission: {local_body}"
+    );
+    source
+        .test_admit_outbound_signal(destination.service_id(), &envelope)
+        .await
+        .unwrap();
+    let body = serde_json::json!({"realm_id": demo_realm_id(), "signals": [envelope]});
+    let mut response = post_peer_signal_value(&destination, body.clone()).await;
+    let status = response.status_code;
+    let outcome: Value = response.take_json().await.unwrap();
+    assert_eq!(status, Some(StatusCode::OK), "peer response: {outcome}");
+    assert_eq!(outcome, serde_json::json!({"accepted": true}));
+    assert_eq!(
+        signal_subscribe_envelopes(destination.clone(), &bob_token, 400).await,
+        vec![envelope.clone()]
+    );
+
+    // Semantic failures are opaque and never append or reach a live subscriber.
+    let mut invalid = Vec::new();
+    let mut digest = envelope.clone();
+    digest.proof.envelope_digest =
+        arkret_wire::Hash::new(format!("sha256:{}", "9".repeat(64))).unwrap();
+    invalid.push(digest);
+    let mut bad_jws = envelope.clone();
+    bad_jws.proof.jws = "AA..AA".to_owned();
+    invalid.push(bad_jws);
+    let mut wrong_station = envelope.clone();
+    wrong_station.sender_actor_id = fixture_account_actor(&destination, ALICE);
+    resign_signal(&mut wrong_station, &key);
+    invalid.push(wrong_station);
+    let mut service_sender = envelope.clone();
+    service_sender.sender_actor_id = arkret_wire::ActorId::service(source.service_core_id());
+    service_sender.proof.verification_method =
+        arkret_wire::DidUrl::new(format!("{SIGNAL_PEER_SOURCE_DID}#{DEVICE}")).unwrap();
+    signal_member(&destination, &service_sender.sender_actor_id);
+    resign_signal(&mut service_sender, &key);
+    invalid.push(service_sender);
+    let mut expired = envelope.clone();
+    expired.sent_at = expired.sent_at - ChronoDuration::seconds(60);
+    expired.expires_at = expired.expires_at - ChronoDuration::seconds(60);
+    expired.proof.created_at = expired.sent_at;
+    resign_signal(&mut expired, &key);
+    invalid.push(expired);
+    let mut stale_epoch = envelope.clone();
+    stale_epoch.encrypted_payload.epoch = 1;
+    resign_signal(&mut stale_epoch, &key);
+    invalid.push(stale_epoch);
+    let mut unknown_state = envelope.clone();
+    unknown_state.encrypted_payload.key_ref.group_state_ref =
+        "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned();
+    resign_signal(&mut unknown_state, &key);
+    invalid.push(unknown_state);
+    let mut moderation = envelope.clone();
+    moderation.signal_class = arkret_wire::SignalClass::Moderation;
+    resign_signal(&mut moderation, &key);
+    invalid.push(moderation);
+    for rejected in invalid {
+        let mut response = post_peer_signal_value(
+            &destination,
+            serde_json::json!({
+                "realm_id": demo_realm_id(), "signals": [rejected],
+            }),
+        )
+        .await;
+        assert_eq!(response.status_code, Some(StatusCode::OK));
+        assert_eq!(response.take_json::<Value>().await.unwrap(), outcome);
+    }
+    assert!(
+        signal_subscribe_envelopes(destination.clone(), &bob_token, 400)
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        destination
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(demo_realm_id())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let mut malformed = body.clone();
+    malformed["signals"][0]["unexpected"] = serde_json::json!(true);
+    assert_ne!(
+        post_peer_signal_value(&destination, malformed)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+    let mut large = envelope.clone();
+    large.encrypted_payload.ciphertext = URL_SAFE_NO_PAD.encode(vec![0u8; 40_000]);
+    let mut oversized = post_peer_signal_value(
+        &destination,
+        serde_json::json!({
+            "realm_id": demo_realm_id(), "signals": vec![large; 20],
+        }),
+    )
+    .await;
+    let oversized_status = oversized.status_code;
+    let oversized_body = oversized.take_json::<Value>().await.unwrap();
+    assert_eq!(
+        oversized_status,
+        Some(StatusCode::PAYLOAD_TOO_LARGE),
+        "{oversized_body}"
+    );
+    assert_eq!(problem_code(&oversized_body), "payload_too_large");
+
+    // A malicious authenticated source can forward a well-formed forged
+    // producer signature. Transport delivery is not device authentication;
+    // recipient verification, tested in the client, must reject this proof.
+    let mut forged = envelope.clone();
+    forged.encrypted_payload.nonce = URL_SAFE_NO_PAD.encode([1u8; 12]);
+    resign_signal(&mut forged, &SigningKey::from_bytes(&[99u8; 32]));
+    let mut response = post_peer_signal_value(
+        &destination,
+        serde_json::json!({
+            "realm_id": demo_realm_id(), "signals": [forged],
+        }),
+    )
+    .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    assert_eq!(response.take_json::<Value>().await.unwrap(), outcome);
+    assert_eq!(
+        signal_subscribe_envelopes(destination.clone(), &bob_token, 400).await,
+        vec![forged]
+    );
+
+    // An empty local recipient set has the identical opaque response and no
+    // relay append. The sender's remote account must not count as local.
+    for membership in destination.test_projection().lock().members.values_mut() {
+        if membership.realm_id == demo_realm_id()
+            && serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                .is_ok_and(|actor| actor.route_service_id().as_str() == destination.service_id())
+        {
+            membership.state = "leave".to_owned();
+        }
+    }
+    let mut no_recipient = envelope.clone();
+    no_recipient.encrypted_payload.nonce = URL_SAFE_NO_PAD.encode([2u8; 12]);
+    resign_signal(&mut no_recipient, &key);
+    let mut response = post_peer_signal_value(
+        &destination,
+        serde_json::json!({
+            "realm_id": demo_realm_id(), "signals": [no_recipient],
+        }),
+    )
+    .await;
+    assert_eq!(response.status_code, Some(StatusCode::OK));
+    assert_eq!(response.take_json::<Value>().await.unwrap(), outcome);
+    assert_eq!(
+        destination
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(demo_realm_id())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+
+    let member_key = (demo_realm_id().to_owned(), sender.to_string());
+    source
+        .test_projection()
+        .lock()
+        .members
+        .get_mut(&member_key)
+        .unwrap()
+        .state = "leave".to_owned();
+    assert!(
+        source
+            .test_admit_outbound_signal(destination.service_id(), &envelope)
+            .await
+            .unwrap_err()
+            .message
+            .contains("current member")
+    );
+    source
+        .test_projection()
+        .lock()
+        .members
+        .get_mut(&member_key)
+        .unwrap()
+        .state = "join".to_owned();
+    source.test_projection().lock().pending_mls_removals.push(
+        soland_domain::reducer::MlsRemoveObligation {
+            realm_id: demo_realm_id().to_owned(),
+            circle_id: None,
+            mls_group_ref: Some(scope.canonical_mls_group_id().unwrap()),
+            actor_id: sender.to_string(),
+            device_id: Some(DEVICE.to_owned()),
+            membership_frontier: Vec::new(),
+            trigger_membership: "leave".to_owned(),
+            triggered_at: Utc::now(),
+        },
+    );
+    assert!(
+        source
+            .test_admit_outbound_signal(destination.service_id(), &envelope)
+            .await
+            .unwrap_err()
+            .message
+            .contains("pending removal")
+    );
+    source.test_projection().lock().pending_mls_removals.clear();
+
+    // Dispatch revisits current device authority; an old ingress result cannot authorize a send.
+    let mut device = source
+        .test_persistence()
+        .devices()
+        .get(fixture_actor_core_id(ALICE).as_str(), DEVICE)
+        .await
+        .unwrap()
+        .unwrap();
+    let current_time = Utc::now();
+    for (not_before, expires_at) in [
+        (current_time + ChronoDuration::minutes(1), None),
+        (
+            current_time - ChronoDuration::minutes(2),
+            Some(current_time - ChronoDuration::minutes(1)),
+        ),
+    ] {
+        set_test_device_authorization_window(&source, ALICE, DEVICE, &key, not_before, expires_at)
+            .await;
+        assert!(
+            source
+                .test_admit_outbound_signal(destination.service_id(), &envelope)
+                .await
+                .unwrap_err()
+                .message
+                .contains("not currently effective")
+        );
+        let mut rejected = post_signal(source.clone(), &alice_token, &envelope).await;
+        assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
+        assert_eq!(
+            rejected.take_json::<Value>().await.unwrap()["reason_code"],
+            "proof_invalid"
+        );
+    }
+    source
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
+    for field in ["device_authorize_event_id", "authorized_generation_ref"] {
+        let mut incomplete = device.clone();
+        incomplete.payload.as_object_mut().unwrap().remove(field);
+        source
+            .test_persistence()
+            .devices()
+            .put(&incomplete)
+            .await
+            .unwrap();
+        assert!(
+            source
+                .test_admit_outbound_signal(destination.service_id(), &envelope)
+                .await
+                .is_err(),
+            "source cannot accept a device row without {field}"
+        );
+    }
+    source
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
+    device.revoked_at = Some(Utc::now());
+    source
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
+    assert!(
+        source
+            .test_admit_outbound_signal(destination.service_id(), &envelope)
+            .await
+            .unwrap_err()
+            .message
+            .contains("not active and authorized")
+    );
+    assert_ne!(
+        post_signal(source.clone(), &alice_token, &envelope)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+    source
+        .test_persistence()
+        .mls_commits()
+        .mark_frontier_contested(
+            &serde_json::to_value(&scope).unwrap(),
+            &scope.canonical_mls_group_id().unwrap(),
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(
+        source
+            .test_admit_outbound_signal(destination.service_id(), &envelope)
+            .await
+            .unwrap_err()
+            .message
+            .contains("contested")
+    );
+}
 
 fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(

@@ -318,6 +318,86 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     pub authorized_generation_ref: Option<u64>,
 }
 
+/// Resolve the exact current accepted authorization, not merely an Active
+/// directory label. Consumers must not extend this authority with a session
+/// lifetime, a cached directory result, or a newly issued attestation TTL.
+pub(crate) async fn current_device_authorization(
+    state: &AppState,
+    actor: &arkret_wire::ActorId,
+    device_id: &arkret_wire::DeviceId,
+    facet: &DeviceSigningDirectoryFacet,
+) -> Result<Option<DeviceAuthorizePayload>, soland_services::ServiceError> {
+    if !actor
+        .as_account_id()
+        .is_some_and(|account| account.station_id.as_str() == state.service_id())
+        || facet.status != DeviceStatus::Active
+    {
+        return Ok(None);
+    }
+    let (Some(event_id), Some(generation)) = (
+        facet.device_authorize_event_id.as_ref(),
+        facet
+            .authorized_generation_ref
+            .filter(|generation| *generation >= 1),
+    ) else {
+        return Ok(None);
+    };
+    let Some(event) = state
+        .event_queries()
+        .canonical_event(event_id.as_str())
+        .await
+        .map_err(|error| soland_services::ServiceError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Some(payload) = event.envelope.get("payload") else {
+        return Ok(None);
+    };
+    let Ok(authorization) = serde_json::from_value::<DeviceAuthorizePayload>(payload.clone())
+    else {
+        return Ok(None);
+    };
+    if authorization.principal_id != *actor.signing_principal_id()
+        || authorization.device_id != *device_id
+    {
+        return Ok(None);
+    }
+    // Resolve all authority material before the final current-state gate;
+    // no unrelated asynchronous lookup may extend its freshness window.
+    let Ok(selector) = super::device_generation::active_device_revocation_gate_selector(
+        state,
+        actor.signing_principal_id().as_str(),
+        device_id.as_str(),
+    )
+    .await
+    else {
+        return Ok(None);
+    };
+    if event_id.as_str() != selector.target_device_authorize_event_id
+        || generation != selector.target_device_generation_ref
+        || state
+            .persistence()
+            .device_revocation_gate_status(&selector)
+            .await?
+            != soland_storage::DeviceRevocationGateStatus::Active
+        || !device_authorization_is_effective_at(&authorization, chrono::Utc::now())
+    {
+        return Ok(None);
+    }
+    Ok(Some(authorization))
+}
+
+pub(crate) fn device_authorization_is_effective_at(
+    authorization: &DeviceAuthorizePayload,
+    at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    authorization.not_before <= at
+        && authorization
+            .expires_at
+            .flatten()
+            .is_none_or(|expiry| at < expiry)
+}
+
 #[derive(Debug, Default, serde::Deserialize)]
 pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
@@ -467,6 +547,50 @@ mod tests {
     use serde_json::json;
 
     use super::{device_quorum_method_matches, *};
+
+    #[test]
+    fn device_authorization_time_window_has_exact_inclusive_start_and_exclusive_expiry() {
+        let start = chrono::DateTime::parse_from_rfc3339("2026-09-01T00:00:00.000Z")
+            .unwrap()
+            .to_utc();
+        let mut authorization: DeviceAuthorizePayload = serde_json::from_value(json!({
+            "principal_id": "ak:did_core:web:alice.example",
+            "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            "device_public_key_did": "did:key:z6MkFixture",
+            "hpke_key": "z6LSFixture",
+            "algorithms": ["ak.mls.v1"],
+            "authorized_by": "ak:did_core:web:alice.example",
+            "not_before": "2026-09-01T00:00:00.000Z",
+            "authorization_binding_kind": "registration_anchor",
+            "device_signature": "c2ln"
+        }))
+        .unwrap();
+        assert!(!device_authorization_is_effective_at(
+            &authorization,
+            start - chrono::Duration::milliseconds(1)
+        ));
+        assert!(device_authorization_is_effective_at(&authorization, start));
+        assert!(device_authorization_is_effective_at(
+            &authorization,
+            start + chrono::Duration::days(1)
+        ));
+        authorization.expires_at = Some(None);
+        assert!(device_authorization_is_effective_at(&authorization, start));
+        let expiry = start + chrono::Duration::seconds(1);
+        authorization.expires_at = Some(Some(expiry));
+        assert!(device_authorization_is_effective_at(
+            &authorization,
+            expiry - chrono::Duration::milliseconds(1)
+        ));
+        assert!(!device_authorization_is_effective_at(
+            &authorization,
+            expiry
+        ));
+        assert!(!device_authorization_is_effective_at(
+            &authorization,
+            expiry + chrono::Duration::milliseconds(1)
+        ));
+    }
 
     fn signed_welcome_fixture(
         actor: ActorId,

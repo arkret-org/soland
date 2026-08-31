@@ -600,7 +600,12 @@ fn signed_federation_request_headers(
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| trust_domain_from_service_id(origin_did.as_str()));
     let created = chrono::Utc::now().timestamp();
-    let expires = created + 300;
+    let expires = created
+        + if target_uri.ends_with("/_arkret/peer/signal") {
+            5
+        } else {
+            300
+        };
     let keyid = format!("{origin_did}#federation-fanout-key");
     let operation = reqwest::Url::parse(target_uri)
         .ok()
@@ -1869,6 +1874,65 @@ pub(crate) async fn project_test_authorized_device(
     event_id
 }
 
+/// Replace the accepted authorization fixture with a newly content-bound
+/// Event and update its derived directory reference, preserving its key.
+pub(crate) async fn set_test_device_authorization_window(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    signing_key: &SigningKey,
+    not_before: chrono::DateTime<chrono::Utc>,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
+) {
+    let persistence = state.test_persistence();
+    let mut device = persistence
+        .devices()
+        .get(fixture_actor_core_id(actor).as_str(), device_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let previous = persistence
+        .events()
+        .get(
+            device.payload["device_authorize_event_id"]
+                .as_str()
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let mut event: arkret_wire::Event = serde_json::from_value(previous.envelope).unwrap();
+    event.proofs.clear();
+    event.payload.insert(
+        "not_before".to_owned(),
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(not_before)),
+    );
+    event.payload.insert(
+        "expires_at".to_owned(),
+        serde_json::json!(expires_at.map(arkret_canonical::format_timestamp_canonical)),
+    );
+    event
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let event = soland_test_support::signed_event::sign_fixture_event(
+        event,
+        actor,
+        device_id,
+        signing_key.to_bytes(),
+    );
+    persistence
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &event,
+            Some(event.realm_id.as_str()),
+            chrono::Utc::now(),
+        ))
+        .await
+        .unwrap();
+    device.payload["device_authorize_event_id"] = serde_json::json!(event.event_id);
+    persistence.devices().put(&device).await.unwrap();
+}
+
 // ── Signal Extension rail (`sync/signal.md`) test fixtures ──────────────────
 //
 // `POST /_arkret/self/signal` admits an encrypted-only `SignalEnvelope`. There
@@ -2184,7 +2248,90 @@ pub(crate) async fn seed_signal_basis_seal(
     realm_id: &str,
     subject: &str,
 ) -> arkret_wire::SealId {
-    seed_test_realm_basis_seal(state, realm_id, subject).await
+    let seal = seed_test_realm_basis_seal(state, realm_id, subject).await;
+    seed_signal_mls_basis(
+        state,
+        &arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(realm_id).unwrap(),
+        },
+    )
+    .await;
+    seal
+}
+
+/// Accepted outer MLS state for transport tests; no server-side leaf tracker.
+pub(crate) fn signal_mls_genesis(scope: &arkret_wire::ScopeRef) -> arkret_wire::Event {
+    let group_id = scope.canonical_mls_group_id().unwrap();
+    let mut binding = serde_json::json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": scope.realm_id(),
+        "effective_scope": scope,
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "security_frontier_digest": format!("sha256:{}", "2".repeat(64)),
+        "content_scheme": "mls_rfc9420",
+        "binding_profile": arkret_wire::ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": "ak.reducer.core.v1"
+    });
+    if let Some(circle_id) = scope.circle_id() {
+        binding["circle_id"] = serde_json::json!(circle_id);
+    }
+    arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::MlsGenesis.as_str(),
+        scope.clone(),
+        fixture_actor_core_id("did:web:alice.example"),
+        soland_test_support::fixture_station_id(),
+        0,
+        arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
+        serde_json::json!({
+            "mls_group_id": group_id,
+            "effective_scope": scope,
+            "epoch": 0,
+            "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
+            "group_info_ref": format!("ak:blob:sha256:{}", "3".repeat(64)),
+            "group_info_digest": format!("sha256:{}", "3".repeat(64)),
+            "ratchet_tree_ref": format!("ak:blob:sha256:{}", "4".repeat(64)),
+            "ratchet_tree_digest": format!("sha256:{}", "4".repeat(64)),
+            "governance_binding": binding,
+            "created_at": "2026-08-31T00:00:00.000Z"
+        }),
+        chrono::DateTime::parse_from_rfc3339("2026-08-31T00:00:00.000Z")
+            .unwrap()
+            .to_utc(),
+    )
+    .unwrap()
+}
+
+pub(crate) async fn seed_signal_mls_basis(state: &AppState, scope: &arkret_wire::ScopeRef) {
+    let event = signal_mls_genesis(scope);
+    let group_id = scope.canonical_mls_group_id().unwrap();
+    let scope_value = serde_json::to_value(scope).unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &event,
+            Some(scope.realm_id().as_str()),
+            event.created_at,
+        ))
+        .await
+        .unwrap();
+    state
+        .test_persistence()
+        .mls_commits()
+        .initialize_genesis(soland_storage::MlsCommitGenesis {
+            effective_scope: &scope_value,
+            group_id: &group_id,
+            leader_actor_id: &event.actor_id.to_string(),
+            creator_device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            genesis_event_ref: event.event_id.as_str(),
+            governance_binding: &event.payload["governance_binding"],
+            committed_at: event.created_at.timestamp(),
+        })
+        .await
+        .unwrap();
 }
 
 /// A bearer session plus the device signing key the Signal proof is made with.
@@ -2200,7 +2347,68 @@ pub(crate) async fn seed_signal_sender_device(
 ) -> (String, SigningKey) {
     let token = dev_token_for_device(state.clone(), actor, device_id, display_name).await;
     let signing_key = test_ephemeral_device_signing_key(actor, device_id);
-    project_test_authorized_device(state, actor, device_id, &signing_key).await;
+    let authorization_event_id =
+        project_test_authorized_device(state, actor, device_id, &signing_key).await;
+    let account_actor = fixture_account_actor(state, actor);
+    let persistence = state.test_persistence();
+    let authorize = persistence
+        .events()
+        .get(&authorization_event_id)
+        .await
+        .unwrap()
+        .expect("Signal fixture persists its accepted authorization Event");
+    assert_eq!(authorize.actor_id, account_actor.to_string());
+    assert_eq!(
+        authorize.kind,
+        arkret_wire::EventKind::DeviceAuthorize.as_str()
+    );
+    assert_eq!(authorize.envelope["payload"]["device_id"], device_id);
+    let predecessors = authorize.envelope["prev_refs"].as_array().unwrap();
+    assert_eq!(predecessors.len(), 1);
+    let genesis = persistence
+        .events()
+        .get(predecessors[0].as_str().unwrap())
+        .await
+        .unwrap()
+        .expect("Signal fixture persists the founding PCR genesis");
+    assert_eq!(genesis.actor_id, account_actor.to_string());
+    assert_eq!(genesis.kind, arkret_wire::EventKind::RealmCreate.as_str());
+    assert_eq!(
+        genesis.envelope["payload"]["object"]["purpose"],
+        "principal_control"
+    );
+    assert!(
+        genesis.envelope["refs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reference| reference["role"] == "did_inception")
+    );
+    let device = persistence
+        .devices()
+        .get(account_actor.signing_principal_id().as_str(), device_id)
+        .await
+        .unwrap()
+        .expect("Signal fixture projects its authorized device");
+    assert_eq!(
+        device.payload["device_authorize_event_id"],
+        authorization_event_id
+    );
+    assert_eq!(device.payload["authorized_generation_ref"], 1);
+    assert_eq!(
+        persistence
+            .device_revocations()
+            .gate_status(&soland_storage::DeviceRevocationGateSelector {
+                principal_id: account_actor.signing_principal_id().clone(),
+                station_id: state.service_core_id(),
+                device_id: device_id.to_owned(),
+                target_device_authorize_event_id: authorization_event_id,
+                target_device_generation_ref: 1,
+            })
+            .await
+            .unwrap(),
+        soland_storage::DeviceRevocationGateStatus::Active
+    );
     (token, signing_key)
 }
 
@@ -2230,6 +2438,11 @@ pub(crate) fn signed_signal_envelope(
     // the complete AccountId is independently bound into AAD and the proof.
     let verification_method = arkret_wire::DidUrl::new(format!("{sender_actor}#{sender_device}"))
         .expect("fixture verification method is a DID URL");
+    let group_state_ref = signal_mls_genesis(&scope_ref).event_id.to_string();
+    // A wire-valid AEAD ciphertext includes at least a 16-byte tag. Preserve
+    // longer payload fixtures (including decoded JSON), padding short labels.
+    let mut opaque_ciphertext = opaque_payload.as_bytes().to_vec();
+    opaque_ciphertext.resize(opaque_ciphertext.len().max(16), 0);
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
         scope_ref,
@@ -2246,13 +2459,13 @@ pub(crate) fn signed_signal_envelope(
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:AdIAmf-J5rIPxEomGXwJblJdhNg-TllVN8uRTI85EUIM".to_owned(),
+                group_state_ref,
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
-            epoch: 7,
+            epoch: 0,
             nonce: "AAAAAAAAAAAAAAAA".to_owned(),
-            ciphertext: URL_SAFE_NO_PAD.encode(opaque_payload.as_bytes()),
+            ciphertext: URL_SAFE_NO_PAD.encode(opaque_ciphertext),
             aad_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
         },

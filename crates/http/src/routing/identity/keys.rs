@@ -235,6 +235,21 @@ async fn attested_device_record(
     if !matches!(facet.status, DeviceStatus::Active) {
         return Ok(None);
     }
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(AppError::internal)?;
+    let Some(authorization) = super::device_signing::current_device_authorization(
+        state,
+        &arkret_wire::ActorId::account(account_id.clone()),
+        device_id,
+        &facet,
+    )
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    else {
+        return Ok(None);
+    };
     let (
         Some(signing_key_did),
         Some(hpke_key),
@@ -265,10 +280,15 @@ async fn attested_device_record(
         })?;
 
     let attested_at = now();
-    let (_, verification_method) = state
-        .current_service_receipt_binding()
-        .await
-        .map_err(AppError::internal)?;
+    if !super::device_signing::device_authorization_is_effective_at(&authorization, attested_at) {
+        return Ok(None);
+    }
+    let default_expiry =
+        attested_at + chrono::Duration::seconds(DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS);
+    let expires_at = authorization
+        .expires_at
+        .flatten()
+        .map_or(default_expiry, |expiry| expiry.min(default_expiry));
     let attestation = arkret_signatures::device_projection::sign_device_projection_attestation(
         arkret_models_crypto::DeviceProjectionAttestationCore {
             account_id: account_id.clone(),
@@ -279,8 +299,7 @@ async fn attested_device_record(
             authorized_generation_ref,
             device_status: DeviceStatus::Active,
             attested_at,
-            expires_at: attested_at
-                + chrono::Duration::seconds(DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS),
+            expires_at,
         },
         verification_method,
         state.notary_signing_key().as_ref(),

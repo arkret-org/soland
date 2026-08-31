@@ -362,6 +362,13 @@ pub(crate) async fn relay_signal_once(
         state.config().development_mode,
         Duration::from_secs(5),
     )?;
+    // Resolution and queueing may outlive the ingress authorization. Never
+    // sign a stale ordinary-device grant, membership, MLS basis, or expired Signal.
+    for envelope in &request.signals {
+        crate::routing::events::sync::signal::admit_outbound_signal(state, peer_id, envelope)
+            .await
+            .map_err(|error| error.to_string())?;
+    }
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(
         reqwest::header::CONTENT_TYPE,

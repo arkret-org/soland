@@ -743,6 +743,14 @@ async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined_body() {
     let circle_id = "ak:circle:AbKyOtwLpbgxFjQKemj8jLsHIcHewEJYmageMo-mkx7R";
     // The Circle exists in the parent Realm but Alice is not a member of it.
     seed_test_circle(&state, demo_realm_id(), circle_id, &["did:web:bob.example"]);
+    seed_signal_mls_basis(
+        &state,
+        &arkret_wire::ScopeRef::Circle {
+            realm_id: RealmId::new(demo_realm_id()).unwrap(),
+            circle_id: arkret_identifiers::CircleId::new(circle_id).unwrap(),
+        },
+    )
+    .await;
 
     let denied = post_signal(
         state.clone(),
@@ -1107,6 +1115,14 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
     // Alice and Bob share a Circle; Carol does not.
     let circle_id = "ak:circle:AfCTSVBDc4fkPpvjN8PIuTeDXjkUZrniW8KdpconEUVE";
     seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, bob]);
+    seed_signal_mls_basis(
+        &state,
+        &arkret_wire::ScopeRef::Circle {
+            realm_id: RealmId::new(demo_realm_id()).unwrap(),
+            circle_id: arkret_identifiers::CircleId::new(circle_id).unwrap(),
+        },
+    )
+    .await;
     let accepted = post_signal(
         state.clone(),
         &alice_token,

@@ -741,6 +741,26 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
             "ak.peer.signal.command.relay.v1 forbids Idempotency-Key",
         ));
     }
+    // Preserve the Signal byte-ceiling code before the shared canonical JSON
+    // verifier can classify its generic ingress budget as a schema failure.
+    let maximum_body_bytes =
+        arkret_wire::MAX_SIGNAL_RELAY_CANONICAL_BODY_BYTES.min(req.secure_max_size());
+    let payload = req
+        .payload_with_max_size(maximum_body_bytes)
+        .await
+        .map_err(|error| match error {
+            salvo::http::ParseError::PayloadTooLarge => AppError::new(
+                soland_http::error::ErrorCode::PayloadTooLarge,
+                "Signal relay request exceeds the body byte ceiling",
+            ),
+            _ => AppError::json_invalid("unable to read the Signal relay request body"),
+        })?;
+    if payload.len() > maximum_body_bytes {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::PayloadTooLarge,
+            "Signal relay request exceeds the body byte ceiling",
+        ));
+    }
     validate_peer_request(state, req, true).await?;
     validate_signal_signature_window(req)?;
     let request = parse_json_body::<SignalRelayRequest>(
@@ -748,9 +768,16 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
         "invalid ak.peer.signal.command.relay.v1 request body",
     )
     .await?;
-    request
-        .validate()
-        .map_err(|error| schema_violation(error.to_string()))?;
+    request.validate().map_err(|error| {
+        if error.error_code() == Some(arkret_wire::ErrorCode::PayloadTooLarge) {
+            AppError::new(
+                soland_http::error::ErrorCode::PayloadTooLarge,
+                error.to_string(),
+            )
+        } else {
+            schema_violation(error.to_string())
+        }
+    })?;
     let source_id = source_id_from_request(req)?;
     for envelope in request.signals {
         if let Err(error) =
