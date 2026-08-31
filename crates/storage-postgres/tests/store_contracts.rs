@@ -2280,7 +2280,10 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     let restarted_store = PgMlsKeyPackageStore { pool };
     let claim_request_id = format!("local-last-resort:{namespace}-01");
     let replayed = restarted_store
-        .get_peer_claim(&format!("did:web:{namespace}.example"), &claim_request_id)
+        .get_peer_claim(
+            &format!("ak:did_core:web:{namespace}.example"),
+            &claim_request_id,
+        )
         .await
         .expect("reload last-resort ledger after store restart")
         .expect("last-resort ledger survives store restart");
@@ -2292,7 +2295,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     );
     let expired = restarted_store
         .get_peer_claim(
-            &format!("did:web:{namespace}.example"),
+            &format!("ak:did_core:web:{namespace}.example"),
             &format!("local-last-resort:{namespace}-02"),
         )
         .await

@@ -1,5 +1,14 @@
 use super::*;
 
+pub(super) fn authorization_event_actor_matches_account(
+    actor_key: &str,
+    account_id: &AccountId,
+) -> bool {
+    arkret_wire::ActorId::account(account_id.clone())
+        .canonical_key()
+        .is_ok_and(|expected| expected == actor_key)
+}
+
 pub(super) async fn verify_recovery_policy_auth_signature(
     state: &AppState,
     payload: &Value,
@@ -245,7 +254,7 @@ pub(super) async fn verify_recovery_auth_signature(
         .ok_or_else(|| {
             recovery_signature_error("recovery authority authorization Event is unavailable")
         })?;
-    if authorize_event.actor_id != principal_id
+    if !authorization_event_actor_matches_account(&authorize_event.actor_id, &authority_key)
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
     {
@@ -289,4 +298,34 @@ pub(super) async fn verify_recovery_auth_signature(
             crate::metrics::record_digest_mismatch("recovery_policy_device_digest");
             recovery_signature_error("recovery policy authority signature verification failed")
         })
+}
+
+#[cfg(test)]
+mod account_lineage_tests {
+    use super::*;
+
+    #[test]
+    fn device_authorization_requires_the_complete_account_actor() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let station = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let account = AccountId::new(principal.clone(), station);
+        let expected = arkret_wire::ActorId::account(account.clone());
+        assert!(authorization_event_actor_matches_account(
+            &expected.canonical_key().unwrap(),
+            &account,
+        ));
+        let foreign = arkret_wire::ActorId::account(AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        for key in [
+            foreign.canonical_key().unwrap(),
+            arkret_wire::ActorId::service(principal.clone())
+                .canonical_key()
+                .unwrap(),
+            principal.to_string(),
+        ] {
+            assert!(!authorization_event_actor_matches_account(&key, &account));
+        }
+    }
 }

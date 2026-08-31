@@ -1166,8 +1166,17 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     let join_rule = serde_json::to_value(&bootstrap_unit[3]).unwrap();
     let history_access = serde_json::to_value(&bootstrap_unit[4]).unwrap();
     let discovery = serde_json::to_value(&bootstrap_unit[5]).unwrap();
-    let creator_membership = serde_json::to_value(&bootstrap_unit[6]).unwrap();
-    let member_state = serde_json::to_value(&bootstrap_unit[7]).unwrap();
+    assert_eq!(
+        bootstrap_unit.len(),
+        7,
+        "ordinary founding unit has one explicit founder join"
+    );
+    let member_state = serde_json::to_value(&bootstrap_unit[6]).unwrap();
+    let actor_key = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        actor_core.clone(),
+        state.service_core_id(),
+    ))
+    .to_string();
 
     // The old shape of this case — a signed producer effect disagreeing with its
     // own payload — cannot exist in v1: there is no producer `effects[]` for the
@@ -1190,7 +1199,6 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         join_rule.clone(),
         history_access.clone(),
         discovery.clone(),
-        creator_membership.clone(),
         malformed_member_state,
     ]);
     let mut mismatch_response = TestClient::post("http://server/_arkret/self/events")
@@ -1223,7 +1231,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         state
             .test_projection()
             .lock()
-            .member(&realm_id, actor_core.as_str())
+            .member(&realm_id, &actor_key)
             .is_none(),
         "rejected bootstrap must leave no creator membership projection"
     );
@@ -1238,7 +1246,6 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
                 join_rule.clone(),
                 history_access.clone(),
                 discovery.clone(),
-                creator_membership.clone(),
                 member_state.clone()
             ])
         }))
@@ -1253,12 +1260,12 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     );
     assert_eq!(body["status"], "accepted");
     assert_eq!(body["accepted"][0], event["event_id"]);
-    assert_eq!(body["accepted"][7], member_state["event_id"]);
+    assert_eq!(body["accepted"][6], member_state["event_id"]);
     assert!(
         state
             .test_projection()
             .lock()
-            .member(&realm_id, actor_core.as_str())
+            .member(&realm_id, &actor_key)
             .is_some_and(|member| member.state == "join")
     );
     {
@@ -1395,7 +1402,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         restarted
             .test_projection()
             .lock()
-            .member(&realm_id, actor_core.as_str())
+            .member(&realm_id, &actor_key)
             .is_some_and(|member| member.state == "join"),
         "restart must rebuild creator membership from canonical create"
     );

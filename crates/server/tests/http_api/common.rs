@@ -882,12 +882,6 @@ pub(crate) async fn seed_test_realm(
         &Did::new(owner.to_owned()).expect("fixture realm owner DID"),
     )
     .expect("fixture realm owner core DID");
-    let recipient_id =
-        DidCoreId::new(state.service_id().clone()).expect("fixture recipient service core DID");
-    let current_record_url = format!(
-        "https://soland.local{}",
-        arkret_models_identity::canonical_service_current_record_path(&recipient_id)
-    );
 
     // The private invite delivery token is transport material, not part of the
     // Invite object (`governance-objects.md` §5.3), so it is returned to the
@@ -922,8 +916,14 @@ pub(crate) async fn seed_test_realm(
             .put(RealmInviteRecord {
                 invite_id,
                 realm_id: realm_id.clone(),
-                inviter_id: owner_core.to_string(),
-                invitee_id: Some(invitee_core.to_string()),
+                inviter_id: arkret_wire::AccountId::new(
+                    owner_core.clone(),
+                    state.service_core_id(),
+                )
+                .to_string(),
+                invitee_id: Some(
+                    arkret_wire::AccountId::new(invitee_core, state.service_core_id()).to_string(),
+                ),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_invite: None,
                 invite_token: invite_token.clone(),
@@ -942,7 +942,7 @@ pub(crate) async fn seed_test_realm(
         "ok": true,
         "realm_id": realm_id,
         "owner_id": owner,
-        "members": [{"did": owner}],
+        "members": [{"actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(owner_core, state.service_core_id()))}],
         "seal_basis": seal_basis,
         "deleted": false,
         "seeded_invite_tokens": seeded_invite_tokens
@@ -953,7 +953,11 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
     let member_core = arkret_wire::project_did_to_core_id(&member_did).unwrap();
-    let member_core_string = member_core.to_string();
+    let member_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        member_core.clone(),
+        state.service_core_id(),
+    ));
+    let member_core_string = member_actor.to_string();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
     )
@@ -961,7 +965,7 @@ pub(crate) fn add_test_realm_member(state: &AppState, realm_id: &str, member: &s
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.insert(member_core);
-        let members = realm_member_roster(&entry);
+        let members = realm_member_roster(state, &entry);
         realms.upsert(entry);
         drop(realms);
         state.test_projection().lock().members.insert(
@@ -993,11 +997,15 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     let typed_realm_id = RealmId::new(realm_id.to_owned()).unwrap();
     let member_did = Did::new(member.to_owned()).unwrap();
     let member_core = arkret_wire::project_did_to_core_id(&member_did).unwrap();
-    let member_core_string = member_core.to_string();
+    let member_core_string = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        member_core.clone(),
+        state.service_core_id(),
+    ))
+    .to_string();
     let mut realms = state.test_realms().lock();
     if let Some(mut entry) = realms.get(&typed_realm_id).cloned() {
         entry.members.remove(&member_core);
-        let members = realm_member_roster(&entry);
+        let members = realm_member_roster(state, &entry);
         realms.upsert(entry);
         drop(realms);
         state
@@ -1016,20 +1024,18 @@ pub(crate) fn remove_test_realm_member(state: &AppState, realm_id: &str, member:
     }
 }
 
-fn realm_member_roster(entry: &RealmDirectoryEntry) -> Vec<Value> {
-    // HDLREN-4/5 (arkret-spec @ 7157ee8) — roster rows MUST NOT carry
-    // `handle` / `handle_uri` directly; identity is resolved through the
-    // `ak.member.identity.update` events surfaced via
-    // `MemberRosterEntry.identity_event_ids[]`. The test helper now only
-    // emits `{did}` to match the spec wire shape.
+fn realm_member_roster(state: &AppState, entry: &RealmDirectoryEntry) -> Vec<Value> {
+    // This fixture creates local Accounts explicitly; the principal-only
+    // directory is not a membership authority or a remote Station locator.
     entry
         .members
         .iter()
-        .map(|did| {
-            let did_str = did.as_str();
-            let mut row = serde_json::Map::new();
-            row.insert("did".to_owned(), serde_json::json!(did_str));
-            Value::Object(row)
+        .map(|principal| {
+            serde_json::json!({
+                "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    principal.clone(), state.service_core_id()
+                ))
+            })
         })
         .collect()
 }
@@ -1364,18 +1370,16 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
         &Did::new(actor.to_owned()).expect("fixture frontier actor DID"),
     )
     .expect("fixture frontier actor core DID");
+    let frontier_request = arkret_models_collaboration::event_query::EventsFrontierRequestBody {
+        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            actor_core,
+            arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
+        )),
+        realm_id: Some(RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id")),
+    };
     let frontier_value: Value = TestClient::query("http://server/_arkret/self/events/frontier")
-        .json(
-            &arkret_models_collaboration::event_query::EventsFrontierRequestBody {
-                actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    actor_core,
-                    arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap(),
-                )),
-                realm_id: Some(
-                    RealmId::new(realm_id.to_owned()).expect("fixture frontier Realm id"),
-                ),
-            },
-        )
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&frontier_request).unwrap())
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
         .await
@@ -2123,7 +2127,14 @@ pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::Seal
         .await
         .expect("demo Realm bootstrap frontier")
         .into_iter()
-        .filter(|record| record.actor_id == fixture_actor_core_id("did:web:alice.example").as_str())
+        .filter(|record| {
+            record.actor_id
+                == arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    fixture_actor_core_id("did:web:alice.example"),
+                    state.service_core_id(),
+                ))
+                .to_string()
+        })
         .max_by_key(|record| record.actor_seq)
         .expect("demo Realm bootstrap has an Alice frontier Event")
         .event_id;
@@ -2294,19 +2305,35 @@ pub(crate) fn seed_test_circle(
             state_changed_at: None,
             created_by: members
                 .first()
-                .map(|member| fixture_actor_core_id(member).to_string())
+                .map(|member| {
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        fixture_actor_core_id(member),
+                        state.service_core_id(),
+                    ))
+                    .to_string()
+                })
                 .unwrap_or_default(),
             created_at: now,
             updated_by: None,
             updated_at: None,
             members: members
                 .iter()
-                .map(|member| fixture_actor_core_id(member).to_string())
+                .map(|member| {
+                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        fixture_actor_core_id(member),
+                        state.service_core_id(),
+                    ))
+                    .to_string()
+                })
                 .collect(),
         },
     );
     for member in members {
-        let member = fixture_actor_core_id(member).to_string();
+        let member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            fixture_actor_core_id(member),
+            state.service_core_id(),
+        ))
+        .to_string();
         projection.circle_memberships.insert(
             (circle_id.to_owned(), member.clone()),
             soland_domain::reducer::CircleMembershipState {

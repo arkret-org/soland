@@ -836,17 +836,22 @@ pub(crate) async fn post_recovery_policy(
         .realm_events_newest_first(&realm_id)
         .await
         .expect("recovery policy Realm events");
+    let account_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_core.clone(),
+        arkret_identifiers::DidCoreId::new(state.service_id().clone()).unwrap(),
+    ));
+    let actor_key = account_actor
+        .canonical_key()
+        .expect("recovery fixture actor key");
     let actor_seq = prior
         .iter()
-        .filter(|record| record.actor_id == principal_core.as_str())
+        .filter(|record| record.actor_id == actor_key)
         .map(|record| record.actor_seq)
         .max()
         .map_or(0, |seq| seq + 1);
     let prev_refs = prior
         .iter()
-        .filter(|record| {
-            record.actor_id == principal_core.as_str() && record.actor_seq + 1 == actor_seq
-        })
+        .filter(|record| record.actor_id == actor_key && record.actor_seq + 1 == actor_seq)
         .map(|record| arkret_wire::EventId::new(record.event_id.clone()).unwrap())
         .collect();
     let logical = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed) & 0xffff;

@@ -87,17 +87,19 @@ async fn signed_event_after_current_alice_frontier(state: &AppState, fixture_lab
             record.actor_id == account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string()
         })
         .collect::<Vec<_>>();
-    let actor_seq = actor_records
-        .iter()
-        .map(|record| record.actor_seq)
-        .max()
-        .expect("demo Realm has an Alice bootstrap frontier");
+    let actor_seq = actor_records.iter().map(|record| record.actor_seq).max();
     let frontier_event_ids = actor_records
         .iter()
-        .filter(|record| record.actor_seq == actor_seq)
+        .filter(|record| Some(record.actor_seq) == actor_seq)
         .map(|record| record.event_id.as_str())
         .collect();
-    signed_event_envelope(fixture_label, actor_seq + 1, frontier_event_ids)
+    // A remote Account starts its own chain; the local same-principal
+    // bootstrap is never an actor frontier for this Station.
+    signed_event_envelope(
+        fixture_label,
+        actor_seq.map_or(0, |seq| seq + 1),
+        frontier_event_ids,
+    )
 }
 /// Derived, never copied: the destination service id every federated request
 /// addresses is this deployment's own resolved identity.
@@ -595,7 +597,8 @@ async fn peer_events_frontier_exposes_current_sibling_heads_body() {
         );
     }
     assert_eq!(
-        frontier["actor_seq_upper_bounds"][fixture_actor_core_id("did:web:alice.example").as_str()],
+        frontier["actor_seq_upper_bounds"]
+            [account_actor("did:web:alice.example", PEER_SOURCE_ID).to_string()],
         42
     );
 }
@@ -669,7 +672,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain_body() {
     );
     // Re-author the envelope as an actor that is neither hosted by the source
     // service authority nor a member of the demo Realm's membership index.
-    event["actor_id"] = serde_json::json!(fixture_actor_core_id("did:web:intruder.evil").as_str());
+    event["actor_id"] = serde_json::json!(account_actor("did:web:intruder.evil", PEER_SOURCE_ID));
     event = resign_federation_event_as(event, "did:web:intruder.evil");
     let body = peer_submit_body(&event);
     let target = "https://server.test/_arkret/peer/events";
@@ -930,7 +933,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope_bo
     .await;
     let hidden_event_id = "ak:event:ATq9Ua5Klw2I-KCZo-6gt8LNi-Z31nyaZaZVZI1sMp5X";
     let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
-    event["actor_id"] = serde_json::json!(fixture_actor_core_id("did:web:alice.example").as_str());
+    event["actor_id"] = serde_json::json!(account_actor("did:web:alice.example", PEER_SOURCE_ID));
     // The Circle security scope of a message is the producer-SIGNED
     // `scope_ref` (`conformance/encoding.md` §6, and the spec's
     // `circle-scope-fixture.json`: message payloads carry no `scope_circle_id`
@@ -1369,8 +1372,7 @@ fn account_actor(principal_did: &str, station_id: &str) -> arkret_wire::ActorId 
 fn member_account_event(event_id: &str, member_did: &str, source_id: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
         "member_id": account_actor(member_did, source_id),
-        "membership": "join",
-        "role": "member"
+        "membership": "join"
     });
     event_envelope(
         event_id,
@@ -1384,10 +1386,8 @@ fn member_account_event(event_id: &str, member_did: &str, source_id: &str, seq: 
 fn circle_member_event(event_id: &str, member_did: &str, sender: &str, seq: u64) -> Value {
     let payload = serde_json::json!({
         "circle_id": TEST_CIRCLE_ID,
-        "actor": member_did,
-        "state": "active",
-        "sender": sender,
-        "manage_capability_verified": true
+        "member_id": account_actor(member_did, PEER_SOURCE_ID),
+        "membership": "join"
     });
     event_envelope(event_id, "ak.circle.member.state", sender, seq, payload)
 }
@@ -1436,12 +1436,33 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
         ))
         .await
         .unwrap();
+    if event.kind == arkret_wire::EventKind::MemberState {
+        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            arkret_identifiers::OperationId::new(new_prefixed_uuid7("ak:operation:")).unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        let effect = state
+            .test_projection()
+            .lock()
+            .restore_accepted_membership(&operation, received_at);
+        assert!(
+            !matches!(
+                effect,
+                soland_domain::reducer::ProjectionEffect::Rejected { .. }
+            ),
+            "accepted peer membership must project: {effect:?}"
+        );
+    }
 }
 
 fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
     let members = members
         .iter()
-        .map(|member| (*member).to_owned())
+        .map(|member| account_actor(member, PEER_SOURCE_ID).to_string())
         .collect::<BTreeSet<_>>();
     state.test_projection().lock().circles.insert(
         circle_id.to_owned(),
@@ -1463,7 +1484,7 @@ fn install_test_circle(state: &AppState, circle_id: &str, members: &[&str]) {
             mls_group_ref: None,
             state: CircleLifecycleState::Active,
             state_changed_at: None,
-            created_by: "ak:did_core:web:admin.example".to_owned(),
+            created_by: account_actor("did:web:admin.example", PEER_SOURCE_ID).to_string(),
             created_at: Utc::now() - ChronoDuration::seconds(30),
             updated_by: None,
             updated_at: None,

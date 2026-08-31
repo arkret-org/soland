@@ -1199,12 +1199,17 @@ fn canonical_wire_event_record(
     };
     let actor_id =
         arkret_identifiers::DidCoreId::new(actor_id.to_owned()).expect("contract actor core id");
-    let event = arkret_wire::test_support::raw_event_at(
-        event_kind,
+    let scope_ref = if event_kind == arkret_wire::EventKind::RealmCreate.as_str() {
+        arkret_wire::ScopeRef::RealmGenesis
+    } else {
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .expect("contract realm id"),
-        },
+        }
+    };
+    let event = arkret_wire::test_support::raw_event_at(
+        event_kind,
+        scope_ref,
         actor_id.clone(),
         actor_id.clone(),
         actor_seq,
@@ -1221,6 +1226,12 @@ fn canonical_wire_event_record(
         .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
         .expect("contract event digest");
     let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
+    let decoded: arkret_wire::Event =
+        serde_json::from_value(envelope.clone()).expect("contract Event decodes");
+    assert_eq!(
+        event.realm_id, decoded.realm_id,
+        "wire Realm identity must round-trip"
+    );
     let canonical_bytes = arkret_canonical::canonical_json_bytes(
         &event.digest_payload().expect("contract digest payload"),
     )
@@ -3520,18 +3531,22 @@ pub async fn assert_atomic_control_event_governance_dependency_contract(
     assert_eq!(stored[0].item, item);
 
     let rollback_realm_id = contract_realm_id(&format!("governance-rollback:{namespace}"));
+    // A genesis Realm is derived from the Event, not chosen by the caller.
+    // Give this independent rollback unit distinct canonical content.
+    let rollback_at = now + Duration::milliseconds(1);
     let rollback_record = canonical_wire_event_record(
         arkret_wire::EventKind::RealmCreate.as_str(),
         &principal_id,
         &rollback_realm_id,
         0,
-        now,
+        rollback_at,
     );
+    assert_ne!(record.event_id, rollback_record.event_id);
     let wrong_realm_id = contract_realm_id(&format!("governance-wrong:{namespace}"));
     let error = events
         .put_realm_bootstrap_batch_atomic(
             vec![rollback_record.clone()],
-            vec![contract_control_proposal_ack(&rollback_record, now)],
+            vec![contract_control_proposal_ack(&rollback_record, rollback_at)],
             vec![GovernanceDependencyWrite {
                 realm_id: RealmId::new(wrong_realm_id).expect("typed wrong Realm"),
                 source: GovernanceDependencySource::ControlEvent(
@@ -3585,11 +3600,9 @@ fn mls_keypackage_contract_row(
         keypackage_digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         owner_account_pk,
-        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId {
-            principal_id: DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
-            station_id: DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
-        })
-        .to_string(),
+        // The KeyPackage wire binds the cryptographic endpoint principal;
+        // the exact Station Account is carried by owner_account_pk above.
+        actor_id: format!("ak:did_core:web:{namespace}.example"),
         device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
         endpoint_verification_method: None,
         intended_realm_id: None,

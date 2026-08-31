@@ -619,7 +619,7 @@ pub async fn seed_event_derived_realm_genesis_event(
             &Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
         )
         .expect("fixture genesis actor projection"),
-        crate::fixture_station_id(),
+        state.service_core_id(),
         0,
         Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
         payload.clone(),
@@ -765,6 +765,56 @@ async fn persist_and_project_realm_genesis_event(
         assert!(
             projection.realm_authority_root(realm_id).is_some(),
             "fixture genesis must project its authority root, got {effect:?}"
+        );
+    }
+    // Persistence contains the validated, closed founding unit above. Its
+    // explicit policy facets and founder join must also reach the read model;
+    // the genesis Event itself intentionally no longer writes them.
+    for bootstrap_event in bootstrap_events.iter().skip(1) {
+        let writes = arkret_schema::project_registered_cell_writes(
+            bootstrap_event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture bootstrap registered projection");
+        let operation = arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            arkret_identifiers::OperationId::new(arkret_identifiers::new_prefixed_uuid7(
+                "ak:operation:",
+            ))
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            bootstrap_event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture bootstrap projected Operation");
+        let effect = match bootstrap_event.kind {
+            arkret_wire::EventKind::MemberState => {
+                if projection.member(realm_id, &actor_id.to_string()).is_some() {
+                    continue;
+                }
+                projection.apply_validated_realm_bootstrap_membership(&operation, &writes)
+            }
+            arkret_wire::EventKind::RealmPolicyBundle
+            | arkret_wire::EventKind::RealmJoinRule
+            | arkret_wire::EventKind::RealmDiscovery => {
+                if writes.iter().all(|write| {
+                    projection
+                        .realm_null_subject_cells
+                        .contains_key(&(realm_id.to_owned(), write.cell_id.to_string()))
+                }) {
+                    continue;
+                }
+                projection.apply_validated_realm_bootstrap_facet(&operation, &writes)
+            }
+            _ => projection.apply_projected(&operation, &writes, state.test_hlc()),
+        };
+        assert!(
+            !matches!(
+                effect,
+                soland_domain::reducer::ProjectionEffect::Rejected { .. }
+            ),
+            "validated fixture bootstrap {} rejected: {effect:?}",
+            bootstrap_event.kind
         );
     }
 }

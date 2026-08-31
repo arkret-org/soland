@@ -171,6 +171,9 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
         realm.members.insert(actor_did.clone());
         realms.upsert(realm);
     }
+    // Login hydrates the projection from persistence, so install the explicit
+    // test membership only after that boundary, never before it is reset.
+    let token = dev_login_token(state.clone(), actor, device_suffix).await;
     let member_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         actor_did,
         state.service_core_id(),
@@ -189,7 +192,6 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
             reason: None,
         },
     );
-    let token = dev_login_token(state.clone(), actor, device_suffix).await;
     let device_id = format!("ak:device:01904100-0000-7000-8000-{device_suffix}");
     let verification_method = format!("{actor}#{device_id}");
     let signing_key = SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(

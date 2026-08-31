@@ -159,10 +159,18 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
 
 /// The next position on the caller's Realm-scoped actor chain.
 async fn actor_frontier(state: &AppState, token: &str, realm_id: &str) -> (u64, Vec<String>) {
+    let request = serde_json::json!({
+        "actor_id": arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(alice_core_id()).unwrap(),
+            state.service_core_id(),
+        )),
+        "realm_id": realm_id
+    });
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierState =
         TestClient::query("http://server/_arkret/self/events/frontier")
             .add_header("Arkret-Operation", "ak.self.events.read.frontier.v1", true)
-            .json(&serde_json::json!({"actor_id": alice_core_id(), "realm_id": realm_id}))
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&request).unwrap())
             .add_header("authorization", format!("Bearer {token}"), true)
             .send(&app_from_state(state))
             .await

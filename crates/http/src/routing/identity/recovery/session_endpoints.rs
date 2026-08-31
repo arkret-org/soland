@@ -1016,7 +1016,7 @@ pub(super) async fn verify_did_root_proof(
         .ok_or_else(|| {
             recovery_signature_error("recovery device authorization Event is unavailable")
         })?;
-    if authorize_event.actor_id != record.principal_id.as_str()
+    if !authorization_event_actor_matches_account(&authorize_event.actor_id, &authority_key)
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
     {
