@@ -2631,7 +2631,7 @@ async fn consume_keypackages(
                 ))
             })?;
     let keypackage_refs = [durable_receipt.key_package_ref.to_string()];
-    verify_keypackage_consumer_signature(
+    let cached_keypackage = verify_keypackage_consumer_signature(
         state,
         &session,
         &durable_receipt.recipient_principal_id,
@@ -2640,12 +2640,19 @@ async fn consume_keypackages(
         &keypackage_refs,
         &body.signature,
         &consume_signing_input,
+        None,
     )
     .await?;
-    validate_recipient_durable_receipt(state, &session, &body).await?;
-    validate_direct_keypackage_consume(state, &body).await?;
-    validate_sidecar_keypackage_consume(state, &body).await?;
+    let welcome =
+        validate_recipient_durable_receipt(state, &session, &body, cached_keypackage.as_ref())
+            .await?;
+    validate_direct_keypackage_consume(state, &body, &welcome).await?;
+    validate_sidecar_keypackage_consume(state, &body, &welcome).await?;
     let group_id = consume_group_ref(&body);
+    // Signature verification may reuse immutable KeyPackage authoring bytes,
+    // but lifecycle admission deliberately reloads the row here. Claim state
+    // can change while Welcome and durable-receipt evidence is being checked;
+    // the consume CAS must start from the freshest durable lifecycle snapshot.
     let record = state
         .mls_key_packages()
         .key_package_by_ref(durable_receipt.key_package_ref.as_str())
@@ -2662,7 +2669,7 @@ async fn consume_keypackages(
         lifecycle.reuse_policy,
         PersistedKeyPackageReusePolicy::LastResort { .. }
     ) {
-        return consume_last_resort_keypackage(state, &body, &record).await;
+        return consume_last_resort_keypackage(state, &body, &record, &welcome).await;
     }
     if let PersistedKeyPackageClaimState::Consumed { mls_group_id, .. } = &lifecycle.claim_state {
         if mls_group_id.as_str() != group_id.as_str() {
@@ -2757,22 +2764,9 @@ async fn consume_last_resort_keypackage(
     state: &AppState,
     body: &KeyPackagesConsumeRequestBody,
     record: &MlsKeyPackageRow,
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
 ) -> JsonResult<KeyPackagesConsumeOutcome> {
     let durable = &body.recipient_durable_receipt;
-    let stored = state
-        .event_queries()
-        .accepted_event(durable.welcome_ref.as_str())
-        .await
-        .map_err(|error| AppError::internal(format!("Welcome lookup failed: {error}")))?
-        .ok_or_else(|| AppError::new(ErrorCode::FailedPrecondition, "Welcome is not accepted"))?;
-    let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
-        .map_err(|error| AppError::internal(format!("stored Welcome invalid: {error}")))?;
-    let welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
-    >(serde_json::to_value(event.payload).map_err(|error| {
-        AppError::internal(format!("stored Welcome payload serialize: {error}"))
-    })?)
-    .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
     let source_id = welcome.claim_receipt.source_id.as_str();
     let claim_request_id = durable.claim_request_id.as_str();
     let ledger = state
@@ -2923,7 +2917,8 @@ async fn validate_recipient_durable_receipt(
     state: &AppState,
     session: &SessionRecord,
     body: &KeyPackagesConsumeRequestBody,
-) -> Result<(), AppError> {
+    cached_keypackage: Option<&MlsKeyPackageRow>,
+) -> Result<arkret_models_collaboration::events_payloads::MlsWelcomePayload, AppError> {
     let receipt = &body.recipient_durable_receipt;
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
         || receipt.recipient_id.as_str() != state.service_id()
@@ -2988,8 +2983,10 @@ async fn validate_recipient_durable_receipt(
         std::slice::from_ref(&receipt.key_package_ref.to_string()),
         &receipt.signature,
         &signing_input,
+        cached_keypackage,
     )
-    .await
+    .await?;
+    Ok(welcome)
 }
 
 async fn verify_keypackage_consumer_signature(
@@ -3001,7 +2998,8 @@ async fn verify_keypackage_consumer_signature(
     keypackage_refs: &[String],
     signature: &KeyOperationSignature,
     signing_input: &[u8],
-) -> Result<(), AppError> {
+    cached_keypackage: Option<&MlsKeyPackageRow>,
+) -> Result<Option<MlsKeyPackageRow>, AppError> {
     match consumer {
         arkret_models_crypto::RecipientMlsDurableSigner::Device {
             recipient_device_id,
@@ -3018,6 +3016,7 @@ async fn verify_keypackage_consumer_signature(
                 keypackage_refs,
                 signature,
                 signing_input,
+                cached_keypackage,
             )
             .await
         }
@@ -3053,7 +3052,7 @@ async fn verify_keypackage_consumer_signature(
             ) {
                 return Err(AppError::param_invalid("endpoint_signature_invalid"));
             }
-            Ok(())
+            Ok(cached_keypackage.cloned())
         }
         arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
             recipient_pairwise_verification_method,
@@ -3099,7 +3098,7 @@ async fn verify_keypackage_consumer_signature(
             ) {
                 return Err(AppError::param_invalid("endpoint_signature_invalid"));
             }
-            Ok(())
+            Ok(cached_keypackage.cloned())
         }
     }
 }
@@ -3283,6 +3282,7 @@ mod recipient_durable_receipt_tests {
 async fn validate_direct_keypackage_consume(
     state: &AppState,
     body: &KeyPackagesConsumeRequestBody,
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
 ) -> Result<bool, AppError> {
     let realm_id = body.recipient_durable_receipt.realm_id.to_string();
     if !state
@@ -3330,7 +3330,6 @@ async fn validate_direct_keypackage_consume(
             "canonical direct binding payload is invalid",
         )
     })?;
-    let welcome_ref = body.recipient_durable_receipt.welcome_ref.as_str();
     let realm_scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
             AppError::new(
@@ -3357,39 +3356,6 @@ async fn validate_direct_keypackage_consume(
             "canonical direct binding belongs to another Realm",
         ));
     }
-    let welcome_event = state
-        .event_queries()
-        .accepted_event(welcome_ref)
-        .await
-        .map_err(|error| AppError::internal(format!("direct Welcome lookup failed: {error}")))?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "canonical direct Welcome Event is missing",
-            )
-        })?;
-    let welcome_event = serde_json::from_value::<arkret_wire::Event>(welcome_event.envelope)
-        .map_err(|error| {
-            AppError::internal(format!("stored direct Welcome Event invalid: {error}"))
-        })?;
-    if welcome_event.realm_id.as_str() != realm_id {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "canonical direct Welcome belongs to another Realm",
-        ));
-    }
-    let welcome =
-        serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
-            serde_json::to_value(welcome_event.payload).map_err(|error| {
-                AppError::internal(format!("stored direct Welcome payload invalid: {error}"))
-            })?,
-        )
-        .map_err(|_| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "canonical direct Welcome payload is invalid",
-            )
-        })?;
     let claim_id = &body.claim_id;
     let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
     if !welcome_recipient_matches_consumer(&welcome, body)
@@ -3451,6 +3417,7 @@ mod direct_consume_tests {
 async fn validate_sidecar_keypackage_consume(
     state: &AppState,
     body: &KeyPackagesConsumeRequestBody,
+    welcome: &arkret_models_collaboration::events_payloads::MlsWelcomePayload,
 ) -> Result<(), AppError> {
     let group_id = body.recipient_durable_receipt.mls_group_id.as_str();
     let sidecar = {
@@ -3484,37 +3451,6 @@ async fn validate_sidecar_keypackage_consume(
             &sidecar_record,
         )
         .await?;
-    let welcome_ref = body.recipient_durable_receipt.welcome_ref.as_str();
-    let stored = state
-        .event_queries()
-        .accepted_event(welcome_ref)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar Welcome lookup failed: {error}")))?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "Sidecar Welcome Event is not accepted",
-            )
-        })?;
-    let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
-        .map_err(|error| AppError::internal(format!("stored Sidecar Welcome invalid: {error}")))?;
-    if event.kind != arkret_wire::EventKind::MlsWelcome {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Sidecar consume reference is not a Welcome Event",
-        ));
-    }
-    let welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
-    >(serde_json::to_value(event.payload).map_err(|error| {
-        AppError::internal(format!("stored Sidecar Welcome payload invalid: {error}"))
-    })?)
-    .map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Sidecar Welcome payload is invalid",
-        )
-    })?;
     let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
     let claim_id = &body.claim_id;
     let sidecar_binding = welcome
@@ -3730,6 +3666,7 @@ async fn revoke_keypackages(
         &refs,
         &body.signature,
         &revoke_signing_input,
+        None,
     )
     .await?;
     let revoked_at = now().timestamp();
@@ -4286,7 +4223,8 @@ async fn verify_session_keypackage_write_signature(
     keypackage_refs: &[String],
     signature: &KeyOperationSignature,
     signing_input: &[u8],
-) -> Result<(), AppError> {
+    cached_keypackage: Option<&MlsKeyPackageRow>,
+) -> Result<Option<MlsKeyPackageRow>, AppError> {
     let principal = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("invalid session principal: {error}")))?;
     if let Some(binding) = current_agent_keypackage_trust_binding(state, &principal).await? {
@@ -4294,13 +4232,22 @@ async fn verify_session_keypackage_write_signature(
             .agent_key_authorize_event_id
             .as_deref()
             .expect("Agent trust binding always carries authorization Event");
+        let mut resolved_single = None;
         for keypackage_ref in keypackage_refs {
-            let record = state
-                .mls_key_packages()
-                .key_package_by_ref(keypackage_ref)
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .ok_or_else(|| AppError::param_invalid("KeyPackage signature target is missing"))?;
+            let record = if let Some(record) = cached_keypackage
+                .filter(|record| record.keypackage_ref.as_str() == keypackage_ref.as_str())
+            {
+                record.clone()
+            } else {
+                state
+                    .mls_key_packages()
+                    .key_package_by_ref(keypackage_ref)
+                    .await
+                    .map_err(|error| AppError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        AppError::param_invalid("KeyPackage signature target is missing")
+                    })?
+            };
             if record.actor_id != session.actor
                 || record.device_id.as_deref() != Some(session.device_id.as_str())
                 || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
@@ -4321,8 +4268,11 @@ async fn verify_session_keypackage_write_signature(
             )
             .await
             .map_err(AppError::param_invalid)?;
+            if keypackage_refs.len() == 1 {
+                resolved_single = Some(record);
+            }
         }
-        return Ok(());
+        return Ok(resolved_single);
     }
     verify_device_keypackage_signature(
         state,
@@ -4331,7 +4281,8 @@ async fn verify_session_keypackage_write_signature(
         signature,
         signing_input,
     )
-    .await
+    .await?;
+    Ok(cached_keypackage.cloned())
 }
 
 fn required_capability_set(capabilities: &[String]) -> Result<BTreeSet<String>, AppError> {

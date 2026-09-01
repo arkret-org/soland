@@ -75,6 +75,14 @@ const HISTORY_RESPONSE_RELAY_ENDPOINT: &str = "/_arkret/peer/history-key-respons
 const HISTORY_REQUEST_REPLICA_RECONCILE_PAGE_LIMIT: usize = 100;
 const HISTORY_REQUEST_REPLICA_RECONCILE_INTERVAL_SECONDS: u64 = 30;
 
+fn history_response_source_record_digest(
+    response: &HistoryKeyResponseSendRequest,
+) -> Result<arkret_wire::Hash, AppError> {
+    response
+        .source_record_digest()
+        .map_err(|error| AppError::param_invalid(error.to_string()))
+}
+
 async fn current_membership_evidence(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
@@ -992,8 +1000,10 @@ async fn send_history_key_response(
         ));
     }
     let request_record = validate_history_response_request_binding(state, &response).await?;
+    let source_record_digest = history_response_source_record_digest(&response)?;
     if request_record.write.request_replica.is_some()
-        && let Some(outcome) = accepted_remote_history_response_retry(state, &response).await?
+        && let Some(outcome) =
+            accepted_remote_history_response_retry(state, &response, &source_record_digest).await?
     {
         return json_ok(outcome);
     }
@@ -1002,7 +1012,9 @@ async fn send_history_key_response(
     {
         validate_remote_source_chunk_manifest(state, &response).await?;
     }
-    if let Some(outcome) = accepted_history_response_retry(state, &response).await? {
+    if let Some(outcome) =
+        accepted_history_response_retry(state, &response, &source_record_digest).await?
+    {
         return json_ok(outcome);
     }
     let checkpoint = validate_retained_history_cut(state, &request_record).await?;
@@ -1021,7 +1033,15 @@ async fn send_history_key_response(
     let source_relay = if has_reservation {
         None
     } else {
-        Some(build_local_history_source_relay(state, &response, &source_signer_dependencies).await?)
+        Some(
+            build_local_history_source_relay(
+                state,
+                &response,
+                &source_record_digest,
+                &source_signer_dependencies,
+            )
+            .await?,
+        )
     };
     if request_record.write.request_replica.is_some() {
         let source_relay = source_relay.ok_or_else(|| {
@@ -1040,6 +1060,7 @@ async fn send_history_key_response(
         accept_history_response_manifest(
             state,
             response,
+            &source_record_digest,
             &request_record,
             source_relay.as_ref(),
             source_signer_dependencies,
@@ -1049,6 +1070,7 @@ async fn send_history_key_response(
         accept_history_response_chunk(
             state,
             response,
+            &source_record_digest,
             source_relay.as_ref(),
             source_signer_dependencies,
         )
@@ -1104,17 +1126,16 @@ async fn relay_history_key_response(
         "history source relay attestation",
     )
     .await?;
-    let source_record_digest = relay
-        .response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let source_record_digest = history_response_source_record_digest(&relay.response)?;
     if relay.source_relay_attestation.source_record_digest != source_record_digest {
         return Err(AppError::capability_denied(
             "history source relay record digest mismatch",
         ));
     }
     let request_record = validate_history_response_request_binding(state, &relay.response).await?;
-    if let Some(outcome) = accepted_history_response_retry(state, &relay.response).await? {
+    if let Some(outcome) =
+        accepted_history_response_retry(state, &relay.response, &source_record_digest).await?
+    {
         return json_ok(outcome);
     }
     let checkpoint = validate_retained_history_cut(state, &request_record).await?;
@@ -1160,6 +1181,7 @@ async fn relay_history_key_response(
         accept_history_response_manifest(
             state,
             relay.response,
+            &source_record_digest,
             &request_record,
             Some(&relay.source_relay_attestation),
             source_signer_dependencies,
@@ -1169,6 +1191,7 @@ async fn relay_history_key_response(
         accept_history_response_chunk(
             state,
             relay.response,
+            &source_record_digest,
             Some(&relay.source_relay_attestation),
             source_signer_dependencies,
         )
@@ -1449,10 +1472,8 @@ fn verify_history_source_proof(
 async fn accepted_history_response_retry(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
 ) -> Result<Option<HistoryKeyResponseSendReceipt>, AppError> {
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     match state
         .persistence()
         .governance_history_service()
@@ -1461,7 +1482,7 @@ async fn accepted_history_response_retry(
         .map_err(map_service_error)?
     {
         Some(soland_storage::HistoryResponseRetryRecord::Accepted(receipt))
-            if receipt.source_record_digest == source_record_digest =>
+            if receipt.source_record_digest == *source_record_digest =>
         {
             Ok(Some(*receipt))
         }
@@ -1469,7 +1490,7 @@ async fn accepted_history_response_retry(
             "history response ID is already bound to different bytes",
         )),
         Some(soland_storage::HistoryResponseRetryRecord::Expired(tombstone))
-            if tombstone.source_record_digest == source_record_digest =>
+            if tombstone.source_record_digest == *source_record_digest =>
         {
             Err(AppError::conflict(
                 "history response ID belongs to an expired record",
@@ -1496,6 +1517,7 @@ fn history_response_relay_outbox_id(response: &HistoryKeyResponseSendRequest) ->
 async fn accepted_remote_history_response_retry(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
 ) -> Result<Option<HistoryKeyResponseSendReceipt>, AppError> {
     let outbox_id = history_response_relay_outbox_id(response);
     let Some(delivery) = state
@@ -1522,9 +1544,10 @@ async fn accepted_remote_history_response_retry(
                 .map_err(|error| {
                     AppError::internal(format!("stored history relay receipt is invalid: {error}"))
                 })?;
-            validate_remote_history_response_receipt(
+            validate_remote_history_response_receipt_with_digest(
                 state,
                 response,
+                source_record_digest,
                 &relay.source_relay_attestation.destination_release_id,
                 &receipt,
             )
@@ -1613,11 +1636,46 @@ pub(crate) async fn validate_remote_history_response_receipt(
     receipt
         .validate()
         .map_err(|error| AppError::capability_denied(error.to_string()))?;
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+    let source_record_digest = history_response_source_record_digest(response)?;
+    validate_remote_history_response_receipt_after_validation(
+        state,
+        response,
+        &source_record_digest,
+        destination_release_id,
+        receipt,
+    )
+    .await
+}
+
+async fn validate_remote_history_response_receipt_with_digest(
+    state: &AppState,
+    response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
+    destination_release_id: &arkret_wire::DidCoreId,
+    receipt: &HistoryKeyResponseSendReceipt,
+) -> Result<(), AppError> {
+    receipt
+        .validate()
+        .map_err(|error| AppError::capability_denied(error.to_string()))?;
+    validate_remote_history_response_receipt_after_validation(
+        state,
+        response,
+        source_record_digest,
+        destination_release_id,
+        receipt,
+    )
+    .await
+}
+
+async fn validate_remote_history_response_receipt_after_validation(
+    state: &AppState,
+    response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
+    destination_release_id: &arkret_wire::DidCoreId,
+    receipt: &HistoryKeyResponseSendReceipt,
+) -> Result<(), AppError> {
     if receipt.response_id != response.response_id
-        || receipt.source_record_digest != source_record_digest
+        || receipt.source_record_digest != *source_record_digest
     {
         return Err(AppError::capability_denied(
             "history relay receipt does not bind the source record",
@@ -1772,6 +1830,7 @@ async fn delivered_remote_source_manifest(
 async fn build_local_history_source_relay(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     source_signer_dependencies: &[GovernanceDependency],
 ) -> Result<SourceRelayAttestation, AppError> {
     let request_record = state
@@ -1795,9 +1854,6 @@ async fn build_local_history_source_relay(
         let local_service_id =
             arkret_wire::project_did_to_core_id(&state.service_resolution_commitment().did)
                 .map_err(|error| AppError::internal(error.to_string()))?;
-        let source_record_digest = response
-            .source_record_digest()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let relayed_at = response.source_proof.created_at;
         let attestation = SourceRelayAttestation::build_signed_proof(
             history_service_verification_method(state)?,
@@ -1885,9 +1941,6 @@ async fn build_local_history_source_relay(
         &response.source_signer_evidence_digest,
         source_signer_dependencies,
     )?;
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let relayed_at = response.source_proof.created_at;
     let attestation = SourceRelayAttestation::build_signed_proof(
         history_service_verification_method(state)?,
@@ -2717,6 +2770,7 @@ async fn validate_history_response_request_binding(
 async fn accept_history_response_manifest(
     state: &AppState,
     response: HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     request_record: &soland_storage::HistoryRequestRecord,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
@@ -2763,7 +2817,14 @@ async fn accept_history_response_manifest(
                 "history manifest source relay is unavailable",
             )
         })?;
-        validate_manifest_current_gate(state, &request_record, &response, source_relay).await?;
+        validate_manifest_current_gate(
+            state,
+            &request_record,
+            &response,
+            source_record_digest,
+            source_relay,
+        )
+        .await?;
     }
     let HistoryKeyResponseContent::Manifest(manifest) = &response.content else {
         return Err(AppError::internal(
@@ -2805,9 +2866,6 @@ async fn accept_history_response_manifest(
     }
     .with_computed_digest()
     .map_err(|error| AppError::internal(error.to_string()))?;
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let accepted_at = existing_reservation
         .as_ref()
         .map_or_else(now, |reservation| reservation.input.sent_at);
@@ -2855,7 +2913,7 @@ async fn accept_history_response_manifest(
     let receipt = sign_history_response_receipt(
         state,
         &record,
-        source_record_digest,
+        source_record_digest.clone(),
         admission.manifest_admission_digest,
         None,
         accepted_at,
@@ -3350,6 +3408,7 @@ pub(crate) fn verify_agent_history_trust(
 async fn accept_history_response_chunk(
     state: &AppState,
     response: HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
@@ -3450,20 +3509,25 @@ async fn accept_history_response_chunk(
                 "history chunk source relay is unavailable",
             )
         })?;
-        validate_manifest_current_gate(state, &request_record, &response, source_relay).await?;
+        validate_manifest_current_gate(
+            state,
+            &request_record,
+            &response,
+            source_record_digest,
+            source_relay,
+        )
+        .await?;
         build_history_release_attestation(
             state,
             &request_record,
             &response,
+            source_record_digest,
             source_relay,
             &accepted_manifest.manifest_admission,
             descriptor.covered_epoch_range,
         )
         .await?
     };
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let accepted_at = existing_reservation
         .as_ref()
         .map_or(release_attestation.accepted_at, |reservation| {
@@ -3516,7 +3580,7 @@ async fn accept_history_response_chunk(
     let receipt = sign_history_response_receipt(
         state,
         &record,
-        source_record_digest,
+        source_record_digest.clone(),
         manifest_admission_digest,
         Some(release_attestation_digest),
         accepted_at,
@@ -3545,6 +3609,7 @@ async fn build_history_release_attestation(
     state: &AppState,
     request_record: &soland_storage::HistoryRequestRecord,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     source_relay: &SourceRelayAttestation,
     manifest_admission: &HistoryManifestAdmission,
     released_range: arkret_models_collaboration::history_key::EpochRange,
@@ -3686,6 +3751,7 @@ async fn build_history_release_attestation(
             state,
             request,
             response,
+            source_record_digest,
             accepted_at,
             response.expires_at,
         )
@@ -3713,9 +3779,7 @@ async fn build_history_release_attestation(
     };
     let attestation = HistoryReleaseAttestation {
         kind: HistoryReleaseAttestationKind::Value,
-        source_record_digest: response
-            .source_record_digest()
-            .map_err(|error| AppError::internal(error.to_string()))?,
+        source_record_digest: source_record_digest.clone(),
         response_id: response.response_id.clone(),
         request_digest: response.request_digest.clone(),
         request_receipt_digest: response.request_receipt_digest.clone(),
@@ -3861,6 +3925,7 @@ async fn build_history_recipient_authority_views(
     state: &AppState,
     request: &HistoryKeyRequest,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     observed_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<
@@ -3879,9 +3944,6 @@ async fn build_history_recipient_authority_views(
     {
         let local_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| AppError::internal(error.to_string()))?;
-        let source_record_digest = response
-            .source_record_digest()
-            .map_err(|error| AppError::param_invalid(error.to_string()))?;
         let selector = AgentSignerEvidenceQuerySelector::CurrentAdmission {
             agent_id: requester_agent_id.clone(),
             verification_method: requester_agent_verification_method.clone(),
@@ -3890,7 +3952,7 @@ async fn build_history_recipient_authority_views(
                 response.response_id
             ))
             .map_err(|error| AppError::internal(error.to_string()))?,
-            request_digest: source_record_digest,
+            request_digest: source_record_digest.clone(),
             verifier_id: local_service_id.clone(),
             audience: local_service_id,
             challenge: arkret_wire::NonEmptyString::new(format!(
@@ -4094,19 +4156,17 @@ async fn validate_manifest_current_gate(
     state: &AppState,
     request_record: &soland_storage::HistoryRequestRecord,
     response: &HistoryKeyResponseSendRequest,
+    source_record_digest: &arkret_wire::Hash,
     source_relay: &SourceRelayAttestation,
 ) -> Result<(), AppError> {
     let request = &request_record.write.request;
-    let source_record_digest = response
-        .source_record_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if source_relay.request_digest != request_record.write.request_digest
         || source_relay.request_receipt_digest != request_record.write.request_receipt_digest
         || source_relay.source_actor_id != response.source_actor_id
         || source_relay.source_sender_domain != response.source_sender_domain
         || source_relay.effective_scope != response.effective_scope
         || source_relay.expires_at != response.expires_at
-        || source_relay.source_record_digest != source_record_digest
+        || source_relay.source_record_digest != *source_record_digest
         || source_relay.destination_release_id != request_record.write.request_receipt.release_id
     {
         return Err(AppError::capability_denied(
@@ -5009,5 +5069,29 @@ fn map_service_error(error: soland_services::ServiceError) -> AppError {
         soland_services::ServiceError::Conflict(detail) => AppError::conflict(detail),
         soland_services::ServiceError::Database(detail)
         | soland_services::ServiceError::Internal(detail) => AppError::internal(detail),
+    }
+}
+
+#[cfg(test)]
+mod canonical_response_digest_tests {
+    use arkret_models_collaboration::history_key::HistoryKeyResponseSendRequest;
+
+    use super::history_response_source_record_digest;
+
+    #[test]
+    fn cached_response_digest_is_the_authoritative_wire_digest() {
+        let fixture = arkret_schema_conformance::spec_json_artifact(
+            "fixtures/history-key-recovery-fixture.json",
+        )
+        .expect("history recovery fixture");
+        let response: HistoryKeyResponseSendRequest = serde_json::from_value(
+            fixture["response_stream_cases"]["wire_instances"]["manifest_send"].clone(),
+        )
+        .expect("typed history response fixture");
+
+        assert_eq!(
+            history_response_source_record_digest(&response).unwrap(),
+            response.source_record_digest().unwrap()
+        );
     }
 }
