@@ -75,18 +75,32 @@ impl ModerationStore for PgModerationStore {
             .pointer("/report/realm_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        let report_event_id = item
+            .pointer("/report/event_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                PersistenceError::Internal(
+                    "moderation queue item missing report.event_id".to_owned(),
+                )
+            })?;
         let id_token =
             ids::event_token_part_or_schema_violation(id, "moderation_queue_item")?.to_vec();
+        let report_event_id_token =
+            ids::event_token_part_or_schema_violation(report_event_id, "moderation_report")?
+                .to_vec();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         crate::realm_identity::ensure_optional_realm_pk(&mut conn, realm_id.as_deref()).await?;
         sql_query(
-            "INSERT INTO moderation_queue_items (id, realm_id, payload, created_at) \
-             VALUES ($1, $2, $3, NOW()) \
-             ON CONFLICT (id) DO UPDATE SET realm_id = EXCLUDED.realm_id, payload = EXCLUDED.payload",
+            "INSERT INTO moderation_queue_items \
+             (id, report_event_id, realm_id, payload, created_at) \
+             VALUES ($1, $2, $3, $4, NOW()) \
+             ON CONFLICT (id) DO UPDATE SET report_event_id = EXCLUDED.report_event_id, \
+             realm_id = EXCLUDED.realm_id, payload = EXCLUDED.payload",
         )
         .bind::<Binary, _>(id_token)
+        .bind::<Binary, _>(report_event_id_token)
         .bind::<Nullable<Text>, _>(realm_id.as_deref())
         .bind::<Jsonb, _>(&item)
         .execute(&mut *conn)
@@ -119,6 +133,29 @@ impl ModerationStore for PgModerationStore {
             .optional()
             .map(|row| row.map(|row| row.payload))
             .map_err(PersistenceError::database)
+    }
+
+    async fn get_submitted_queue_item_for_report_event(
+        &self,
+        report_event_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        let report_event_id_token =
+            ids::event_token_part_or_schema_violation(report_event_id, "moderation_report")?
+                .to_vec();
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT payload FROM moderation_queue_items \
+             WHERE report_event_id = $1 AND payload ->> 'status' = 'submitted' \
+             ORDER BY created_at ASC, pk ASC LIMIT 1",
+        )
+        .bind::<Binary, _>(report_event_id_token)
+        .get_result::<JsonPayloadRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(|row| row.payload))
+        .map_err(PersistenceError::database)
     }
 
     async fn append_appeal(&self, appeal: Value) -> PersistenceResult<()> {

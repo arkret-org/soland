@@ -3676,18 +3676,28 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
     Some(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
 }
 
+mod commit;
+mod control_ack;
+mod device_gate;
+mod duplicate;
 mod ingress_receipt;
 mod outcome;
 mod post_commit;
 mod preflight;
+mod projection_preflight;
 mod value;
 
+use commit::*;
+use control_ack::*;
+use device_gate::*;
+use duplicate::*;
 pub(in crate::routing) use ingress_receipt::validate_authorization_lease_for_event;
 use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
 use preflight::*;
+use projection_preflight::*;
 use value::*;
 pub(in crate::routing) use value::{
     DevicePairingAdmission, prepare_service_franking_proof_event_value,

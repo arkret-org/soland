@@ -333,42 +333,12 @@ fn stage_control_proposal_acks(
     control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
     acks_required: bool,
 ) -> PersistenceResult<()> {
-    if control_proposal_acks.is_empty() && !acks_required {
-        return Ok(());
-    }
-    if control_proposal_acks.len() != records.len() {
-        return Err(PersistenceError::Conflict(
-            "schema_violation: Control Proposal Ack cardinality mismatch".to_owned(),
-        ));
-    }
-    let mut by_digest = BTreeMap::new();
-    for ack in control_proposal_acks {
-        ack.validate_protocol_bounds().map_err(|error| {
-            PersistenceError::Conflict(format!(
-                "schema_violation: invalid Control Proposal Ack: {error}"
-            ))
-        })?;
-        if by_digest
-            .insert(ack.proposal_digest.as_str().to_owned(), ack)
-            .is_some()
-        {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: duplicate Control Proposal Ack".to_owned(),
-            ));
-        }
-    }
+    let by_digest =
+        super::control_proposal_acks_by_digest(records, control_proposal_acks, acks_required)?;
     for record in records {
-        let ack = by_digest.get(&record.canonical_digest).ok_or_else(|| {
-            PersistenceError::Conflict(
-                "schema_violation: accepted Control Move is missing Control Proposal Ack"
-                    .to_owned(),
-            )
-        })?;
-        if record.realm_id.as_deref() != Some(ack.realm_id.as_str()) {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
-            ));
-        }
+        let Some(ack) = by_digest.get(&record.canonical_digest) else {
+            continue;
+        };
         if let Some(existing) = staged.get(&record.canonical_digest)
             && existing != ack
         {

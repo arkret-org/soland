@@ -230,13 +230,17 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         let transaction_id = record.resource.transaction_id.as_str();
         let mut sessions = self.sessions.lock();
         let mut by_id = self.by_id.lock();
-        if let Some(existing) = by_id.get(transaction_id) {
-            if existing.canonical_request == record.canonical_request {
-                return Ok(existing.clone());
+        let existing = by_id.get(transaction_id);
+        match super::classify_security_transaction_first_write(
+            existing.map(|stored| stored.canonical_request.as_slice()),
+            &record.canonical_request,
+        )? {
+            super::SecurityTransactionFirstWriteDecision::ExactRetry => {
+                return Ok(existing
+                    .expect("exact retry has an existing record")
+                    .clone());
             }
-            return Err(PersistenceError::Conflict(format!(
-                "transaction_id `{transaction_id}` already exists with different canonical bytes"
-            )));
+            super::SecurityTransactionFirstWriteDecision::Insert => {}
         }
         if let Some(binding) = record.resource.recovery_binding() {
             let session_id = binding.recovery_session_id.as_str();
@@ -332,14 +336,17 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             )));
         }
         let mut attempts = self.step_attempts.lock();
-        if let Some(existing) = attempts.get(&key) {
-            if existing.canonical_request == attempt.canonical_request {
-                return Ok(existing.clone());
+        let existing = attempts.get(&key);
+        match super::classify_security_transaction_first_write(
+            existing.map(|stored| stored.canonical_request.as_slice()),
+            &attempt.canonical_request,
+        )? {
+            super::SecurityTransactionFirstWriteDecision::ExactRetry => {
+                return Ok(existing
+                    .expect("exact retry has an existing attempt")
+                    .clone());
             }
-            return Err(PersistenceError::Conflict(format!(
-                "security transaction step {:?} already began with different canonical bytes",
-                attempt.step
-            )));
+            super::SecurityTransactionFirstWriteDecision::Insert => {}
         }
         attempts.insert(key, attempt.clone());
         Ok(attempt)
@@ -350,6 +357,10 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         record: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeRecord,
     ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
+        record
+            .resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         let transaction_id = record.resource.transaction_id.as_str();
         if outcome.transaction_id != transaction_id {
             return Err(PersistenceError::SchemaViolation(
@@ -364,14 +375,17 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         let mut by_id = self.by_id.lock();
         let attempts = self.step_attempts.lock();
         let mut outcomes = self.step_outcomes.lock();
-        if let Some(existing) = outcomes.get(&key) {
-            if existing.canonical_request == outcome.canonical_request {
-                return Ok(existing.clone());
+        let stored_outcome = outcomes.get(&key);
+        match super::classify_security_transaction_first_write(
+            stored_outcome.map(|stored| stored.canonical_request.as_slice()),
+            &outcome.canonical_request,
+        )? {
+            super::SecurityTransactionFirstWriteDecision::ExactRetry => {
+                return Ok(stored_outcome
+                    .expect("exact retry has an existing outcome")
+                    .clone());
             }
-            return Err(PersistenceError::Conflict(format!(
-                "security transaction step {:?} already has different canonical request bytes",
-                outcome.step
-            )));
+            super::SecurityTransactionFirstWriteDecision::Insert => {}
         }
         let existing = by_id.get(transaction_id).ok_or_else(|| {
             PersistenceError::NotFound(format!("transaction_id `{transaction_id}` not found"))
@@ -382,24 +396,7 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
                 outcome.step
             ))
         })?;
-        if attempt.canonical_request != outcome.canonical_request {
-            return Err(PersistenceError::Conflict(format!(
-                "security transaction step {:?} outcome changed the durable request bytes",
-                outcome.step
-            )));
-        }
-        super::validate_security_transaction_update(existing, &record)?;
-        if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
-            || existing
-                .resource
-                .accepted_step_kind(existing.resource.accepted_steps.len())
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-                != outcome.step
-        {
-            return Err(PersistenceError::SchemaViolation(
-                "accepted step outcome must match the single appended transaction step".to_owned(),
-            ));
-        }
+        super::validate_security_transaction_step_accept(existing, &record, attempt, &outcome)?;
         if record.resource.is_completed()
             && let Some(binding) = record.resource.recovery_binding()
         {
@@ -446,13 +443,15 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             )));
         }
         let mut records = self.backup_erase_progress.lock();
-        if let Some(existing) = records.get(&progress.transaction_id) {
-            if existing.canonical_request == progress.canonical_request {
-                return Ok(existing.clone());
+        let existing = records.get(&progress.transaction_id);
+        match super::classify_security_transaction_first_write(
+            existing.map(|stored| stored.canonical_request.as_slice()),
+            &progress.canonical_request,
+        )? {
+            super::SecurityTransactionFirstWriteDecision::ExactRetry => {
+                return Ok(existing.expect("exact retry has erase progress").clone());
             }
-            return Err(PersistenceError::Conflict(
-                "backup erase already began with different canonical bytes".to_owned(),
-            ));
+            super::SecurityTransactionFirstWriteDecision::Insert => {}
         }
         records.insert(progress.transaction_id.clone(), progress.clone());
         Ok(progress)

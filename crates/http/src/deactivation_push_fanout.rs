@@ -1,9 +1,10 @@
 //! Push-gateway deactivation fanout producer (`account-lifecycle.md` §7.1).
 //!
 //! The spec's Push-route fanout row completes only when the push gateway side
-//! stops delivering: "当 gateway 独立持有注册 endpoint / 投递状态时，Principal
-//! Server MUST 通过已登记的内部通道通知 gateway 并取得处理结果；本地存储 purge
-//! 不构成该行的完成" (§7.1, Push-route completion criterion). This module is
+//! stops delivering: when a gateway independently owns registration endpoints
+//! or delivery state, the Principal Server must notify it through the registered
+//! internal channel and obtain the outcome; a local purge alone is insufficient
+//! (§7.1, Push-route completion criterion). This module is
 //! that registered internal channel's producer side:
 //!
 //! - the wire contract is the audited `floria-contracts` crate (shared with the floria gateway,
@@ -52,7 +53,7 @@ use crate::state::AppState;
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Per-request full-response timeout against the gateway.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// Exponential backoff base/cap for gateway retries (bounded, §7.1 "继续重试").
+/// Exponential backoff base/cap for bounded gateway retries (§7.1).
 const BACKOFF_BASE_SECS: u64 = 5;
 const BACKOFF_CAP_SECS: u64 = 300;
 

@@ -322,6 +322,7 @@ pub enum PeerKeyPackageClaimAttemptResult {
     KeyPackageUnavailable,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MlsKeyPackageClaimTarget<'a> {
     Group(&'a str),
     Retire,
@@ -337,6 +338,201 @@ pub struct MlsKeyPackageClaim<'a> {
     pub device_revocation_gate: Option<DeviceRevocationGateSelector>,
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: Option<i64>,
+}
+
+/// Apply the storage-neutral acceptance rules for one KeyPackage claim.
+///
+/// Adapters remain responsible for revocation-gate reads, row locking and the
+/// atomic write. Returning `None` is the CAS-loser/unavailable outcome.
+pub fn apply_key_package_claim(
+    row: &MlsKeyPackageRow,
+    claim: &MlsKeyPackageClaim<'_>,
+) -> Option<MlsKeyPackageRow> {
+    if row.id != claim.id {
+        return None;
+    }
+    let (group_id, terminal_without_claim, retiring) = match claim.target {
+        MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false, false),
+        MlsKeyPackageClaimTarget::Retire => ("retired", true, true),
+        MlsKeyPackageClaimTarget::Revoke => ("revoked", true, false),
+    };
+    if matches!(
+        row.claimed_by_mls_group_id.as_deref(),
+        Some("revoked" | "retired")
+    ) || retiring && (row.last_resort || row.claimed_by_mls_group_id.is_some())
+    {
+        return None;
+    }
+    if !terminal_without_claim
+        && (claim.claimed_at >= row.lifetime_not_after
+            || claim
+                .claim_expires_at_unix_ms
+                .is_some_and(|expires_at_unix_ms| {
+                    expires_at_unix_ms <= claim.claimed_at.saturating_mul(1000)
+                        || expires_at_unix_ms > row.lifetime_not_after.saturating_mul(1000)
+                }))
+    {
+        return None;
+    }
+    if row
+        .claimed_by_mls_group_id
+        .as_deref()
+        .is_some_and(|claimed| claimed != group_id)
+        && !(row.last_resort && !terminal_without_claim)
+    {
+        return None;
+    }
+    if claim
+        .device_authorize_event_id
+        .is_some_and(|event_id| row.device_authorize_event_id.as_deref() != Some(event_id))
+        || claim
+            .agent_key_authorize_event_id
+            .is_some_and(|event_id| row.agent_key_authorize_event_id.as_deref() != Some(event_id))
+    {
+        return None;
+    }
+
+    let mut next = row.clone();
+    if row.last_resort && !terminal_without_claim {
+        let realm_id = claim.intended_realm_id?;
+        if row
+            .last_resort_realm_id
+            .as_deref()
+            .is_some_and(|bound_realm_id| bound_realm_id != realm_id)
+        {
+            return None;
+        }
+        if next.last_resort_realm_id.is_none() {
+            next.last_resort_realm_id = Some(realm_id.to_owned());
+        }
+        return Some(next);
+    }
+
+    next.claimed_by_mls_group_id = Some(group_id.to_owned());
+    next.claimed_at = (!terminal_without_claim).then_some(claim.claimed_at);
+    next.claim_expires_at_unix_ms = if terminal_without_claim {
+        None
+    } else {
+        claim.claim_expires_at_unix_ms
+    };
+    next.consumed_at = None;
+    Some(next)
+}
+
+#[cfg(test)]
+mod key_package_claim_transition_tests {
+    use super::*;
+
+    fn row(last_resort: bool) -> MlsKeyPackageRow {
+        MlsKeyPackageRow {
+            id: "kp-1".to_owned(),
+            keypackage_ref: "ak:mls:keypackage:kp-1".to_owned(),
+            keypackage_digest:
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+            owner_account_pk: AccountPk(1),
+            actor_id: "ak:did_core:web:agent.example".to_owned(),
+            device_id: Some("ak:device:01904100-0000-7000-8000-000000000001".to_owned()),
+            endpoint_verification_method: None,
+            intended_realm_id: None,
+            key_package_bytes: vec![1, 2, 3],
+            capabilities: vec!["ak.mls.rfc9420".to_owned()],
+            capabilities_digest:
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+            last_resort,
+            last_resort_realm_id: None,
+            lifetime_not_before: 1,
+            lifetime_not_after: 100,
+            claimed_by_mls_group_id: None,
+            device_authorize_event_id: Some("event-1".to_owned()),
+            agent_key_authorize_event_id: None,
+            claimed_at: None,
+            claim_expires_at_unix_ms: None,
+            consumed_at: None,
+            created_at: 1,
+        }
+    }
+
+    fn claim<'a>(target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPackageClaim<'a> {
+        MlsKeyPackageClaim {
+            id: "kp-1",
+            target,
+            intended_realm_id: None,
+            device_authorize_event_id: Some("event-1"),
+            agent_key_authorize_event_id: None,
+            device_revocation_gate: None,
+            claimed_at: 10,
+            claim_expires_at_unix_ms: Some(20_000),
+        }
+    }
+
+    #[test]
+    fn ordinary_claim_case_table_covers_acceptance_and_cas_losers() {
+        let available = row(false);
+        let accepted = apply_key_package_claim(
+            &available,
+            &claim(MlsKeyPackageClaimTarget::Group("group-a")),
+        )
+        .expect("available ordinary package is claimable");
+        assert_eq!(accepted.claimed_by_mls_group_id.as_deref(), Some("group-a"));
+        assert_eq!(accepted.claimed_at, Some(10));
+        assert_eq!(accepted.claim_expires_at_unix_ms, Some(20_000));
+
+        let renewed = apply_key_package_claim(
+            &accepted,
+            &claim(MlsKeyPackageClaimTarget::Group("group-a")),
+        );
+        assert!(renewed.is_some(), "same-group retry is idempotent renewal");
+        assert!(
+            apply_key_package_claim(
+                &accepted,
+                &claim(MlsKeyPackageClaimTarget::Group("group-b"))
+            )
+            .is_none(),
+            "different group loses the CAS"
+        );
+
+        let mut expired = claim(MlsKeyPackageClaimTarget::Group("group-a"));
+        expired.claimed_at = 100;
+        assert!(apply_key_package_claim(&available, &expired).is_none());
+
+        let mut wrong_event = claim(MlsKeyPackageClaimTarget::Group("group-a"));
+        wrong_event.device_authorize_event_id = Some("event-2");
+        assert!(apply_key_package_claim(&available, &wrong_event).is_none());
+    }
+
+    #[test]
+    fn terminal_and_last_resort_transitions_share_one_oracle() {
+        let ordinary = row(false);
+        let retired = apply_key_package_claim(&ordinary, &claim(MlsKeyPackageClaimTarget::Retire))
+            .expect("unused ordinary package may retire");
+        assert_eq!(retired.claimed_by_mls_group_id.as_deref(), Some("retired"));
+        assert!(
+            apply_key_package_claim(&retired, &claim(MlsKeyPackageClaimTarget::Revoke)).is_none()
+        );
+
+        let reusable = row(true);
+        assert!(
+            apply_key_package_claim(
+                &reusable,
+                &claim(MlsKeyPackageClaimTarget::Group("group-a"))
+            )
+            .is_none(),
+            "last-resort claim requires an intended realm"
+        );
+        let mut bound_claim = claim(MlsKeyPackageClaimTarget::Group("group-a"));
+        bound_claim.intended_realm_id =
+            Some("ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K");
+        let bound = apply_key_package_claim(&reusable, &bound_claim)
+            .expect("last-resort package binds on first realm claim");
+        assert_eq!(
+            bound.last_resort_realm_id,
+            bound_claim.intended_realm_id.map(str::to_owned)
+        );
+        assert!(bound.claimed_by_mls_group_id.is_none());
+        assert!(
+            apply_key_package_claim(&reusable, &claim(MlsKeyPackageClaimTarget::Retire)).is_none()
+        );
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

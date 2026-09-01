@@ -7,7 +7,8 @@ use super::{
     PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
     PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Uuid, Value,
-    async_trait, ids, json_string_array, mls_effective_scope_parts, pg_conn, sql_query, sql_types,
+    apply_key_package_claim, async_trait, ids, json_string_array, mls_effective_scope_parts,
+    pg_conn, sql_query, sql_types,
 };
 
 /// Encode a key package's trust-binding Event reference for storage.
@@ -138,76 +139,67 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         &self,
         claim: MlsKeyPackageClaim<'_>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
-        let MlsKeyPackageClaim {
-            id,
-            target,
-            intended_realm_id,
-            device_authorize_event_id,
-            agent_key_authorize_event_id,
-            device_revocation_gate,
-            claimed_at,
-            claim_expires_at_unix_ms,
-        } = claim;
-        const REVOKED_CLAIM_SENTINEL: &str = "revoked";
-        let gate_required = matches!(target, MlsKeyPackageClaimTarget::Group(_))
-            && device_authorize_event_id.is_some();
-        let group_id = match target {
-            MlsKeyPackageClaimTarget::Group(group_id) => group_id,
-            MlsKeyPackageClaimTarget::Retire => "retired",
-            MlsKeyPackageClaimTarget::Revoke => REVOKED_CLAIM_SENTINEL,
-        };
+        let gate_required = matches!(claim.target, MlsKeyPackageClaimTarget::Group(_))
+            && claim.device_authorize_event_id.is_some();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-        if gate_required {
-            let selector = device_revocation_gate.as_ref().ok_or_else(|| {
-                PersistenceError::SchemaViolation(
-                    "device KeyPackage claim is missing revocation selector".to_owned(),
+            // Preserve the adapter boundary's strict wire-id validation even
+            // though the shared transition compares canonical strings.
+            parse_authorize_event_id(claim.device_authorize_event_id)?;
+            parse_authorize_event_id(claim.agent_key_authorize_event_id)?;
+            if gate_required {
+                let selector = claim.device_revocation_gate.as_ref().ok_or_else(|| {
+                    PersistenceError::SchemaViolation(
+                        "device KeyPackage claim is missing revocation selector".to_owned(),
+                    )
+                })?;
+                crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
+            }
+            let existing = sql_query(
+                "SELECT id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
+                 key_package_bytes, capabilities, capabilities_digest, \
+                 last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+                 claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+                 claim_expires_at_unix_ms, consumed_at, created_at \
+                 FROM mls_key_packages WHERE id = $1 FOR UPDATE",
+            )
+            .bind::<Text, _>(claim.id)
+            .get_result::<MlsKeyPackagePgRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(PersistenceError::database)?
+            .map(validated_keypackage_row)
+            .transpose()?;
+            let Some(existing) = existing else {
+                return Ok(None);
+            };
+            let Some(next) = apply_key_package_claim(&existing, &claim) else {
+                return Ok(None);
+            };
+            let updated = sql_query(
+                "UPDATE mls_key_packages \
+                 SET claimed_by_mls_group_id = $2, last_resort_realm_id = $3, \
+                     claimed_at = $4, claim_expires_at_unix_ms = $5, consumed_at = $6 \
+                 WHERE id = $1",
+            )
+            .bind::<Text, _>(claim.id)
+            .bind::<Nullable<Text>, _>(&next.claimed_by_mls_group_id)
+            .bind::<Nullable<Text>, _>(&next.last_resort_realm_id)
+            .bind::<Nullable<BigInt>, _>(next.claimed_at)
+            .bind::<Nullable<BigInt>, _>(next.claim_expires_at_unix_ms)
+            .bind::<Nullable<BigInt>, _>(next.consumed_at)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            if updated != 1 {
+                return Err(PersistenceError::Internal(
+                    "locked MLS KeyPackage row disappeared during claim".to_owned(),
                 )
-            })?;
-            crate::ensure_gate_allowed_in_transaction(conn, selector).await?;
-        }
-        let row = sql_query(
-            "UPDATE mls_key_packages \
-             SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN claimed_by_mls_group_id ELSE $2 END, \
-                 last_resort_realm_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
-                 device_authorize_event_id = COALESCE($4, device_authorize_event_id), \
-                 agent_key_authorize_event_id = COALESCE($5, agent_key_authorize_event_id), \
-                 claimed_at = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claimed_at ELSE $6 END, \
-                 claim_expires_at_unix_ms = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $7 END, \
-                 consumed_at = NULL \
-             WHERE id = $1 \
-               AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id NOT IN ('revoked', 'retired')) \
-               AND (($2 = 'retired' AND NOT last_resort AND claimed_by_mls_group_id IS NULL) \
-                    OR ($2 <> 'retired' AND (claimed_by_mls_group_id IS NULL \
-                    OR claimed_by_mls_group_id = $2 \
-                    OR (last_resort AND $2 <> 'revoked')))) \
-               AND ($4 IS NULL OR device_authorize_event_id = $4) \
-               AND ($5 IS NULL OR agent_key_authorize_event_id = $5) \
-               AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $6 \
-                    AND ($7 IS NULL OR ($7 > $6 * 1000 AND $7 <= lifetime_not_after * 1000)))) \
-               AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
-             RETURNING id, keypackage_ref, keypackage_digest, owner_account_pk, actor_id, device_id, endpoint_verification_method, intended_realm_id, \
-             key_package_bytes, capabilities, capabilities_digest, \
-             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
-             claimed_by_mls_group_id, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
-             claim_expires_at_unix_ms, consumed_at, created_at",
-        )
-        .bind::<Text, _>(id)
-        .bind::<Text, _>(group_id)
-        .bind::<Nullable<Text>, _>(intended_realm_id)
-        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(device_authorize_event_id)?)
-        .bind::<Nullable<Binary>, _>(parse_authorize_event_id(agent_key_authorize_event_id)?)
-        .bind::<BigInt, _>(claimed_at)
-        .bind::<Nullable<BigInt>, _>(claim_expires_at_unix_ms)
-        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?
-        .map(validated_keypackage_row)
-        .transpose()?;
-        Ok::<Option<MlsKeyPackageRow>, PgTransactionError>(row)
+                .into());
+            }
+            Ok::<Option<MlsKeyPackageRow>, PgTransactionError>(Some(next))
         })
         .await
         .map_err(PgTransactionError::into_persistence)

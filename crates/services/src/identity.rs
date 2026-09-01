@@ -1,23 +1,14 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_identifiers::{BlobRef, CellRef, Did, DidCoreId, EventId, Hash};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_models_collaboration::contact_operations::{
-    ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
-    RequestAcceptanceReceipt,
-};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use arkret_models_crypto::{
-    DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
-    SessionState,
-};
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_wire::{
-    AccountId, DeviceReanchorPreFenceSealFrontier, DidUrl, LeaseBasisRef, NotaryJoseAlgorithm,
-    NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
+    AccountId, DidUrl, NotaryJoseAlgorithm, NotaryKeyKind, NotarySignerDescriptor, OpaqueLocalId,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -140,91 +131,10 @@ impl arkret_wire::PayloadSigner for FrozenEd25519NotarySigner {
     }
 }
 
-/// A consent cell is addressed by its subject: `consent_id` is the cell
-/// subject of exactly one holder (`consent-model.md` section 3.1), so the
-/// runtime key is `(holder, cell_id)`. `(peer, consent_scope)` is the intent
-/// carried by the cell's dots, not part of its address.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ConsentCellKey {
-    pub holder_principal_id: DidCoreId,
-    pub cell_id: CellRef,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsentGrantDot {
-    pub dot: String,
-    pub not_before: Option<DateTime<Utc>>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub granted_at: DateTime<Utc>,
-}
-
-/// One holder-private `ak.component.consent.grant.v1` or_set cell.
-///
-/// `peer` and `consent_scope` are the intent frozen by the cell's first
-/// accepted grant; every later dot on the same `consent_id` MUST carry that
-/// same intent (`consent-model.md` sections 3.1 and 3.2).
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConsentCellRecord {
-    pub cell_id: CellRef,
-    pub holder_principal_id: DidCoreId,
-    pub peer: arkret_models_collaboration::account_lifecycle::ConsentPeer,
-    pub consent_scope: String,
-    pub grant_dots: BTreeMap<String, ConsentGrantDot>,
-    pub revoked_dots: BTreeSet<String>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MimiConsentCorrelation {
-    pub consent_id: String,
-    pub requester_id: String,
-    pub target_kind: String,
-    pub target_id: String,
-    pub purpose: String,
-    pub strand_id: Option<String>,
-    pub source_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ContactRequestSlotState {
-    pub owner_id: arkret_wire::ActorId,
-    pub peer_id: arkret_wire::ActorId,
-    pub accepted_sequence: u64,
-    pub head_digest: Hash,
-}
-
-#[derive(Clone, Debug)]
-pub struct ContactRecord {
-    pub requester_id: arkret_wire::ActorId,
-    pub target_id: arkret_wire::ActorId,
-    pub contact_round_id: Option<Hash>,
-    pub version: Option<u64>,
-    pub granted_to_target_scopes: Vec<String>,
-    pub granted_to_requester_scopes: Vec<String>,
-    pub status: String,
-    pub request_event_ref: Option<EventId>,
-    /// Station-internal directional request-slot CAS heads. These are not
-    /// Contact-round continuity and never cross the wire by themselves.
-    pub request_slot_states: Vec<ContactRequestSlotState>,
-    pub request_receipts: Vec<RequestAcceptanceReceipt>,
-    pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
-    pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
-    /// Immediate terminal predecessor first, followed by its predecessors up
-    /// to the unique root round. Keeping the verified bundles beside the
-    /// current row lets the resolver supply the exact re-contact continuity
-    /// chain without reconstructing signed evidence from Event references.
-    pub contact_round_evidence_history: Vec<ContactRoundEvidenceBundle>,
-    pub control_outcomes: Vec<PeerContactSubmitOutcome>,
-    pub response_event_ref: Option<EventId>,
-    pub tombstone_event_ref: Option<EventId>,
-    pub message: Option<String>,
-    pub peer_host_id: Option<DidCoreId>,
-    pub peer_service_resolution: Option<Value>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
+pub use soland_domain::identity::{
+    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
+};
+pub use soland_storage::MimiConsentCorrelationRecord as MimiConsentCorrelation;
 
 /// The coordinates one `ak.direct_conversation.bound` endorsement settles.
 ///
@@ -400,23 +310,10 @@ impl AccountProfileState {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AccountLocalpartState {
-    pub id: String,
-    pub account_pk: AccountPk,
-    pub localpart: String,
-    pub is_primary: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct AccountLifecycleState {
-    pub state: String,
-    pub reason: Option<String>,
-    pub changed_by: Option<arkret_wire::ActorId>,
-    pub changed_at: DateTime<Utc>,
-}
+pub use soland_storage::{
+    AccountLifecycleRecord as AccountLifecycleState,
+    AccountLocalpartRecord as AccountLocalpartState,
+};
 
 #[derive(Clone, Debug)]
 pub struct RegisterAccountCommand {
@@ -1105,13 +1002,7 @@ pub struct RecordAgentPairingCommitIntentCommand {
     pub signing_key_binding: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct AgentPairingCommitIntentState {
-    pub request_digest: String,
-    pub authorize_event_id: String,
-    pub signing_key_binding:
-        Option<arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding>,
-}
+pub use soland_storage::PendingAgentPairingCommitIntent as AgentPairingCommitIntentState;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentPairingState {
@@ -1366,28 +1257,9 @@ impl AgentPairingState {
     }
 }
 
-/// Service-owned projection of a server-mediated device-pairing short-link
-/// request. Mirrors the storage `DevicePairingRecord`; the port maps between
-/// the two so the service layer stays storage-crate agnostic.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DevicePairingState {
-    pub device_pairing_request_id: String,
-    pub pairing_code: String,
-    pub new_device_pubkey: Value,
-    pub client_nonce: String,
-    pub gate_audience: String,
-    pub server_nonce: String,
-    pub display_name: Option<String>,
-    pub device_metadata: Option<Value>,
-    /// Lifecycle state; canonical SDK enum (device-pairing.schema.json
-    /// `#/$defs/device_pairing_state`).
-    pub state: arkret_models_collaboration::http_bodies::DevicePairingState,
-    pub device_id: Option<String>,
-    pub authorized_by_actor_id: Option<arkret_wire::DidCoreId>,
-    pub authorized_event_ref: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
+/// Device-pairing state has no application-only shape or invariant; the
+/// service port and persistence adapter share the durable record verbatim.
+pub use soland_storage::DevicePairingRecord as DevicePairingState;
 
 #[async_trait]
 pub trait DevicePairingPort: Send + Sync {
@@ -1479,28 +1351,9 @@ pub trait AgentPairingPort: Send + Sync {
     ) -> ServiceResult<AgentRuntimeEnqueueOutcome>;
 }
 
-#[derive(Clone, Debug)]
-pub struct AgentSidecarState {
-    pub sidecar_id: String,
-    pub realm_id: String,
-    pub controller_id: String,
-    /// Lifecycle state; canonical SDK enum (`active` | `suspended` | `tombstoned`).
-    pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
-    pub state_changed_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AgentSidecarContextState {
-    pub sidecar_id: String,
-    pub normalized_context_ref_digest: String,
-    pub normalized_context_ref: Value,
-    pub version: i64,
-    pub predecessor_event_ref: Option<String>,
-    pub attach_event_ref: String,
-    pub created_at: DateTime<Utc>,
-}
+pub use soland_storage::{
+    AgentSidecarContextRecord as AgentSidecarContextState, AgentSidecarRecord as AgentSidecarState,
+};
 
 #[async_trait]
 pub trait SidecarPort: Send + Sync {
@@ -1533,21 +1386,7 @@ pub struct AgentPairingService {
     sidecars: Arc<dyn SidecarPort>,
 }
 
-#[derive(Clone, Debug)]
-pub struct RecoveryPolicyState {
-    pub policy_id: String,
-    pub account_id: arkret_wire::AccountId,
-    pub version: u32,
-    pub acceptance_basis: LeaseBasisRef,
-    pub trust_domain: String,
-    pub allowed_proof_kinds: Vec<String>,
-    pub supersedes: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub issued_at: DateTime<Utc>,
-    pub raw_payload: Value,
-    pub accepted_at: DateTime<Utc>,
-    pub verification_method: String,
-}
+pub use soland_storage::RecoveryPolicyRecord as RecoveryPolicyState;
 
 #[derive(Clone, Debug)]
 pub struct PublishRecoveryPolicyCommand {
@@ -1637,37 +1476,7 @@ impl RecoveryPolicyService {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RecoverySessionState {
-    pub request_id: String,
-    pub create_intent_digest: String,
-    pub recovery_session_id: String,
-    pub session_grant_id: String,
-    pub session_grant_cnf_jkt: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
-    pub station_id: arkret_identifiers::DidCoreId,
-    pub requesting_device_id: String,
-    pub trust_domain: String,
-    pub policy_id: String,
-    pub policy_version: u32,
-    pub identity_model: RecoveryIdentityModel,
-    pub current_device_generation_ref: u64,
-    pub device_generation_status: DeviceGenerationStatus,
-    pub registry_head: Hash,
-    pub accepted_seal_frontier: DeviceReanchorPreFenceSealFrontier,
-    pub policy_payload: Value,
-    pub publication_authority_context: RecoveryPublicationAuthorityContext,
-    pub publication_authority_context_digest: Hash,
-    pub challenge: String,
-    /// Lifecycle state; canonical SDK enum (recovery-session.schema.json
-    /// `#/$defs/session_state`).
-    pub state: SessionState,
-    pub proof_payload: Option<Value>,
-    pub transaction_id: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
+pub use soland_storage::RecoverySessionRecord as RecoverySessionState;
 
 #[async_trait]
 pub trait RecoverySessionPort: Send + Sync {
@@ -1731,34 +1540,11 @@ impl RecoverySessionService {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct SecurityTransactionRecord {
-    pub canonical_request: Vec<u8>,
-    pub resource: arkret_wire::SecurityTransaction,
-}
-
-#[derive(Clone, Debug)]
-pub struct SecurityTransactionStepOutcomeState {
-    pub transaction_id: String,
-    pub step: arkret_wire::SecurityTransactionStep,
-    pub canonical_request: Vec<u8>,
-    pub response: Value,
-    pub participant_outcome: Option<Value>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SecurityTransactionStepAttemptState {
-    pub transaction_id: String,
-    pub step: arkret_wire::SecurityTransactionStep,
-    pub canonical_request: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-pub struct BackupSeriesEraseProgressState {
-    pub transaction_id: String,
-    pub canonical_request: Vec<u8>,
-    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
-}
+pub use soland_storage::{
+    BackupSeriesEraseProgressRecord as BackupSeriesEraseProgressState, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord as SecurityTransactionStepAttemptState,
+    SecurityTransactionStepOutcomeRecord as SecurityTransactionStepOutcomeState,
+};
 
 #[async_trait]
 pub trait SecurityTransactionPort: Send + Sync {
@@ -2513,17 +2299,7 @@ impl IdentityService {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct DidDocumentState {
-    pub did: String,
-    pub did_document: Value,
-    pub key_log_head: Option<String>,
-    pub seq: u64,
-    pub method_evidence: Value,
-    pub fetched_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
+pub use soland_storage::WebvhDocumentRecord as DidDocumentState;
 
 pub const DID_DOCUMENT_HIGH_RISK_TTL_SECS: i64 = 15 * 60;
 
@@ -2545,14 +2321,7 @@ pub fn evaluate_did_document_freshness(
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct DidLogEvent {
-    pub event_digest: String,
-    pub did: String,
-    pub seq: u64,
-    pub operation: Value,
-    pub created_at: DateTime<Utc>,
-}
+pub use soland_storage::WebvhLogRecord as DidLogEvent;
 
 /// Relationship between a verified pinned did:webvh version and the verified
 /// head observed during the same history resolution.
@@ -3006,8 +2775,8 @@ impl DidService {
 mod tests {
     use super::*;
 
-    fn recovery_policy_basis() -> LeaseBasisRef {
-        LeaseBasisRef::Seal(
+    fn recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
+        arkret_wire::LeaseBasisRef::Seal(
             arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
         )
     }

@@ -145,7 +145,9 @@ pub(super) enum SubmitMode<'a> {
 /// authorization Event id or generation ref is instead a projection integrity
 /// failure, which surfaces as an internal availability fault and never as an
 /// authorization answer.
-fn local_device_authorization_error(error: soland_services::ServiceError) -> SubmitOneError {
+pub(super) fn local_device_authorization_error(
+    error: soland_services::ServiceError,
+) -> SubmitOneError {
     let (status, code) = if error.is_not_found() {
         (StatusCode::FORBIDDEN, "device_unauthorized")
     } else {
@@ -274,7 +276,7 @@ pub(super) async fn derive_submit_cell_writes(
 
 // Sections 5, 6.3.1 and 9.3.1 require the Event's frozen Seal basis, never
 // the receiver's latest projection or a concurrent Move's writes.
-fn validate_cas_write_guards(
+pub(super) fn validate_cas_write_guards(
     state: &AppState,
     operation: &Operation,
     writes: &[arkret_wire::cba::ProjectedCellWrite],
@@ -332,7 +334,7 @@ fn validate_cas_write_guards(
     Ok(())
 }
 
-async fn validate_active_series_authority_before_commit(
+pub(super) async fn validate_active_series_authority_before_commit(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     operation: &Operation,
@@ -980,7 +982,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
 /// `offline-publication.md` §2.1 requires the receipt this service persisted for
 /// the digest to come back on every response for that digest, including an
 /// idempotent duplicate — byte-identically, never re-stamped.
-fn with_ingress_receipt(
+pub(super) fn with_ingress_receipt(
     mut response: SubmittedEventOutcome,
     receipt: Option<&arkret_wire::offline_publication::IngressReceipt>,
 ) -> SubmittedEventOutcome {
@@ -1010,7 +1012,7 @@ fn apply_delivery_summary_from_intents(
     response.outcome.pending_delivery_count = pending_targets;
 }
 
-async fn apply_durable_delivery_summary(
+pub(super) async fn apply_durable_delivery_summary(
     state: &AppState,
     response: &mut SubmittedEventOutcome,
 ) -> Result<(), SubmitOneError> {
@@ -1078,7 +1080,7 @@ pub(super) async fn durable_pending_delivery_count(
     Ok(targets.values().filter(|pending| **pending).count() as u32)
 }
 
-async fn stored_control_proposal_ack(
+pub(super) async fn stored_control_proposal_ack(
     state: &AppState,
     digest: &Hash,
 ) -> Result<arkret_wire::ControlProposalAck, SubmitOneError> {
@@ -1117,7 +1119,7 @@ async fn stored_control_proposal_ack(
     ))
 }
 
-async fn restore_exact_duplicate_control_event(
+pub(super) async fn restore_exact_duplicate_control_event(
     state: &AppState,
     accepted: &soland_services::events::AcceptedEvent,
     ackless_self_principal_ingress: Option<&AcklessSelfPrincipalIngress>,
@@ -1845,7 +1847,7 @@ pub(super) fn exact_producer_retry(existing_bytes: &[u8], submitted: &Event) -> 
     existing == *submitted
 }
 
-fn moderation_franking_replay_nonce(
+pub(super) fn moderation_franking_replay_nonce(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
     consumed_at: chrono::DateTime<chrono::Utc>,
@@ -2390,133 +2392,32 @@ pub(super) async fn submit_event_value_with_context(
         }
         None => None,
     };
-    let service = state.event_queries();
     // Event ids are globally unique. A managed Realm genesis is initially
     // committed through the bootstrap-batch writer but may subsequently be
     // replayed through this single-Event path, so resolve the retry by that
     // stable id before asking whether the Realm already exists. A storage
     // failure must not be silently reclassified as a brand-new create.
-    let existing = service
-        .canonical_event(parsed.event_id.as_str())
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("canonical Event duplicate lookup failed: {error}"),
-            )
-        })?;
-    if let Some(existing) = existing {
-        if existing.canonical_bytes == parsed.canonical_bytes
-            || exact_producer_retry(&existing.canonical_bytes, &submitted_event)
-        {
-            let stored_compensation_evidence = service
-                .membership_compensation_evidence(parsed.event_id.as_str())
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("stored membership compensation evidence lookup failed: {error}"),
-                    )
-                })?;
-            match (
-                stored_compensation_evidence.as_ref(),
-                context.membership_compensation_evidence,
-            ) {
-                (None, None) => {}
-                (Some(stored), Some(incoming)) => {
-                    let incoming_bytes = arkret_canonical::canonical_json_bytes(incoming)
-                        .map_err(|error| {
-                            SubmitOneError::new(
-                                StatusCode::BAD_REQUEST,
-                                "schema_violation",
-                                format!(
-                                    "membership compensation evidence is not canonicalizable: {error}"
-                                ),
-                            )
-                        })?;
-                    if stored.canonical_bytes != incoming_bytes {
-                        return Err(SubmitOneError::new(
-                            StatusCode::CONFLICT,
-                            "membership_compensation_conflict",
-                            "the same Event was replayed with different membership compensation evidence",
-                        ));
-                    }
-                }
-                (Some(_), None) | (None, Some(_)) => {
-                    return Err(SubmitOneError::new(
-                        StatusCode::CONFLICT,
-                        "membership_compensation_conflict",
-                        "the Event replay does not match its accepted membership compensation carrier",
-                    ));
-                }
-            }
-            if control_event_for_proposal.is_some() {
-                restore_exact_duplicate_control_event(
-                    state,
-                    &existing,
-                    ackless_self_principal_ingress.as_ref(),
-                    parsed.digest_suite,
-                )
-                .await?;
-            }
-            let frontier = super::super::endpoints::load_realm_actor_frontier(
-                state,
-                parsed.realm_id.clone(),
-                parsed.actor.clone(),
-            )
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("post-submit frontier unavailable: {error}"),
-                )
-            })?;
-            let mut response = with_ingress_receipt(
-                event_submit_response(
-                    state,
-                    session,
-                    EventsSubmitStatus::Duplicate,
-                    existing.event_id.clone(),
-                    frontier,
-                )
-                .await,
-                ingress_receipt.as_ref(),
-            );
-            if (envelope.get("seal_basis").is_some() || agent_pcr_genesis)
-                && !self_principal_pcr_device_authorized
-            {
-                let digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("stored Control Move digest is invalid: {error}"),
-                    )
-                })?;
-                let ack = stored_control_proposal_ack(state, &digest).await?;
-                response.outcome.control_proposal_acks.push(ack);
-            }
-            apply_durable_delivery_summary(state, &mut response).await?;
-            return Ok(response);
-        }
-        append_audit_log(
-            state,
-            Some(&session.actor),
-            "events.submit",
-            json!({
-                "event_id": parsed.event_id,
-                "reason": "witness_disagreement",
-                "canonical_digest": parsed.canonical_digest
-            }),
-            "witness_disagreement",
-        )
-        .await;
-        let record =
-            super::identity_anchor::canonical_record(&parsed, envelope.clone(), received_at);
-        return Err(quarantine_verified_event_collision(state, record).await);
+    if let Some(response) = resolve_existing_event_stage(
+        state,
+        ExistingEventStage {
+            session,
+            envelope: &envelope,
+            parsed: &parsed,
+            submitted_event: &submitted_event,
+            membership_compensation_evidence: context.membership_compensation_evidence,
+            has_control_event: control_event_for_proposal.is_some(),
+            ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
+            ingress_receipt: ingress_receipt.as_ref(),
+            agent_pcr_genesis,
+            self_principal_pcr_device_authorized,
+            received_at,
+        },
+    )
+    .await?
+    {
+        return Ok(response);
     }
+    let service = state.event_queries();
     if let Some(evidence) = context.membership_compensation_evidence {
         validate_membership_compensation_live_state(state, &submitted_event, evidence).await?;
     }
@@ -2713,488 +2614,28 @@ pub(super) async fn submit_event_value_with_context(
         has_projection = projection_operation.is_some(),
         "submit_event"
     );
-    let mut strand_status_audit_payload = None;
-    let mut consent_admission = None;
-    let mut validated_agent_approval = None;
-    if let Some(operation) = projection_operation.as_ref() {
-        if let Err(message) = validate_operation_semantics(state, std::slice::from_ref(operation)) {
-            return Err(SubmitOneError::semantic_schema_violation(message));
-        }
-        if let Some(basis) = &submitted_event.seal_basis {
-            let frozen = state
-                .projections()
-                .effective_state_at(&basis.leaves, &operation.realm_id)
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "failed_precondition",
-                        format!("Control Move frozen Seal basis unavailable: {error}"),
-                    )
-                })?;
-            validate_cas_write_guards(state, operation, &projected_cell_writes, &frozen)?;
-        }
-        preflight_moderation_dismiss(state, operation).await?;
-        preflight_account_data_cas(state, operation).await?;
-        // Holder-private consent is admission state, not a post-acceptance
-        // cache: resolve the whole or_set mutation and its eager invalidation
-        // here so a Move that cannot be projected is refused with zero writes
-        // (`consent-model.md` sections 3.1, 3.3 and 4.1.2).
-        consent_admission = crate::routing::identity::consent::preflight_consent_admission(
-            state,
-            operation,
-            &submitted_event,
-        )
-        .await
-        .map_err(|rejection| {
-            SubmitOneError::new(rejection.status, rejection.code, rejection.message)
-        })?;
-        if let Err(reason) =
-            crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
-                state,
-                parsed.device_id_str(),
-                operation,
-            )
-            .await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-        if let Err(reason) =
-            crate::routing::identity::agents::sidecar::validate_sidecar_exchange_control_event(
-                state, operation,
-            )
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-        validate_active_series_authority_before_commit(state, &parsed, operation).await?;
-        if let Err(reason) =
-            validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-        // AKP-0016 — reject agent_participation ceiling writes that widen
-        // the parent scope's ceiling (tighten-only invariant).
-        if let Err(reason) =
-            validate_agent_participation_ceiling(state, std::slice::from_ref(operation)).await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-        // AKP-0016 §5.2 / architecture §7 — Agent writes
-        // require an auditable agent_context plus the effective participation
-        // bit for the write mode. Per 0016-agent-participation-policy.md §6,
-        // missing materialised grants are preconditions, not auth-context
-        // denials.
-        // The MIMI reporter lane already verifies the closed, short-lived
-        // holder transcript and the current Agent proxy/key authorization.
-        // Its closed moderation payload cannot carry the ordinary
-        // agent_context/approval fields, so do not require that second,
-        // incompatible authorization profile for the same producer.
-        if !context
-            .internal_admission
-            .is_some_and(InternalEventAdmission::is_mimi_agent_reporter)
-        {
-            let agent_policy_operation =
-                operation_with_unsigned_agent_context(operation, &envelope);
-            match validate_agent_reply_participation(
-                state,
-                std::slice::from_ref(&agent_policy_operation),
-            )
-            .await
-            {
-                Ok(mut approvals) => {
-                    validated_agent_approval = approvals.pop();
-                    if !approvals.is_empty() {
-                        return Err(SubmitOneError::new(
-                            StatusCode::BAD_REQUEST,
-                            "schema_violation",
-                            "one Event operation cannot consume multiple agent approvals",
-                        ));
-                    }
-                }
-                Err(reason) => {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        reason,
-                        reason,
-                    ));
-                }
-            }
-        }
-        // Policy validation always sees the whole submit batch, so facet
-        // writes can cross-check sibling scheme/profile values instead of
-        // only the projection (`operations::policy_extra`). Outside a batch
-        // surface the lane sees the Event's own Operation alone.
-        let policy_operations: &[arkret_event_draft::ProjectedEventOperation] =
-            if context.batch_operations.is_empty() {
-                std::slice::from_ref(operation)
-            } else {
-                context.batch_operations
-            };
-        let policy_result = if preparing_agent_membership {
-            crate::routing::events::operations::validate_single_operation_policy_for_agent_membership_cascade(
-                state,
-                operation,
-                policy_operations,
-                has_internal_plaintext_service_binding,
-            )
-            .await
-        } else {
-            crate::routing::events::operations::validate_single_operation_policy_in_batch(
-                state,
-                operation,
-                policy_operations,
-                has_internal_plaintext_service_binding,
-            )
-            .await
-        };
-        if let Err(message) = policy_result {
-            let (status, code) =
-                crate::routing::events::operations::operation_policy_reason_code(message);
-            return Err(SubmitOneError::new(status, code, message));
-        }
-        // Recipient trust is checked by the claim ledger only after the exact
-        // destination receipt has been authenticated, never by a local DID lookup.
-        if context.internal_admission.is_none()
-            && let Some(reason) =
-                preflight_mls_welcome_claim_ledger_reject(state, &parsed.actor, operation).await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
-        // The typed decode above proves the validated envelope is a JSON
-        // object, so this deref cannot fail.
-        let envelope_object = envelope
-            .as_object()
-            .expect("validated Event envelope decoded as a JSON object");
-        if let Some(reason) = preflight_mls_welcome_claim_signature_reject(
-            state,
+    let ProjectionPreflightOutcome {
+        strand_status_audit_payload,
+        consent_admission,
+        validated_agent_approval,
+    } = apply_projection_preflight(
+        state,
+        ProjectionPreflightContext {
             session,
-            envelope_object,
-            &parsed.actor,
-            operation,
-            context.internal_admission,
-        )
-        .await
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
-        if let Err(reason) =
-            crate::routing::events::projection::validate_invite_cancel_pre_admission(
-                parsed.actor_id.as_str(),
-                operation,
-                &frozen_pre_state,
-            )
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-        let (invite_preflight_reject, invite_proof_context) = {
-            // Admission checks below are mandatory and MUST NOT be skipped
-            // (fail-closed). The projection lock is a `parking_lot::Mutex`
-            // (no poisoning), so acquiring it cannot fail and this block
-            // always runs.
-            let proj = state.projections().snapshot();
-            if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_strand_lifecycle_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_strand_status_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            // event-and-patch.md §4.4 — a Control Move's generic
-            // `preconditions[].head_eq` compare-and-swap MUST be evaluated
-            // against the materialized head before any effect lands; a stale
-            // head fails closed with `failed_precondition` and no partial
-            // apply.
-            if let Err(reason) = proj.check_move_preconditions(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            strand_status_audit_payload =
-                proj.strand_status_transition_audit_payload(operation, parsed.actor_id.as_str());
-            if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_redaction_target_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_strand_tracks_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_bottom_cell_transition(operation) {
-                let (code, message) = cba_bottom_reject(reason);
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    code,
-                    message,
-                ));
-            }
-            if let Err(reason) = proj.check_membership_join_admission(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_pin_scope_safety(operation) {
-                let status = if reason == "not_found" {
-                    StatusCode::NOT_FOUND
-                } else {
-                    StatusCode::PRECONDITION_FAILED
-                };
-                return Err(SubmitOneError::new(status, reason, reason));
-            }
-            // relation.md §2/§4 — relation effective scope is reducer-managed,
-            // and structural contains/belongs_to MUST stay within one Realm.
-            if let Err(reason) = proj.check_relation_invariants(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if let Err(reason) = proj.check_child_scope_policy_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            // capabilities.md §10.2 — a capability grant whose typed
-            // authority refs close a cycle MUST be rejected before it projects.
-            if let Err(reason) = proj.check_authority_cycle(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
-            if parsed.kind == arkret_wire::EventKind::RealmLink.as_str() {
-                let target_realm_id = operation
-                    .payload
-                    .get("target_realm_id")
-                    .and_then(Value::as_str)
-                    .expect("validated Realm Link target_realm_id");
-                let link_kind = operation
-                    .payload
-                    .get("link_kind")
-                    .and_then(Value::as_str)
-                    .expect("validated Realm Link link_kind");
-                let status = operation
-                    .payload
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .expect("validated Realm Link status");
-                if let Err(reason) =
-                    soland_domain::reducer::realm_links::check_realm_link_admissible(
-                        &proj,
-                        operation.realm_id.as_str(),
-                        target_realm_id,
-                        link_kind,
-                        status,
-                    )
-                {
-                    let code = if reason == arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION {
-                        "failed_precondition"
-                    } else {
-                        "schema_violation"
-                    };
-                    return Err(SubmitOneError::new(
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        code,
-                        reason,
-                    )
-                    .with_details(serde_json::json!({"reason_code": reason})));
-                }
-            }
-            if let Some(reason) = state
-                .projections()
-                .preflight_capability_rejection(operation, &projected_cell_writes)
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason.clone(),
-                    reason,
-                ));
-            }
-            if let Some(reason) = state
-                .projections()
-                .preflight_realm_policy_rejection(operation, &projected_cell_writes)
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason.clone(),
-                    reason,
-                ));
-            }
-            if let Some(reason) = state
-                .projections()
-                .preflight_calendar_rejection(operation, &projected_cell_writes)
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason.clone(),
-                    reason,
-                ));
-            }
-            if let Some(reason) = state.projections().preflight_mls_rejection(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason.clone(),
-                    reason,
-                ));
-            }
-            // Poll response validity is admission state, not a best-effort
-            // post-commit projection. This path is shared by local and peer
-            // federation submission, so an unresolved/cross-scope Poll or an
-            // invalid selection can never enter the canonical Event log.
-            if let Some(reason) = state
-                .projections()
-                .preflight_poll_rejection(operation, &projected_cell_writes)
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason.clone(),
-                    reason,
-                ));
-            }
-            // Single moderation Events are checked against the live accepted
-            // projection. Atomic verdict aggregates skip this point check
-            // because their complete ordered sibling set was already folded
-            // over a projection rebuilt from durable accepted facts.
-            if !context.moderation_atomic_batch_verified {
-                if operation.event_kind == arkret_wire::EventKind::ModerationAppealDecision {
-                    match operation.payload.get("decision").and_then(Value::as_str) {
-                        Some("overturn") => {
-                            return Err(SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "appeal_overturn_missing_lift",
-                                "appeal_overturn_missing_lift",
-                            ));
-                        }
-                        Some("modify") => {
-                            return Err(SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "appeal_modify_missing_lift",
-                                "appeal_modify_missing_lift",
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(reason) = state
-                    .projections()
-                    .preflight_moderation_rejection(operation, &projected_cell_writes)
-                {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        reason.clone(),
-                        reason,
-                    ));
-                }
-            }
-            let invite_preflight_reject = state
-                .projections()
-                .preflight_invite_rejection(operation, &projected_cell_writes);
-            let invite_proof_context = if invite_preflight_reject.is_none() {
-                invite_claim_proof_context_from_projection(state.projections(), operation).map_err(
-                    |reason| SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason),
-                )?
-            } else {
-                None
-            };
-            (invite_preflight_reject, invite_proof_context)
-        };
-        if let Some(reason) = invite_preflight_reject {
-            record_rejected_invite_claim_effect(state, operation)
-                .await
-                .map_err(|message| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "invite_claim_reject_effect_failed",
-                        message,
-                    )
-                })?;
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason.clone(),
-                reason,
-            ));
-        }
-        if let Some(context) = invite_proof_context
-            && let Err(reason) =
-                verify_invite_claim_proofs_for_operation(state, operation, &context).await
-        {
-            record_rejected_invite_claim_effect(state, operation)
-                .await
-                .map_err(|message| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "invite_claim_reject_effect_failed",
-                        message,
-                    )
-                })?;
-            return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
-            ));
-        }
-    }
+            parsed: &parsed,
+            submitted_event: &submitted_event,
+            envelope: &envelope,
+            projection_operation: projection_operation.as_ref(),
+            projected_cell_writes: &projected_cell_writes,
+            frozen_pre_state: &frozen_pre_state,
+            internal_admission: context.internal_admission,
+            batch_operations: context.batch_operations,
+            preparing_agent_membership,
+            has_internal_plaintext_service_binding,
+            moderation_atomic_batch_verified: context.moderation_atomic_batch_verified,
+        },
+    )
+    .await?;
 
     // `ak.device.revoke` acceptance is only a reversible durable pending
     // transition. Irreversible device/key/delivery cleanup belongs to the
@@ -3209,249 +2650,21 @@ pub(super) async fn submit_event_value_with_context(
         stamp_projection_operation_received_at(operation, received_at);
     }
 
-    let control_proposal_ack = if let Some(event) = control_event_for_proposal.as_ref() {
-        let realm_id = parsed.realm_id.clone();
-        let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("validated Control Move digest is invalid: {error}"),
-            )
-        })?;
-        if self_principal_pcr_device_authorized {
-            None
-        } else {
-            let agent_pcr_control =
-                crate::control_proposal::agent_pcr_event_matches_accepted_delegation(state, event)
-                    .await
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            error,
-                        )
-                    })?;
-            let policy = crate::control_proposal::control_proposal_policy(
-                state,
-                &realm_id,
-                std::slice::from_ref(event),
-            )
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
-                    format!("Control Proposal policy is unavailable: {error}"),
-                )
-            })?;
-            if let Some(ack) = context.control_proposal_ack {
-                // A Agent PCR closed genesis is the one delegated
-                // ingress-authority class: its receipt is signed by the
-                // controller device named by the accepted Agent DID
-                // delegation, never by a frozen notary descriptor and never
-                // by this service (`authz/cba-profiles.md`, ingress source 1).
-                let authority_set_ref = if agent_pcr_control {
-                    crate::control_proposal::verify_agent_pcr_ack(state, event, ack, policy)
-                        .await
-                        .map_err(|error| {
-                            SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "failed_precondition",
-                                format!("submitted Control Proposal Ack is invalid: {error}"),
-                            )
-                        })?
-                } else {
-                    let worker =
-                        crate::notary::NotaryWorker::for_service(state.service_id().clone());
-                    let (_, authority_set_ref) = worker
-                        .current_notary_value_for_events(
-                            state,
-                            &realm_id,
-                            std::slice::from_ref(event),
-                        )
-                        .map_err(|error| {
-                            SubmitOneError::new(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "quorum_unreachable",
-                                format!("Control Proposal authority is unavailable: {error}"),
-                            )
-                        })?
-                        .ok_or_else(|| {
-                            SubmitOneError::new(
-                                StatusCode::SERVICE_UNAVAILABLE,
-                                "quorum_unreachable",
-                                "current proposal authority profile is unavailable",
-                            )
-                        })?;
-                    crate::control_proposal::verify_control_proposal_ack(state, event, ack, policy)
-                        .await
-                        .map_err(|error| {
-                            SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "failed_precondition",
-                                format!("submitted Control Proposal Ack is invalid: {error}"),
-                            )
-                        })?;
-                    authority_set_ref
-                };
-                if ack.realm_id != realm_id
-                    || ack.proposal_digest != proposal_digest
-                    || ack.authority_set_ref != authority_set_ref
-                {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "failed_precondition",
-                        "submitted Control Proposal Ack does not bind the Event basis authority",
-                    ));
-                }
-                Some(ack.clone())
-            } else if agent_pcr_control {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    "Agent PCR Control Move requires a delegated-controller Control Proposal Ack",
-                ));
-            } else if event.seal_basis.is_none() {
-                let bootstrap_authority = context
-                    .authorization_lease
-                    .map(|lease| &lease.authority_set_ref)
-                    .ok_or_else(|| {
-                        SubmitOneError::new(
-                            StatusCode::PRECONDITION_FAILED,
-                            "failed_precondition",
-                            "basis-less Control Move requires an anchor-unit authorization lease",
-                        )
-                    })?;
-                crate::control_proposal::mint_control_proposal_acks(
-                    state,
-                    &realm_id,
-                    std::slice::from_ref(event),
-                    std::slice::from_ref(&parsed.digest_suite),
-                    received_at,
-                    Some(bootstrap_authority),
-                )
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        format!("Control Proposal Ack signing failed: {error}"),
-                    )
-                })?
-                .into_iter()
-                .next()
-            } else {
-                let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-                let (_, authority_set_ref) = worker
-                    .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
-                            format!("Control Proposal authority is unavailable: {error}"),
-                        )
-                    })?
-                    .ok_or_else(|| {
-                        SubmitOneError::new(
-                            StatusCode::SERVICE_UNAVAILABLE,
-                            "quorum_unreachable",
-                            "current proposal authority profile is unavailable",
-                        )
-                    })?;
-                worker
-                .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        format!("Control Proposal authority is unavailable: {error}"),
-                    )
-                })?
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        "this service cannot issue the current authority set's Control Proposal Ack",
-                    )
-                })?;
-                Some(
-                    crate::control_proposal::mint_control_proposal_ack(
-                        state,
-                        realm_id,
-                        proposal_digest,
-                        authority_set_ref,
-                        received_at,
-                        policy,
-                    )
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!("Control Proposal Ack signing failed: {error}"),
-                        )
-                    })?,
-                )
-            }
-        }
-    } else {
-        None
-    };
+    let control_proposal_ack = resolve_control_proposal_ack(
+        state,
+        &parsed,
+        control_event_for_proposal.as_ref(),
+        ControlProposalAckContext {
+            control_proposal_ack: context.control_proposal_ack,
+            authorization_lease: context.authorization_lease,
+            self_principal_pcr_device_authorized,
+            received_at,
+        },
+    )
+    .await?;
     let local_device_revocation_gate =
-        if !session.token_hash.starts_with("federation:") && parsed.device_id.is_some() {
-            let producer_principal_id = submitted_event
-                .executed_by
-                .as_ref()
-                .unwrap_or(&submitted_event.actor_id)
-                .signing_principal_id()
-                .as_str();
-            let selector =
-            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
-                state,
-                producer_principal_id,
-                parsed.device_id_str(),
-            )
-            .await
-            .map_err(local_device_authorization_error)?;
-            let gate_status = state
-                .persistence()
-                .device_revocation_gate_status(&selector)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("Event author revocation gate unavailable: {error}"),
-                    )
-                })?;
-            match gate_status {
-                soland_storage::DeviceRevocationGateStatus::Active => {}
-                soland_storage::DeviceRevocationGateStatus::Pending { .. } => {
-                    return Err(SubmitOneError::new(
-                        StatusCode::CONFLICT,
-                        "device_revocation_pending",
-                        "Event author device has a pending revocation proposal",
-                    ));
-                }
-                soland_storage::DeviceRevocationGateStatus::Revoked { .. } => {
-                    return Err(SubmitOneError::new(
-                        StatusCode::CONFLICT,
-                        "device_revoked",
-                        "Event author device generation is revoked",
-                    ));
-                }
-                soland_storage::DeviceRevocationGateStatus::AuthorityMismatch
-                | soland_storage::DeviceRevocationGateStatus::GenerationMismatch => {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        "device_unauthorized",
-                        "Event author device generation no longer matches accepted authority state",
-                    ));
-                }
-            }
-            Some(selector)
-        } else {
-            None
-        };
+        validate_local_event_device_revocation_gate(state, session, &parsed, &submitted_event)
+            .await?;
     let (accepted_event, envelope, accepted_canonical_bytes, governance_dependency) =
         accepted_event_envelope(
             state,
@@ -3792,345 +3005,47 @@ pub(super) async fn submit_event_value_with_context(
         });
         return Ok(accepted_response);
     }
-    let franking_replay_nonce =
-        moderation_franking_replay_nonce(&parsed, &envelope_for_bootstrap, received_at)?;
-    let encrypted_message = is_encrypted_message(&parsed, &envelope_for_bootstrap);
-    let commit_result = if encrypted_message {
-        // Service actor sequence allocation and the final transaction stay
-        // under one process-wide authoring lock. PostgreSQL's Realm/actor
-        // advisory lock supplies the cross-process CAS; this lock prevents
-        // avoidable sibling construction inside one instance.
-        let service_event_lock = service_event_authoring_lock();
-        let _service_event_guard = service_event_lock.lock().await;
-        let proof_command = Box::pin(
-            crate::routing::interop::moderation::prepare_franking_proof_event(
-                state,
-                &command.event,
-            ),
-        )
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                error.http_status(),
-                error.wire_code(),
-                format!("franking proof preparation failed: {error}"),
-            )
-        })?;
-        state
-            .events()
-            .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
-                events: vec![command, proof_command],
-                agent_approval_nonce,
-                franking_replay_nonce,
-                applet_record: None,
-                applet_authoring_preview: None,
-                agent_membership_cascade: None,
-            })
-            .await
-    } else if franking_replay_nonce.is_some() || agent_approval_nonce.is_some() {
-        state
-            .events()
-            .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
-                events: vec![command],
-                agent_approval_nonce,
-                franking_replay_nonce,
-                applet_record: None,
-                applet_authoring_preview: None,
-                agent_membership_cascade: None,
-            })
-            .await
-    } else {
-        state.events().commit_accepted_event(command).await
-    };
-    if let Err(error) = commit_result {
-        if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
-            && error.is_realm_already_exists()
-        {
-            return Err(realm_already_exists_error());
-        }
-        if error.is_conflict_kind() {
-            let message = error.detail();
-            // The commit lane's conflict code decides the status and the wire
-            // reason. Reading it as a value (rather than substring-matching
-            // the diagnostic) is what keeps a reworded message from silently
-            // moving an admission decision, and what makes an unregistered
-            // conflict visible instead of falling through to a 500 labelled
-            // "events store unavailable".
-            let conflict = error.conflict_code();
-            if conflict == Some(ConflictCode::CasConflict) {
-                let current_frontier = super::super::endpoints::load_realm_actor_frontier(
-                    state,
-                    parsed.realm_id.clone(),
-                    parsed.actor.clone(),
-                )
-                .await
-                .map_err(|frontier_error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("actor frontier unavailable: {frontier_error}"),
-                    )
-                })?;
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "cas_conflict",
-                    "actor_seq is older than the accepted actor frontier",
-                )
-                .with_details(
-                    arkret_models_collaboration::event_sync::EventsActorCasConflictProblem {
-                        accepted: false,
-                        current_frontier,
-                    },
-                ));
-            }
-            if conflict == Some(ConflictCode::ForkQuarantine) {
-                return Err(SubmitOneError::quarantine(
-                    parsed.event_id.to_string(),
-                    "fork_quarantine",
-                    "actor_seq sibling fork limit exceeded; event is quarantined pending actor-chain repair",
-                ));
-            }
-            if conflict == Some(ConflictCode::SchemaViolation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    message,
-                ));
-            }
-            if conflict == Some(ConflictCode::MembershipCompensationConflict) {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "membership_compensation_conflict",
-                    message,
-                ));
-            }
-            if conflict == Some(ConflictCode::DevicePairingNotFound) {
-                return Err(SubmitOneError::new(
-                    StatusCode::NOT_FOUND,
-                    "not_found",
-                    "device pairing request not found",
-                ));
-            }
-            if conflict == Some(ConflictCode::DeviceRevocationPending) {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "device_revocation_pending",
-                    "device revocation is pending",
-                ));
-            }
-            if conflict == Some(ConflictCode::DeviceRevoked) {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "device_revoked",
-                    "device generation is revoked",
-                ));
-            }
-            if conflict == Some(ConflictCode::ApprovalNonceReused) {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    arkret_wire::ReasonCode::APPROVAL_NONCE_REUSED,
-                    "agent approval nonce was already consumed",
-                ));
-            }
-            if conflict == Some(ConflictCode::DuplicateConflict) {
-                if let Ok(Some(existing)) = service.canonical_event(parsed.event_id.as_str()).await
-                    && (existing.canonical_bytes == parsed.canonical_bytes
-                        || existing.canonical_bytes == accepted_canonical_bytes)
-                {
-                    let frontier = super::super::endpoints::load_realm_actor_frontier(
-                        state,
-                        parsed.realm_id.clone(),
-                        parsed.actor.clone(),
-                    )
-                    .await
-                    .map_err(|frontier_error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!("actor frontier unavailable: {frontier_error}"),
-                        )
-                    })?;
-                    let mut response = with_ingress_receipt(
-                        event_submit_response(
-                            state,
-                            session,
-                            EventsSubmitStatus::Duplicate,
-                            parsed.event_id.to_string(),
-                            frontier,
-                        )
-                        .await,
-                        ingress_receipt.as_ref(),
-                    );
-                    if control_event_for_proposal.is_some() && !self_principal_pcr_device_authorized
-                    {
-                        let digest =
-                            Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
-                                SubmitOneError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "internal_error",
-                                    format!("stored Control Move digest is invalid: {error}"),
-                                )
-                            })?;
-                        let ack = stored_control_proposal_ack(state, &digest).await?;
-                        response.outcome.control_proposal_acks.push(ack);
-                    }
-                    apply_durable_delivery_summary(state, &mut response).await?;
-                    return Ok(response);
-                }
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "duplicate_conflict",
-                    "event_id already exists with different canonical bytes",
-                ));
-            }
-        }
-        if let Some(collision) = map_event_hash_collision(parsed.event_id.to_string(), &error) {
-            return Err(collision);
-        }
-        if error.is_conflict_kind() {
-            // The commit lane rejected the write for a reason this routing
-            // layer has no registered code for. Fail closed, but do not claim
-            // the store is unavailable: that message sent operators looking at
-            // the database for what is a classification gap in this file.
-            tracing::error!(
-                %error,
-                "commit rejected a canonical event with an unregistered conflict code"
-            );
-            return Err(SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "unclassified persistence conflict",
-            ));
-        }
-        tracing::error!(%error, "failed to persist canonical event");
-        return Err(SubmitOneError::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "internal_error",
-            "events store unavailable",
-        ));
-    }
-    if let Some(control_event) = accepted_control_event_for_proposal.as_ref() {
-        // The durable pending row carries the ingress classification
-        // (`event-auth-state-resolution.md` §7.2): device-authorized
-        // self-principal PCR moves stay outside the external
-        // proposal/decision rail as `AcklessSelfPrincipal` rows until the
-        // same authority signs a successor Seal; every other Control Move
-        // binds its canonical Ack as `AckRequired`. The two unreachable arms
-        // are excluded above: the Ackless class rejects a submitted Ack at
-        // admission, and the Ack-required class always mints or verifies one
-        // before this point.
-        let ingress = match (
-            ackless_self_principal_ingress,
-            control_proposal_ack.as_ref(),
-        ) {
-            (Some(class), None) => ControlProposalIngress::AcklessSelfPrincipal(class),
-            (None, Some(ack)) => ControlProposalIngress::AckRequired(ack.clone()),
-            (Some(_), Some(_)) | (None, None) => {
-                return Err(SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    "accepted Control Move violates its durable ingress classification",
-                ));
-            }
-        };
-        state
-            .projections()
-            .put_pending_control_event(control_event, &ingress, parsed.digest_suite)
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("accepted Control Move pending index unavailable: {error}"),
-                )
-            })?;
-        state.wake_control_seal_coordinator();
-    }
-    if let Some(admission) = consent_admission.as_ref() {
-        // The cell row and its invalidation are already durable; publish the
-        // runtime projection and the holder's notifications.
-        crate::routing::identity::consent::apply_committed_consent_admission(state, admission)
-            .await;
-    }
-    if let Some(operation) = projection_operation {
-        crate::routing::events::projection::project_accepted_canonical_event_from_device(
-            state,
-            parsed.actor_id.as_str(),
-            parsed.device_id_str(),
-            &operation,
-            &projected_cell_writes,
-        )
-        .await;
-        resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str()).await;
-    }
-    if (parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
-        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
-        && let Err(error) = persist_principal_resolution_projection(state, &accepted_event).await
-    {
-        // This index is rebuildable from canonical Events. The Event is
-        // already committed, so never misreport it as rejected; surface
-        // the drift for repair and let public reads fail closed meanwhile.
-        tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
-    }
-    if let Some(event) = projected_event {
-        let _ = state.publish_event_notification(crate::state::EventNotification::event(
-            event.realm_id.clone(),
-            event.event_id.clone(),
-            crate::routing::events::projection::projection_event_json(&event),
-        ));
-    } else {
-        // Actor-scoped streams consume durable control history even when the
-        // Event has no timeline projection. Its canonical envelope supplies
-        // only a wake-up hint; subscribers reload the accepted record.
-        let _ = state.publish_event_notification(crate::state::EventNotification::event(
-            parsed.realm_id.to_string(),
-            parsed.event_id.to_string(),
-            envelope_for_bootstrap.clone(),
-        ));
-    }
-    if let Some(payload) = strand_status_audit_payload {
-        append_audit_log(
-            state,
-            Some(parsed.actor_id.as_str()),
-            "incident.status.transition",
-            payload,
-            "accepted",
-        )
-        .await;
-    }
-    if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
-        && let Some(envelope_object) = envelope_for_bootstrap.as_object()
-    {
-        bootstrap_realm_member_index(
-            state,
-            parsed.realm_id.as_str(),
-            parsed.actor_id.as_str(),
-            envelope_object,
-        )
-        .await;
-        organizations::record_realm_organizations_from_event(
-            state,
-            parsed.realm_id.as_str(),
-            &envelope_for_bootstrap,
-        )
-        .await;
-    }
-    append_audit_log(
+    if let Some(response) = commit_accepted_event_stage(
         state,
-        Some(&session.actor),
-        "events.submit",
-        json!({
-            "event_id": parsed.event_id.clone(),
-            "realm_id": parsed.realm_id.clone(),
-            "kind": parsed.kind.clone(),
-            "canonical_digest": parsed.canonical_digest.clone()
-        }),
-        "accepted",
+        AcceptedEventCommit {
+            session,
+            parsed: &parsed,
+            envelope_for_bootstrap: &envelope_for_bootstrap,
+            accepted_canonical_bytes: &accepted_canonical_bytes,
+            command,
+            agent_approval_nonce,
+            ingress_receipt: ingress_receipt.as_ref(),
+            control_event_for_proposal: control_event_for_proposal.is_some(),
+            self_principal_pcr_device_authorized,
+            received_at,
+        },
     )
-    .await;
+    .await?
+    {
+        return Ok(response);
+    }
+    apply_accepted_event_post_commit(
+        state,
+        AcceptedEventPostCommit {
+            session,
+            parsed: &parsed,
+            accepted_event: &accepted_event,
+            accepted_control_event: accepted_control_event_for_proposal.as_ref(),
+            ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
+            control_proposal_ack: control_proposal_ack.as_ref(),
+            consent_admission: consent_admission.as_ref(),
+            projection_operation,
+            projected_cell_writes: &projected_cell_writes,
+            projected_event,
+            envelope: &envelope_for_bootstrap,
+            strand_status_audit_payload,
+        },
+    )
+    .await?;
     Ok(accepted_response)
 }
 
-async fn preflight_moderation_dismiss(
+pub(super) async fn preflight_moderation_dismiss(
     state: &AppState,
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), SubmitOneError> {
@@ -4195,38 +3110,35 @@ pub(super) async fn resolve_moderation_dismiss_queue_item(
     }) else {
         return;
     };
-    let Ok(items) = state.governance().moderation_queue_items().await else {
+    let Ok(item) = state
+        .governance()
+        .submitted_moderation_queue_item_for_report_event(target_ref)
+        .await
+    else {
         tracing::warn!(target_ref, "moderation queue lookup failed after dismiss");
         return;
     };
-    for mut item in items {
-        let matches_report = item
-            .get("report")
-            .and_then(|report| report.get("event_id"))
-            .and_then(Value::as_str)
-            == Some(target_ref);
-        if !matches_report || item.get("status").and_then(Value::as_str) != Some("submitted") {
-            continue;
-        }
-        if let Some(object) = item.as_object_mut() {
-            object.insert("status".to_owned(), Value::String("resolved".to_owned()));
-            object.insert(
-                "resolution".to_owned(),
-                json!({
-                    "decision": "dismiss",
-                    "effective_verdict": "none",
-                    "decision_event_id": decision_event_id,
-                }),
-            );
-            object.insert("resolved_at".to_owned(), json!(now()));
-        }
-        if let Err(error) = state.governance().upsert_moderation_queue_item(item).await {
-            tracing::warn!(%error, target_ref, "moderation queue dismiss projection failed");
-        }
+    let Some(mut item) = item else {
+        return;
+    };
+    if let Some(object) = item.as_object_mut() {
+        object.insert("status".to_owned(), Value::String("resolved".to_owned()));
+        object.insert(
+            "resolution".to_owned(),
+            json!({
+                "decision": "dismiss",
+                "effective_verdict": "none",
+                "decision_event_id": decision_event_id,
+            }),
+        );
+        object.insert("resolved_at".to_owned(), json!(now()));
+    }
+    if let Err(error) = state.governance().upsert_moderation_queue_item(item).await {
+        tracing::warn!(%error, target_ref, "moderation queue dismiss projection failed");
     }
 }
 
-async fn preflight_account_data_cas(
+pub(super) async fn preflight_account_data_cas(
     state: &AppState,
     operation: &arkret_event_draft::ProjectedEventOperation,
 ) -> Result<(), SubmitOneError> {

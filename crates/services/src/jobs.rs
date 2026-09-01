@@ -6,7 +6,6 @@ use arkret_wire::ActorId;
 pub const INTERNAL_IDEMPOTENCY_OPERATION: &str = "soland://internal/idempotency";
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use serde_json::Value;
 
 use crate::ServiceResult;
 
@@ -44,25 +43,10 @@ pub trait RuntimeHealthPort: Send + Sync {
     fn database_pool_in_use(&self) -> u32;
 }
 
-#[derive(Clone, Debug)]
-pub struct IdempotencyState {
-    pub authenticated_actor: ActorId,
-    pub operation_id: String,
-    pub idempotency_key: String,
-    pub request_hash: String,
-    pub response_status: i32,
-    pub response_body: Value,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct ControlProposalAuthorityAckState {
-    pub ack_key: String,
-    pub request_hash: String,
-    pub response_body: Value,
-    pub created_at: DateTime<Utc>,
-}
+pub use soland_storage::{
+    ControlProposalAuthorityAckRecord as ControlProposalAuthorityAckState,
+    IdempotencyRecord as IdempotencyState,
+};
 
 #[derive(Clone)]
 pub struct JobsService {

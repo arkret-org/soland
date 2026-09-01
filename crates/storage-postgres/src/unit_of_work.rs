@@ -1014,15 +1014,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     }
                     arkret_state::state::store::ControlProposalIngress::AckRequired(ack) => {
                         Some({
-                            if ack.proposal_digest.as_str() != event_digest
-                                || ack.realm_id != typed_event.realm_id
-                            {
-                                return Err(PersistenceError::Conflict(
-                                    "schema_violation: Control Proposal Ack does not bind Control Move"
-                                        .to_owned(),
-                                )
-                                .into());
-                            }
+                            super::validate_control_proposal_ack_binding(&request.event, ack)?;
                             serde_json::to_value(ack).map_err(|error| {
                                 PersistenceError::Internal(format!(
                                     "Control Proposal Ack encoding failed: {error}"

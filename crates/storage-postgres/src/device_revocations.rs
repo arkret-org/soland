@@ -29,6 +29,24 @@ struct TargetStateRow {
 }
 
 #[derive(QueryableByName)]
+struct ExistingTransitionRow {
+    #[diesel(sql_type = Text)]
+    principal_id: arkret_identifiers::DidCoreId,
+    #[diesel(sql_type = Text)]
+    station_id: arkret_identifiers::DidCoreId,
+    #[diesel(sql_type = Text)]
+    device_id: String,
+    #[diesel(sql_type = Text)]
+    target_device_authorize_event_id: String,
+    #[diesel(sql_type = BigInt)]
+    target_device_generation_ref: i64,
+    #[diesel(sql_type = Text)]
+    proposal_event_id: String,
+    #[diesel(sql_type = Jsonb)]
+    control_proposal_ack: Value,
+}
+
+#[derive(QueryableByName)]
 struct ReceiptRow {
     #[diesel(sql_type = Jsonb)]
     decision_payload: Value,
@@ -252,25 +270,12 @@ pub(crate) async fn insert_transition_in_transaction(
     )
     .await?;
     let existing = sql_query(
-        "SELECT t.proposal_digest, t.proposal_event_id, t.accepted_at, t.acceptance_seq, \
-                t.control_proposal_ack, c.proposal_decisions, \
-                COALESCE(b.decision_overdue, false) AS decision_overdue, \
-                b.seal_id AS covering_seal_id, b.sealed_at AS covered_at \
-         FROM device_revocation_targets t JOIN state_control_events c \
-           ON c.event_digest = t.proposal_digest \
-         LEFT JOIN LATERAL ( \
-             SELECT binding.seal_id, binding.sealed_at, \
-                    bool_or(binding.decision_overdue) OVER () AS decision_overdue \
-             FROM state_seal_control_events binding \
-             WHERE binding.event_digest = c.event_digest \
-               AND NOT EXISTS (SELECT 1 FROM state_seal_quarantine q \
-                               WHERE q.seal_id = binding.seal_id) \
-             ORDER BY binding.sealed_at, binding.seal_id LIMIT 1 \
-         ) b ON true \
-         WHERE t.proposal_digest = $1 FOR UPDATE OF t, c",
+        "SELECT principal_id, station_id, device_id, target_device_authorize_event_id, \
+                target_device_generation_ref, proposal_event_id, control_proposal_ack \
+         FROM device_revocation_targets WHERE proposal_digest = $1 FOR UPDATE",
     )
     .bind::<Text, _>(&transition.proposal_digest)
-    .get_result::<TargetStateRow>(&mut *conn)
+    .get_result::<ExistingTransitionRow>(&mut *conn)
     .await
     .optional()
     .map_err(PersistenceError::database)?;
@@ -279,36 +284,49 @@ pub(crate) async fn insert_transition_in_transaction(
             serde_json::from_value(existing.control_proposal_ack).map_err(|error| {
                 PersistenceError::Internal(format!("stored revoke Ack: {error}"))
             })?;
-        return if existing.proposal_event_id == transition.proposal_event_id
-            && ack == transition.control_proposal_ack
-        {
-            Ok(false)
-        } else {
-            Err(PersistenceError::Conflict(
-                "duplicate_conflict: device revocation target differs".to_owned(),
-            ))
+        let existing_selector = DeviceRevocationGateSelector {
+            principal_id: existing.principal_id,
+            station_id: existing.station_id,
+            device_id: existing.device_id,
+            target_device_authorize_event_id: existing.target_device_authorize_event_id,
+            target_device_generation_ref: u64::try_from(existing.target_device_generation_ref)
+                .map_err(|_| {
+                    PersistenceError::Internal(
+                        "stored device revocation generation is negative".to_owned(),
+                    )
+                })?,
         };
+        let decision = soland_storage::classify_device_revocation_transition(
+            transition,
+            soland_storage::DeviceRevocationTransitionSnapshot::Existing {
+                selector: &existing_selector,
+                proposal_event_id: &existing.proposal_event_id,
+                control_proposal_ack: &ack,
+            },
+        )?;
+        debug_assert_eq!(
+            decision,
+            soland_storage::DeviceRevocationTransitionDecision::Duplicate
+        );
+        return Ok(false);
     }
-    match gate_status_in_transaction(conn, &transition.selector).await? {
-        DeviceRevocationGateStatus::Revoked { .. } => {
-            return Err(PersistenceError::Conflict("device_revoked".to_owned()));
-        }
-        DeviceRevocationGateStatus::Active | DeviceRevocationGateStatus::Pending { .. } => {}
-        DeviceRevocationGateStatus::AuthorityMismatch
-        | DeviceRevocationGateStatus::GenerationMismatch => {
-            unreachable!("derived from target rows")
-        }
-    }
+    let gate_status = gate_status_in_transaction(conn, &transition.selector).await?;
     let live = target_rows(conn, &transition.selector)
         .await?
         .into_iter()
         .filter(|row| !is_rejected(&row.proposal_decisions))
         .count();
-    if live >= soland_storage::MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION {
-        return Err(PersistenceError::Conflict(
-            "schema_violation: device revocation proposal cap exceeded".to_owned(),
-        ));
-    }
+    let decision = soland_storage::classify_device_revocation_transition(
+        transition,
+        soland_storage::DeviceRevocationTransitionSnapshot::New {
+            gate_status: &gate_status,
+            live_proposal_count: live,
+        },
+    )?;
+    debug_assert_eq!(
+        decision,
+        soland_storage::DeviceRevocationTransitionDecision::Insert
+    );
     let acceptance_seq = allocate_seq(
         conn,
         transition.selector.principal_id.as_str(),

@@ -106,6 +106,31 @@ pub trait SecurityTransactionStore: Send + Sync {
     ) -> PersistenceResult<BackupSeriesEraseProgressRecord>;
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[doc(hidden)]
+pub enum SecurityTransactionFirstWriteDecision {
+    Insert,
+    ExactRetry,
+}
+
+/// Classifies the immutable canonical bytes fixed by the first writer for a
+/// transaction, step, outcome, or transaction-bound erase operation.
+#[doc(hidden)]
+pub fn classify_security_transaction_first_write(
+    existing: Option<&[u8]>,
+    proposed: &[u8],
+) -> PersistenceResult<SecurityTransactionFirstWriteDecision> {
+    match existing {
+        None => Ok(SecurityTransactionFirstWriteDecision::Insert),
+        Some(existing) if existing == proposed => {
+            Ok(SecurityTransactionFirstWriteDecision::ExactRetry)
+        }
+        Some(_) => Err(PersistenceError::Conflict(
+            "security transaction first canonical request bytes changed".to_owned(),
+        )),
+    }
+}
+
 fn decode_backup_erase_request(
     progress: &BackupSeriesEraseProgressRecord,
 ) -> PersistenceResult<arkret_models_crypto::BackupSeriesEraseRequestBody> {
@@ -257,6 +282,49 @@ pub fn validate_security_transaction_update(
     }
     Ok(())
 }
+
+#[doc(hidden)]
+pub fn validate_security_transaction_step_accept(
+    existing: &SecurityTransactionRecord,
+    proposed: &SecurityTransactionRecord,
+    attempt: &SecurityTransactionStepAttemptRecord,
+    outcome: &SecurityTransactionStepOutcomeRecord,
+) -> PersistenceResult<()> {
+    proposed
+        .resource
+        .validate_structural()
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let transaction_id = proposed.resource.transaction_id.as_str();
+    if attempt.transaction_id != transaction_id
+        || outcome.transaction_id != transaction_id
+        || attempt.step != outcome.step
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "security transaction step records belong to different transactions or steps"
+                .to_owned(),
+        ));
+    }
+    if attempt.canonical_request != outcome.canonical_request {
+        return Err(PersistenceError::Conflict(format!(
+            "security transaction step {:?} outcome changed the durable request bytes",
+            outcome.step
+        )));
+    }
+    validate_security_transaction_update(existing, proposed)?;
+    if proposed.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
+        || existing
+            .resource
+            .accepted_step_kind(existing.resource.accepted_steps.len())
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+            != outcome.step
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "accepted step outcome must match the single appended transaction step".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 #[doc(hidden)]
 pub fn recovery_active_policy_locked(
     data: &BTreeMap<String, RecoveryPolicyRecord>,
@@ -266,4 +334,22 @@ pub fn recovery_active_policy_locked(
         .filter(|record| &record.account_id == account_id)
         .max_by_key(|record| record.version)
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn security_transaction_first_writer_distinguishes_insert_retry_and_conflict() {
+        assert_eq!(
+            classify_security_transaction_first_write(None, b"request").unwrap(),
+            SecurityTransactionFirstWriteDecision::Insert
+        );
+        assert_eq!(
+            classify_security_transaction_first_write(Some(b"request"), b"request").unwrap(),
+            SecurityTransactionFirstWriteDecision::ExactRetry
+        );
+        assert!(classify_security_transaction_first_write(Some(b"request"), b"changed").is_err());
+    }
 }

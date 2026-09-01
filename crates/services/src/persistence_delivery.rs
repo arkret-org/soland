@@ -11,55 +11,6 @@ struct PersistenceDeviceMessages(Arc<dyn PersistenceStore>);
 struct PersistenceSignalRelay(Arc<dyn PersistenceStore>);
 struct PersistenceBlobs(Arc<dyn PersistenceStore>);
 struct PersistencePushBridgeCache(Arc<dyn PersistenceStore>);
-
-fn application_push_bridge_cache(
-    record: soland_storage::OutboundPushBridgeCacheRecord,
-) -> crate::delivery::OutboundPushBridgeCacheState {
-    crate::delivery::OutboundPushBridgeCacheState {
-        push_gateway_url: record.push_gateway_url,
-        service_base_url: record.service_base_url,
-        bridge_describe_url: record.bridge_describe_url,
-        fetch_state: record.fetch_state,
-        cache_state: record.cache_state,
-        contract_digest: record.contract_digest,
-        fetched_at: record.fetched_at,
-        remote_contract: record.remote_contract,
-        trust_level: record.trust_level,
-        freshness_at: record.freshness_at,
-        etag: record.etag,
-    }
-}
-
-fn persistence_push_bridge_cache(
-    record: crate::delivery::OutboundPushBridgeCacheState,
-) -> soland_storage::OutboundPushBridgeCacheRecord {
-    soland_storage::OutboundPushBridgeCacheRecord {
-        push_gateway_url: record.push_gateway_url,
-        service_base_url: record.service_base_url,
-        bridge_describe_url: record.bridge_describe_url,
-        fetch_state: record.fetch_state,
-        cache_state: record.cache_state,
-        contract_digest: record.contract_digest,
-        fetched_at: record.fetched_at,
-        remote_contract: record.remote_contract,
-        trust_level: record.trust_level,
-        freshness_at: record.freshness_at,
-        etag: record.etag,
-    }
-}
-
-fn application_push_contract_drift(
-    result: soland_storage::DriftResult,
-) -> crate::delivery::PushContractDrift {
-    match result {
-        soland_storage::DriftResult::Match => crate::delivery::PushContractDrift::Match,
-        soland_storage::DriftResult::Stale => crate::delivery::PushContractDrift::Stale,
-        soland_storage::DriftResult::DigestMismatch => {
-            crate::delivery::PushContractDrift::DigestMismatch
-        }
-        soland_storage::DriftResult::Unknown => crate::delivery::PushContractDrift::Unknown,
-    }
-}
 #[async_trait::async_trait]
 impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
     async fn store_notification(
@@ -222,69 +173,24 @@ impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
     }
 }
 
-fn application_blob(record: soland_storage::BlobRecord) -> crate::delivery::BlobState {
-    crate::delivery::BlobState {
-        sha256: record.sha256,
-        size_bytes: record.size_bytes,
-        storage_backend: record.storage_backend,
-        storage_key: record.storage_key,
-        media_type: record.media_type,
-        filename: record.filename,
-        realm_id: record.realm_id,
-        encryption: record.encryption,
-        legal_hold: record.legal_hold,
-        redacted: record.redacted,
-        visibility: record.visibility,
-        uploaded_by: record.uploaded_by,
-        created_at: record.created_at,
-    }
-}
-fn persistence_blob(record: crate::delivery::BlobState) -> soland_storage::BlobRecord {
-    soland_storage::BlobRecord {
-        sha256: record.sha256,
-        size_bytes: record.size_bytes,
-        storage_backend: record.storage_backend,
-        storage_key: record.storage_key,
-        media_type: record.media_type,
-        filename: record.filename,
-        realm_id: record.realm_id,
-        encryption: record.encryption,
-        legal_hold: record.legal_hold,
-        redacted: record.redacted,
-        visibility: record.visibility,
-        uploaded_by: record.uploaded_by,
-        created_at: record.created_at,
-    }
-}
-
 #[async_trait::async_trait]
 impl crate::delivery::BlobPort for PersistenceBlobs {
     async fn blob(
         &self,
         blob_ref: &str,
     ) -> crate::ServiceResult<Option<crate::delivery::BlobState>> {
-        Ok(self.0.blobs().get(blob_ref).await?.map(application_blob))
+        Ok(self.0.blobs().get(blob_ref).await?)
     }
     async fn store_blob(
         &self,
         blob_ref: &str,
         blob: crate::delivery::BlobState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .blobs()
-            .put(blob_ref, &persistence_blob(blob))
-            .await?;
+        self.0.blobs().put(blob_ref, &blob).await?;
         Ok(())
     }
     async fn blobs(&self) -> crate::ServiceResult<Vec<crate::delivery::BlobState>> {
-        Ok(self
-            .0
-            .blobs()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_blob)
-            .collect())
+        Ok(self.0.blobs().snapshot_all().await?)
     }
 }
 
@@ -297,7 +203,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
     ) -> crate::ServiceResult<()> {
         self.0
             .push_bridge_cache()
-            .put(bridge_describe_url, persistence_push_bridge_cache(record))
+            .put(bridge_describe_url, record)
             .await?;
         Ok(())
     }
@@ -310,8 +216,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
             .0
             .push_bridge_cache()
             .current_contract(bridge_describe_url)
-            .await?
-            .map(application_push_bridge_cache))
+            .await?)
     }
     async fn verify_contract_freshness(
         &self,
@@ -319,116 +224,11 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
         observed_digest: &str,
         max_age: chrono::Duration,
     ) -> crate::ServiceResult<crate::delivery::PushContractDrift> {
-        Ok(application_push_contract_drift(
-            self.0
-                .push_bridge_cache()
-                .verify_contract_freshness(bridge_describe_url, observed_digest, max_age)
-                .await?,
-        ))
-    }
-}
-
-fn application_device_message(
-    record: soland_storage::DeviceMessageRecord,
-) -> crate::delivery::DeviceMessageState {
-    crate::delivery::DeviceMessageState {
-        idempotency_key: record.idempotency_key,
-        sender: record.sender,
-        recipient: record.recipient,
-        device_id: record.device_id,
-        position: record.position,
-        content: record.content,
-        created_at: record.created_at,
-    }
-}
-
-fn persistence_device_message(
-    message: crate::delivery::DeviceMessageState,
-) -> soland_storage::DeviceMessageRecord {
-    soland_storage::DeviceMessageRecord {
-        idempotency_key: message.idempotency_key,
-        sender: message.sender,
-        recipient: message.recipient,
-        device_id: message.device_id,
-        position: message.position,
-        content: message.content,
-        created_at: message.created_at,
-    }
-}
-
-fn persistence_device_message_batch(
-    batch: crate::delivery::DeviceMessageBatchRecord,
-) -> soland_storage::DeviceMessageBatchRecord {
-    soland_storage::DeviceMessageBatchRecord {
-        request_key: batch.request_key,
-        request_digest: batch.request_digest,
-        idempotency_expires_at: batch.idempotency_expires_at,
-        target_snapshot_guard: batch.target_snapshot_guard.map(|guard| {
-            soland_storage::DeviceMessageTargetSnapshotGuard {
-                recipient: guard.recipient,
-                devices: guard.devices,
-            }
-        }),
-        device_revocation_gate: batch.device_revocation_gate,
-        items: batch
-            .items
-            .into_iter()
-            .map(|item| soland_storage::DeviceMessageBatchItemRecord {
-                message_key: item.message_key,
-                intent_digest: item.intent_digest,
-                idempotency_expires_at: item.idempotency_expires_at,
-                message: item.message.map(persistence_device_message),
-            })
-            .collect(),
-    }
-}
-
-fn application_device_message_inspection(
-    inspection: soland_storage::DeviceMessageBatchInspection,
-) -> crate::delivery::DeviceMessageBatchInspection {
-    match inspection {
-        soland_storage::DeviceMessageBatchInspection::Fresh {
-            existing_message_outcomes,
-        } => crate::delivery::DeviceMessageBatchInspection::Fresh {
-            existing_message_outcomes,
-        },
-        soland_storage::DeviceMessageBatchInspection::Duplicate(outcomes) => {
-            crate::delivery::DeviceMessageBatchInspection::Duplicate(outcomes)
-        }
-        soland_storage::DeviceMessageBatchInspection::RequestConflict => {
-            crate::delivery::DeviceMessageBatchInspection::RequestConflict
-        }
-        soland_storage::DeviceMessageBatchInspection::MessageConflict { message_key } => {
-            crate::delivery::DeviceMessageBatchInspection::MessageConflict { message_key }
-        }
-    }
-}
-
-fn application_device_message_commit_outcome(
-    outcome: soland_storage::DeviceMessageBatchCommitOutcome,
-) -> crate::delivery::DeviceMessageBatchCommitOutcome {
-    match outcome {
-        soland_storage::DeviceMessageBatchCommitOutcome::Stored(outcomes) => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::Stored(outcomes)
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::Duplicate(outcomes) => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::Duplicate(outcomes)
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::RequestConflict => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::RequestConflict
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::MessageConflict { message_key } => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::MessageConflict { message_key }
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::SnapshotConflict => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::SnapshotConflict
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::DeviceRevocationPending => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::DeviceRevocationPending
-        }
-        soland_storage::DeviceMessageBatchCommitOutcome::DeviceRevoked => {
-            crate::delivery::DeviceMessageBatchCommitOutcome::DeviceRevoked
-        }
+        Ok(self
+            .0
+            .push_bridge_cache()
+            .verify_contract_freshness(bridge_describe_url, observed_digest, max_age)
+            .await?)
     }
 }
 
@@ -441,7 +241,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
     ) -> crate::ServiceResult<()> {
         self.0
             .device_messages()
-            .append(device_revocation_gate, persistence_device_message(message))
+            .append(device_revocation_gate, message)
             .await?;
         Ok(())
     }
@@ -450,12 +250,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         &self,
         batch: crate::delivery::DeviceMessageBatchRecord,
     ) -> crate::ServiceResult<crate::delivery::DeviceMessageBatchCommitOutcome> {
-        Ok(application_device_message_commit_outcome(
-            self.0
-                .device_messages()
-                .commit_batch(persistence_device_message_batch(batch))
-                .await?,
-        ))
+        Ok(self.0.device_messages().commit_batch(batch).await?)
     }
 
     async fn inspect_batch(
@@ -464,19 +259,11 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         request_digest: &str,
         items: &[crate::delivery::DeviceMessageIntentRecord],
     ) -> crate::ServiceResult<crate::delivery::DeviceMessageBatchInspection> {
-        let items = items
-            .iter()
-            .map(|item| soland_storage::DeviceMessageIntentRecord {
-                message_key: item.message_key.clone(),
-                intent_digest: item.intent_digest.clone(),
-            })
-            .collect::<Vec<_>>();
-        Ok(application_device_message_inspection(
-            self.0
-                .device_messages()
-                .inspect_batch(request_key, request_digest, &items)
-                .await?,
-        ))
+        Ok(self
+            .0
+            .device_messages()
+            .inspect_batch(request_key, request_digest, items)
+            .await?)
     }
 
     async fn issue_ack_token(
@@ -515,10 +302,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
             .0
             .device_messages()
             .list_after(recipient, device_id, queue_position)
-            .await?
-            .into_iter()
-            .map(application_device_message)
-            .collect())
+            .await?)
     }
 
     async fn prune(

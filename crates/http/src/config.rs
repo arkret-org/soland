@@ -471,7 +471,7 @@ pub struct AppConfig {
     pub push_bridge_trusted_ids: Vec<String>,
     /// Base URL of the push gateway (floria) this deployment notifies over
     /// the registered internal channel when an account is deactivated
-    /// (`account-lifecycle.md` §7.1 "Push route 行的完成判据"). The fanout
+    /// (`account-lifecycle.md` §7.1, Push-route completion criterion). The fanout
     /// endpoint is derived by appending
     /// `floria_contracts::ACCOUNT_DEACTIVATE_FANOUT_PATH`.
     ///

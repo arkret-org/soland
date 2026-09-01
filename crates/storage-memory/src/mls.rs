@@ -5,7 +5,7 @@ use super::{
     MlsWelcomeStore, Mutex, PeerClaimTerminalTransition, PeerKeyPackageClaimAttempt,
     PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, Uuid, Value,
-    VecDeque, async_trait, mls_epoch_key,
+    VecDeque, apply_key_package_claim, async_trait, mls_epoch_key,
 };
 
 #[derive(Default)]
@@ -90,77 +90,25 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             }
             _ => None,
         };
-        let (group_id, terminal_without_claim, retiring) = match target {
-            MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false, false),
-            MlsKeyPackageClaimTarget::Retire => ("retired", true, true),
-            MlsKeyPackageClaimTarget::Revoke => ("revoked", true, false),
-        };
         let mut state = self.state.lock();
-        let Some(row) = state.rows.get_mut(id) else {
+        let Some(row) = state.rows.get(id) else {
             return Ok(None);
         };
-        if matches!(
-            row.claimed_by_mls_group_id.as_deref(),
-            Some("revoked" | "retired")
-        ) || retiring && (row.last_resort || row.claimed_by_mls_group_id.is_some())
-        {
-            return Ok(None);
-        }
-        if !terminal_without_claim
-            && (claimed_at >= row.lifetime_not_after
-                || claim_expires_at_unix_ms.is_some_and(|expires_at_unix_ms| {
-                    expires_at_unix_ms <= claimed_at.saturating_mul(1000)
-                        || expires_at_unix_ms > row.lifetime_not_after.saturating_mul(1000)
-                }))
-        {
-            return Ok(None);
-        }
-        if row
-            .claimed_by_mls_group_id
-            .as_deref()
-            .is_some_and(|claimed| claimed != group_id)
-            && !(row.last_resort && !terminal_without_claim)
-        {
-            // Already claimed by a different group — CAS loser path. A repeat
-            // claim by the same group is idempotent renewal (mirrors the
-            // reducer and the postgres try_claim guard).
-            return Ok(None);
-        }
-        if let Some(event_id) = device_authorize_event_id
-            && row.device_authorize_event_id.as_deref() != Some(event_id)
-        {
-            return Ok(None);
-        }
-        if let Some(event_id) = agent_key_authorize_event_id
-            && row.agent_key_authorize_event_id.as_deref() != Some(event_id)
-        {
-            return Ok(None);
-        }
-        if row.last_resort && !terminal_without_claim {
-            let Some(realm_id) = intended_realm_id else {
-                return Ok(None);
-            };
-            if row
-                .last_resort_realm_id
-                .as_deref()
-                .is_some_and(|bound_realm_id| bound_realm_id != realm_id)
-            {
-                return Ok(None);
-            }
-            if row.last_resort_realm_id.is_none() {
-                row.last_resort_realm_id = Some(realm_id.to_owned());
-            }
-            return Ok(Some(row.clone()));
-        }
-        row.claimed_by_mls_group_id = Some(group_id.to_owned());
-        row.claimed_at = (!terminal_without_claim).then_some(claimed_at);
-        row.claim_expires_at_unix_ms = if terminal_without_claim {
-            None
-        } else {
-            claim_expires_at_unix_ms
+        let claim = MlsKeyPackageClaim {
+            id,
+            target,
+            intended_realm_id,
+            device_authorize_event_id,
+            agent_key_authorize_event_id,
+            device_revocation_gate,
+            claimed_at,
+            claim_expires_at_unix_ms,
         };
-        row.consumed_at = None;
-        Ok(Some(row.clone()))
+        let Some(next) = apply_key_package_claim(row, &claim) else {
+            return Ok(None);
+        };
+        state.rows.insert(id.to_owned(), next.clone());
+        Ok(Some(next))
     }
 
     async fn consume_claim(

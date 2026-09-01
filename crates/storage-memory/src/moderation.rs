@@ -69,6 +69,21 @@ impl ModerationStore for MemoryModerationStore {
             .cloned())
     }
 
+    async fn get_submitted_queue_item_for_report_event(
+        &self,
+        report_event_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        Ok(self
+            .queue_items
+            .lock()
+            .iter()
+            .find(|item| {
+                item.pointer("/report/event_id").and_then(Value::as_str) == Some(report_event_id)
+                    && item.get("status").and_then(Value::as_str) == Some("submitted")
+            })
+            .cloned())
+    }
+
     async fn append_appeal(&self, appeal: Value) -> PersistenceResult<()> {
         if appeal.get("appeal_id").and_then(Value::as_str).is_none() {
             return Err(PersistenceError::Internal(
@@ -101,5 +116,38 @@ impl ModerationStore for MemoryModerationStore {
             .filter(|a| a.get("appeal_id").and_then(Value::as_str) == Some(appeal_id))
             .cloned()
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn submitted_queue_lookup_is_keyed_by_report_event() {
+        let store = MemoryModerationStore::new();
+        store
+            .upsert_queue_item(serde_json::json!({
+                "id": "ak:event:queue",
+                "status": "submitted",
+                "report": { "event_id": "ak:event:report" }
+            }))
+            .await
+            .unwrap();
+
+        assert!(
+            store
+                .get_submitted_queue_item_for_report_event("ak:event:report")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .get_submitted_queue_item_for_report_event("ak:event:other")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }

@@ -1,38 +1,14 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_wire::WebOrigin;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
-use serde_json::Value;
+pub use soland_storage::{
+    CursorRevocation as CursorRevocationState, SyncCursorRecord as CursorState,
+};
 
 use crate::ServiceResult;
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct CursorState {
-    pub handle: String,
-    pub binding_subject: Option<String>,
-    pub device_id: Option<String>,
-    pub service_id: arkret_identifiers::DidCoreId,
-    pub filter_digest: Option<String>,
-    pub purpose: String,
-    pub positions: Option<Value>,
-    pub target: Option<Value>,
-    pub issued_at_ms: i64,
-    pub expires_at_ms: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct CursorRevocationState {
-    pub cursor_digest: String,
-    pub account_id: arkret_wire::AccountId,
-    pub device_id: Option<String>,
-    pub scope: String,
-    pub reason_code: String,
-    pub revoked_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
 
 #[async_trait]
 pub trait CursorStorePort: Send + Sync {
@@ -54,29 +30,10 @@ pub trait CursorStorePort: Send + Sync {
     ) -> ServiceResult<Vec<CursorRevocationState>>;
 }
 
-/// One single-use `challenge_dpop_session_v1` challenge, as the sync layer
-/// sees it (`zh/sync/websocket-binding.md` §3.1).
-#[derive(Clone, Debug, PartialEq)]
-pub struct WebsocketChallengeState {
-    pub connection_id: String,
-    pub nonce: String,
-    pub canonical_origin: WebOrigin,
-    pub canonical_base_url: String,
-    pub issued_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub consumed: bool,
-    pub retain_until: DateTime<Utc>,
-}
-
-/// The `(cnf.jkt, jti, context)` replay-ledger key plus its retention.
-#[derive(Clone, Debug, PartialEq)]
-pub struct WebsocketReplayState {
-    pub cnf_jkt: String,
-    pub jti: String,
-    pub proof_context: String,
-    pub consumed_at: DateTime<Utc>,
-    pub retain_until: DateTime<Utc>,
-}
+pub use soland_storage::{
+    WebsocketAuthChallengeRecord as WebsocketChallengeState,
+    WebsocketAuthReplayRecord as WebsocketReplayState,
+};
 
 /// Durable, cross-instance challenge + replay state for the WebSocket binding.
 #[async_trait]

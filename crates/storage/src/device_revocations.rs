@@ -76,6 +76,189 @@ pub struct DeviceRevocationTargetRecord {
     pub status: DeviceRevocationTargetStatus,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceRevocationTransitionDecision {
+    Insert,
+    Duplicate,
+}
+
+pub enum DeviceRevocationTransitionSnapshot<'a> {
+    Existing {
+        selector: &'a DeviceRevocationGateSelector,
+        proposal_event_id: &'a str,
+        control_proposal_ack: &'a arkret_wire::ControlProposalAck,
+    },
+    New {
+        gate_status: &'a DeviceRevocationGateStatus,
+        live_proposal_count: usize,
+    },
+}
+
+/// Classify one accepted device-revocation target independently of adapter
+/// locking and sequence allocation.
+pub fn classify_device_revocation_transition(
+    transition: &DeviceRevocationTransition,
+    snapshot: DeviceRevocationTransitionSnapshot<'_>,
+) -> PersistenceResult<DeviceRevocationTransitionDecision> {
+    match snapshot {
+        DeviceRevocationTransitionSnapshot::Existing {
+            selector,
+            proposal_event_id,
+            control_proposal_ack,
+        } => {
+            if selector == &transition.selector
+                && proposal_event_id == transition.proposal_event_id
+                && control_proposal_ack == &transition.control_proposal_ack
+            {
+                Ok(DeviceRevocationTransitionDecision::Duplicate)
+            } else {
+                Err(PersistenceError::Conflict(
+                    "duplicate_conflict: device revocation target differs".to_owned(),
+                ))
+            }
+        }
+        DeviceRevocationTransitionSnapshot::New {
+            gate_status,
+            live_proposal_count,
+        } => {
+            if matches!(gate_status, DeviceRevocationGateStatus::Revoked { .. }) {
+                return Err(PersistenceError::Conflict("device_revoked".to_owned()));
+            }
+            if live_proposal_count >= MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: device revocation proposal cap exceeded".to_owned(),
+                ));
+            }
+            Ok(DeviceRevocationTransitionDecision::Insert)
+        }
+    }
+}
+
+#[cfg(test)]
+mod transition_tests {
+    use super::*;
+
+    fn selector(device_id: &str) -> DeviceRevocationGateSelector {
+        DeviceRevocationGateSelector {
+            principal_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:principal.example".to_owned(),
+            )
+            .unwrap(),
+            station_id: arkret_identifiers::DidCoreId::new(
+                "ak:did_core:web:soland.example".to_owned(),
+            )
+            .unwrap(),
+            device_id: device_id.to_owned(),
+            target_device_authorize_event_id: "authorize-event".to_owned(),
+            target_device_generation_ref: 1,
+        }
+    }
+
+    fn ack() -> arkret_wire::ControlProposalAck {
+        let created_at = Utc::now();
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: arkret_wire::RealmId::new(
+                "ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw".to_owned(),
+            )
+            .unwrap(),
+            proposal_digest: arkret_wire::Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
+            received_at: created_at,
+            decision_due_at: created_at + policy.decision_window,
+            absolute_due_at: created_at + policy.absolute_horizon,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:soland.example#authority-1".to_owned(),
+                )
+                .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                jws: "e30..c2ln".to_owned(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+    }
+
+    fn transition() -> DeviceRevocationTransition {
+        DeviceRevocationTransition {
+            selector: selector("device-a"),
+            proposal_event_id: "proposal-event".to_owned(),
+            proposal_digest: format!("sha256:{}", "b".repeat(64)),
+            control_proposal_ack: ack(),
+        }
+    }
+
+    #[test]
+    fn exact_replay_is_duplicate_but_selector_drift_conflicts() {
+        let transition = transition();
+        assert_eq!(
+            classify_device_revocation_transition(
+                &transition,
+                DeviceRevocationTransitionSnapshot::Existing {
+                    selector: &transition.selector,
+                    proposal_event_id: &transition.proposal_event_id,
+                    control_proposal_ack: &transition.control_proposal_ack,
+                },
+            )
+            .unwrap(),
+            DeviceRevocationTransitionDecision::Duplicate
+        );
+        assert!(
+            classify_device_revocation_transition(
+                &transition,
+                DeviceRevocationTransitionSnapshot::Existing {
+                    selector: &selector("device-b"),
+                    proposal_event_id: &transition.proposal_event_id,
+                    control_proposal_ack: &transition.control_proposal_ack,
+                },
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn new_target_respects_terminal_gate_and_live_cap() {
+        let transition = transition();
+        assert_eq!(
+            classify_device_revocation_transition(
+                &transition,
+                DeviceRevocationTransitionSnapshot::New {
+                    gate_status: &DeviceRevocationGateStatus::Active,
+                    live_proposal_count: 0,
+                },
+            )
+            .unwrap(),
+            DeviceRevocationTransitionDecision::Insert
+        );
+        assert!(
+            classify_device_revocation_transition(
+                &transition,
+                DeviceRevocationTransitionSnapshot::New {
+                    gate_status: &DeviceRevocationGateStatus::Revoked {
+                        covering_seal_id: "seal".to_owned(),
+                    },
+                    live_proposal_count: 0,
+                },
+            )
+            .is_err()
+        );
+        assert!(
+            classify_device_revocation_transition(
+                &transition,
+                DeviceRevocationTransitionSnapshot::New {
+                    gate_status: &DeviceRevocationGateStatus::Active,
+                    live_proposal_count: MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION,
+                },
+            )
+            .is_err()
+        );
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum DeviceRevocationGateStatus {

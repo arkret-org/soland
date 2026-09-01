@@ -1,5 +1,167 @@
 use super::*;
 
+/// Inputs whose effects are intentionally deferred until the canonical Event
+/// and its atomic commit command have succeeded.
+///
+/// Keeping this boundary explicit prevents rebuildable projections,
+/// notifications, and audit writes from drifting back into the persistence
+/// transaction or being observed for a rejected Event.
+pub(super) struct AcceptedEventPostCommit<'a> {
+    pub(super) session: &'a SessionRecord,
+    pub(super) parsed: &'a ValidatedEventEnvelope,
+    pub(super) accepted_event: &'a Event,
+    pub(super) accepted_control_event: Option<&'a Event>,
+    pub(super) ackless_self_principal_ingress:
+        Option<&'a arkret_state::state::store::AcklessSelfPrincipalIngress>,
+    pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
+    pub(super) consent_admission: Option<&'a crate::routing::identity::consent::ConsentAdmission>,
+    pub(super) projection_operation: Option<arkret_event_draft::ProjectedEventOperation>,
+    pub(super) projected_cell_writes: &'a [arkret_wire::cba::ProjectedCellWrite],
+    pub(super) projected_event: Option<soland_services::events::ProjectedEvent>,
+    pub(super) envelope: &'a Value,
+    pub(super) strand_status_audit_payload: Option<Value>,
+}
+
+/// Apply only rebuildable or externally observable effects after the durable
+/// canonical commit has completed.
+pub(super) async fn apply_accepted_event_post_commit(
+    state: &AppState,
+    stage: AcceptedEventPostCommit<'_>,
+) -> Result<(), SubmitOneError> {
+    let AcceptedEventPostCommit {
+        session,
+        parsed,
+        accepted_event,
+        accepted_control_event,
+        ackless_self_principal_ingress,
+        control_proposal_ack,
+        consent_admission,
+        projection_operation,
+        projected_cell_writes,
+        projected_event,
+        envelope,
+        strand_status_audit_payload,
+    } = stage;
+
+    if let Some(control_event) = accepted_control_event {
+        // The durable pending row carries the ingress classification:
+        // device-authorized self-principal PCR moves stay ack-less until the
+        // same authority signs a successor Seal; every other Control Move
+        // binds its canonical Ack.
+        let ingress = match (ackless_self_principal_ingress, control_proposal_ack) {
+            (Some(class), None) => {
+                arkret_state::state::store::ControlProposalIngress::AcklessSelfPrincipal(
+                    class.clone(),
+                )
+            }
+            (None, Some(ack)) => {
+                arkret_state::state::store::ControlProposalIngress::AckRequired(ack.clone())
+            }
+            (Some(_), Some(_)) | (None, None) => {
+                return Err(SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    "accepted Control Move violates its durable ingress classification",
+                ));
+            }
+        };
+        state
+            .projections()
+            .put_pending_control_event(control_event, &ingress, parsed.digest_suite)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Control Move pending index unavailable: {error}"),
+                )
+            })?;
+        state.wake_control_seal_coordinator();
+    }
+    if let Some(admission) = consent_admission {
+        // The cell row and its invalidation are already durable; publish the
+        // runtime projection and the holder's notifications.
+        crate::routing::identity::consent::apply_committed_consent_admission(state, admission)
+            .await;
+    }
+    if let Some(operation) = projection_operation {
+        crate::routing::events::projection::project_accepted_canonical_event_from_device(
+            state,
+            parsed.actor_id.as_str(),
+            parsed.device_id_str(),
+            &operation,
+            projected_cell_writes,
+        )
+        .await;
+        resolve_moderation_dismiss_queue_item(state, &operation, parsed.event_id.as_str()).await;
+    }
+    if (parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
+        || parsed.kind == arkret_wire::EventKind::IdentityResolutionUpdate.as_str())
+        && let Err(error) = persist_principal_resolution_projection(state, accepted_event).await
+    {
+        // This index is rebuildable from canonical Events. The Event is
+        // already committed, so never misreport it as rejected; surface the
+        // drift for repair and let public reads fail closed meanwhile.
+        tracing::error!(%error, event_id = %parsed.event_id, "principal resolution read-index update failed");
+    }
+    if let Some(event) = projected_event {
+        let _ = state.publish_event_notification(crate::state::EventNotification::event(
+            event.realm_id.clone(),
+            event.event_id.clone(),
+            crate::routing::events::projection::projection_event_json(&event),
+        ));
+    } else {
+        // Actor-scoped streams consume durable control history even when the
+        // Event has no timeline projection. Its canonical envelope supplies
+        // only a wake-up hint; subscribers reload the accepted record.
+        let _ = state.publish_event_notification(crate::state::EventNotification::event(
+            parsed.realm_id.to_string(),
+            parsed.event_id.to_string(),
+            envelope.clone(),
+        ));
+    }
+    if let Some(payload) = strand_status_audit_payload {
+        append_audit_log(
+            state,
+            Some(parsed.actor_id.as_str()),
+            "incident.status.transition",
+            payload,
+            "accepted",
+        )
+        .await;
+    }
+    if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
+        && let Some(envelope_object) = envelope.as_object()
+    {
+        bootstrap_realm_member_index(
+            state,
+            parsed.realm_id.as_str(),
+            parsed.actor_id.as_str(),
+            envelope_object,
+        )
+        .await;
+        organizations::record_realm_organizations_from_event(
+            state,
+            parsed.realm_id.as_str(),
+            envelope,
+        )
+        .await;
+    }
+    append_audit_log(
+        state,
+        Some(&session.actor),
+        "events.submit",
+        json!({
+            "event_id": parsed.event_id.clone(),
+            "realm_id": parsed.realm_id.clone(),
+            "kind": parsed.kind.clone(),
+            "canonical_digest": parsed.canonical_digest.clone()
+        }),
+        "accepted",
+    )
+    .await;
+    Ok(())
+}
+
 pub(super) async fn persist_principal_resolution_projection(
     state: &AppState,
     event: &Event,

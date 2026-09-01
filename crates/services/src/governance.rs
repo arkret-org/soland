@@ -3,85 +3,14 @@ use std::sync::Arc;
 
 use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
+pub use soland_storage::{
+    MultisigPendingRecord, OrganizationPolicyRecord, OrganizationRecord, PolicyDocumentRecord,
+    RetentionPolicyRecord, RetentionTombstoneRecord,
+};
 
 use crate::ServiceResult;
-
-#[derive(Clone, Debug)]
-pub struct MultisigPendingRecord {
-    pub seal_id: String,
-    pub realm_id: String,
-    pub digest_suite: arkret_canonical::DigestSuite,
-    pub threshold_k: u32,
-    pub threshold_n: u32,
-    pub members: Vec<String>,
-    pub canonical_b64: String,
-    pub partials: BTreeMap<String, Value>,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub claimed_by_node_id: Option<String>,
-    pub claimed_until: Option<DateTime<Utc>>,
-    pub claim_seq: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct PolicyDocumentRecord {
-    pub policy_id: String,
-    pub owner: String,
-    pub scope: String,
-    pub subject_ref: String,
-    pub policy_kind: String,
-    pub payload: Value,
-    pub active: bool,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OrganizationRecord {
-    pub organization_id: String,
-    pub organization_principal_id: arkret_identifiers::DidCoreId,
-    pub handle: Option<String>,
-    pub display_name: String,
-    pub source_refs: Vec<String>,
-    pub policy_revision: String,
-    pub verified: bool,
-    pub members: BTreeSet<String>,
-    pub member_count: usize,
-    pub created_by: arkret_identifiers::DidCoreId,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OrganizationPolicyRecord {
-    pub organization_id: String,
-    pub policy_id: String,
-    pub payload: Value,
-    pub version: u64,
-    pub updated_by: arkret_identifiers::DidCoreId,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RetentionPolicyRecord {
-    pub realm_id: String,
-    pub ttl_seconds: i64,
-    pub updated_by: arkret_wire::ActorId,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RetentionTombstoneRecord {
-    pub event_id: String,
-    pub realm_id: String,
-    pub reason: String,
-    pub policy_ttl_seconds: i64,
-    pub expired_at: DateTime<Utc>,
-    pub tombstoned_at: DateTime<Utc>,
-    pub sealed: bool,
-}
 
 #[async_trait]
 pub trait RuntimeSettingsPort: Send + Sync {
@@ -109,6 +38,10 @@ pub trait ModerationPort: Send + Sync {
     async fn upsert_queue_item(&self, item: Value) -> ServiceResult<()>;
     async fn queue_items(&self) -> ServiceResult<Vec<Value>>;
     async fn queue_item(&self, id: &str) -> ServiceResult<Option<Value>>;
+    async fn submitted_queue_item_for_report_event(
+        &self,
+        report_event_id: &str,
+    ) -> ServiceResult<Option<Value>>;
     async fn append_appeal(&self, appeal: Value) -> ServiceResult<()>;
     async fn appeals(&self) -> ServiceResult<Vec<Value>>;
     async fn appeal_history(&self, appeal_id: &str) -> ServiceResult<Vec<Value>>;
@@ -436,6 +369,14 @@ impl GovernanceService {
     pub async fn moderation_queue_item(&self, id: &str) -> ServiceResult<Option<Value>> {
         self.moderation.queue_item(id).await
     }
+    pub async fn submitted_moderation_queue_item_for_report_event(
+        &self,
+        report_event_id: &str,
+    ) -> ServiceResult<Option<Value>> {
+        self.moderation
+            .submitted_queue_item_for_report_event(report_event_id)
+            .await
+    }
     pub async fn append_moderation_appeal(&self, appeal: Value) -> ServiceResult<()> {
         self.moderation.append_appeal(appeal).await
     }
@@ -755,6 +696,12 @@ mod tests {
             Ok(Vec::new())
         }
         async fn queue_item(&self, _id: &str) -> ServiceResult<Option<Value>> {
+            Ok(None)
+        }
+        async fn submitted_queue_item_for_report_event(
+            &self,
+            _report_event_id: &str,
+        ) -> ServiceResult<Option<Value>> {
             Ok(None)
         }
         async fn append_appeal(&self, _appeal: Value) -> ServiceResult<()> {

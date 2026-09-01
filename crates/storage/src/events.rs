@@ -29,6 +29,169 @@ pub enum RealmBootstrapCommitOutcome {
     ExactRetry { event_ids: Vec<String> },
 }
 
+/// Validate the storage-neutral binding of one Control Proposal Ack to the
+/// canonical Event record committed in the same atomic unit.
+pub fn validate_control_proposal_ack_binding(
+    record: &CanonicalEventRecord,
+    ack: &arkret_wire::ControlProposalAck,
+) -> PersistenceResult<()> {
+    ack.validate_protocol_bounds().map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: invalid Control Proposal Ack: {error}"
+        ))
+    })?;
+    if ack.proposal_digest.as_str() != record.canonical_digest
+        || record.realm_id.as_deref() != Some(ack.realm_id.as_str())
+    {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: Control Proposal Ack does not bind Control Move".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Validate and index the complete Ack set for an atomic Control Move unit.
+///
+/// The returned map is keyed only by canonical proposal digest. Adapters add
+/// their own persistence conflict checks after this shared preflight.
+pub fn control_proposal_acks_by_digest(
+    records: &[CanonicalEventRecord],
+    control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
+    acks_required: bool,
+) -> PersistenceResult<BTreeMap<String, arkret_wire::ControlProposalAck>> {
+    if control_proposal_acks.is_empty() && !acks_required {
+        return Ok(BTreeMap::new());
+    }
+    if control_proposal_acks.len() != records.len() {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: Control Proposal Ack cardinality mismatch".to_owned(),
+        ));
+    }
+    let mut by_digest = BTreeMap::new();
+    for ack in control_proposal_acks {
+        if by_digest
+            .insert(ack.proposal_digest.as_str().to_owned(), ack)
+            .is_some()
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: duplicate Control Proposal Ack".to_owned(),
+            ));
+        }
+    }
+    for record in records {
+        let ack = by_digest.get(&record.canonical_digest).ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: accepted Control Move is missing Control Proposal Ack"
+                    .to_owned(),
+            )
+        })?;
+        validate_control_proposal_ack_binding(record, ack)?;
+    }
+    Ok(by_digest)
+}
+
+#[cfg(test)]
+mod control_proposal_ack_tests {
+    use super::*;
+
+    fn record(canonical_bytes: &[u8]) -> CanonicalEventRecord {
+        let digest = arkret_canonical::sha256_bytes(canonical_bytes);
+        let mut id = [0_u8; crate::ids::EVENT_ID_BYTES];
+        id[0] = 0x01;
+        id[1..].copy_from_slice(&digest);
+        CanonicalEventRecord {
+            event_id: crate::ids::format_event_id(&id),
+            actor_id: "ak:did_core:web:founder.example".to_owned(),
+            actor_seq: 1,
+            realm_id: Some("ak:realm:AYcO0aKZZvKELI-s58wUjRHsrz5v8Y51T0_sGUTciDVw".to_owned()),
+            kind: "ak.realm.join_rule".to_owned(),
+            schema_id: "arkret://events/realm/join-rule/v1".to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest: crate::ids::format_event_digest(0x01, &digest).unwrap(),
+            canonical_bytes: canonical_bytes.to_vec(),
+            envelope: serde_json::json!({}),
+            received_at: chrono::Utc::now(),
+        }
+    }
+
+    fn ack(record: &CanonicalEventRecord) -> arkret_wire::ControlProposalAck {
+        let created_at = record.received_at;
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
+            realm_id: arkret_wire::RealmId::new(record.realm_id.clone().unwrap()).unwrap(),
+            proposal_digest: arkret_wire::Hash::new(record.canonical_digest.clone()).unwrap(),
+            received_at: created_at,
+            decision_due_at: created_at + policy.decision_window,
+            absolute_due_at: created_at + policy.absolute_horizon,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            signature: arkret_wire::PayloadSignature {
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:web:soland.example#authority-1".to_owned(),
+                )
+                .unwrap(),
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                jws: "e30..c2ln".to_owned(),
+            },
+        };
+        authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], policy).unwrap()
+    }
+
+    #[test]
+    fn complete_ack_set_is_indexed_only_by_proposal_digest() {
+        let record = record(b"one");
+        let ack = ack(&record);
+        let indexed =
+            control_proposal_acks_by_digest(std::slice::from_ref(&record), vec![ack.clone()], true)
+                .unwrap();
+        assert_eq!(indexed.get(&record.canonical_digest), Some(&ack));
+        assert!(!indexed.contains_key(&record.event_id));
+    }
+
+    #[test]
+    fn incomplete_duplicate_and_cross_realm_ack_sets_fail_closed() {
+        let first = record(b"one");
+        let second = record(b"two");
+        let first_ack = ack(&first);
+        assert!(
+            control_proposal_acks_by_digest(
+                &[first.clone(), second.clone()],
+                vec![first_ack.clone()],
+                true,
+            )
+            .is_err()
+        );
+        assert!(
+            control_proposal_acks_by_digest(
+                &[first.clone(), second],
+                vec![first_ack.clone(), first_ack.clone()],
+                true,
+            )
+            .is_err()
+        );
+
+        let mut wrong_realm = first_ack;
+        wrong_realm.realm_id = arkret_wire::RealmId::new(
+            "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
+        )
+        .unwrap();
+        assert!(control_proposal_acks_by_digest(&[first], vec![wrong_realm], true).is_err());
+    }
+
+    #[test]
+    fn optional_empty_ack_set_is_valid() {
+        let record = record(b"ackless");
+        assert!(
+            control_proposal_acks_by_digest(&[record], Vec::new(), false)
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
 /// Trait for message storage operations.
 #[async_trait]
 pub trait MessageStore: Send + Sync {

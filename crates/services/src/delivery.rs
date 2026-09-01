@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -91,125 +90,20 @@ pub trait DeviceDeliveryPort: Send + Sync {
     async fn push_devices(&self) -> ServiceResult<Vec<Value>>;
 }
 
-#[derive(Clone, Debug)]
-pub struct DeviceMessageState {
-    pub idempotency_key: String,
-    pub sender: String,
-    pub recipient: String,
-    pub device_id: String,
-    pub position: i64,
-    pub content: Value,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DeviceMessageIntentRecord {
-    pub message_key: String,
-    pub intent_digest: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct DeviceMessageBatchItemRecord {
-    pub message_key: String,
-    pub intent_digest: String,
-    pub idempotency_expires_at: DateTime<Utc>,
-    pub message: Option<DeviceMessageState>,
-}
-
-#[derive(Clone, Debug)]
-pub struct DeviceMessageBatchRecord {
-    pub request_key: String,
-    pub request_digest: String,
-    pub idempotency_expires_at: DateTime<Utc>,
-    pub target_snapshot_guard: Option<DeviceMessageTargetSnapshotGuard>,
-    pub device_revocation_gate: Option<soland_storage::DeviceRevocationGateSelector>,
-    pub items: Vec<DeviceMessageBatchItemRecord>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DeviceMessageTargetSnapshotGuard {
-    pub recipient: String,
-    pub devices: Vec<(String, DateTime<Utc>)>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DeviceMessageBatchInspection {
-    Fresh {
-        existing_message_outcomes: BTreeMap<String, bool>,
-    },
-    Duplicate(BTreeMap<String, bool>),
-    RequestConflict,
-    MessageConflict {
-        message_key: String,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum DeviceMessageBatchCommitOutcome {
-    Stored(BTreeMap<String, bool>),
-    Duplicate(BTreeMap<String, bool>),
-    RequestConflict,
-    MessageConflict { message_key: String },
-    SnapshotConflict,
-    DeviceRevocationPending,
-    DeviceRevoked,
-}
-
 /// One admitted `SignalEnvelope` held for its TTL (`sync/signal.md` §4).
 ///
 /// Presence, typing, call signalling and read receipts are all Signals in v1:
 /// they share this one opaque relay record instead of four plaintext shapes,
 /// and the server sees only the AAD-bound envelope header.
-#[derive(Clone, Debug)]
-pub struct BlobState {
-    pub sha256: String,
-    pub size_bytes: i64,
-    pub storage_backend: String,
-    pub storage_key: String,
-    pub media_type: String,
-    pub filename: Option<String>,
-    pub realm_id: Option<String>,
-    pub encryption: Option<Value>,
-    pub legal_hold: bool,
-    pub redacted: bool,
-    pub visibility: arkret_models_collaboration::objects::blob::BlobVisibility,
-    pub uploaded_by: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct OutboundPushBridgeCacheState {
-    pub push_gateway_url: String,
-    pub service_base_url: String,
-    pub bridge_describe_url: String,
-    pub fetch_state: String,
-    pub cache_state: String,
-    pub contract_digest: String,
-    pub fetched_at: DateTime<Utc>,
-    pub remote_contract: Value,
-    pub trust_level: String,
-    pub freshness_at: DateTime<Utc>,
-    pub etag: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PushContractDrift {
-    Match,
-    Stale,
-    DigestMismatch,
-    Unknown,
-}
-
-impl PushContractDrift {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Match => "match",
-            Self::Stale => "stale",
-            Self::DigestMismatch => "digest_mismatch",
-            Self::Unknown => "unknown",
-        }
-    }
-}
+pub use soland_storage::{
+    BlobRecord as BlobState, DriftResult as PushContractDrift,
+    OutboundPushBridgeCacheRecord as OutboundPushBridgeCacheState,
+};
+pub use soland_storage::{
+    DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
+    DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord as DeviceMessageState,
+    DeviceMessageTargetSnapshotGuard,
+};
 
 #[async_trait]
 pub trait BlobPort: Send + Sync {

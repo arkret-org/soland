@@ -858,6 +858,7 @@ diesel::table! {
     moderation_queue_items (pk) {
         pk -> Int8,
         id -> Bytea,
+        report_event_id -> Bytea,
         realm_id -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,

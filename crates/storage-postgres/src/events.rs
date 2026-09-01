@@ -558,22 +558,6 @@ async fn insert_pending_control_event(
             "schema_violation: canonical digest differs from anchor Event digest".to_owned(),
         ));
     }
-    // Anchor/bootstrap/founding rows always enter the pending-control log on
-    // the Ack-required rail: their Acks are minted server-side at admission.
-    if control_proposal_ack.proposal_digest.as_str() != digest
-        || control_proposal_ack.realm_id != event.realm_id
-    {
-        return Err(PersistenceError::Conflict(
-            "schema_violation: Control Proposal Ack does not bind anchor Event".to_owned(),
-        ));
-    }
-    control_proposal_ack
-        .validate_protocol_bounds()
-        .map_err(|error| {
-            PersistenceError::Conflict(format!(
-                "schema_violation: invalid Control Proposal Ack: {error}"
-            ))
-        })?;
     let control_proposal_ack = serde_json::to_value(control_proposal_ack).map_err(|error| {
         PersistenceError::Internal(format!("Control Proposal Ack encoding failed: {error}"))
     })?;
@@ -805,18 +789,6 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
     }
 }
 
-fn identity_anchor_receipt_cardinality_is_valid(
-    record_count: usize,
-    control_proposal_ack_count: usize,
-    reanchor_conflict: bool,
-) -> bool {
-    if reanchor_conflict {
-        control_proposal_ack_count == 0
-    } else {
-        control_proposal_ack_count == record_count
-    }
-}
-
 #[async_trait]
 impl EventStore for PgEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
@@ -951,23 +923,7 @@ impl EventStore for PgEventStore {
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<soland_storage::RealmBootstrapCommitOutcome> {
-        let mut acks = BTreeMap::new();
-        for ack in control_proposal_acks {
-            if acks
-                .insert(ack.proposal_digest.as_str().to_owned(), ack)
-                .is_some()
-            {
-                return Err(PersistenceError::Conflict(
-                    "schema_violation: duplicate Realm bootstrap Control Proposal Ack".to_owned(),
-                ));
-            }
-        }
-        if acks.len() != records.len() {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: Realm bootstrap Control Proposal Ack cardinality mismatch"
-                    .to_owned(),
-            ));
-        }
+        let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1066,24 +1022,7 @@ impl EventStore for PgEventStore {
                 "direct_conversation_founding_unit_invalid".to_owned(),
             ));
         }
-        let mut acks = BTreeMap::new();
-        for ack in control_proposal_acks {
-            if acks
-                .insert(ack.proposal_digest.as_str().to_owned(), ack)
-                .is_some()
-            {
-                return Err(PersistenceError::Conflict(
-                    "schema_violation: duplicate Direct Conversation founding Control Proposal Ack"
-                        .to_owned(),
-                ));
-            }
-        }
-        if acks.len() != records.len() {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: Direct Conversation founding Control Proposal Ack cardinality mismatch"
-                    .to_owned(),
-            ));
-        }
+        let acks = super::control_proposal_acks_by_digest(&records, control_proposal_acks, true)?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -1241,18 +1180,6 @@ impl EventStore for PgEventStore {
         publication_evidence: Vec<PublicationEvidenceRecord>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
-        let mut control_proposal_acks_by_digest = BTreeMap::new();
-        for receipt in control_proposal_acks {
-            if control_proposal_acks_by_digest
-                .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
-                .is_some()
-            {
-                return Err(PersistenceError::Conflict(
-                    "schema_violation: duplicate identity anchor Control Proposal Ack".to_owned(),
-                ));
-            }
-        }
-        let record_count = records.len();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -1309,16 +1236,22 @@ impl EventStore for PgEventStore {
                 } else {
                     false
                 };
-                if !identity_anchor_receipt_cardinality_is_valid(
-                    record_count,
-                    control_proposal_acks_by_digest.len(),
-                    reanchor_conflict,
-                ) {
-                    return Err(PersistenceError::Conflict(
-                        "schema_violation: identity anchor receipt cardinality mismatch".to_owned(),
-                    )
-                    .into());
-                }
+                let control_proposal_acks_by_digest = if reanchor_conflict {
+                    if !control_proposal_acks.is_empty() {
+                        return Err(PersistenceError::Conflict(
+                            "schema_violation: identity anchor receipt cardinality mismatch"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    BTreeMap::new()
+                } else {
+                    super::control_proposal_acks_by_digest(
+                        &records,
+                        control_proposal_acks,
+                        true,
+                    )?
+                };
                 if let Some(frontier_cas) = frontier_cas {
                     assert_identity_anchor_frontier(conn, &frontier_cas).await.map_err(PersistenceError::database)?;
                 }
@@ -1776,25 +1709,6 @@ impl EventStore for PgEventStore {
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::database)
-    }
-}
-
-#[cfg(test)]
-mod identity_anchor_receipt_tests {
-    use super::identity_anchor_receipt_cardinality_is_valid;
-
-    #[test]
-    fn accepted_anchor_units_require_one_control_proposal_ack_per_event() {
-        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 0, false));
-        assert!(identity_anchor_receipt_cardinality_is_valid(2, 2, false));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 1, false));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 3, false));
-    }
-
-    #[test]
-    fn reanchor_conflict_cannot_attach_control_proposal_acks() {
-        assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
-        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
     }
 }
 

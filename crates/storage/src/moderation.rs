@@ -23,6 +23,15 @@ pub trait ModerationStore: Send + Sync {
     async fn get_queue_item(&self, _id: &str) -> PersistenceResult<Option<Value>> {
         Ok(None)
     }
+    /// Return the still-submitted queue item derived from one moderation report
+    /// Event. Report identity is a first-class lookup key so a decision
+    /// projection never needs to load and scan the entire queue.
+    async fn get_submitted_queue_item_for_report_event(
+        &self,
+        _report_event_id: &str,
+    ) -> PersistenceResult<Option<Value>> {
+        Ok(None)
+    }
 
     /// Append a projected appeal event. The projection record MUST carry the
     /// event-derived `appeal_id`, `realm_id`, and the variant-specific fields (see

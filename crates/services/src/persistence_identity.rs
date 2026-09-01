@@ -122,22 +122,14 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
             .0
             .account_localparts()
             .list_for_account(account_pk)
-            .await?
-            .into_iter()
-            .map(application_account_localpart)
-            .collect())
+            .await?)
     }
 
     async fn localpart_owner(
         &self,
         localpart: &str,
     ) -> crate::ServiceResult<Option<crate::identity::AccountLocalpartState>> {
-        Ok(self
-            .0
-            .account_localparts()
-            .owner_of(localpart)
-            .await?
-            .map(application_account_localpart))
+        Ok(self.0.account_localparts().owner_of(localpart).await?)
     }
 
     async fn add_localpart(
@@ -146,12 +138,11 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         localpart: &str,
         primary: bool,
     ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
-        Ok(application_account_localpart(
-            self.0
-                .account_localparts()
-                .add(account_pk, localpart, primary)
-                .await?,
-        ))
+        Ok(self
+            .0
+            .account_localparts()
+            .add(account_pk, localpart, primary)
+            .await?)
     }
 
     async fn set_primary_localpart(
@@ -159,12 +150,11 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         account_pk: AccountPk,
         localpart: &str,
     ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
-        Ok(application_account_localpart(
-            self.0
-                .account_localparts()
-                .set_primary(account_pk, localpart)
-                .await?,
-        ))
+        Ok(self
+            .0
+            .account_localparts()
+            .set_primary(account_pk, localpart)
+            .await?)
     }
 
     async fn remove_localpart(
@@ -204,15 +194,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     ) -> crate::ServiceResult<()> {
         self.0
             .account_lifecycle()
-            .put(
-                account_pk,
-                &soland_storage::AccountLifecycleRecord {
-                    state: lifecycle.state,
-                    reason: lifecycle.reason,
-                    changed_by: lifecycle.changed_by,
-                    changed_at: lifecycle.changed_at,
-                },
-            )
+            .put(account_pk, &lifecycle)
             .await?;
         Ok(())
     }
@@ -234,24 +216,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
             crate::identity::AccountLifecycleState,
         )>,
     > {
-        Ok(self
-            .0
-            .account_lifecycle()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(|(actor_id, lifecycle)| {
-                (
-                    actor_id,
-                    crate::identity::AccountLifecycleState {
-                        state: lifecycle.state,
-                        reason: lifecycle.reason,
-                        changed_by: lifecycle.changed_by,
-                        changed_at: lifecycle.changed_at,
-                    },
-                )
-            })
-            .collect())
+        Ok(self.0.account_lifecycle().snapshot_all().await?)
     }
 }
 
@@ -285,19 +250,6 @@ fn persistence_account_profile(
         bio: account.bio,
         avatar_blob_ref: account.avatar_blob_ref,
         created_at: account.created_at,
-    }
-}
-
-fn application_account_localpart(
-    record: soland_storage::AccountLocalpartRecord,
-) -> crate::identity::AccountLocalpartState {
-    crate::identity::AccountLocalpartState {
-        id: record.id,
-        account_pk: record.account_pk,
-        localpart: record.localpart,
-        is_primary: record.is_primary,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
     }
 }
 
@@ -386,14 +338,7 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
             crate::identity::ConsentCellRecord,
         )>,
     > {
-        Ok(self
-            .0
-            .consent_cells()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(|(key, cell)| (application_consent_key(key), application_consent_cell(cell)))
-            .collect())
+        Ok(self.0.consent_cells().snapshot_all().await?)
     }
 }
 
@@ -403,10 +348,7 @@ impl crate::identity::MimiConsentCorrelationPort for PersistenceMimiConsentCorre
         &self,
         correlation: crate::identity::MimiConsentCorrelation,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .mimi_consent_correlations()
-            .put(&storage_mimi_consent_correlation(correlation))
-            .await?;
+        self.0.mimi_consent_correlations().put(&correlation).await?;
         Ok(())
     }
 
@@ -414,44 +356,7 @@ impl crate::identity::MimiConsentCorrelationPort for PersistenceMimiConsentCorre
         &self,
         consent_id: &str,
     ) -> crate::ServiceResult<Option<crate::identity::MimiConsentCorrelation>> {
-        Ok(self
-            .0
-            .mimi_consent_correlations()
-            .get(consent_id)
-            .await?
-            .map(application_mimi_consent_correlation))
-    }
-}
-
-fn storage_mimi_consent_correlation(
-    correlation: crate::identity::MimiConsentCorrelation,
-) -> soland_storage::MimiConsentCorrelationRecord {
-    soland_storage::MimiConsentCorrelationRecord {
-        consent_id: correlation.consent_id,
-        requester_id: correlation.requester_id,
-        target_kind: correlation.target_kind,
-        target_id: correlation.target_id,
-        purpose: correlation.purpose,
-        strand_id: correlation.strand_id,
-        source_id: correlation.source_id,
-        created_at: correlation.created_at,
-        expires_at: correlation.expires_at,
-    }
-}
-
-fn application_mimi_consent_correlation(
-    correlation: soland_storage::MimiConsentCorrelationRecord,
-) -> crate::identity::MimiConsentCorrelation {
-    crate::identity::MimiConsentCorrelation {
-        consent_id: correlation.consent_id,
-        requester_id: correlation.requester_id,
-        target_kind: correlation.target_kind,
-        target_id: correlation.target_id,
-        purpose: correlation.purpose,
-        strand_id: correlation.strand_id,
-        source_id: correlation.source_id,
-        created_at: correlation.created_at,
-        expires_at: correlation.expires_at,
+        Ok(self.0.mimi_consent_correlations().get(consent_id).await?)
     }
 }
 
@@ -462,33 +367,21 @@ impl crate::identity::ContactPort for PersistenceContacts {
         requester_id: &arkret_wire::ActorId,
         target_id: &arkret_wire::ActorId,
     ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
-        Ok(self
-            .0
-            .contacts()
-            .get(requester_id, target_id)
-            .await?
-            .map(application_contact))
+        Ok(self.0.contacts().get(requester_id, target_id).await?)
     }
 
     async fn contacts_for_actor(
         &self,
         actor_id: &arkret_wire::ActorId,
     ) -> crate::ServiceResult<Vec<crate::identity::ContactRecord>> {
-        Ok(self
-            .0
-            .contacts()
-            .list_for_actor(actor_id)
-            .await?
-            .into_iter()
-            .map(application_contact)
-            .collect())
+        Ok(self.0.contacts().list_for_actor(actor_id).await?)
     }
 
     async fn save_contact(
         &self,
         contact: crate::identity::ContactRecord,
     ) -> crate::ServiceResult<()> {
-        self.0.contacts().put(&storage_contact(contact)).await?;
+        self.0.contacts().put(&contact).await?;
         Ok(())
     }
 
@@ -500,7 +393,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
         Ok(self
             .0
             .contacts()
-            .put_if_updated_at(expected_updated_at, &storage_contact(contact))
+            .put_if_updated_at(expected_updated_at, &contact)
             .await?)
     }
 }
@@ -528,139 +421,6 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
         )>,
     > {
         Ok(self.0.invite_receive_policies().snapshot_all().await?)
-    }
-}
-
-fn application_consent_key(key: soland_storage::ConsentCellKey) -> crate::identity::ConsentCellKey {
-    crate::identity::ConsentCellKey {
-        holder_principal_id: key.holder_principal_id,
-        cell_id: key.cell_id,
-    }
-}
-
-fn application_consent_cell(
-    cell: soland_storage::ConsentCellRecord,
-) -> crate::identity::ConsentCellRecord {
-    crate::identity::ConsentCellRecord {
-        cell_id: cell.cell_id,
-        holder_principal_id: cell.holder_principal_id,
-        peer: cell.peer,
-        consent_scope: cell.consent_scope,
-        grant_dots: cell
-            .grant_dots
-            .into_iter()
-            .map(|(key, dot)| {
-                (
-                    key,
-                    crate::identity::ConsentGrantDot {
-                        dot: dot.dot,
-                        not_before: dot.not_before,
-                        expires_at: dot.expires_at,
-                        granted_at: dot.granted_at,
-                    },
-                )
-            })
-            .collect(),
-        revoked_dots: cell.revoked_dots,
-        updated_at: cell.updated_at,
-    }
-}
-
-pub(crate) fn storage_consent_cell(
-    cell: crate::identity::ConsentCellRecord,
-) -> soland_storage::ConsentCellRecord {
-    soland_storage::ConsentCellRecord {
-        cell_id: cell.cell_id,
-        holder_principal_id: cell.holder_principal_id,
-        peer: cell.peer,
-        consent_scope: cell.consent_scope,
-        grant_dots: cell
-            .grant_dots
-            .into_iter()
-            .map(|(key, dot)| {
-                (
-                    key,
-                    soland_storage::ConsentGrantDot {
-                        dot: dot.dot,
-                        not_before: dot.not_before,
-                        expires_at: dot.expires_at,
-                        granted_at: dot.granted_at,
-                    },
-                )
-            })
-            .collect(),
-        revoked_dots: cell.revoked_dots,
-        updated_at: cell.updated_at,
-    }
-}
-
-fn application_contact(record: soland_storage::ContactRecord) -> crate::identity::ContactRecord {
-    crate::identity::ContactRecord {
-        requester_id: record.requester_id,
-        target_id: record.target_id,
-        contact_round_id: record.contact_round_id,
-        version: record.version,
-        granted_to_target_scopes: record.granted_to_target_scopes,
-        granted_to_requester_scopes: record.granted_to_requester_scopes,
-        status: record.status,
-        request_event_ref: record.request_event_ref,
-        request_slot_states: record
-            .request_slot_states
-            .into_iter()
-            .map(|state| crate::identity::ContactRequestSlotState {
-                owner_id: state.owner_id,
-                peer_id: state.peer_id,
-                accepted_sequence: state.accepted_sequence,
-                head_digest: state.head_digest,
-            })
-            .collect(),
-        request_receipts: record.request_receipts,
-        request_mirror_receipts: record.request_mirror_receipts,
-        contact_round_evidence: record.contact_round_evidence,
-        contact_round_evidence_history: record.contact_round_evidence_history,
-        control_outcomes: record.control_outcomes,
-        response_event_ref: record.response_event_ref,
-        tombstone_event_ref: record.tombstone_event_ref,
-        message: record.message,
-        peer_host_id: record.peer_host_id,
-        peer_service_resolution: record.peer_service_resolution,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-    }
-}
-
-fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::ContactRecord {
-    soland_storage::ContactRecord {
-        requester_id: record.requester_id,
-        target_id: record.target_id,
-        contact_round_id: record.contact_round_id,
-        version: record.version,
-        granted_to_target_scopes: record.granted_to_target_scopes,
-        granted_to_requester_scopes: record.granted_to_requester_scopes,
-        status: record.status,
-        request_event_ref: record.request_event_ref,
-        request_slot_states: record
-            .request_slot_states
-            .into_iter()
-            .map(|state| soland_storage::ContactRequestSlotState {
-                owner_id: state.owner_id,
-                peer_id: state.peer_id,
-                accepted_sequence: state.accepted_sequence,
-                head_digest: state.head_digest,
-            })
-            .collect(),
-        request_receipts: record.request_receipts,
-        request_mirror_receipts: record.request_mirror_receipts,
-        contact_round_evidence: record.contact_round_evidence,
-        contact_round_evidence_history: record.contact_round_evidence_history,
-        control_outcomes: record.control_outcomes,
-        response_event_ref: record.response_event_ref,
-        tombstone_event_ref: record.tombstone_event_ref,
-        message: record.message,
-        peer_host_id: record.peer_host_id,
-        peer_service_resolution: record.peer_service_resolution,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
     }
 }
 
@@ -986,10 +746,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
 #[async_trait::async_trait]
 impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
     async fn stage(&self, record: crate::identity::DevicePairingState) -> crate::ServiceResult<()> {
-        self.0
-            .device_pairings()
-            .put(persistence_device_pairing(record))
-            .await?;
+        self.0.device_pairings().put(record).await?;
         Ok(())
     }
 
@@ -1001,8 +758,7 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
             .0
             .device_pairings()
             .get_by_request_id(device_pairing_request_id)
-            .await?
-            .map(application_device_pairing))
+            .await?)
     }
 
     async fn prune_expired_before(
@@ -1014,48 +770,6 @@ impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
             .device_pairings()
             .delete_expired_before(cutoff)
             .await?)
-    }
-}
-
-fn application_device_pairing(
-    record: soland_storage::DevicePairingRecord,
-) -> crate::identity::DevicePairingState {
-    crate::identity::DevicePairingState {
-        device_pairing_request_id: record.device_pairing_request_id,
-        pairing_code: record.pairing_code,
-        new_device_pubkey: record.new_device_pubkey,
-        client_nonce: record.client_nonce,
-        gate_audience: record.gate_audience,
-        server_nonce: record.server_nonce,
-        display_name: record.display_name,
-        device_metadata: record.device_metadata,
-        state: record.state,
-        device_id: record.device_id,
-        authorized_by_actor_id: record.authorized_by_actor_id,
-        authorized_event_ref: record.authorized_event_ref,
-        created_at: record.created_at,
-        expires_at: record.expires_at,
-    }
-}
-
-fn persistence_device_pairing(
-    record: crate::identity::DevicePairingState,
-) -> soland_storage::DevicePairingRecord {
-    soland_storage::DevicePairingRecord {
-        device_pairing_request_id: record.device_pairing_request_id,
-        pairing_code: record.pairing_code,
-        new_device_pubkey: record.new_device_pubkey,
-        client_nonce: record.client_nonce,
-        gate_audience: record.gate_audience,
-        server_nonce: record.server_nonce,
-        display_name: record.display_name,
-        device_metadata: record.device_metadata,
-        state: record.state,
-        device_id: record.device_id,
-        authorized_by_actor_id: record.authorized_by_actor_id,
-        authorized_event_ref: record.authorized_event_ref,
-        created_at: record.created_at,
-        expires_at: record.expires_at,
     }
 }
 
@@ -1077,13 +791,7 @@ fn application_agent_pairing(
         pairing_request_id: record.pairing_request_id,
         paired_pairing_request_id: record.paired_pairing_request_id,
         paired_request_digest: record.paired_request_digest,
-        pending_pairing_commit_intent: record.pending_pairing_commit_intent.map(|intent| {
-            crate::identity::AgentPairingCommitIntentState {
-                request_digest: intent.request_digest,
-                authorize_event_id: intent.authorize_event_id,
-                signing_key_binding: intent.signing_key_binding,
-            }
-        }),
+        pending_pairing_commit_intent: record.pending_pairing_commit_intent,
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
@@ -1123,13 +831,7 @@ fn persistence_agent_pairing(
         pairing_request_id: record.pairing_request_id,
         paired_pairing_request_id: record.paired_pairing_request_id,
         paired_request_digest: record.paired_request_digest,
-        pending_pairing_commit_intent: record.pending_pairing_commit_intent.map(|intent| {
-            soland_storage::PendingAgentPairingCommitIntent {
-                request_digest: intent.request_digest,
-                authorize_event_id: intent.authorize_event_id,
-                signing_key_binding: intent.signing_key_binding,
-            }
-        }),
+        pending_pairing_commit_intent: record.pending_pairing_commit_intent,
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
@@ -1151,82 +853,19 @@ fn persistence_agent_pairing(
     }
 }
 
-fn application_sidecar(
-    record: soland_storage::AgentSidecarRecord,
-) -> crate::identity::AgentSidecarState {
-    crate::identity::AgentSidecarState {
-        sidecar_id: record.sidecar_id,
-        realm_id: record.realm_id,
-        controller_id: record.controller_id,
-        state: record.state,
-        state_changed_at: record.state_changed_at,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-    }
-}
-fn persistence_sidecar(
-    record: crate::identity::AgentSidecarState,
-) -> soland_storage::AgentSidecarRecord {
-    soland_storage::AgentSidecarRecord {
-        sidecar_id: record.sidecar_id,
-        realm_id: record.realm_id,
-        controller_id: record.controller_id,
-        state: record.state,
-        state_changed_at: record.state_changed_at,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-    }
-}
-fn application_sidecar_context(
-    record: soland_storage::AgentSidecarContextRecord,
-) -> crate::identity::AgentSidecarContextState {
-    crate::identity::AgentSidecarContextState {
-        sidecar_id: record.sidecar_id,
-        normalized_context_ref_digest: record.normalized_context_ref_digest,
-        normalized_context_ref: record.normalized_context_ref,
-        version: record.version,
-        predecessor_event_ref: record.predecessor_event_ref,
-        attach_event_ref: record.attach_event_ref,
-        created_at: record.created_at,
-    }
-}
-fn persistence_sidecar_context(
-    record: crate::identity::AgentSidecarContextState,
-) -> soland_storage::AgentSidecarContextRecord {
-    soland_storage::AgentSidecarContextRecord {
-        sidecar_id: record.sidecar_id,
-        normalized_context_ref_digest: record.normalized_context_ref_digest,
-        normalized_context_ref: record.normalized_context_ref,
-        version: record.version,
-        predecessor_event_ref: record.predecessor_event_ref,
-        attach_event_ref: record.attach_event_ref,
-        created_at: record.created_at,
-    }
-}
-
 #[async_trait::async_trait]
 impl crate::identity::SidecarPort for PersistenceSidecars {
     async fn ensure_sidecar(
         &self,
         sidecar: crate::identity::AgentSidecarState,
     ) -> crate::ServiceResult<crate::identity::AgentSidecarState> {
-        Ok(application_sidecar(
-            self.0
-                .sidecars()
-                .insert_or_get(persistence_sidecar(sidecar))
-                .await?,
-        ))
+        Ok(self.0.sidecars().insert_or_get(sidecar).await?)
     }
     async fn sidecar(
         &self,
         sidecar_id: &str,
     ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarState>> {
-        Ok(self
-            .0
-            .sidecars()
-            .get(sidecar_id)
-            .await?
-            .map(application_sidecar))
+        Ok(self.0.sidecars().get(sidecar_id).await?)
     }
     async fn sidecar_for_realm_controller(
         &self,
@@ -1237,8 +876,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
             .0
             .sidecars()
             .get_for_realm_controller(realm_id, controller_id)
-            .await?
-            .map(application_sidecar))
+            .await?)
     }
     async fn sidecars_for_controller(
         &self,
@@ -1249,33 +887,20 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
             .0
             .sidecars()
             .list_for_controller(controller_id, realm_id)
-            .await?
-            .into_iter()
-            .map(application_sidecar)
-            .collect())
+            .await?)
     }
     async fn ensure_context(
         &self,
         context: crate::identity::AgentSidecarContextState,
     ) -> crate::ServiceResult<crate::identity::AgentSidecarContextState> {
-        Ok(application_sidecar_context(
-            self.0
-                .sidecars()
-                .insert_or_get_context(persistence_sidecar_context(context))
-                .await?,
-        ))
+        Ok(self.0.sidecars().insert_or_get_context(context).await?)
     }
     async fn context(
         &self,
         sidecar_id: &str,
         digest: &str,
     ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarContextState>> {
-        Ok(self
-            .0
-            .sidecars()
-            .get_context(sidecar_id, digest)
-            .await?
-            .map(application_sidecar_context))
+        Ok(self.0.sidecars().get_context(sidecar_id, digest).await?)
     }
 }
 
@@ -1534,44 +1159,6 @@ fn persistence_session_identity(
     }
 }
 
-fn application_recovery_policy(
-    record: soland_storage::RecoveryPolicyRecord,
-) -> crate::identity::RecoveryPolicyState {
-    crate::identity::RecoveryPolicyState {
-        policy_id: record.policy_id,
-        account_id: record.account_id,
-        version: record.version,
-        acceptance_basis: record.acceptance_basis,
-        trust_domain: record.trust_domain,
-        allowed_proof_kinds: record.allowed_proof_kinds,
-        supersedes: record.supersedes,
-        expires_at: record.expires_at,
-        issued_at: record.issued_at,
-        raw_payload: record.raw_payload,
-        accepted_at: record.accepted_at,
-        verification_method: record.verification_method,
-    }
-}
-
-fn persistence_recovery_policy(
-    policy: crate::identity::RecoveryPolicyState,
-) -> soland_storage::RecoveryPolicyRecord {
-    soland_storage::RecoveryPolicyRecord {
-        policy_id: policy.policy_id,
-        account_id: policy.account_id,
-        version: policy.version,
-        acceptance_basis: policy.acceptance_basis,
-        trust_domain: policy.trust_domain,
-        allowed_proof_kinds: policy.allowed_proof_kinds,
-        supersedes: policy.supersedes,
-        expires_at: policy.expires_at,
-        issued_at: policy.issued_at,
-        raw_payload: policy.raw_payload,
-        accepted_at: policy.accepted_at,
-        verification_method: policy.verification_method,
-    }
-}
-
 #[async_trait::async_trait]
 impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     async fn active_policy(
@@ -1582,8 +1169,7 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
             .0
             .recovery_policies()
             .get_active_for_account(account_id)
-            .await?
-            .map(application_recovery_policy))
+            .await?)
     }
 
     async fn policy_history(
@@ -1594,87 +1180,15 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
             .0
             .recovery_policies()
             .list_for_account(account_id)
-            .await?
-            .into_iter()
-            .map(application_recovery_policy)
-            .collect())
+            .await?)
     }
 
     async fn insert_policy(
         &self,
         policy: crate::identity::RecoveryPolicyState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .recovery_policies()
-            .insert(persistence_recovery_policy(policy))
-            .await?;
+        self.0.recovery_policies().insert(policy).await?;
         Ok(())
-    }
-}
-
-fn application_recovery_session(
-    record: soland_storage::RecoverySessionRecord,
-) -> crate::identity::RecoverySessionState {
-    crate::identity::RecoverySessionState {
-        request_id: record.request_id,
-        create_intent_digest: record.create_intent_digest,
-        recovery_session_id: record.recovery_session_id,
-        session_grant_id: record.session_grant_id,
-        session_grant_cnf_jkt: record.session_grant_cnf_jkt,
-        principal_id: record.principal_id,
-        station_id: record.station_id,
-        requesting_device_id: record.requesting_device_id,
-        trust_domain: record.trust_domain,
-        policy_id: record.policy_id,
-        policy_version: record.policy_version,
-        identity_model: record.identity_model,
-        current_device_generation_ref: record.current_device_generation_ref,
-        device_generation_status: record.device_generation_status,
-        registry_head: record.registry_head,
-        accepted_seal_frontier: record.accepted_seal_frontier,
-        policy_payload: record.policy_payload,
-        publication_authority_context: record.publication_authority_context,
-        publication_authority_context_digest: record.publication_authority_context_digest,
-        challenge: record.challenge,
-        state: record.state,
-        proof_payload: record.proof_payload,
-        transaction_id: record.transaction_id,
-        created_at: record.created_at,
-        updated_at: record.updated_at,
-        expires_at: record.expires_at,
-    }
-}
-
-fn persistence_recovery_session(
-    session: crate::identity::RecoverySessionState,
-) -> soland_storage::RecoverySessionRecord {
-    soland_storage::RecoverySessionRecord {
-        request_id: session.request_id,
-        create_intent_digest: session.create_intent_digest,
-        recovery_session_id: session.recovery_session_id,
-        session_grant_id: session.session_grant_id,
-        session_grant_cnf_jkt: session.session_grant_cnf_jkt,
-        principal_id: session.principal_id,
-        station_id: session.station_id,
-        requesting_device_id: session.requesting_device_id,
-        trust_domain: session.trust_domain,
-        policy_id: session.policy_id,
-        policy_version: session.policy_version,
-        identity_model: session.identity_model,
-        current_device_generation_ref: session.current_device_generation_ref,
-        device_generation_status: session.device_generation_status,
-        registry_head: session.registry_head,
-        accepted_seal_frontier: session.accepted_seal_frontier,
-        policy_payload: session.policy_payload,
-        publication_authority_context: session.publication_authority_context,
-        publication_authority_context_digest: session.publication_authority_context_digest,
-        challenge: session.challenge,
-        state: session.state,
-        proof_payload: session.proof_payload,
-        transaction_id: session.transaction_id,
-        created_at: session.created_at,
-        updated_at: session.updated_at,
-        expires_at: session.expires_at,
     }
 }
 
@@ -1684,12 +1198,7 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
         &self,
         recovery_session_id: &str,
     ) -> crate::ServiceResult<Option<crate::identity::RecoverySessionState>> {
-        Ok(self
-            .0
-            .recovery_sessions()
-            .get(recovery_session_id)
-            .await?
-            .map(application_recovery_session))
+        Ok(self.0.recovery_sessions().get(recovery_session_id).await?)
     }
 
     async fn session_for_grant(
@@ -1700,8 +1209,7 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
             .0
             .recovery_sessions()
             .get_by_grant_id(session_grant_id)
-            .await?
-            .map(application_recovery_session))
+            .await?)
     }
 
     async fn session_for_request(
@@ -1713,18 +1221,14 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
             .0
             .recovery_sessions()
             .get_by_grant_request(session_grant_id, request_id)
-            .await?
-            .map(application_recovery_session))
+            .await?)
     }
 
     async fn insert_session(
         &self,
         session: crate::identity::RecoverySessionState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .recovery_sessions()
-            .insert(persistence_recovery_session(session))
-            .await?;
+        self.0.recovery_sessions().insert(session).await?;
         Ok(())
     }
 
@@ -1732,93 +1236,8 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
         &self,
         session: crate::identity::RecoverySessionState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .recovery_sessions()
-            .update(persistence_recovery_session(session))
-            .await?;
+        self.0.recovery_sessions().update(session).await?;
         Ok(())
-    }
-}
-
-fn application_security_transaction(
-    record: soland_storage::SecurityTransactionRecord,
-) -> crate::identity::SecurityTransactionRecord {
-    crate::identity::SecurityTransactionRecord {
-        canonical_request: record.canonical_request,
-        resource: record.resource,
-    }
-}
-
-fn persistence_security_transaction(
-    transaction: crate::identity::SecurityTransactionRecord,
-) -> soland_storage::SecurityTransactionRecord {
-    soland_storage::SecurityTransactionRecord {
-        canonical_request: transaction.canonical_request,
-        resource: transaction.resource,
-    }
-}
-
-fn application_security_transaction_step_outcome(
-    record: soland_storage::SecurityTransactionStepOutcomeRecord,
-) -> crate::identity::SecurityTransactionStepOutcomeState {
-    crate::identity::SecurityTransactionStepOutcomeState {
-        transaction_id: record.transaction_id,
-        step: record.step,
-        canonical_request: record.canonical_request,
-        response: record.response,
-        participant_outcome: record.participant_outcome,
-    }
-}
-
-fn application_security_transaction_step_attempt(
-    record: soland_storage::SecurityTransactionStepAttemptRecord,
-) -> crate::identity::SecurityTransactionStepAttemptState {
-    crate::identity::SecurityTransactionStepAttemptState {
-        transaction_id: record.transaction_id,
-        step: record.step,
-        canonical_request: record.canonical_request,
-    }
-}
-
-fn persistence_security_transaction_step_attempt(
-    attempt: crate::identity::SecurityTransactionStepAttemptState,
-) -> soland_storage::SecurityTransactionStepAttemptRecord {
-    soland_storage::SecurityTransactionStepAttemptRecord {
-        transaction_id: attempt.transaction_id,
-        step: attempt.step,
-        canonical_request: attempt.canonical_request,
-    }
-}
-
-fn persistence_security_transaction_step_outcome(
-    outcome: crate::identity::SecurityTransactionStepOutcomeState,
-) -> soland_storage::SecurityTransactionStepOutcomeRecord {
-    soland_storage::SecurityTransactionStepOutcomeRecord {
-        transaction_id: outcome.transaction_id,
-        step: outcome.step,
-        canonical_request: outcome.canonical_request,
-        response: outcome.response,
-        participant_outcome: outcome.participant_outcome,
-    }
-}
-
-fn application_backup_series_erase_progress(
-    record: soland_storage::BackupSeriesEraseProgressRecord,
-) -> crate::identity::BackupSeriesEraseProgressState {
-    crate::identity::BackupSeriesEraseProgressState {
-        transaction_id: record.transaction_id,
-        canonical_request: record.canonical_request,
-        outcome: record.outcome,
-    }
-}
-
-fn persistence_backup_series_erase_progress(
-    progress: crate::identity::BackupSeriesEraseProgressState,
-) -> soland_storage::BackupSeriesEraseProgressRecord {
-    soland_storage::BackupSeriesEraseProgressRecord {
-        transaction_id: progress.transaction_id,
-        canonical_request: progress.canonical_request,
-        outcome: progress.outcome,
     }
 }
 
@@ -1828,34 +1247,21 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
         &self,
         transaction: crate::identity::SecurityTransactionRecord,
     ) -> crate::ServiceResult<crate::identity::SecurityTransactionRecord> {
-        Ok(application_security_transaction(
-            self.0
-                .security_transactions()
-                .create(persistence_security_transaction(transaction))
-                .await?,
-        ))
+        Ok(self.0.security_transactions().create(transaction).await?)
     }
 
     async fn transaction(
         &self,
         transaction_id: &str,
     ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionRecord>> {
-        Ok(self
-            .0
-            .security_transactions()
-            .get(transaction_id)
-            .await?
-            .map(application_security_transaction))
+        Ok(self.0.security_transactions().get(transaction_id).await?)
     }
 
     async fn save(
         &self,
         transaction: crate::identity::SecurityTransactionRecord,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .security_transactions()
-            .update(persistence_security_transaction(transaction))
-            .await?;
+        self.0.security_transactions().update(transaction).await?;
         Ok(())
     }
 
@@ -1868,8 +1274,7 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .0
             .security_transactions()
             .step_outcome(transaction_id, step)
-            .await?
-            .map(application_security_transaction_step_outcome))
+            .await?)
     }
 
     async fn step_attempt(
@@ -1881,20 +1286,14 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .0
             .security_transactions()
             .step_attempt(transaction_id, step)
-            .await?
-            .map(application_security_transaction_step_attempt))
+            .await?)
     }
 
     async fn begin_step(
         &self,
         attempt: crate::identity::SecurityTransactionStepAttemptState,
     ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepAttemptState> {
-        Ok(application_security_transaction_step_attempt(
-            self.0
-                .security_transactions()
-                .begin_step(persistence_security_transaction_step_attempt(attempt))
-                .await?,
-        ))
+        Ok(self.0.security_transactions().begin_step(attempt).await?)
     }
 
     async fn accept_step(
@@ -1902,15 +1301,11 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
         transaction: crate::identity::SecurityTransactionRecord,
         outcome: crate::identity::SecurityTransactionStepOutcomeState,
     ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepOutcomeState> {
-        Ok(application_security_transaction_step_outcome(
-            self.0
-                .security_transactions()
-                .accept_step(
-                    persistence_security_transaction(transaction),
-                    persistence_security_transaction_step_outcome(outcome),
-                )
-                .await?,
-        ))
+        Ok(self
+            .0
+            .security_transactions()
+            .accept_step(transaction, outcome)
+            .await?)
     }
 
     async fn backup_erase_progress(
@@ -1921,86 +1316,29 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .0
             .security_transactions()
             .backup_erase_progress(transaction_id)
-            .await?
-            .map(application_backup_series_erase_progress))
+            .await?)
     }
 
     async fn begin_backup_erase(
         &self,
         progress: crate::identity::BackupSeriesEraseProgressState,
     ) -> crate::ServiceResult<crate::identity::BackupSeriesEraseProgressState> {
-        Ok(application_backup_series_erase_progress(
-            self.0
-                .security_transactions()
-                .begin_backup_erase(persistence_backup_series_erase_progress(progress))
-                .await?,
-        ))
+        Ok(self
+            .0
+            .security_transactions()
+            .begin_backup_erase(progress)
+            .await?)
     }
 
     async fn update_backup_erase(
         &self,
         progress: crate::identity::BackupSeriesEraseProgressState,
     ) -> crate::ServiceResult<crate::identity::BackupSeriesEraseProgressState> {
-        Ok(application_backup_series_erase_progress(
-            self.0
-                .security_transactions()
-                .update_backup_erase(persistence_backup_series_erase_progress(progress))
-                .await?,
-        ))
-    }
-}
-
-fn application_did_document(
-    record: soland_storage::WebvhDocumentRecord,
-) -> crate::identity::DidDocumentState {
-    crate::identity::DidDocumentState {
-        did: record.did,
-        did_document: record.did_document,
-        key_log_head: record.key_log_head,
-        seq: record.seq,
-        method_evidence: record.method_evidence,
-        fetched_at: record.fetched_at,
-        expires_at: record.expires_at,
-        updated_at: record.updated_at,
-    }
-}
-
-fn persistence_did_document(
-    record: crate::identity::DidDocumentState,
-) -> soland_storage::WebvhDocumentRecord {
-    soland_storage::WebvhDocumentRecord {
-        did: record.did,
-        did_document: record.did_document,
-        key_log_head: record.key_log_head,
-        seq: record.seq,
-        method_evidence: record.method_evidence,
-        fetched_at: record.fetched_at,
-        expires_at: record.expires_at,
-        updated_at: record.updated_at,
-    }
-}
-
-fn application_did_log_event(
-    record: soland_storage::WebvhLogRecord,
-) -> crate::identity::DidLogEvent {
-    crate::identity::DidLogEvent {
-        event_digest: record.event_digest,
-        did: record.did,
-        seq: record.seq,
-        operation: record.operation,
-        created_at: record.created_at,
-    }
-}
-
-fn persistence_did_log_event(
-    record: crate::identity::DidLogEvent,
-) -> soland_storage::WebvhLogRecord {
-    soland_storage::WebvhLogRecord {
-        event_digest: record.event_digest,
-        did: record.did,
-        seq: record.seq,
-        operation: record.operation,
-        created_at: record.created_at,
+        Ok(self
+            .0
+            .security_transactions()
+            .update_backup_erase(progress)
+            .await?)
     }
 }
 
@@ -2010,12 +1348,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
         &self,
         did: &str,
     ) -> crate::ServiceResult<Option<crate::identity::DidDocumentState>> {
-        Ok(self
-            .0
-            .webvh()
-            .get_document(did)
-            .await?
-            .map(application_did_document))
+        Ok(self.0.webvh().get_document(did).await?)
     }
 
     async fn embedded_document(
@@ -2026,32 +1359,21 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
             .0
             .webvh()
             .get_embedded_webvh_document_by_local_id(local_id)
-            .await?
-            .map(application_did_document))
+            .await?)
     }
 
     async fn log_events(
         &self,
         did: &str,
     ) -> crate::ServiceResult<Vec<crate::identity::DidLogEvent>> {
-        Ok(self
-            .0
-            .webvh()
-            .list_log_events(did)
-            .await?
-            .into_iter()
-            .map(application_did_log_event)
-            .collect())
+        Ok(self.0.webvh().list_log_events(did).await?)
     }
 
     async fn store_document(
         &self,
         document: crate::identity::DidDocumentState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .webvh()
-            .put_document(persistence_did_document(document))
-            .await?;
+        self.0.webvh().put_document(document).await?;
         Ok(())
     }
 
@@ -2059,10 +1381,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
         &self,
         event: crate::identity::DidLogEvent,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .webvh()
-            .append_log_event(persistence_did_log_event(event))
-            .await?;
+        self.0.webvh().append_log_event(event).await?;
         Ok(())
     }
 
@@ -2086,12 +1405,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
             match self
                 .0
                 .webvh()
-                .commit_service_registration(
-                    key,
-                    outcome,
-                    persistence_did_document(document),
-                    persistence_did_log_event(event),
-                )
+                .commit_service_registration(key, outcome, document, event)
                 .await?
             {
                 soland_storage::ServiceRegistrationCommitOutcome::Created(outcome) => {
@@ -2117,11 +1431,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
             match self
                 .0
                 .webvh()
-                .commit_log_operation(
-                    expected_current_head,
-                    persistence_did_document(document),
-                    persistence_did_log_event(event),
-                )
+                .commit_log_operation(expected_current_head, document, event)
                 .await?
             {
                 soland_storage::WebvhLogCommitOutcome::Accepted => {

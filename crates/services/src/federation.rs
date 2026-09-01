@@ -3,38 +3,16 @@ use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
-use arkret_wire::ActorId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
-pub use soland_storage::FEDERATION_FRONTIER_STATUS_PEER_STALE;
+pub use soland_storage::{
+    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierExchangeRecord,
+    FederationFrontierReductionCheckpoint,
+};
 
 use crate::ServiceResult;
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FederationFrontierExchangeRecord {
-    pub realm_id: String,
-    pub peer_id: DidCoreId,
-    pub status: String,
-    pub consecutive_failures: i32,
-    pub last_success_at: Option<i64>,
-    pub last_failure_at: Option<i64>,
-    pub last_frontier_root: Option<String>,
-    pub last_error: Option<String>,
-    pub updated_at: i64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FederationFrontierReductionCheckpoint {
-    pub realm_id: String,
-    pub peer_id: DidCoreId,
-    pub remote_snapshot_digest: String,
-    pub actor_set_digest: String,
-    pub actor_id: ActorId,
-    pub cursor: Option<String>,
-    pub updated_at: i64,
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct SovereignDeploymentState {
@@ -155,24 +133,7 @@ pub struct PendingFederationDelivery {
     pub completed_at: Option<i64>,
 }
 
-#[derive(Clone, Debug)]
-pub struct FederationDeadLetter {
-    pub id: String,
-    pub outbox_id: String,
-    pub peer_id: DidCoreId,
-    pub endpoint: String,
-    pub idempotency_key: String,
-    pub last_http_status: Option<i32>,
-    pub attempts: i32,
-    pub response_excerpt: Option<String>,
-    pub reason: String,
-    pub failed_at: i64,
-    pub requeued_outbox_id: Option<String>,
-    pub requeued_by: Option<String>,
-    pub requeue_reason: Option<String>,
-    pub requeue_request_digest: Option<String>,
-    pub requeued_at: Option<i64>,
-}
+pub use soland_storage::FederationOutboxDeadLetterRecord as FederationDeadLetter;
 
 #[derive(Clone, Debug)]
 pub struct EnqueueFederationDeliveryCommand {

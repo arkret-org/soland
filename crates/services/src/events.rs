@@ -9,8 +9,6 @@ use arkret_models_collaboration::events_payloads::agent::{
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScopeKind,
 };
-use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
-use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use arkret_models_crypto::MlsGovernanceBindingPayload;
 use arkret_wire::{EventBatchReceipt, ScopeRef};
@@ -30,15 +28,7 @@ pub struct RealmDirectoryQuery {
     pub limit: Option<usize>,
 }
 
-#[derive(Clone, Debug)]
-pub struct PeerEventsPageQuery {
-    pub realms: Vec<String>,
-    pub actors: Vec<String>,
-    pub kind_filter: Option<String>,
-    pub cursor_event_id: Option<String>,
-    pub backward: bool,
-    pub limit: usize,
-}
+pub use soland_storage::PeerEventsPageQuery;
 
 #[derive(Clone, Debug)]
 pub struct ActiveAgentAccountabilityQuery {
@@ -48,53 +38,10 @@ pub struct ActiveAgentAccountabilityQuery {
     pub accepted_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpaceContainerProjectionRecord {
-    pub container_space_id: String,
-    pub realm_id: String,
-    pub kind: String,
-    pub title: String,
-    pub fields: BTreeMap<String, Value>,
-    pub scope_circle_id: Option<String>,
-    pub child_scope_policy: Option<String>,
-    pub child_scope_policy_scope_circle_id: Option<String>,
-    pub parent_ref: Option<String>,
-    pub rank: Option<String>,
-    pub state: String,
-    pub state_changed_at: Option<DateTime<Utc>>,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub history_basis_seals: Vec<String>,
-    pub updated_by: Option<String>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-/// Circle projection records are shared verbatim with the persistence layer:
-/// there is no service-side reshaping to justify a second copy of the shape.
 pub use soland_storage::{
-    CircleMemberProjectionRecord, CircleProjectionRecord, StrandWatchProjectionRecord,
+    CircleMemberProjectionRecord, CircleProjectionRecord, RealmOrganizationStatementRecord,
+    SpaceContainerProjectionRecord, StrandProjectionRecord, StrandWatchProjectionRecord,
 };
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct StrandProjectionRecord {
-    pub strand_id: String,
-    pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrack>,
-    pub title: String,
-    pub summary: Option<String>,
-    /// Canonical content slot; exactly one of the two is present on an active
-    /// object and both are absent once `state=redacted` (common-fields.md 5.2).
-    pub content: Option<Value>,
-    pub encrypted_content: Option<Value>,
-    pub state: String,
-    pub state_changed_at: Option<DateTime<Utc>>,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub history_basis_seals: Vec<String>,
-    pub updated_by: Option<String>,
-    pub updated_at: Option<DateTime<Utc>>,
-    pub scope_circle_id: Option<String>,
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct MorphProjectionRecord {
@@ -120,26 +67,6 @@ pub struct MorphProjectionRecord {
     pub history_basis_seals: Vec<String>,
     pub updated_by: Option<String>,
     pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct RealmOrganizationStatementRecord {
-    pub realm_id: String,
-    pub organization_id: DidCoreId,
-    pub relationship: String,
-    pub statement_id: String,
-    pub status: String,
-    pub control_scopes: Vec<String>,
-    pub issued_at: DateTime<Utc>,
-    pub not_before: Option<DateTime<Utc>>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub supersedes_statement_id: Option<String>,
-    pub revokes_statement_id: Option<String>,
-    pub realm_frontier_digest: Option<String>,
-    pub proof_digest: Option<String>,
-    pub delegation_ref: Option<String>,
-    pub issuer_role: String,
-    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -378,20 +305,7 @@ fn realm_directory_score(entry: &RealmDirectoryEntry, query: &RealmDirectoryQuer
     score
 }
 
-#[derive(Clone, Debug)]
-pub struct AcceptedEvent {
-    pub event_id: String,
-    pub actor_id: String,
-    pub actor_seq: u64,
-    pub realm_id: Option<String>,
-    pub kind: String,
-    pub schema_id: String,
-    pub digest_suite: arkret_canonical::DigestSuite,
-    pub canonical_digest: String,
-    pub canonical_bytes: Vec<u8>,
-    pub envelope: Value,
-    pub received_at: DateTime<Utc>,
-}
+pub use soland_storage::CanonicalEventRecord as AcceptedEvent;
 
 /// Locate the replacement `ak.device.authorize` that belongs to one accepted
 /// B-model re-anchor.
@@ -760,17 +674,7 @@ pub struct ProjectedEvent {
     pub received_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct MessageState {
-    pub event_id: String,
-    pub message_id: String,
-    pub realm_id: String,
-    pub sender: String,
-    pub thread_id: String,
-    pub content: Value,
-    pub encrypted: bool,
-    pub created_at: DateTime<Utc>,
-}
+pub use soland_storage::MessageRecord as MessageState;
 
 #[async_trait::async_trait]
 pub trait MessagePort: Send + Sync {
@@ -783,33 +687,11 @@ pub trait MessagePort: Send + Sync {
     ) -> ServiceResult<Vec<MessageState>>;
 }
 
-#[derive(Clone, Debug)]
-pub struct AppletTransactionReplayState {
-    pub applet_id: arkret_wire::AppletId,
-    pub source_id: String,
-    pub idempotency_key: String,
-    pub delivery_authentication_record_digest: String,
-    pub request_digest: String,
-    pub outcome: Option<Value>,
-    pub received_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub enum AppletTransactionReplayResult {
-    Fresh,
-    Existing(AppletTransactionReplayState),
-}
-
-#[derive(Clone, Debug)]
-pub struct AppletAuthoringPreviewState {
-    pub subject_key: String,
-    pub basis_digest: String,
-    pub request_digest: String,
-    pub signed_request: Value,
-    pub issued_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-}
+pub use soland_storage::{
+    AppletAuthoringPreviewRecord as AppletAuthoringPreviewState,
+    AppletTransactionReplayBegin as AppletTransactionReplayResult,
+    AppletTransactionReplayRecord as AppletTransactionReplayState,
+};
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
@@ -861,11 +743,7 @@ pub trait AppletPort: Send + Sync {
     ) -> ServiceResult<Option<AppletAuthoringPreviewState>>;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProjectedEventAppendResult {
-    Inserted,
-    AlreadyExists,
-}
+pub use soland_storage::ProjectionEventAppendOutcome as ProjectedEventAppendResult;
 
 #[derive(Clone, Debug)]
 pub struct IdempotentResponse {
@@ -928,46 +806,12 @@ pub struct CommitAccountDataCas {
     pub conflict_code: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct CommitContactProjection {
-    pub record: crate::identity::ContactRecord,
-    pub expected_updated_at: Option<DateTime<Utc>>,
-    pub conflict_code: String,
-    /// Exact recipient-private Contact request carrier retained for the
-    /// pending-incoming verification window. Same-service delivery has no
-    /// federation outbox hop, so this must commit with the shared slot.
-    pub verified_mirror: Option<soland_storage::ContactVerifiedMirrorRecord>,
-    pub invite_policy: Option<(
-        arkret_wire::AccountId,
-        arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    )>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CommitDevicePairingAuthorization {
-    pub device_pairing_request_id: String,
-    pub pairing_code: String,
-    pub new_device_pubkey: arkret_models_collaboration::governance::agent_artifacts::PublicKey,
-    pub device_id: String,
-    pub authorized_by_actor_id: arkret_wire::DidCoreId,
-    pub authorized_event_ref: String,
-    pub changed_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CommitAppletRecord {
-    pub applet_id: arkret_wire::AppletId,
-    pub identity: CommitAppletIdentity,
-    pub expected_record: Option<Value>,
-    pub record: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct CommitAppletIdentity {
-    pub target_station_id: arkret_wire::DidCoreId,
-    pub expected_record: Option<Value>,
-    pub record: Value,
-}
+pub use soland_storage::{
+    AppletAuthoringPreviewCommit as CommitAppletAuthoringPreview,
+    AppletIdentityCommit as CommitAppletIdentity, AppletRecordCommit as CommitAppletRecord,
+    ContactProjectionCommit as CommitContactProjection,
+    DevicePairingAuthorizationCommit as CommitDevicePairingAuthorization,
+};
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventBatchCommand {
@@ -977,12 +821,6 @@ pub struct CommitAcceptedEventBatchCommand {
     pub applet_record: Option<CommitAppletRecord>,
     pub applet_authoring_preview: Option<CommitAppletAuthoringPreview>,
     pub agent_membership_cascade: Option<soland_storage::AgentMembershipCascadeCommit>,
-}
-
-#[derive(Clone, Debug)]
-pub struct CommitAppletAuthoringPreview {
-    pub subject_key: String,
-    pub request_digest: String,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -996,37 +834,12 @@ pub struct AcceptedBatchReceipt {
     pub value: Value,
 }
 
-#[derive(Clone, Debug)]
-pub struct IdentityAnchorDeviceState {
-    pub actor: String,
-    pub device_id: String,
-    pub display_name: Option<String>,
-    pub verification_state: String,
-    pub payload: Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub revoked_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug)]
-pub struct IdentityAnchorFrontierState {
-    pub realm_id: String,
-    pub raw_leaves: Vec<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct IdentityAnchorReanchorState {
-    pub actor_id: String,
-    pub station_id: String,
-    pub new_device_generation: u64,
-    pub reanchor_digest: String,
-    pub authorize_digest: String,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct IdentityAnchorCommitResult {
-    pub reanchor_conflict: bool,
-}
+pub use soland_storage::{
+    DeviceInventoryRecord as IdentityAnchorDeviceState,
+    IdentityAnchorCommitOutcome as IdentityAnchorCommitResult,
+    IdentityAnchorFrontierCas as IdentityAnchorFrontierState,
+    IdentityAnchorReanchorSlot as IdentityAnchorReanchorState,
+};
 
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
@@ -1906,25 +1719,10 @@ pub enum ClaimMlsKeyPackageTarget<'a> {
 }
 
 pub use soland_storage::{
-    MlsKeyPackageRow as MlsKeyPackageState, PersistedKeyPackageClaimState,
-    PersistedKeyPackageReusePolicy,
+    MlsKeyPackageRow as MlsKeyPackageState,
+    PeerKeyPackageClaimLedgerRecord as PeerKeyPackageClaimLedgerState,
+    PersistedKeyPackageClaimState, PersistedKeyPackageReusePolicy,
 };
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct PeerKeyPackageClaimLedgerState {
-    pub source_id: String,
-    pub claim_request_id: String,
-    pub request_digest: String,
-    pub key_package_use: String,
-    pub keypackage_id: Option<String>,
-    pub outcome: Option<Value>,
-    pub terminal_receipt: Option<Value>,
-    pub consume_receipt: Option<Value>,
-    pub claim_expires_at_unix_ms: Option<i64>,
-    pub expires_at: i64,
-    pub state: String,
-    pub updated_at: i64,
-}
 
 pub struct PeerKeyPackageClaimCommand<'a> {
     pub keypackage_id: &'a str,
@@ -1947,18 +1745,10 @@ pub struct PeerClaimTerminalTransitionCommand<'a> {
     pub now_unix_ms: i64,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub enum PeerKeyPackageClaimResult {
-    Claimed(Box<MlsKeyPackageState>),
-    Existing(Box<PeerKeyPackageClaimLedgerState>),
-    KeyPackageUnavailable,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum PeerKeyPackageClaimLedgerWriteResult {
-    Inserted,
-    Existing(Box<PeerKeyPackageClaimLedgerState>),
-}
+pub use soland_storage::{
+    PeerKeyPackageClaimAttemptResult as PeerKeyPackageClaimResult,
+    PeerKeyPackageClaimLedgerWriteResult,
+};
 
 #[async_trait::async_trait]
 pub trait MlsKeyPackageMaintenancePort: Send + Sync {
@@ -2220,36 +2010,7 @@ impl MlsKeyPackageService {
     }
 }
 
-#[derive(Clone, Debug)]
-pub struct RealmMetadata {
-    pub owner: String,
-    pub deleted: bool,
-    pub discoverability: String,
-    pub history_access: String,
-    pub preview_policy: Option<Value>,
-    pub preview_policy_digest: Option<String>,
-    pub asset_privacy_policy: Option<Value>,
-    pub asset_privacy_policy_digest: Option<String>,
-    pub encryption_profile: Option<String>,
-    pub plaintext_visible_services: BTreeSet<String>,
-    pub plaintext_visible_service_classes:
-        BTreeMap<String, BTreeSet<arkret_wire::PlaintextDataClassKind>>,
-    pub minimal_metadata_realm: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-impl RealmMetadata {
-    pub fn allows_plaintext_data_class(
-        &self,
-        service_id: &str,
-        data_class: arkret_wire::PlaintextDataClassKind,
-    ) -> bool {
-        self.plaintext_visible_service_classes
-            .get(service_id)
-            .is_some_and(|classes| classes.contains(&data_class))
-    }
-}
+pub use soland_storage::RealmMetaRecord as RealmMetadata;
 
 #[async_trait::async_trait]
 pub trait RealmMetadataPort: Send + Sync {
@@ -2300,51 +2061,12 @@ pub trait RealmInvitePort: Send + Sync {
     async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>>;
 }
 
-#[derive(Clone, Debug)]
-pub struct RealmInviteState {
-    pub invite_id: String,
-    pub realm_id: String,
-    pub inviter_id: String,
-    pub invitee_id: Option<String>,
-    pub introduction_evidence_digest: Option<String>,
-    pub third_party_invite: Option<ThirdPartyInvite>,
-    pub invite_token: String,
-    pub status: String,
-    pub claim_nonces: BTreeMap<String, String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct InviteLocatorState {
-    pub locator_id: String,
-    pub token_digest: String,
-    pub subject_id: String,
-    pub recipient_id: String,
-    pub issued_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub one_time_use: bool,
-    pub display_hint: Option<PrincipalLocatorDisplayHint>,
-    pub revoked_at: Option<DateTime<Utc>>,
-    pub consumed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct InviteLocatorRotateCommand {
-    pub locator_id: String,
-    pub token_digest: String,
-    pub issued_at: DateTime<Utc>,
-    pub ttl_seconds: Option<u32>,
-    pub one_time_use: Option<bool>,
-    pub display_hint: Option<Option<PrincipalLocatorDisplayHint>>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum InviteLocatorInsertResult {
-    Inserted,
-    ActiveLimitReached,
-}
+pub use soland_storage::{
+    InviteLocatorInsertOutcome as InviteLocatorInsertResult,
+    InviteLocatorRecord as InviteLocatorState,
+    InviteLocatorRotateMutation as InviteLocatorRotateCommand,
+    RealmInviteRecord as RealmInviteState,
+};
 
 #[async_trait::async_trait]
 pub trait InviteLocatorPort: Send + Sync {

@@ -6,7 +6,8 @@ use soland_storage::{
     DeviceRevocationGateLinearization, DeviceRevocationGateLinearizationRequest,
     DeviceRevocationGateSelector, DeviceRevocationGateStatus, DeviceRevocationStore,
     DeviceRevocationTargetRecord, DeviceRevocationTargetStatus, DeviceRevocationTransition,
-    MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION, PersistenceError, PersistenceResult,
+    DeviceRevocationTransitionDecision, DeviceRevocationTransitionSnapshot, PersistenceError,
+    PersistenceResult, classify_device_revocation_transition,
 };
 
 use crate::{Arc, Mutex, Utc, async_trait};
@@ -76,23 +77,20 @@ impl MemoryDeviceRevocationState {
         accepted_at: chrono::DateTime<Utc>,
     ) -> PersistenceResult<bool> {
         if let Some(existing) = self.targets.get(&transition.proposal_digest) {
-            let same = existing.selector == transition.selector
-                && existing.proposal_event_id == transition.proposal_event_id
-                && existing.control_proposal_ack == transition.control_proposal_ack;
-            return if same {
-                Ok(false)
-            } else {
-                Err(PersistenceError::Conflict(
-                    "duplicate_conflict: device revocation target differs".to_owned(),
-                ))
-            };
+            return classify_device_revocation_transition(
+                transition,
+                DeviceRevocationTransitionSnapshot::Existing {
+                    selector: &existing.selector,
+                    proposal_event_id: &existing.proposal_event_id,
+                    control_proposal_ack: &existing.control_proposal_ack,
+                },
+            )
+            .map(|decision| {
+                debug_assert_eq!(decision, DeviceRevocationTransitionDecision::Duplicate);
+                false
+            });
         }
-        if matches!(
-            self.status(&transition.selector),
-            DeviceRevocationGateStatus::Revoked { .. }
-        ) {
-            return Err(PersistenceError::Conflict("device_revoked".to_owned()));
-        }
+        let gate_status = self.status(&transition.selector);
         let live = self
             .targets
             .values()
@@ -101,11 +99,14 @@ impl MemoryDeviceRevocationState {
                     && !matches!(record.status, DeviceRevocationTargetStatus::Rejected { .. })
             })
             .count();
-        if live >= MAX_DEVICE_REVOCATION_PROPOSALS_PER_GENERATION {
-            return Err(PersistenceError::Conflict(
-                "schema_violation: device revocation proposal cap exceeded".to_owned(),
-            ));
-        }
+        let decision = classify_device_revocation_transition(
+            transition,
+            DeviceRevocationTransitionSnapshot::New {
+                gate_status: &gate_status,
+                live_proposal_count: live,
+            },
+        )?;
+        debug_assert_eq!(decision, DeviceRevocationTransitionDecision::Insert);
         let acceptance_seq = self.allocate_seq((
             transition.selector.principal_id.clone(),
             transition.selector.station_id.clone(),
