@@ -2,33 +2,6 @@
 
 use super::*;
 
-pub(super) fn canonical_manifest_ranges(
-    manifest: &arkret_models_collaboration::history_key::HistoryResponseManifest,
-) -> Result<Vec<arkret_models_collaboration::history_key::EpochRange>, AppError> {
-    let mut ranges = manifest
-        .chunks
-        .iter()
-        .map(|chunk| chunk.covered_epoch_range)
-        .collect::<Vec<_>>();
-    ranges.sort_by_key(|range| (range.from_epoch, range.to_epoch));
-    let mut canonical = Vec::<arkret_models_collaboration::history_key::EpochRange>::new();
-    for range in ranges {
-        if let Some(previous) = canonical.last_mut()
-            && previous
-                .to_epoch
-                .checked_add(1)
-                .is_some_and(|next| range.from_epoch <= next)
-        {
-            previous.to_epoch = previous.to_epoch.max(range.to_epoch);
-        } else {
-            canonical.push(range);
-        }
-    }
-    arkret_models_collaboration::history_key::validate_canonical_ranges(&canonical, 1_024)
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    Ok(canonical)
-}
-
 pub(super) fn sign_history_response_record(
     state: &AppState,
     sequence: u64,

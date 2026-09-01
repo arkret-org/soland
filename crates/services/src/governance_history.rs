@@ -21,7 +21,23 @@ use soland_storage::{
 
 use crate::{ServiceError, ServiceResult};
 
+pub mod archive_list;
+pub mod response_acceptance;
+pub mod retained_cut;
+
 const MAX_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub enum HistoryPreparationError {
+    #[error("{0}")]
+    FrontierUnavailable(String),
+    #[error("{0}")]
+    CapabilityDenied(String),
+    #[error("{0}")]
+    InvalidInput(String),
+    #[error("{0}")]
+    Invariant(String),
+}
 
 #[derive(Clone, Copy)]
 enum TraversalCaller<'a> {

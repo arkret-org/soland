@@ -2,7 +2,7 @@ use arkret_models_collaboration::events_payloads::mls::MlsGenesisPayload;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencyResolveOutcome, GovernanceDependencySelector,
     PeerGovernanceDependencyResolveRequest, SelfGovernanceDependencyResolveRequest,
-    governance_attester_evidence_selectors, governance_runtime_dependency_selectors_for_replay,
+    governance_attester_evidence_selectors,
 };
 use arkret_models_collaboration::history_key::{
     AcceptedAuthorityViewVector, AccountStatusViewLocator, AgentEvidenceViewLocator, AuthorProfile,
@@ -16,12 +16,11 @@ use arkret_models_collaboration::history_key::{
     HistoryKeyResponseAckRequest, HistoryKeyResponseContent, HistoryKeyResponseListOutcome,
     HistoryKeyResponseListQuery, HistoryKeyResponseRecord, HistoryKeyResponseSendReceipt,
     HistoryKeyResponseSendRequest, HistoryKeySourceRelay, HistoryManifestAdmission,
-    HistoryManifestAdmissionKind, HistoryManifestAdmissionPass, HistoryReleaseAttestation,
-    HistoryReleaseAttestationKind, HistoryReleaseVerifierProfile, HistoryRequestId,
-    HistoryResponseAckTokenClaims, HistoryResponseCapabilityPlaintext,
-    HistoryResponseCapabilityPlaintextKind, HistoryResponseCapabilitySealContext,
-    HistoryResponseCapabilitySealPurpose, HistoryResponsePageEntry,
-    OrganizationRecoveryArchiveListItem, OrganizationRecoveryArchiveListOutcome,
+    HistoryManifestAdmissionPass, HistoryReleaseAttestation, HistoryReleaseAttestationKind,
+    HistoryReleaseVerifierProfile, HistoryRequestId, HistoryResponseAckTokenClaims,
+    HistoryResponseCapabilityPlaintext, HistoryResponseCapabilityPlaintextKind,
+    HistoryResponseCapabilitySealContext, HistoryResponseCapabilitySealPurpose,
+    HistoryResponsePageEntry, OrganizationRecoveryArchiveListOutcome,
     OrganizationRecoveryArchiveListQuery, OrganizationRecoveryArchiveReplica,
     OrganizationRecoveryArchiveReplicaOutcome, OrganizationRecoveryArchiveSetMember,
     PcrDeviceViewLocator, RealmCurrentGateProjection, RealmCurrentGateProjectionKind,
@@ -77,6 +76,21 @@ pub(crate) use stream::{
 const HISTORY_RESPONSE_RELAY_ENDPOINT: &str = "/_arkret/peer/history-key-responses/relay";
 const HISTORY_REQUEST_REPLICA_RECONCILE_PAGE_LIMIT: usize = 100;
 const HISTORY_REQUEST_REPLICA_RECONCILE_INTERVAL_SECONDS: u64 = 30;
+
+fn map_history_preparation_error(
+    error: soland_services::governance_history::HistoryPreparationError,
+) -> AppError {
+    use soland_services::governance_history::HistoryPreparationError;
+
+    match error {
+        HistoryPreparationError::FrontierUnavailable(detail) => {
+            AppError::new(ErrorCode::FrontierUnavailable, detail)
+        }
+        HistoryPreparationError::CapabilityDenied(detail) => AppError::capability_denied(detail),
+        HistoryPreparationError::InvalidInput(detail) => AppError::param_invalid(detail),
+        HistoryPreparationError::Invariant(detail) => AppError::internal(detail),
+    }
+}
 
 fn history_response_source_record_digest(
     response: &HistoryKeyResponseSendRequest,
@@ -2471,46 +2485,17 @@ async fn accept_history_response_manifest(
         )
         .await?;
     }
-    let HistoryKeyResponseContent::Manifest(manifest) = &response.content else {
-        return Err(AppError::internal(
-            "manifest admission received a chunk response",
-        ));
-    };
-    let authorized_ranges = canonical_manifest_ranges(manifest)?;
-    if authorized_ranges.iter().any(|range| {
-        !request_record
-            .write
-            .request
-            .requested_ranges
-            .iter()
-            .any(|requested| {
-                requested.from_epoch <= range.from_epoch && range.to_epoch <= requested.to_epoch
-            })
-    }) {
-        return Err(AppError::capability_denied(
-            "history response manifest range exceeds the request",
-        ));
-    }
-    let manifest_digest = response
-        .manifest_digest()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
-    let admission = HistoryManifestAdmission {
-        kind: HistoryManifestAdmissionKind::Value,
-        manifest_digest,
-        request_digest: response.request_digest.clone(),
-        request_receipt_digest: response.request_receipt_digest.clone(),
-        traversal_intent_digest: request_record
-            .write
-            .request_receipt
-            .history_traversal_retention
-            .traversal_intent_digest
-            .clone(),
-        authorized_ranges,
-        t0_pass: HistoryManifestAdmissionPass::Value,
-        manifest_admission_digest: zero_sha256_hash()?,
-    }
-    .with_computed_digest()
-    .map_err(|error| AppError::internal(error.to_string()))?;
+    let admission =
+        soland_services::governance_history::response_acceptance::construct_manifest_admission(
+            &response,
+            &request_record.write.request.requested_ranges,
+            &request_record
+                .write
+                .request_receipt
+                .history_traversal_retention
+                .traversal_intent_digest,
+        )
+        .map_err(map_history_preparation_error)?;
     let accepted_at = existing_reservation
         .as_ref()
         .map_or_else(now, |reservation| reservation.input.sent_at);
@@ -2609,358 +2594,21 @@ async fn validate_retained_history_cut(
         };
         &derived_traversal
     };
-    if traversal.retention
-        != request_record
+    let prepared = soland_services::governance_history::retained_cut::prepare_retained_history_cut(
+        &request_record.write.request.effective_scope,
+        &request_record
             .write
             .request_receipt
-            .history_traversal_retention
-    {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "history traversal retention drifted from its receipt",
-        ));
-    }
-    let HistoryGovernanceTraversalIntent::MemberHistoryDelivery {
-        trusted_history_base_basis,
-        target_basis,
-        ..
-    } = &traversal.retention.traversal_intent
-    else {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "history traversal intent is not member delivery",
-        ));
-    };
-    if traversal.pins.len() != traversal.objects.len() {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "history traversal pin and retained-object counts differ",
-        ));
-    }
-    let retained_seal_map = traversal
-        .pins
-        .iter()
-        .zip(&traversal.objects)
-        .filter_map(|(pin, object)| match (pin, object) {
-            (
-                soland_storage::HistoryTraversalPin::Seal { seal_id, .. },
-                soland_storage::HistoryTraversalRetainedObject::Seal(seal),
-            ) if seal.id == *seal_id => Some((seal_id.clone(), seal)),
-            _ => None,
-        })
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let retained_seals = traversal
-        .pins
-        .iter()
-        .filter_map(|pin| match pin {
-            soland_storage::HistoryTraversalPin::Seal { seal_id, .. } => Some(seal_id.clone()),
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    if retained_seal_map.len() != retained_seals.len() {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "history retained Seal pin and object branches disagree",
-        ));
-    }
-    let base_leaves = trusted_history_base_basis
-        .leaves
-        .iter()
-        .cloned()
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut expected_seals = std::collections::BTreeSet::new();
-    let mut pending = target_basis.leaves.clone();
-    while let Some(seal_id) = pending.pop() {
-        if !expected_seals.insert(seal_id.clone()) {
-            continue;
-        }
-        let seal = retained_seal_map.get(&seal_id).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "history retained Seal predecessor closure is incomplete",
-            )
-        })?;
-        if base_leaves.contains(&seal_id) {
-            if !seal.predecessor_refs.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    "history trusted base is not predecessor-free",
-                ));
-            }
-        } else {
-            pending.extend(seal.predecessor_refs.iter().cloned());
-        }
-    }
-    if !base_leaves.is_subset(&expected_seals) || retained_seals != expected_seals {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "history retained Seal cut is not the exact target-to-base closure",
-        ));
-    }
-    let realm_id = match &request_record.write.request.effective_scope {
-        HistoryEffectiveScope::Realm { realm_id }
-        | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
-    };
-    let retained_events = traversal
-        .pins
-        .iter()
-        .filter_map(|pin| match pin {
-            soland_storage::HistoryTraversalPin::ControlEvent { event_digest, .. } => {
-                Some(event_digest.clone())
-            }
-            _ => None,
-        })
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut replay_seals = Vec::new();
-    let mut replay_events = Vec::new();
-    let mut replay_event_digest_suites = Vec::new();
-    let mut replay_event_bytes_digests = Vec::new();
-    let mut replay_dependencies = Vec::new();
-    for (pin, object) in traversal.pins.iter().zip(&traversal.objects) {
-        let canonical = soland_storage::history_traversal_retained_object_canonical(object)
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-        let (pin_kind, pin_ref, pin_digest) = pin
-            .storage_parts()
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-        if canonical.object_kind != pin_kind
-            || canonical.object_ref != pin_ref
-            || canonical.object_digest != *pin_digest
-        {
-            return Err(AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "retained history object bytes no longer match their pin",
-            ));
-        }
-        match (pin, object) {
-            (
-                soland_storage::HistoryTraversalPin::Seal { seal_id, .. },
-                soland_storage::HistoryTraversalRetainedObject::Seal(seal),
-            ) => {
-                if seal.id != *seal_id
-                    || seal
-                        .delta
-                        .iter()
-                        .any(|event_digest| !retained_events.contains(event_digest))
-                {
-                    return Err(AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        "retained history Seal bytes or delta are incomplete",
-                    ));
-                }
-                replay_seals.push(seal.clone());
-            }
-            (
-                soland_storage::HistoryTraversalPin::ControlEvent {
-                    event_digest,
-                    object_digest,
-                },
-                soland_storage::HistoryTraversalRetainedObject::ControlEvent(event),
-            ) => {
-                let event_digest_suite = event_digest.digest_suite().map_err(|error| {
-                    AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                })?;
-                let actual_event_digest = arkret_wire::Hash::new(
-                    event
-                        .event_digest_with_digest_suite(event_digest_suite)
-                        .map_err(|error| AppError::internal(error.to_string()))?,
-                )
-                .map_err(|error| AppError::internal(error.to_string()))?;
-                if actual_event_digest != *event_digest {
-                    return Err(AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        "retained Control Event digest does not match its pin",
-                    ));
-                }
-                match event.proofs.as_slice() {
-                    [arkret_wire::EventProof::Producer(_)] => event
-                        .validate_for_direct_history_structural()
-                        .map_err(|error| {
-                            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                        })?,
-                    _ => event
-                        .validate_for_federation_structural_in_context(
-                            arkret_wire::event_envelope::EventSubmitContext::Standard,
-                            event_digest_suite,
-                        )
-                        .map_err(|error| {
-                            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                        })?,
-                }
-                replay_event_bytes_digests.push((replay_events.len(), object_digest.clone()));
-                replay_events.push(event.clone());
-                replay_event_digest_suites.push(event_digest_suite);
-            }
-            (
-                soland_storage::HistoryTraversalPin::GovernanceDependency { selector, .. },
-                soland_storage::HistoryTraversalRetainedObject::GovernanceDependency(item),
-            ) => {
-                if item.selector() != selector {
-                    return Err(AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        "retained governance dependency selector changed",
-                    ));
-                }
-                replay_dependencies.push(item.clone());
-            }
-            _ => {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    "retained history pin and object branch mismatch",
-                ));
-            }
-        }
-    }
-    for (event_index, object_digest) in replay_event_bytes_digests {
-        let event = &replay_events[event_index];
-        let event_digest_suite = replay_event_digest_suites[event_index];
-        let receipt_matches = replay_dependencies.iter().any(|dependency| {
-            let GovernanceDependency::AvailabilityReceipt {
-                availability_receipt,
-                ..
-            } = dependency
-            else {
-                return false;
-            };
-            availability_receipt.bytes_digest == object_digest
-                && availability_receipt
-                    .validate_event_bytes_digest(event, |bytes| {
-                        Ok(arkret_wire::Hash::new(arkret_canonical::digest(
-                            event_digest_suite,
-                            bytes,
-                        ))?)
-                    })
-                    .is_ok()
-        });
-        if !receipt_matches {
-            return Err(AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "retained history Control Event receipt no longer validates",
-            ));
-        }
-    }
-    let expected_first_round = governance_runtime_dependency_selectors_for_replay(
-        &replay_seals,
-        &replay_events,
-        &replay_event_digest_suites,
+            .history_traversal_retention,
+        traversal,
     )
-    .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-    let selector_key = |selector: &arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector| {
-        selector
-            .canonical_sort_key()
-            .map(|(kind, bytes)| (kind.to_owned(), bytes))
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))
-    };
-    let mut expected_selector_values = expected_first_round.clone();
-    let dependency_by_selector = replay_dependencies
-        .iter()
-        .map(|dependency| Ok((selector_key(dependency.selector())?, dependency)))
-        .collect::<Result<std::collections::BTreeMap<_, _>, AppError>>()?;
-    let mut expected_selectors = std::collections::BTreeSet::new();
-    let mut cursor = 0;
-    while cursor < expected_selector_values.len() {
-        let selector = &expected_selector_values[cursor];
-        cursor += 1;
-        let key = selector_key(selector)?;
-        if !expected_selectors.insert(key.clone()) {
-            continue;
-        }
-        let dependency = dependency_by_selector.get(&key).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "retained governance dependency closure is incomplete",
-            )
-        })?;
-        if let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-            authenticated_signer_resolution_evidence,
-            ..
-        } = dependency
-        {
-            expected_selector_values.extend(
-                governance_attester_evidence_selectors(std::slice::from_ref(
-                    authenticated_signer_resolution_evidence,
-                ))
-                .map_err(|error| {
-                    AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                })?,
-            );
-        }
-    }
-    let retained_selectors = replay_dependencies
-        .iter()
-        .map(|dependency| selector_key(dependency.selector()))
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
-    if !expected_selectors.is_subset(&retained_selectors) {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "retained governance replay dependency closure is incomplete",
-        ));
-    }
-    let source_evidence = replay_dependencies
-        .iter()
-        .filter(|dependency| {
-            selector_key(dependency.selector()).is_ok_and(|key| !expected_selectors.contains(&key))
-        })
-        .collect::<Vec<_>>();
-    if source_evidence.iter().any(|dependency| {
-        !matches!(
-            dependency,
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence { .. }
-                | GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence { .. }
-        )
-    }) {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "retained traversal contains a surplus non-signer governance dependency",
-        ));
-    }
-    let source_authenticated = source_evidence
-        .iter()
-        .filter_map(|dependency| match dependency {
-            GovernanceDependency::AuthenticatedSignerResolutionEvidence {
-                authenticated_signer_resolution_evidence,
-                ..
-            } => Some(authenticated_signer_resolution_evidence.clone()),
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    let source_attesters = governance_attester_evidence_selectors(&source_authenticated)
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-    if source_attesters
-        .iter()
-        .map(selector_key)
-        .collect::<Result<std::collections::BTreeSet<_>, _>>()?
-        .iter()
-        .any(|selector| !retained_selectors.contains(selector))
-    {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
-            "retained source signer attester dependency closure is incomplete",
-        ));
-    }
-    let checkpoint_dependencies = expected_selectors
-        .iter()
-        .map(|selector| {
-            dependency_by_selector
-                .get(selector)
-                .map(|dependency| (*dependency).clone())
-                .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        "retained replay dependency disappeared",
-                    )
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    for event in &replay_events {
-        arkret_schema::validate_event_wire_schema(event)
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
-    }
+    .map_err(map_history_preparation_error)?;
     let checkpoint = arkret::verify_mls_governance_closure(
-        realm_id,
-        target_basis,
-        &replay_seals,
-        &replay_events,
-        &checkpoint_dependencies,
+        &prepared.realm_id,
+        &prepared.target_basis,
+        &prepared.replay_seals,
+        &prepared.replay_events,
+        &prepared.checkpoint_dependencies,
         |event, _digest_suite, evidence, dependencies| {
             arkret::verify_agent_historical_event_key(
                 event,
@@ -3116,30 +2764,12 @@ async fn accept_history_response_chunk(
                 "history chunk manifest admission is unavailable",
             )
         })?;
-    if accepted_manifest.manifest_admission.request_digest != response.request_digest
-        || accepted_manifest.manifest_admission.request_receipt_digest
-            != response.request_receipt_digest
-    {
-        return Err(AppError::capability_denied(
-            "history chunk manifest binds another request",
-        ));
-    }
-    let HistoryKeyResponseContent::Manifest(manifest) = &accepted_manifest.source_record.content
-    else {
-        return Err(AppError::internal(
-            "accepted manifest storage returned a chunk",
-        ));
-    };
-    let descriptor = manifest
-        .chunks
-        .iter()
-        .find(|descriptor| {
-            descriptor.chunk_response_id == response.response_id
-                && descriptor.chunk_index == chunk.chunk_index
-        })
-        .ok_or_else(|| {
-            AppError::capability_denied("history chunk is not named by the accepted manifest")
-        })?;
+    let covered_epoch_range =
+        soland_services::governance_history::response_acceptance::validate_local_chunk_manifest(
+            &response,
+            &accepted_manifest,
+        )
+        .map_err(map_history_preparation_error)?;
     let manifest_admission_digest = chunk.manifest_admission_digest.clone();
     let release_attestation = if let Some(reservation) = existing_reservation.as_ref() {
         reservation
@@ -3169,7 +2799,7 @@ async fn accept_history_response_chunk(
             source_record_digest,
             source_relay,
             &accepted_manifest.manifest_admission,
-            descriptor.covered_epoch_range,
+            covered_epoch_range,
         )
         .await?
     };
@@ -4224,49 +3854,18 @@ async fn list_organization_recovery_archives(
     candidates.truncate(4_096);
     let byte_limit = usize::try_from(query.byte_limit.unwrap_or(1_048_576))
         .map_err(|_| AppError::param_invalid("archive byte_limit is invalid"))?;
-    let mut items = Vec::new();
-    let mut last_sequence = None;
-    let mut limited = false;
-    for record in candidates {
-        let Some(outcome) = &record.accepted_outcome else {
-            continue;
-        };
-        let replica = &record.input.archive_replica;
-        let archive = &replica.archive;
-        if archive.holder_principal_id != caller
-            || archive.effective_scope != query.effective_scope
-            || archive.recovery_key_id != query.recovery_key_id
-            || archive.key_agreement_ref != query.key_agreement_ref
-            || archive.accepted_key_evidence_ref != query.accepted_key_evidence_ref
-            || archive.holder_trusted_basis != query.holder_trusted_basis
-            || query.from_epoch.is_some_and(|from| archive.epoch < from)
-            || query.to_epoch.is_some_and(|to| archive.epoch > to)
-        {
-            continue;
-        }
-        let item = OrganizationRecoveryArchiveListItem {
-            archive_sequence: outcome.archive_sequence,
-            archive_replica_digest: outcome.archive_replica_digest.clone(),
-            archive: archive.clone(),
-            container_event_ref: replica.container_event_ref.clone(),
-            history_traversal_retention: replica.history_traversal_retention.clone(),
-        };
-        let mut tentative = items.clone();
-        tentative.push(item.clone());
-        if arkret_canonical::canonical_json_bytes(&tentative)
-            .map_err(|error| AppError::internal(error.to_string()))?
-            .len()
-            > byte_limit
-        {
-            limited = true;
-            break;
-        }
-        last_sequence = Some(outcome.archive_sequence);
-        items.push(item);
-    }
-    if !limited && has_more_candidates {
-        limited = true;
-    }
+    let soland_services::governance_history::archive_list::PreparedArchiveListPage {
+        items,
+        last_sequence,
+        limited,
+    } = soland_services::governance_history::archive_list::build_archive_list_page(
+        candidates,
+        &query,
+        &caller,
+        byte_limit,
+        has_more_candidates,
+    )
+    .map_err(map_history_preparation_error)?;
     if items.is_empty() {
         return Err(AppError::not_found(
             "organization recovery archives are unavailable",

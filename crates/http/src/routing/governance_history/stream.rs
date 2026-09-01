@@ -275,27 +275,10 @@ pub(super) async fn validate_remote_source_chunk_manifest(
             "history chunk manifest has not been accepted by the release service",
         )
     })?;
-    if manifest.request_digest != response.request_digest
-        || manifest.request_receipt_digest != response.request_receipt_digest
-        || manifest.effective_scope != response.effective_scope
-        || manifest.source_actor_id != response.source_actor_id
-        || manifest.source_sender_domain != response.source_sender_domain
-    {
-        return Err(AppError::capability_denied(
-            "history chunk manifest binds another source request",
-        ));
-    }
-    let HistoryKeyResponseContent::Manifest(manifest_content) = manifest.content else {
-        unreachable!("delivered manifest lookup returns only manifest records")
-    };
-    if !manifest_content.chunks.iter().any(|descriptor| {
-        descriptor.chunk_response_id == response.response_id
-            && descriptor.chunk_index == chunk.chunk_index
-    }) {
-        return Err(AppError::capability_denied(
-            "history chunk is not named by the accepted remote manifest",
-        ));
-    }
+    soland_services::governance_history::response_acceptance::validate_remote_chunk_manifest(
+        response, &manifest,
+    )
+    .map_err(map_history_preparation_error)?;
     Ok(())
 }
 
