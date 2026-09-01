@@ -225,7 +225,7 @@ pub(in crate::routing) fn local_router() -> Router {
 }
 
 pub(in crate::routing) fn local_service_router() -> Router {
-    Router::with_path("accounts/{account_principal_id}/localparts")
+    Router::with_path(soland_contracts::ACCOUNT_LOCALPARTS_ROUTE)
         .get(list_account_localparts)
         .post(add_account_localpart)
         .push(

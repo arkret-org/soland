@@ -5651,6 +5651,7 @@ dependencies = [
  "salvo-oapi",
  "serde",
  "serde_json",
+ "url",
 ]
 
 [[package]]

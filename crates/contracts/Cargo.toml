@@ -30,6 +30,7 @@ chrono = { workspace = true, features = ["serde"] }
 salvo-oapi = { workspace = true, optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+url = "2.5"
 
 [lints]
 workspace = true
