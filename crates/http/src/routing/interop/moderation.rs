@@ -1099,6 +1099,10 @@ async fn moderation_report(
     let report_id = body
         .report_id(digest_suite)
         .map_err(|error| AppError::param_invalid(format!("report_event: {error}")))?;
+    let report_event_id = event.event_id.clone();
+    let report_payload = Value::Object(event.payload.clone().into_iter().collect());
+    let report_scope = event.scope_ref.clone();
+    let report_created_at = event.created_at;
     crate::routing::events::event_log::submit_initial_event_submission(
         state,
         &session,
@@ -1113,6 +1117,15 @@ async fn moderation_report(
             &error.message,
         )
     })?;
+    crate::routing::events::projection::materialize_moderation_report_record(
+        state,
+        &report_event_id,
+        &report_payload,
+        &report_scope,
+        report_created_at,
+    )
+    .await
+    .map_err(AppError::internal)?;
     json_ok(ModerationReportOutcome {
         report_id,
         status:

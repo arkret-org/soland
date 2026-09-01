@@ -628,42 +628,62 @@ async fn project_accepted_operations_inner(
 }
 
 async fn materialize_moderation_report(state: &AppState, operation: &Operation) {
-    let event_id = &operation.context.event_id;
+    if let Err(error) = materialize_moderation_report_record(
+        state,
+        &operation.context.event_id,
+        &operation.payload,
+        &operation.context.accepted_scope_ref,
+        operation.created_at,
+    )
+    .await
+    {
+        tracing::error!(
+            %error,
+            event_id = %operation.context.event_id,
+            "accepted moderation report projection failed"
+        );
+    }
+}
+
+/// Idempotently materialise both report workbench records required by
+/// content-moderation.md section 3.1.1 from one accepted report Event.
+///
+/// The ordinary projection path calls this after Event commit. The dedicated
+/// report endpoint also calls it before returning its stored outcome so an
+/// exact replay repairs either read model if a prior process stopped between
+/// canonical acceptance and projection.
+pub(crate) async fn materialize_moderation_report_record(
+    state: &AppState,
+    event_id: &arkret_identifiers::EventId,
+    payload: &Value,
+    accepted_scope_ref: &arkret_wire::ScopeRef,
+    created_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), String> {
     let report_id = arkret_identifiers::ReportId::from_event_id(event_id);
     let queue_item_id = arkret_identifiers::ModerationQueueItemId::from_event_id(event_id);
-    let Some(mut report) = operation.payload.as_object().cloned() else {
-        tracing::error!(event_id = %event_id, "accepted moderation report payload is not an object");
-        return;
+    let Some(mut report) = payload.as_object().cloned() else {
+        return Err("accepted moderation report payload is not an object".to_owned());
     };
     report.insert("report_id".to_owned(), serde_json::json!(report_id));
     report.insert("event_id".to_owned(), serde_json::json!(event_id));
     report.insert(
         "effective_scope".to_owned(),
-        serde_json::json!(operation.context.accepted_scope_ref),
+        serde_json::json!(accepted_scope_ref),
     );
-    if operation
-        .payload
+    if payload
         .get("target_ref")
         .and_then(Value::as_str)
         .is_some_and(|target| target.starts_with("ak:event:"))
     {
-        report.insert(
-            "target_event_id".to_owned(),
-            operation.payload["target_ref"].clone(),
-        );
+        report.insert("target_event_id".to_owned(), payload["target_ref"].clone());
     }
-    report.insert(
-        "created_at".to_owned(),
-        serde_json::json!(operation.created_at),
-    );
+    report.insert("created_at".to_owned(), serde_json::json!(created_at));
     let report = Value::Object(report);
-    if let Err(error) = state
+    state
         .governance()
         .append_moderation_report(report.clone())
         .await
-    {
-        tracing::error!(%error, event_id = %event_id, "accepted moderation report projection failed");
-    }
+        .map_err(|error| format!("store moderation report: {error}"))?;
     let queue_item = serde_json::json!({
         "id": queue_item_id,
         "report": report,
@@ -672,15 +692,14 @@ async fn materialize_moderation_report(state: &AppState, operation: &Operation) 
         "visibility": "metadata_only",
         "assigned_to": [format!("{}#moderation", state.service_id())],
         "audit_refs": [],
-        "created_at": operation.created_at,
+        "created_at": created_at,
     });
-    if let Err(error) = state
+    state
         .governance()
         .upsert_moderation_queue_item(queue_item)
         .await
-    {
-        tracing::error!(%error, event_id = %event_id, "accepted moderation queue projection failed");
-    }
+        .map_err(|error| format!("store moderation queue item: {error}"))?;
+    Ok(())
 }
 
 pub(crate) async fn mirror_moderation_effect_to_persistence(
@@ -1093,6 +1112,47 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn moderation_report_materialization_is_complete_and_idempotent() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let event_id =
+            arkret_wire::EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x42; 32]);
+        let realm_id = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x24; 32],
+        ));
+        let scope = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-09-01T12:00:00.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let payload = json!({
+            "realm_id": realm_id,
+            "target_ref": event_id,
+            "report_reason_code": "spam",
+            "reporter_id": "ak:did_core:web:alice.example",
+            "provenance": "self"
+        });
+
+        for _ in 0..2 {
+            materialize_moderation_report_record(&state, &event_id, &payload, &scope, created_at)
+                .await
+                .unwrap();
+        }
+
+        let reports = state.governance().moderation_reports().await.unwrap();
+        let queue = state.governance().moderation_queue_items().await.unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(queue.len(), 1);
+        assert_eq!(reports[0]["event_id"], json!(event_id));
+        assert_eq!(queue[0]["report"], reports[0]);
+        assert_eq!(queue[0]["status"], "submitted");
+    }
 
     #[tokio::test]
     async fn foreign_device_authorization_cannot_pollute_the_local_account_directory() {

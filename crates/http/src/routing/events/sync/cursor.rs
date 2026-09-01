@@ -571,12 +571,8 @@ pub async fn parse_and_validate_sync_cursor(
         .get("ctx")
         .and_then(|ctx| ctx.as_object())
         .ok_or(SyncCursorError::Integrity("cursor handle is missing ctx"))?;
-    let expected_binding_subject = session
-        .map(|session| session.actor.as_str())
-        .unwrap_or("anonymous");
-    let expected_device = session
-        .map(|session| session.device_id.as_str())
-        .unwrap_or("anonymous");
+    let (expected_account_id, expected_device) = cursor_account_device(state, session);
+    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
     if ctx
         .get("purpose")
         .and_then(|purpose| purpose.as_str())
@@ -589,7 +585,7 @@ pub async fn parse_and_validate_sync_cursor(
     if ctx
         .get("binding_subject")
         .and_then(|subject| subject.as_str())
-        .is_none_or(|subject| subject != expected_binding_subject)
+        .is_none_or(|subject| subject != expected_binding_subject.as_str())
     {
         return Err(SyncCursorError::Mismatch(
             "cursor binding subject does not match request actor",
@@ -598,7 +594,7 @@ pub async fn parse_and_validate_sync_cursor(
     if ctx
         .get("device_id")
         .and_then(|device| device.as_str())
-        .is_none_or(|device| device != expected_device)
+        .is_none_or(|device| device != expected_device.as_str())
     {
         return Err(SyncCursorError::Mismatch(
             "cursor device does not match request device",

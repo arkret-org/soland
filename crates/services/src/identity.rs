@@ -615,6 +615,20 @@ impl ContactService {
         *self.runtime_invite_policies.lock() = policies.into_iter().collect();
     }
 
+    /// Reflect a policy already committed atomically by the Event unit of work
+    /// into the runtime read cache. The durable write is owned by that unit;
+    /// repeating it here would split one accepted Contact transition across
+    /// two persistence transactions.
+    pub fn apply_committed_invite_policy(
+        &self,
+        account_id: AccountId,
+        policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    ) {
+        self.runtime_invite_policies
+            .lock()
+            .insert(account_id, policy);
+    }
+
     pub fn invite_policy(
         &self,
         account_id: &arkret_wire::AccountId,

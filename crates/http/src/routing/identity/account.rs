@@ -28,7 +28,8 @@ use arkret_models_collaboration::contact_operations::{
     ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
 };
 use arkret_models_collaboration::direct_conversation_ops::{
-    DirectConversationCoordinates, DirectConversationResolveOutcome,
+    DirectConversationCoordinates, DirectConversationFoundingAuthorityEvidence,
+    DirectConversationFoundingInput, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
 use arkret_models_collaboration::events_payloads::ActorProfileCreatePayload;
@@ -2040,12 +2041,27 @@ async fn direct_conversation_resolve(
         });
     }
     match founder {
-        // The resolve request does not carry the founder's exact authority
-        // instance, so selecting a stored binding by principal core would
-        // permit same-core PCR substitution.
-        Some(founder) if founder == session.actor => {
-            json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
-                retry_after_ms: None,
+        Some(founder) if founder == actor.to_string() => {
+            let Some(contact) = contact.as_ref() else {
+                return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                    retry_after_ms: None,
+                });
+            };
+            let Some(contact_round_evidence) = contact.contact_round_evidence.clone() else {
+                return json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+                    retry_after_ms: None,
+                });
+            };
+            json_ok(DirectConversationResolveOutcome::CreationRequired {
+                next_founding_input: DirectConversationFoundingInput {
+                    founding_authority_evidence:
+                        DirectConversationFoundingAuthorityEvidence::Human {
+                            contact_round_evidence,
+                            contact_round_continuity_chains: contact
+                                .contact_round_evidence_history
+                                .clone(),
+                        },
+                },
             })
         }
         Some(_) => json_ok(DirectConversationResolveOutcome::AwaitingFounder {

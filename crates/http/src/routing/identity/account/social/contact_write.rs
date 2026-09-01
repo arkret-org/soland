@@ -62,6 +62,7 @@ enum ContactReservationBranch {
         contact_round_id: Hash,
         version: u64,
         predecessor_event_ref: EventId,
+        block_peer: bool,
     },
 }
 
@@ -1321,6 +1322,9 @@ async fn commit(
         created_at: idempotency_created_at,
         expires_at: idempotency_created_at + chrono::Duration::hours(CONTACT_OUTCOME_TTL_HOURS),
     };
+    let committed_invite_policy = contact_projection
+        .as_ref()
+        .and_then(|projection| projection.invite_policy.clone());
     crate::routing::events::event_log::submit_initial_event_submission_with_contact_projection(
         state,
         session,
@@ -1343,6 +1347,11 @@ async fn commit(
             .with_status(error.status)
             .with_wire_code(Box::leak(error.code.into_boxed_str()))
     })?;
+    if let Some((account_id, policy)) = committed_invite_policy {
+        state
+            .contacts()
+            .apply_committed_invite_policy(account_id, policy);
+    }
     json_ok(outcome)
 }
 
@@ -1909,6 +1918,7 @@ async fn plan_contact_commit(
             contact_round_id,
             version,
             predecessor_event_ref,
+            block_peer,
             ..
         } => {
             let Some(mut record) = contact_record_for_lineage(state, &holder, &peer).await? else {
@@ -1946,12 +1956,36 @@ async fn plan_contact_commit(
                         .cmp(&right.peer.contact_actor_id())
                 });
             }
+            let invite_policy = if *block_peer {
+                let holder_account_id = match &reservation.holder {
+                    ContactPeer::Human { account_id } => account_id.clone(),
+                    ContactPeer::Agent {
+                        controller_account_id,
+                        ..
+                    } => controller_account_id.clone(),
+                };
+                let mut policy = state
+                    .contacts()
+                    .invite_policy(&holder_account_id)
+                    .unwrap_or_else(|| {
+                        InviteReceivePolicy::spec_default(holder_account_id.clone())
+                    });
+                if !policy.denied_actor_ids.contains(&peer) {
+                    policy.denied_actor_ids.push(peer.clone());
+                    policy
+                        .denied_actor_ids
+                        .sort_by_key(arkret_wire::ActorId::to_string);
+                }
+                Some((holder_account_id, policy))
+            } else {
+                None
+            };
             projection = Some(soland_services::events::CommitContactProjection {
                 record,
                 expected_updated_at: Some(expected_updated_at),
                 conflict_code: "contact_lineage_conflict".to_owned(),
                 verified_mirror: None,
-                invite_policy: None,
+                invite_policy,
             });
             let lineage = signed_lineage(
                 state,
@@ -2231,9 +2265,21 @@ async fn contact_record_for_lineage(
     holder: &arkret_wire::ActorId,
     peer: &arkret_wire::ActorId,
 ) -> Result<Option<ContactRecord>, AppError> {
-    state
+    let forward = state
         .contacts()
         .contact_any(holder, peer)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    if forward.is_some() {
+        return Ok(forward);
+    }
+    // A Contact round has one durable row, oriented by the original
+    // requester. Scope/tombstone lineage commands are holder-symmetric, so a
+    // holder who was the original target must resolve the reverse key before
+    // validating its local lineage head.
+    state
+        .contacts()
+        .contact_any(peer, holder)
         .await
         .map_err(|error| AppError::internal(error.to_string()))
 }
@@ -2559,6 +2605,7 @@ pub(super) async fn tombstone(
                     contact_round_id: body.contact_round_id,
                     version: body.version,
                     predecessor_event_ref: body.predecessor_event_ref,
+                    block_peer: body.block_peer,
                 },
                 payload,
             )
