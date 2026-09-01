@@ -15,8 +15,11 @@ const GUARDED_PACKAGES: &[&str] = &[
 const ALLOWED: &[(&str, &str)] = &[
     ("soland", "soland-http"),
     ("soland", "soland-services"),
+    ("soland", "soland-storage"),
     ("soland", "soland-storage-postgres"),
+    ("soland-http", "soland-domain"),
     ("soland-http", "soland-services"),
+    ("soland-http", "soland-storage"),
     ("soland-http", "soland-contracts"),
     ("soland-http", "arkret-sdk"),
     ("soland-services", "soland-domain"),

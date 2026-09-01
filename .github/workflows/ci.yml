@@ -74,12 +74,16 @@ jobs:
         run: python scripts/check-env-docs.py
         working-directory: soland
 
+      - name: Test-support surface gate
+        run: python scripts/check-test-support-surface.py
+        working-directory: soland
+
       - name: Registered cell-family literal gate
         run: python ../arkret-rust-sdk/tools/lint-cell-family-literals.py --root .
         working-directory: soland
 
       - name: Crate layering gate
-        run: cargo +1.97 run -p xtask --bin check_layering --locked
+        run: cargo +1.98 run -p xtask --bin check_layering --locked
         working-directory: soland
 
       - name: Rustfmt
@@ -87,17 +91,17 @@ jobs:
         working-directory: soland
 
       - name: Clippy
-        run: cargo +1.97 clippy --all-targets --locked -- -D warnings
+        run: cargo +1.98 clippy --all-targets --locked -- -D warnings
         working-directory: soland
 
       - name: KeyStore keygen
         run: |
-          cargo +1.97 clippy --locked -p soland-keystore-keygen --all-targets -- -D warnings
-          cargo +1.97 test --locked -p soland-keystore-keygen
+          cargo +1.98 clippy --locked -p soland-keystore-keygen --all-targets -- -D warnings
+          cargo +1.98 test --locked -p soland-keystore-keygen
         working-directory: soland
 
       - name: Clippy with OpenTelemetry
-        run: cargo +1.97 clippy --features otel --all-targets --locked -- -D warnings
+        run: cargo +1.98 clippy --features otel --all-targets --locked -- -D warnings
         working-directory: soland
 
       # Keep test binaries separate from `target/dev`, matching the local
@@ -106,7 +110,7 @@ jobs:
       - name: Test (includes HTTP API suite)
         env:
           CARGO_TARGET_DIR: target/test
-        run: cargo +1.97 test --locked
+        run: cargo +1.98 test --locked
         working-directory: soland
 
   migration-cycle:

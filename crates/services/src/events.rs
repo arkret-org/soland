@@ -329,6 +329,7 @@ impl RealmDirectoryService {
         removed
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_index(&self) -> &Arc<parking_lot::Mutex<RealmDirectoryIndex>> {
         &self.index

@@ -2961,55 +2961,7 @@ async fn validate_recipient_durable_receipt(
     })?)
     .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
     let welcome_digest = welcome_digest_from_inline_carrier(&welcome);
-    let welcome_recipient_matches = match (&welcome.recipient, &receipt.recipient) {
-        (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
-                recipient_device_id,
-            },
-            arkret_models_crypto::RecipientMlsDurableSigner::Device {
-                recipient_device_id: durable_recipient_device_id,
-                ..
-            },
-        ) => {
-            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
-                && recipient_device_id == durable_recipient_device_id
-        }
-        (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Agent {
-                recipient_agent_id,
-                recipient_agent_verification_method,
-                agent_key_authorize_event_id,
-            },
-            arkret_models_crypto::RecipientMlsDurableSigner::Agent {
-                recipient_agent_id: durable_recipient_agent_id,
-                recipient_agent_verification_method: durable_recipient_agent_verification_method,
-                agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
-            },
-        ) => {
-            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
-                && recipient_agent_id == durable_recipient_agent_id
-                && recipient_agent_verification_method
-                    == durable_recipient_agent_verification_method
-                && agent_key_authorize_event_id == durable_agent_key_authorize_event_id
-        }
-        (
-            arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::MinimalMetadataPairwise {
-                recipient_pairwise_actor_id,
-                recipient_pairwise_verification_method,
-            },
-            arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
-                recipient_pairwise_verification_method:
-                    durable_recipient_pairwise_verification_method,
-            },
-        ) => {
-            welcome.recipient_principal_id.is_none()
-                && recipient_pairwise_actor_id == &receipt.recipient_principal_id
-                && recipient_pairwise_verification_method
-                    == durable_recipient_pairwise_verification_method
-        }
-        _ => false,
-    };
-    if !welcome_recipient_matches
+    if !welcome_recipient_matches_consumer(&welcome, body)
         || welcome.claim_receipt.claim_request_id != receipt.claim_request_id
         || welcome.keypackage_ref != receipt.key_package_ref.as_str()
         || welcome.claim_id.as_str() != body.claim_id.as_str()

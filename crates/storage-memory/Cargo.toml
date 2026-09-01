@@ -12,6 +12,7 @@ description = "In-memory Soland storage adapter."
 [features]
 default = []
 fault-injection = []
+test-support = []
 
 [dependencies]
 arkret-canonical.workspace = true

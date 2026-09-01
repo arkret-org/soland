@@ -1040,6 +1040,7 @@ async fn send_history_key_response(
         accept_history_response_manifest(
             state,
             response,
+            &request_record,
             source_relay.as_ref(),
             source_signer_dependencies,
         )
@@ -1159,6 +1160,7 @@ async fn relay_history_key_response(
         accept_history_response_manifest(
             state,
             relay.response,
+            &request_record,
             Some(&relay.source_relay_attestation),
             source_signer_dependencies,
         )
@@ -2715,6 +2717,7 @@ async fn validate_history_response_request_binding(
 async fn accept_history_response_manifest(
     state: &AppState,
     response: HistoryKeyResponseSendRequest,
+    request_record: &soland_storage::HistoryRequestRecord,
     source_relay: Option<&SourceRelayAttestation>,
     source_signer_dependencies: Vec<GovernanceDependency>,
 ) -> JsonResult<HistoryKeyResponseSendReceipt> {
@@ -2746,11 +2749,6 @@ async fn accept_history_response_manifest(
             }
         }
     }
-    let request_record = history
-        .history_request_by_digest(&response.request_digest)
-        .await
-        .map_err(map_service_error)?
-        .ok_or_else(|| AppError::not_found("history request is unavailable"))?;
     if existing_reservation.is_none() {
         let (current_release_id, _) =
             validate_local_history_release_binding(state, &request_record.write.request).await?;
@@ -2759,7 +2757,6 @@ async fn accept_history_response_manifest(
                 "history response stream release service binding changed",
             ));
         }
-        let _ = validate_retained_history_cut(state, &request_record).await?;
         let source_relay = source_relay.ok_or_else(|| {
             AppError::new(
                 ErrorCode::DependencyMissing,

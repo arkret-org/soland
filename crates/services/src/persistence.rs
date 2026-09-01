@@ -734,6 +734,7 @@ impl PersistenceHandle {
             .await
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn shared_for_tests(&self) -> Arc<dyn PersistenceStore> {
         self.persistence.clone()

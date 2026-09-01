@@ -2177,6 +2177,7 @@ impl ProjectionService {
         *self.state.lock() = state;
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     #[must_use]
     pub fn test_state(&self) -> &Arc<Mutex<ProjectionState>> {

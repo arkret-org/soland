@@ -18,6 +18,7 @@ impl MemoryServiceIdentityStore {
         Self::default()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn seed(&self, identity: StoredDidCoreIdentity) {
         self.row.lock().identity = Some(identity);
     }

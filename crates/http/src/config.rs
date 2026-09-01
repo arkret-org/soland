@@ -746,6 +746,7 @@ pub struct MediaIssuerConfig {
 }
 
 impl MediaIssuerConfig {
+    #[cfg(any(test, feature = "test-support"))]
     fn test_default() -> Self {
         Self {
             issuer_kid: String::new(),
@@ -851,6 +852,7 @@ impl AppConfig {
     ///     ..AppConfig::test_default()
     /// };
     /// ```
+    #[cfg(any(test, feature = "test-support"))]
     pub fn test_default() -> Self {
         Self {
             bind: "127.0.0.1:0".parse().unwrap(),

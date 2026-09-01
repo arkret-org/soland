@@ -36,6 +36,7 @@ impl MemoryWebvhStore {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn seed_log_event(&self, event: WebvhLogRecord) {
         self.log
             .lock()

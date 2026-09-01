@@ -86,7 +86,7 @@ rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-domain.workspace = true
 soland-services = { workspace = true, features = ["test-support"] }
-soland-storage-memory.workspace = true
+soland-storage-memory = { workspace = true, features = ["test-support"] }
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite.workspace = true

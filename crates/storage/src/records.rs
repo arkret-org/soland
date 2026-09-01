@@ -884,6 +884,7 @@ impl FederationOutboxRecord {
     }
 
     /// Attach a monotonic coalescing lane to a generic pending delivery.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn with_coalescing_lane(mut self, key: String, position: i64) -> Self {
         self.coalescing_key = Some(key);
         self.coalescing_position = Some(position);

@@ -35,9 +35,12 @@ serde_json.workspace = true
 sha2.workspace = true
 soland-domain = { version = "0.3.0", path = "../domain" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
-soland-services = { version = "0.3.0", path = "../services" }
+soland-services = { version = "0.3.0", path = "../services", features = ["test-support"] }
 soland-storage = { version = "0.3.0", path = "../storage" }
-soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = ["fault-injection"] }
+soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = [
+    "fault-injection",
+    "test-support",
+] }
 
 [lints]
 workspace = true

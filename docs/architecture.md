@@ -18,8 +18,9 @@ state, and persistence adapters can be verified independently.
 | `soland-test-support` | Development-only state builders and integration-test fixtures. |
 
 The hard dependency policy lives in `xtask/src/bin/check_layering.rs` and runs
-in CI. In particular, `soland-http` has no normal dependency on domain or
-storage adapters, and only `soland-storage-postgres` may depend on Diesel.
+in CI. `soland-http` may depend on deterministic domain logic and storage port
+contracts, but not on concrete storage adapters. Only
+`soland-storage-postgres` may depend on Diesel.
 
 ## Event pipeline
 

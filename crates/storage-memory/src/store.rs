@@ -323,6 +323,7 @@ impl SolandMemoryPersistenceStore {
         store
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn seed_service_identity(
         &self,
         identity: arkret_identity::service_identity::StoredDidCoreIdentity,
@@ -330,6 +331,7 @@ impl SolandMemoryPersistenceStore {
         self.service_identity.seed(identity);
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn seed_webvh_log_event(&self, event: soland_storage::WebvhLogRecord) {
         self.webvh.seed_log_event(event);
     }
