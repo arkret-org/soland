@@ -339,6 +339,14 @@ async fn apply_authoritative_event_seal_path(
                 )));
             }
         }
+        if state.storage_mode() == "memory" {
+            crate::routing::federation::move_seal::validate_accepted_fork_resolution_records(
+                state,
+                seal,
+                digest_suites.seal_digest_suite,
+            )
+            .await?;
+        }
     }
     Ok(())
 }

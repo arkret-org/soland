@@ -944,6 +944,15 @@ impl NotaryWorker {
                         ))
                     })?;
             }
+            crate::routing::federation::move_seal::validate_accepted_fork_resolution_records(
+                state,
+                &seal,
+                digest_suites.seal_digest_suite,
+            )
+            .await
+            .map_err(|error| {
+                NotaryError::Store(format!("consume in-memory fork resolution: {error:?}"))
+            })?;
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
             let projected_cells = state.projections().realm_cells(realm_id)?;

@@ -563,6 +563,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    federation_frontier_confirmed_evidence (realm_id, peer_id, evidence_scope_key) {
+        realm_id -> Text,
+        peer_id -> Text,
+        evidence_scope_key -> Text,
+        reason -> Text,
+        evidence_scope -> Jsonb,
+        observed_at -> Int8,
+        resolution_kind -> Nullable<Text>,
+        resolution_digest -> Nullable<Text>,
+        resolved_at -> Nullable<Int8>,
+    }
+}
+
+diesel::table! {
     federation_frontier_reduction_checkpoint (realm_id, peer_id) {
         realm_id -> Text,
         peer_id -> Text,
@@ -1517,6 +1531,17 @@ diesel::table! {
 }
 
 diesel::table! {
+    state_seal_effective_checkpoints (seal_id) {
+        seal_id -> Text,
+        realm_id -> Text,
+        covered_event_digests -> Array<Text>,
+        covered_seal_ids -> Array<Text>,
+        state_json -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     state_seal_collision_variants (variant_id) {
         variant_id -> Int8,
         seal_id -> Text,
@@ -1879,6 +1904,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     event_batch_receipt_events,
     event_collision_variants,
     event_federation_outbox,
+    federation_frontier_confirmed_evidence,
     federation_frontier_exchange,
     federation_frontier_reduction_checkpoint,
     federation_operations,
@@ -1957,6 +1983,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     state_control_events,
     state_control_seal_repair_cursor,
     state_control_seal_schedule,
+    state_seal_effective_checkpoints,
     state_seal_collision_variants,
     state_seal_control_events,
     state_seal_quarantine,

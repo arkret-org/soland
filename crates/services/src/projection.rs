@@ -87,6 +87,15 @@ pub fn effective_policy_for_realm(
     soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SealEffectiveStateCheckpoint {
+    pub realm_id: RealmId,
+    pub seal_id: SealId,
+    pub covered_event_digests: BTreeSet<Hash>,
+    pub covered_seal_ids: BTreeSet<SealId>,
+    pub state: BTreeMap<CellRef, CellState>,
+}
+
 pub trait EventSealCommitPort: Send + Sync {
     #[allow(
         clippy::too_many_arguments,
@@ -104,6 +113,13 @@ pub trait EventSealCommitPort: Send + Sync {
     ) -> StoreResult<bool>;
 
     fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
+
+    fn effective_state_checkpoint(
+        &self,
+        _seal_id: &SealId,
+    ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
+        Ok(None)
+    }
 }
 
 /// Process-local hybrid logical clock owned by the application layer.
@@ -1015,10 +1031,79 @@ impl ProjectionService {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
 
+    fn validated_effective_state_checkpoint(
+        &self,
+        seal_id: &SealId,
+        realm_id: &RealmId,
+    ) -> Result<Option<SealEffectiveStateCheckpoint>, SealReject> {
+        let Some(checkpoint) = self
+            .event_seal_committer()
+            .effective_state_checkpoint(seal_id)?
+        else {
+            return Ok(None);
+        };
+        if checkpoint.seal_id != *seal_id || checkpoint.realm_id != *realm_id {
+            return Err(SealReject::Store(
+                "effective-state checkpoint is bound to a different Seal or Realm".to_owned(),
+            ));
+        }
+        let seal = self
+            .seal_store()
+            .get(seal_id)?
+            .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} not in store")))?;
+        if seal.realm_id != *realm_id {
+            return Err(SealReject::Store(
+                "effective-state checkpoint Seal belongs to a different Realm".to_owned(),
+            ));
+        }
+        if !checkpoint.covered_seal_ids.contains(seal_id)
+            || !seal
+                .predecessor_refs
+                .iter()
+                .all(|predecessor| checkpoint.covered_seal_ids.contains(predecessor))
+        {
+            return Err(SealReject::Store(
+                "effective-state checkpoint has an invalid Seal closure index".to_owned(),
+            ));
+        }
+        let digest_suite = self
+            .seal_store()
+            .digest_suite(seal_id)?
+            .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} has no suite")))?;
+        let state_root = arkret_state::compute_state_root(&checkpoint.state, digest_suite)
+            .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
+        if state_root != seal.state_root {
+            return Err(SealReject::StateRootMismatch {
+                declared: seal.state_root.as_str().to_owned(),
+                recomputed: state_root.as_str().to_owned(),
+            });
+        }
+        let coverage_root =
+            arkret_state::control_event_set_root(&checkpoint.covered_event_digests, digest_suite)?;
+        if coverage_root != seal.control_event_set_root {
+            return Err(SealReject::ControlEventSetRootMismatch {
+                declared: seal.control_event_set_root.as_str().to_owned(),
+                recomputed: coverage_root.as_str().to_owned(),
+            });
+        }
+        Ok(Some(checkpoint))
+    }
+
     pub fn predecessor_covered_events(
         &self,
         predecessor_refs: &[SealId],
     ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
+        if let [seal_id] = predecessor_refs {
+            let seal = self
+                .seal_store()
+                .get(seal_id)?
+                .ok_or_else(|| SealReject::Store(format!("predecessor {seal_id} not in store")))?;
+            if let Some(checkpoint) =
+                self.validated_effective_state_checkpoint(seal_id, &seal.realm_id)?
+            {
+                return Ok(checkpoint.covered_event_digests);
+            }
+        }
         arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store())
     }
 
@@ -1126,6 +1211,12 @@ impl ProjectionService {
         leaves: &[SealId],
         realm_id: &RealmId,
     ) -> Result<BTreeMap<CellRef, CellState>, SealReject> {
+        if let [seal_id] = leaves
+            && let Some(checkpoint) =
+                self.validated_effective_state_checkpoint(seal_id, realm_id)?
+        {
+            return Ok(checkpoint.state);
+        }
         arkret_state::effective_state_at(
             leaves,
             realm_id,
@@ -1140,6 +1231,17 @@ impl ProjectionService {
     ///
     /// Used by consumers that need the accepted Seal predecessor closure.
     pub fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
+        if let [seal_id] = leaves {
+            let seal = self
+                .seal_store()
+                .get(seal_id)?
+                .ok_or_else(|| SealReject::Store(format!("predecessor {seal_id} not in store")))?;
+            if let Some(checkpoint) =
+                self.validated_effective_state_checkpoint(seal_id, &seal.realm_id)?
+            {
+                return Ok(checkpoint.covered_seal_ids);
+            }
+        }
         arkret_state::predecessor_seal_closure(leaves, self.seal_store())
     }
 
@@ -3255,6 +3357,244 @@ impl HistoryAuthorityViewCas for ProjectionService {
             }
         }
         mutation()
+    }
+}
+
+#[cfg(test)]
+mod effective_checkpoint_tests {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use arkret_state::state::store::{CellStore, SealStore};
+    use arkret_state::state::{
+        MemoryCellRegistry, MemoryCellStore, MemoryControlEventStore, MemorySealStore,
+    };
+
+    use super::*;
+
+    struct CountingCellStore {
+        inner: MemoryCellStore,
+        history_reads: AtomicUsize,
+    }
+
+    impl Default for CountingCellStore {
+        fn default() -> Self {
+            Self {
+                inner: MemoryCellStore::default(),
+                history_reads: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl CellStore for CountingCellStore {
+        fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
+            self.history_reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.list_cells(realm_id)
+        }
+
+        fn sealed_ops_for_cell(
+            &self,
+            realm_id: &RealmId,
+            cell: &CellRef,
+        ) -> StoreResult<Vec<IssuedOp>> {
+            self.history_reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.sealed_ops_for_cell(realm_id, cell)
+        }
+
+        fn sealed_op_batches_for_cell(
+            &self,
+            realm_id: &RealmId,
+            cell: &CellRef,
+        ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
+            self.history_reads.fetch_add(1, Ordering::Relaxed);
+            self.inner.sealed_op_batches_for_cell(realm_id, cell)
+        }
+
+        fn cached_state(
+            &self,
+            realm_id: &RealmId,
+            cell: &CellRef,
+            view_hash: &Hash,
+        ) -> StoreResult<Option<CellState>> {
+            self.inner.cached_state(realm_id, cell, view_hash)
+        }
+
+        fn put_cached_state(
+            &self,
+            realm_id: &RealmId,
+            cell: &CellRef,
+            view_hash: &Hash,
+            state: &CellState,
+        ) -> StoreResult<()> {
+            self.inner
+                .put_cached_state(realm_id, cell, view_hash, state)
+        }
+
+        fn append_sealed_effects(
+            &self,
+            realm_id: &RealmId,
+            seal: &SealId,
+            new_ops: &[(CellRef, IssuedOp)],
+        ) -> StoreResult<()> {
+            self.inner.append_sealed_effects(realm_id, seal, new_ops)
+        }
+
+        fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
+            self.inner.rollback_seal(realm_id, seal)
+        }
+    }
+
+    struct CheckpointCommitter {
+        checkpoints: BTreeMap<SealId, SealEffectiveStateCheckpoint>,
+    }
+
+    impl EventSealCommitPort for CheckpointCommitter {
+        fn commit_if_frontier(
+            &self,
+            _seal: &Seal,
+            _digest_suite: arkret_canonical::DigestSuite,
+            _expected_store_frontier: &[SealId],
+            _new_ops: &[(CellRef, IssuedOp)],
+            _covered: &BTreeSet<Hash>,
+            _data_event_leaf_manifest: &BTreeSet<Hash>,
+            _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
+        ) -> StoreResult<bool> {
+            panic!("checkpoint lookup test must not commit a Seal")
+        }
+
+        fn data_event_leaf_manifest(
+            &self,
+            _seal_id: &SealId,
+        ) -> StoreResult<Option<BTreeSet<Hash>>> {
+            Ok(None)
+        }
+
+        fn effective_state_checkpoint(
+            &self,
+            seal_id: &SealId,
+        ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
+            Ok(self.checkpoints.get(seal_id).cloned())
+        }
+    }
+
+    fn test_hash(marker: u8) -> Hash {
+        Hash::new(format!("sha256:{}", format!("{marker:02x}").repeat(32))).unwrap()
+    }
+
+    fn chain_seal(
+        realm_id: &RealmId,
+        predecessor_refs: Vec<SealId>,
+        notary_seq: u64,
+        control_event_set_root: Hash,
+        state_root: Hash,
+    ) -> Seal {
+        let mut seal = Seal {
+            id: SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
+            realm_id: realm_id.clone(),
+            predecessor_refs,
+            delta: Vec::new(),
+            control_event_set_root,
+            state_root,
+            completeness_root: test_hash(0x33),
+            notary_seq,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_receipt_digests: Vec::new(),
+            covered_event_digests: Vec::new(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            notary_signature: arkret_wire::seal::NotarySig::Single(arkret_wire::SealSignature {
+                verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
+                payload_digest: test_hash(0xff),
+                jws: "AAAA.BBBB.CCCC".to_owned(),
+            }),
+            sealed_at: chrono::DateTime::from_timestamp(1_800_000_000 + notary_seq as i64, 0)
+                .unwrap(),
+            hlc: arkret_wire::Hlc::new(format!("019f00000000-{:04x}-aabbccdd", notary_seq))
+                .unwrap(),
+        };
+        seal.id = seal
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        seal
+    }
+
+    #[test]
+    fn long_successor_checkpoint_queries_do_not_reload_cell_history() {
+        const SUCCESSORS: u64 = 128;
+        let realm_id =
+            RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
+                .unwrap();
+        let seal_store = Arc::new(MemorySealStore::default());
+        let cell_store = Arc::new(CountingCellStore::default());
+        let state = BTreeMap::new();
+        let covered = BTreeSet::new();
+        let state_root =
+            arkret_state::compute_state_root(&state, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+        let control_root =
+            arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
+                .unwrap();
+        let mut checkpoints = BTreeMap::new();
+        let mut closure = BTreeSet::new();
+        let mut leaf = None;
+
+        for notary_seq in 1..=SUCCESSORS {
+            let predecessors = leaf.iter().cloned().collect::<Vec<_>>();
+            let seal = chain_seal(
+                &realm_id,
+                predecessors.clone(),
+                notary_seq,
+                control_root.clone(),
+                state_root.clone(),
+            );
+            assert!(
+                seal_store
+                    .put_if_frontier(&seal, &predecessors, arkret_canonical::DigestSuite::Sha256,)
+                    .unwrap()
+            );
+            closure.insert(seal.id.clone());
+            checkpoints.insert(
+                seal.id.clone(),
+                SealEffectiveStateCheckpoint {
+                    realm_id: realm_id.clone(),
+                    seal_id: seal.id.clone(),
+                    covered_event_digests: covered.clone(),
+                    covered_seal_ids: closure.clone(),
+                    state: state.clone(),
+                },
+            );
+            leaf = Some(seal.id);
+        }
+
+        let service = ProjectionService::new(
+            Arc::new(MemoryControlEventStore::default()),
+            seal_store,
+            cell_store.clone(),
+            Arc::new(MemoryCellRegistry::default()),
+            Arc::new(CheckpointCommitter { checkpoints }),
+            "checkpoint-chain-test",
+        );
+        let leaf = leaf.unwrap();
+        for _ in 0..SUCCESSORS {
+            assert_eq!(
+                service
+                    .effective_state_at(std::slice::from_ref(&leaf), &realm_id)
+                    .unwrap(),
+                state
+            );
+            assert_eq!(
+                service
+                    .predecessor_covered_events(std::slice::from_ref(&leaf))
+                    .unwrap(),
+                covered
+            );
+            assert_eq!(
+                service.seal_closure(std::slice::from_ref(&leaf)).unwrap(),
+                closure
+            );
+        }
+        assert_eq!(cell_store.history_reads.load(Ordering::Relaxed), 0);
     }
 }
 

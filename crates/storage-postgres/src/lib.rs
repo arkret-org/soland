@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
 pub(crate) use arkret_event_draft::ProjectedEventOperation;
@@ -33,18 +35,18 @@ pub(crate) use soland_storage::{
     DeviceRevocationGateStatus, DeviceRevocationStore, DeviceRevocationTargetRecord,
     DeviceRevocationTargetStatus, DeviceRevocationTransition,
     DirectConversationFoundingCommitOutcome, DirectConversationFoundingSlotRecord, DriftResult,
-    EnqueueAgentRuntimeMessage, EventStore, FederationFrontierExchangeRecord,
-    FederationFrontierExchangeStore, FederationFrontierReductionCheckpoint,
-    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, HandleClaimEvidenceRecord,
-    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
-    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
-    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
-    MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey,
-    MembershipCompensationEvidenceRecord, MessageRecord, MessageStore,
+    EnqueueAgentRuntimeMessage, EventStore, FederationFrontierConfirmedEvidenceRecord,
+    FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
+    FederationFrontierReductionCheckpoint, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition,
+    HandleClaimEvidenceRecord, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
+    IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    KeyBackupDeleteChallengeRecord, KeyBackupStore, MemberIdentityEventRecord, MemberIdentityStore,
+    MemberIdentitySubjectKey, MembershipCompensationEvidenceRecord, MessageRecord, MessageStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,

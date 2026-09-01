@@ -415,6 +415,48 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
             .await?;
         Ok(())
     }
+    async fn record_frontier_confirmed_evidence(
+        &self,
+        evidence: &crate::federation::FederationFrontierConfirmedEvidenceRecord,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .federation_frontier_exchange()
+            .record_confirmed_evidence(evidence)
+            .await?;
+        Ok(())
+    }
+    async fn unresolved_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        peer_id: &arkret_identifiers::DidCoreId,
+    ) -> crate::ServiceResult<Vec<crate::federation::FederationFrontierConfirmedEvidenceRecord>>
+    {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .unresolved_confirmed_evidence(realm_id, peer_id)
+            .await?)
+    }
+    async fn resolve_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        evidence_scope_key: &str,
+        resolution_kind: &str,
+        resolution_digest: &str,
+        resolved_at: i64,
+    ) -> crate::ServiceResult<Vec<arkret_identifiers::DidCoreId>> {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .resolve_confirmed_evidence(
+                realm_id,
+                evidence_scope_key,
+                resolution_kind,
+                resolution_digest,
+                resolved_at,
+            )
+            .await?)
+    }
 }
 
 #[async_trait::async_trait]

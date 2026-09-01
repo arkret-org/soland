@@ -1,7 +1,9 @@
 use arkret_wire::DidCoreId;
 
 use super::{
-    Arc, BTreeMap, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
+    Arc, BTreeMap, FEDERATION_FRONTIER_STALE_FAILURES, FEDERATION_FRONTIER_STATUS_HEALTHY,
+    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
+    FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
     FederationFrontierReductionCheckpoint, FederationOperationsStore, FederationOutboxClaim,
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
@@ -343,12 +345,16 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
 pub(crate) struct MemoryFederationFrontierExchangeStore {
     data: Arc<Mutex<BTreeMap<(String, DidCoreId), FederationFrontierExchangeRecord>>>,
     checkpoints: Arc<Mutex<BTreeMap<(String, DidCoreId), FederationFrontierReductionCheckpoint>>>,
+    evidence: Arc<
+        Mutex<BTreeMap<(String, DidCoreId, String), FederationFrontierConfirmedEvidenceRecord>>,
+    >,
 }
 impl MemoryFederationFrontierExchangeStore {
     pub(crate) fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
             checkpoints: Arc::new(Mutex::new(BTreeMap::new())),
+            evidence: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -440,6 +446,133 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
             .lock()
             .remove(&(realm_id.to_owned(), peer_id.clone()));
         Ok(())
+    }
+
+    async fn record_confirmed_evidence(
+        &self,
+        evidence: &FederationFrontierConfirmedEvidenceRecord,
+    ) -> PersistenceResult<()> {
+        if !matches!(
+            evidence.reason.as_str(),
+            "witness_disagreement" | "fork_quarantine"
+        ) || evidence.resolution_kind.is_some()
+            || evidence.resolution_digest.is_some()
+            || evidence.resolved_at.is_some()
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "confirmed frontier evidence must be unresolved and use a registered reason"
+                    .to_owned(),
+            ));
+        }
+        let evidence_key = (
+            evidence.realm_id.clone(),
+            evidence.peer_id.clone(),
+            evidence.evidence_scope_key.clone(),
+        );
+        let mut retained = self.evidence.lock();
+        if retained
+            .get(&evidence_key)
+            .is_some_and(|existing| existing.resolution_digest.is_some())
+        {
+            return Ok(());
+        }
+        retained
+            .entry(evidence_key)
+            .and_modify(|existing| {
+                existing.reason.clone_from(&evidence.reason);
+                existing.evidence_scope.clone_from(&evidence.evidence_scope);
+                existing.observed_at = existing.observed_at.min(evidence.observed_at);
+            })
+            .or_insert_with(|| evidence.clone());
+        drop(retained);
+        let mut data = self.data.lock();
+        let exchange_key = (evidence.realm_id.clone(), evidence.peer_id.clone());
+        let record = frontier_exchange_failure_record(
+            data.get(&exchange_key).cloned(),
+            &evidence.realm_id,
+            &evidence.peer_id,
+            &evidence.reason,
+            evidence.observed_at,
+        );
+        data.insert(exchange_key, record);
+        Ok(())
+    }
+
+    async fn unresolved_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
+        Ok(self
+            .evidence
+            .lock()
+            .values()
+            .filter(|record| {
+                record.realm_id == realm_id
+                    && &record.peer_id == peer_id
+                    && record.resolution_digest.is_none()
+            })
+            .cloned()
+            .collect())
+    }
+
+    async fn resolve_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        evidence_scope_key: &str,
+        resolution_kind: &str,
+        resolution_digest: &str,
+        resolved_at: i64,
+    ) -> PersistenceResult<Vec<DidCoreId>> {
+        if !matches!(
+            resolution_kind,
+            "fork_resolution_event" | "witness_reagreement"
+        ) {
+            return Err(PersistenceError::SchemaViolation(
+                "frontier evidence resolution kind is not registered".to_owned(),
+            ));
+        }
+        let mut evidence = self.evidence.lock();
+        let peers = evidence
+            .values_mut()
+            .filter(|record| {
+                record.realm_id == realm_id
+                    && record.evidence_scope_key == evidence_scope_key
+                    && record.resolution_digest.is_none()
+            })
+            .map(|record| {
+                record.resolution_kind = Some(resolution_kind.to_owned());
+                record.resolution_digest = Some(resolution_digest.to_owned());
+                record.resolved_at = Some(resolved_at);
+                record.peer_id.clone()
+            })
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut exchanges = self.data.lock();
+        for peer in &peers {
+            let unresolved = evidence.values().any(|record| {
+                record.realm_id == realm_id
+                    && &record.peer_id == peer
+                    && record.resolution_digest.is_none()
+            });
+            if !unresolved
+                && let Some(exchange) = exchanges.get_mut(&(realm_id.to_owned(), peer.clone()))
+                && matches!(
+                    exchange.last_error.as_deref(),
+                    Some("witness_disagreement" | "fork_quarantine")
+                )
+            {
+                exchange.last_error = None;
+                exchange.status =
+                    if exchange.consecutive_failures >= FEDERATION_FRONTIER_STALE_FAILURES {
+                        FEDERATION_FRONTIER_STATUS_PEER_STALE
+                    } else {
+                        FEDERATION_FRONTIER_STATUS_HEALTHY
+                    }
+                    .to_owned();
+                exchange.updated_at = resolved_at;
+            }
+        }
+        Ok(peers.into_iter().collect())
     }
 }
 #[derive(Default)]

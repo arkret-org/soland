@@ -117,6 +117,27 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
     ) -> arkret_state::state::StoreResult<Option<BTreeSet<arkret_wire::Hash>>> {
         self.0.data_event_leaf_manifest(seal_id)
     }
+
+    fn effective_state_checkpoint(
+        &self,
+        seal_id: &arkret_wire::SealId,
+    ) -> arkret_state::state::StoreResult<
+        Option<soland_services::projection::SealEffectiveStateCheckpoint>,
+    > {
+        self.0
+            .effective_state_checkpoint(seal_id)
+            .map(|checkpoint| {
+                checkpoint.map(|checkpoint| {
+                    soland_services::projection::SealEffectiveStateCheckpoint {
+                        realm_id: checkpoint.realm_id,
+                        seal_id: checkpoint.seal_id,
+                        covered_event_digests: checkpoint.covered_event_digests,
+                        covered_seal_ids: checkpoint.covered_seal_ids,
+                        state: checkpoint.state,
+                    }
+                })
+            })
+    }
 }
 
 #[async_trait::async_trait]

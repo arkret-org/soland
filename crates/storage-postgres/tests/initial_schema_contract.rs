@@ -63,6 +63,28 @@ fn seal_data_event_manifest_is_created_and_dropped_symmetrically() {
 }
 
 #[test]
+fn seal_effective_state_checkpoint_is_created_and_dropped_symmetrically() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.state_seal_effective_checkpoints"));
+    assert!(INITIAL_UP.contains("covered_event_digests text[] NOT NULL"));
+    assert!(INITIAL_UP.contains("covered_seal_ids text[] NOT NULL"));
+    assert!(INITIAL_UP.contains("state_seal_effective_checkpoints_immutable"));
+    assert!(INITIAL_DOWN.contains("DROP TABLE IF EXISTS state_seal_effective_checkpoints CASCADE"));
+}
+
+#[test]
+fn frontier_confirmed_evidence_has_closed_resolution_authority() {
+    assert!(INITIAL_UP.contains("CREATE TABLE public.federation_frontier_confirmed_evidence"));
+    assert!(INITIAL_UP.contains(
+        "resolution_kind text CHECK (resolution_kind IN ('fork_resolution_event', 'witness_reagreement'))"
+    ));
+    assert!(INITIAL_UP.contains("CHECK ((resolution_kind IS NULL) = (resolution_digest IS NULL))"));
+    assert!(
+        INITIAL_DOWN
+            .contains("DROP TABLE IF EXISTS federation_frontier_confirmed_evidence CASCADE")
+    );
+}
+
+#[test]
 fn franking_replay_nonce_ledger_has_bounded_expiry_contract() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.moderation_franking_replay_nonces"));
     assert!(INITIAL_UP.contains("expires_at timestamp with time zone NOT NULL"));

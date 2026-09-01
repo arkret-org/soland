@@ -142,6 +142,39 @@ pub(crate) async fn verified_availability_dependency_writes(
         .collect()
 }
 
+pub(crate) async fn validate_accepted_fork_resolution_records(
+    state: &AppState,
+    seal: &Seal,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<(), AppError> {
+    for digest in &seal.delta {
+        let Some(event) = state.projections().control_event(digest).map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("load accepted fork-resolution Move: {error}"),
+            )
+        })?
+        else {
+            continue;
+        };
+        if event.kind != arkret_wire::EventKind::ForkResolution {
+            continue;
+        }
+        let _record =
+            arkret_models_collaboration::events_payloads::ForkResolutionRecord::from_accepted_seal(
+                &event,
+                seal,
+                digest_suite,
+            )
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        // The accepted control-cell projection authorizes local normalization
+        // only. It does not prove that any particular peer has aligned its
+        // exact sibling scope, so confirmed evidence remains fail-closed until
+        // the frontier worker supplies that separate per-peer proof.
+    }
+    Ok(())
+}
+
 /// Map an SDK [`SealReject`] onto an [`AppError`].
 ///
 /// Every reject reason routes through the canonical Arkret error
@@ -1108,13 +1141,14 @@ async fn try_apply_device_generation_event_seal(
 
     let availability_dependency_writes =
         verified_availability_dependency_writes(state, seal).await?;
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?
+        .seal_digest_suite;
     match state.projections().commit_event_seal_if_frontier(
         seal,
-        state
-            .projections()
-            .seal_digest_suites(seal)
-            .map_err(app_error_from_seal_reject)?
-            .seal_digest_suite,
+        digest_suite,
         &context.cas_frontier_refs,
         &new_ops,
         &target,
@@ -1134,6 +1168,9 @@ async fn try_apply_device_generation_event_seal(
                 format!("commit Event Seal atomically: {error}"),
             ));
         }
+    }
+    if state.storage_mode() == "memory" {
+        validate_accepted_fork_resolution_records(state, seal, digest_suite).await?;
     }
     Ok(Some(committed_seal_effect(seal)))
 }
@@ -1470,13 +1507,14 @@ pub(crate) async fn apply_agent_event_seal(
         .collect::<Vec<_>>();
     let availability_dependency_writes =
         verified_availability_dependency_writes(state, seal).await?;
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?
+        .seal_digest_suite;
     match state.projections().commit_event_seal_if_frontier(
         seal,
-        state
-            .projections()
-            .seal_digest_suites(seal)
-            .map_err(app_error_from_seal_reject)?
-            .seal_digest_suite,
+        digest_suite,
         &leaves,
         &new_ops,
         &target,
@@ -1496,6 +1534,9 @@ pub(crate) async fn apply_agent_event_seal(
                 format!("commit Agent PCR Seal atomically: {error}"),
             ));
         }
+    }
+    if state.storage_mode() == "memory" {
+        validate_accepted_fork_resolution_records(state, seal, digest_suite).await?;
     }
     Ok(committed_seal_effect(seal))
 }
@@ -1583,7 +1624,12 @@ pub(crate) async fn apply_inbound_seal(
         &BTreeSet::new(),
         &governance_dependencies,
     ) {
-        Ok(true) => Ok(prepared.effect),
+        Ok(true) => {
+            if state.storage_mode() == "memory" {
+                validate_accepted_fork_resolution_records(state, seal, digest_suite).await?;
+            }
+            Ok(prepared.effect)
+        }
         Ok(false) => Err(AppError::new(
             ErrorCode::FrontierUnavailable,
             "Seal frontier changed during atomic admission".to_owned(),

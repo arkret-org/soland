@@ -1,9 +1,10 @@
 use arkret_wire::DidCoreId;
 
 use super::{
-    FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
-    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxState,
-    PersistenceError, PersistenceResult, ProjectedEventOperation, async_trait,
+    FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
+    FederationFrontierReductionCheckpoint, FederationOutboxDeadLetterRecord,
+    FederationOutboxRecord, FederationOutboxState, PersistenceError, PersistenceResult,
+    ProjectedEventOperation, async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.
@@ -313,6 +314,23 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
         realm_id: &str,
         peer_id: &DidCoreId,
     ) -> PersistenceResult<()>;
+    async fn record_confirmed_evidence(
+        &self,
+        evidence: &FederationFrontierConfirmedEvidenceRecord,
+    ) -> PersistenceResult<()>;
+    async fn unresolved_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
+    async fn resolve_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        evidence_scope_key: &str,
+        resolution_kind: &str,
+        resolution_digest: &str,
+        resolved_at: i64,
+    ) -> PersistenceResult<Vec<DidCoreId>>;
 }
 
 #[cfg(test)]

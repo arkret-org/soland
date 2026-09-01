@@ -8,11 +8,11 @@ use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 pub use soland_storage::{
-    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierExchangeRecord,
-    FederationFrontierReductionCheckpoint,
+    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
+    FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
 };
 
-use crate::ServiceResult;
+use crate::{ServiceError, ServiceResult};
 
 #[derive(Clone, Debug, Default)]
 pub struct SovereignDeploymentState {
@@ -290,6 +290,23 @@ pub trait FederationStatePort: Send + Sync {
         realm_id: &str,
         peer_id: &DidCoreId,
     ) -> ServiceResult<()>;
+    async fn record_frontier_confirmed_evidence(
+        &self,
+        evidence: &FederationFrontierConfirmedEvidenceRecord,
+    ) -> ServiceResult<()>;
+    async fn unresolved_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
+    async fn resolve_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        evidence_scope_key: &str,
+        resolution_kind: &str,
+        resolution_digest: &str,
+        resolved_at: i64,
+    ) -> ServiceResult<Vec<DidCoreId>>;
 }
 
 #[derive(Clone)]
@@ -491,6 +508,62 @@ impl FederationService {
             .clear_frontier_reduction_checkpoint(realm_id, peer_id)
             .await
     }
+    pub async fn record_frontier_confirmed_evidence(
+        &self,
+        evidence: &FederationFrontierConfirmedEvidenceRecord,
+    ) -> ServiceResult<()> {
+        self.state
+            .record_frontier_confirmed_evidence(evidence)
+            .await
+    }
+    pub async fn unresolved_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
+        self.state
+            .unresolved_frontier_confirmed_evidence(realm_id, peer_id)
+            .await
+    }
+    pub async fn resolve_frontier_confirmed_evidence(
+        &self,
+        realm_id: &str,
+        evidence_scope_key: &str,
+        resolution_kind: &str,
+        resolution_digest: &str,
+        resolved_at: i64,
+    ) -> ServiceResult<Vec<DidCoreId>> {
+        self.state
+            .resolve_frontier_confirmed_evidence(
+                realm_id,
+                evidence_scope_key,
+                resolution_kind,
+                resolution_digest,
+                resolved_at,
+            )
+            .await
+    }
+
+    pub async fn resolve_verified_witness_reagreement(
+        &self,
+        resolution: &arkret_models_collaboration::sync_frames::snapshot::WitnessReagreementResolutionRecord,
+        resolved_at: i64,
+    ) -> ServiceResult<Vec<DidCoreId>> {
+        let scope_key = resolution
+            .evidence_scope_key()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        let resolution_digest = resolution
+            .resolution_digest()
+            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
+        self.resolve_frontier_confirmed_evidence(
+            resolution.realm_id.as_str(),
+            scope_key.as_str(),
+            "witness_reagreement",
+            resolution_digest.as_str(),
+            resolved_at,
+        )
+        .await
+    }
 }
 
 #[cfg(test)]
@@ -564,6 +637,29 @@ mod tests {
             _peer_id: &DidCoreId,
         ) -> ServiceResult<()> {
             Ok(())
+        }
+        async fn record_frontier_confirmed_evidence(
+            &self,
+            _evidence: &FederationFrontierConfirmedEvidenceRecord,
+        ) -> ServiceResult<()> {
+            Ok(())
+        }
+        async fn unresolved_frontier_confirmed_evidence(
+            &self,
+            _realm_id: &str,
+            _peer_id: &DidCoreId,
+        ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
+            Ok(Vec::new())
+        }
+        async fn resolve_frontier_confirmed_evidence(
+            &self,
+            _realm_id: &str,
+            _evidence_scope_key: &str,
+            _resolution_kind: &str,
+            _resolution_digest: &str,
+            _resolved_at: i64,
+        ) -> ServiceResult<Vec<DidCoreId>> {
+            Ok(Vec::new())
         }
     }
 

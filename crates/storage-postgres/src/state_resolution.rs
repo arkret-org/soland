@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -32,6 +32,15 @@ pub struct StateResolutionStores {
     pub event_seal_committer: Arc<dyn EventSealCommitStore>,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct SealEffectiveStateCheckpoint {
+    pub realm_id: RealmId,
+    pub seal_id: SealId,
+    pub covered_event_digests: BTreeSet<Hash>,
+    pub covered_seal_ids: BTreeSet<SealId>,
+    pub state: BTreeMap<CellRef, CellState>,
+}
+
 pub trait EventSealCommitStore: Send + Sync {
     #[allow(
         clippy::too_many_arguments,
@@ -49,6 +58,14 @@ pub trait EventSealCommitStore: Send + Sync {
     ) -> StoreResult<bool>;
 
     fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
+
+    /// Return the immutable, receiver-verified effective state frozen at one
+    /// accepted Seal. A missing row permits legacy replay; a malformed row is
+    /// an error and must never silently fall back to a closure scan.
+    fn effective_state_checkpoint(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<SealEffectiveStateCheckpoint>>;
 }
 
 pub fn build_state_resolution_stores(
@@ -78,6 +95,7 @@ pub fn build_state_resolution_stores(
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
             data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
+            effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store,
             seal_store,
             cell_store,
@@ -108,6 +126,7 @@ struct MemoryEventSealCommitStore {
     lock: parking_lot::Mutex<()>,
     data_event_leaf_manifests:
         parking_lot::Mutex<std::collections::BTreeMap<SealId, BTreeSet<Hash>>>,
+    effective_state_checkpoints: parking_lot::Mutex<BTreeMap<SealId, SealEffectiveStateCheckpoint>>,
     control_event_store: Arc<arkret_state::state::MemoryControlEventStore>,
     seal_store: Arc<arkret_state::state::MemorySealStore>,
     cell_store: Arc<arkret_state::state::MemoryCellStore>,
@@ -263,6 +282,24 @@ struct CountRow {
 struct DataEventLeafManifestRow {
     #[diesel(sql_type = Array<Text>)]
     leaf_digests: Vec<String>,
+}
+
+#[derive(QueryableByName)]
+struct TextArrayRow {
+    #[diesel(sql_type = Array<Text>)]
+    values: Vec<String>,
+}
+
+#[derive(QueryableByName)]
+struct EffectiveStateCheckpointRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Array<Text>)]
+    covered_event_digests: Vec<String>,
+    #[diesel(sql_type = Array<Text>)]
+    covered_seal_ids: Vec<String>,
+    #[diesel(sql_type = Jsonb)]
+    state_json: Value,
 }
 
 fn validate_data_event_leaf_manifest(
@@ -1933,6 +1970,11 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 StoreError::Backend(format!("accepted Seal canonical encoding failed: {error}"))
             })?;
         let predecessor_refs = seal_predecessor_refs_json(seal);
+        let predecessor_seal_ids = seal
+            .predecessor_refs
+            .iter()
+            .map(|predecessor| predecessor.as_str().to_owned())
+            .collect::<Vec<_>>();
         let seal_id = seal.id.as_str().to_owned();
         let error_seal_id = seal_id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
@@ -2020,6 +2062,58 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     if !exact_dependencies {
                         return Err(StoreError::Conflict(
                             "duplicate_conflict: exact Seal replay has different governance dependencies"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    let checkpoint = sql_query(
+                        "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
+                         FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+                    )
+                    .bind::<Text, _>(&seal_id)
+                    .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+                    .await
+                    .optional()?;
+                    let Some(checkpoint) = checkpoint else {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay is missing its effective-state checkpoint"
+                                .to_owned(),
+                        )
+                        .into());
+                    };
+                    if checkpoint.realm_id != realm_id
+                        || checkpoint
+                            .covered_event_digests
+                            .into_iter()
+                            .collect::<BTreeSet<_>>()
+                            != covered
+                    {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay has different checkpoint coverage"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    let checkpoint_seals = checkpoint
+                        .covered_seal_ids
+                        .into_iter()
+                        .collect::<BTreeSet<_>>();
+                    if !checkpoint_seals.contains(&seal_id) {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay checkpoint omits its Seal"
+                                .to_owned(),
+                        )
+                        .into());
+                    }
+                    let checkpoint_state = serde_json::from_value::<BTreeMap<CellRef, CellState>>(
+                        checkpoint.state_json,
+                    )
+                    .map_err(serde_to_store)?;
+                    let checkpoint_root = compute_state_root(&checkpoint_state, digest_suite)
+                        .map_err(|error| StoreError::Backend(error.to_string()))?;
+                    if checkpoint_root != declared_state_root {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay has an invalid effective-state checkpoint"
                                 .to_owned(),
                         )
                         .into());
@@ -2148,12 +2242,52 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     ))
                     .into());
                 }
+                let mut checkpoint_seals = BTreeSet::from([seal_id.clone()]);
+                for predecessor in &predecessor_seal_ids {
+                    let row = sql_query(
+                        "SELECT covered_seal_ids AS values \
+                         FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+                    )
+                    .bind::<Text, _>(predecessor)
+                    .get_result::<TextArrayRow>(&mut *conn)
+                    .await
+                    .optional()?;
+                    let Some(row) = row else {
+                        return Err(StoreError::Conflict(format!(
+                            "predecessor {predecessor} has no effective-state checkpoint"
+                        ))
+                        .into());
+                    };
+                    if !row.values.iter().any(|seal| seal == predecessor) {
+                        return Err(StoreError::Conflict(format!(
+                            "predecessor {predecessor} has an invalid closure checkpoint"
+                        ))
+                        .into());
+                    }
+                    checkpoint_seals.extend(row.values);
+                }
                 // The frontier CAS is the durable acceptance boundary for the
                 // delta. Cell effects, Seal lineage, and each Event's sealed
                 // marker must commit in this same transaction; otherwise a
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
+                let checkpoint_state_json =
+                    serde_json::to_value(&joined).map_err(serde_to_store)?;
+                let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
+                let checkpoint_seal_ids = checkpoint_seals.into_iter().collect::<Vec<_>>();
+                sql_query(
+                    "INSERT INTO state_seal_effective_checkpoints \
+                     (seal_id, realm_id, covered_event_digests, covered_seal_ids, state_json) \
+                     VALUES ($1, $2, $3, $4, $5)",
+                )
+                .bind::<Text, _>(&seal_id)
+                .bind::<Text, _>(&realm_id)
+                .bind::<Array<Text>, _>(&checkpoint_coverage)
+                .bind::<Array<Text>, _>(&checkpoint_seal_ids)
+                .bind::<Jsonb, _>(&checkpoint_state_json)
+                .execute(&mut *conn)
+                .await?;
                 sql_query(
                     "INSERT INTO state_seal_data_event_manifests \
                      (seal_id, realm_id, digest_suite, leaf_digests, data_event_set_root) \
@@ -2219,6 +2353,53 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .transpose()
         })
     }
+
+    fn effective_state_checkpoint(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
+        let pool = self.pool.clone();
+        let seal_id = seal_id.clone();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
+                 FROM state_seal_effective_checkpoints WHERE seal_id = $1",
+            )
+            .bind::<Text, _>(seal_id.as_str())
+            .get_result::<EffectiveStateCheckpointRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.map(|row| {
+                let realm_id = RealmId::new(row.realm_id)
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                let covered_event_digests = row
+                    .covered_event_digests
+                    .into_iter()
+                    .map(|digest| {
+                        Hash::new(digest).map_err(|error| StoreError::Backend(error.to_string()))
+                    })
+                    .collect::<StoreResult<BTreeSet<_>>>()?;
+                let covered_seal_ids = row
+                    .covered_seal_ids
+                    .into_iter()
+                    .map(|id| {
+                        SealId::new(id).map_err(|error| StoreError::Backend(error.to_string()))
+                    })
+                    .collect::<StoreResult<BTreeSet<_>>>()?;
+                let state = serde_json::from_value(row.state_json).map_err(serde_to_store)?;
+                Ok(SealEffectiveStateCheckpoint {
+                    realm_id,
+                    seal_id,
+                    covered_event_digests,
+                    covered_seal_ids,
+                    state,
+                })
+            })
+            .transpose()
+        })
+    }
 }
 
 impl EventSealCommitStore for MemoryEventSealCommitStore {
@@ -2249,6 +2430,24 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             {
                 return Err(StoreError::Conflict(
                     "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                    .to_owned(),
+                ));
+            }
+            let checkpoints = self.effective_state_checkpoints.lock();
+            let checkpoint = checkpoints.get(&seal.id).ok_or_else(|| {
+                StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay is missing its effective-state checkpoint"
+                        .to_owned(),
+                )
+            })?;
+            if checkpoint.realm_id != seal.realm_id
+                || checkpoint.covered_event_digests != *covered
+                || compute_state_root(&checkpoint.state, digest_suite)
+                    .map_err(|error| StoreError::Backend(error.to_string()))?
+                    != seal.state_root
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay has a different or invalid effective-state checkpoint"
                         .to_owned(),
                 ));
             }
@@ -2265,6 +2464,23 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .collect::<BTreeSet<_>>();
         if actual != expected {
             return Ok(false);
+        }
+        let mut checkpoint_seals = BTreeSet::from([seal.id.clone()]);
+        {
+            let checkpoints = self.effective_state_checkpoints.lock();
+            for predecessor in &seal.predecessor_refs {
+                let checkpoint = checkpoints.get(predecessor).ok_or_else(|| {
+                    StoreError::Conflict(format!(
+                        "predecessor {predecessor} has no effective-state checkpoint"
+                    ))
+                })?;
+                if !checkpoint.covered_seal_ids.contains(predecessor) {
+                    return Err(StoreError::Conflict(format!(
+                        "predecessor {predecessor} has an invalid closure checkpoint"
+                    )));
+                }
+                checkpoint_seals.extend(checkpoint.covered_seal_ids.iter().cloned());
+            }
         }
         let post_state = effective_state_with_new_ops(
             self.cell_store.as_ref(),
@@ -2291,6 +2507,16 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                 self.data_event_leaf_manifests
                     .lock()
                     .insert(seal.id.clone(), data_event_leaf_manifest.clone());
+                self.effective_state_checkpoints.lock().insert(
+                    seal.id.clone(),
+                    SealEffectiveStateCheckpoint {
+                        realm_id: seal.realm_id.clone(),
+                        seal_id: seal.id.clone(),
+                        covered_event_digests: covered.clone(),
+                        covered_seal_ids: checkpoint_seals,
+                        state: post_state,
+                    },
+                );
                 // Match the PostgreSQL transaction: accepted delta Events
                 // leave the pending queue at the same acceptance boundary as
                 // their Seal and cell effects. In particular, the basis-free
@@ -2315,6 +2541,18 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
     fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
         let _guard = self.lock.lock();
         Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
+    }
+
+    fn effective_state_checkpoint(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
+        let _guard = self.lock.lock();
+        Ok(self
+            .effective_state_checkpoints
+            .lock()
+            .get(seal_id)
+            .cloned())
     }
 }
 
@@ -2821,6 +3059,7 @@ mod event_seal_commit_tests {
         let committer = Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
             data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
+            effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store: control_event_store.clone(),
             seal_store: seal_store.clone(),
             cell_store: cell_store.clone(),

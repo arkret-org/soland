@@ -925,6 +925,19 @@ pub struct FederationFrontierExchangeRecord {
     pub updated_at: i64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct FederationFrontierConfirmedEvidenceRecord {
+    pub realm_id: String,
+    pub peer_id: DidCoreId,
+    pub evidence_scope_key: String,
+    pub reason: String,
+    pub evidence_scope: Value,
+    pub observed_at: i64,
+    pub resolution_kind: Option<String>,
+    pub resolution_digest: Option<String>,
+    pub resolved_at: Option<i64>,
+}
+
 /// Durable progress through one immutable remote frontier observation.
 ///
 /// The actor is the complete closed `ActorId`; a principal-only projection is

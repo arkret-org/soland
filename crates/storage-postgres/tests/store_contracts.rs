@@ -91,8 +91,30 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .status,
         "healthy"
     );
+    let subject =
+        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingBucket {
+            actor_id: arkret_wire::ActorId::service(peer.clone()),
+            actor_seq: 9,
+            prev_frontier_digest: None,
+            sibling_event_digests: vec![
+                arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                arkret_wire::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+            ],
+        };
+    let evidence_scope_key = subject.evidence_scope_key().unwrap();
+    let evidence_record = soland_storage::FederationFrontierConfirmedEvidenceRecord {
+        realm_id: realm.to_string(),
+        peer_id: peer.clone(),
+        evidence_scope_key: evidence_scope_key.to_string(),
+        reason: "fork_quarantine".to_owned(),
+        evidence_scope: serde_json::to_value(&subject).unwrap(),
+        observed_at: 5,
+        resolution_kind: None,
+        resolution_digest: None,
+        resolved_at: None,
+    };
     let (evidence, success) = tokio::join!(
-        store.record_failure(realm.as_str(), &peer, "witness_disagreement", 5),
+        store.record_confirmed_evidence(&evidence_record),
         reopened.record_success(realm.as_str(), &peer, "another-scope-root", 6),
     );
     evidence.unwrap();
@@ -116,7 +138,57 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     let restarted = PgFederationFrontierExchangeStore { pool };
     let record = restarted.get(realm.as_str(), &peer).await.unwrap().unwrap();
     assert_eq!(record.status, "peer_stale");
-    assert_eq!(record.last_error.as_deref(), Some("witness_disagreement"));
+    assert_eq!(record.last_error.as_deref(), Some("fork_quarantine"));
+    assert_eq!(
+        restarted
+            .unresolved_confirmed_evidence(realm.as_str(), &peer)
+            .await
+            .unwrap(),
+        vec![evidence_record]
+    );
+    assert!(
+        restarted
+            .resolve_confirmed_evidence(
+                realm.as_str(),
+                "sha256:wrong-scope",
+                "fork_resolution_event",
+                &format!("sha256:{}", "3".repeat(64)),
+                7,
+            )
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        restarted
+            .record_success(realm.as_str(), &peer, "ordinary-success", 8)
+            .await
+            .unwrap()
+            .status,
+        "peer_stale"
+    );
+    assert_eq!(
+        restarted
+            .resolve_confirmed_evidence(
+                realm.as_str(),
+                evidence_scope_key.as_str(),
+                "fork_resolution_event",
+                &format!("sha256:{}", "3".repeat(64)),
+                9,
+            )
+            .await
+            .unwrap(),
+        vec![peer.clone()]
+    );
+    assert_eq!(
+        restarted
+            .get(realm.as_str(), &peer)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "healthy"
+    );
     let checkpoint = restarted
         .reduction_checkpoint(realm.as_str(), &peer)
         .await
@@ -1310,6 +1382,8 @@ struct SealDependencyAtomicCounts {
     dependency_edges: i64,
     #[diesel(sql_type = diesel::sql_types::BigInt)]
     data_event_manifests: i64,
+    #[diesel(sql_type = diesel::sql_types::BigInt)]
+    effective_state_checkpoints: i64,
 }
 
 async fn seal_dependency_atomic_counts(
@@ -1328,7 +1402,8 @@ async fn seal_dependency_atomic_counts(
            (SELECT COUNT(*) FROM state_seal_control_events WHERE seal_id = $1) AS sealed_markers, \
            (SELECT COUNT(*) FROM governance_dependency_objects WHERE object_digest = $2) AS dependency_objects, \
            (SELECT COUNT(*) FROM governance_dependency_edges WHERE seal_id = $1) AS dependency_edges, \
-           (SELECT COUNT(*) FROM state_seal_data_event_manifests WHERE seal_id = $1) AS data_event_manifests",
+           (SELECT COUNT(*) FROM state_seal_data_event_manifests WHERE seal_id = $1) AS data_event_manifests, \
+           (SELECT COUNT(*) FROM state_seal_effective_checkpoints WHERE seal_id = $1) AS effective_state_checkpoints",
     )
     .bind::<Text, _>(seal_id.as_str())
     .bind::<Text, _>(object_digest.as_str())
@@ -1435,6 +1510,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert_eq!(committed.dependency_objects, 1);
     assert_eq!(committed.dependency_edges, 1);
     assert_eq!(committed.data_event_manifests, 1);
+    assert_eq!(committed.effective_state_checkpoints, 1);
     assert_eq!(
         stores
             .event_seal_committer
@@ -1454,6 +1530,19 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         Some(genesis_manifest.clone()),
         "a reconstructed PostgreSQL adapter must return the byte-identical frozen manifest"
     );
+    let checkpoint = restarted
+        .event_seal_committer
+        .effective_state_checkpoint(&genesis_seal.id)
+        .unwrap()
+        .expect("accepted Seal checkpoint survives adapter reconstruction");
+    assert_eq!(checkpoint.realm_id, realm_id);
+    assert_eq!(checkpoint.seal_id, genesis_seal.id);
+    assert_eq!(checkpoint.covered_event_digests, genesis_covered);
+    assert_eq!(
+        checkpoint.covered_seal_ids,
+        [genesis_seal.id.clone()].into_iter().collect()
+    );
+    assert!(checkpoint.state.is_empty());
     assert_eq!(
         stores
             .control_event_store
@@ -1601,6 +1690,10 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             counts.data_event_manifests, 0,
             "{failure} failure leaked a DataEvent manifest"
         );
+        assert_eq!(
+            counts.effective_state_checkpoints, 0,
+            "{failure} failure leaked an effective-state checkpoint"
+        );
         assert!(
             stores
                 .control_event_store
@@ -1658,6 +1751,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
     assert_eq!(root_mismatch_counts.seals, 0);
     assert_eq!(root_mismatch_counts.data_event_manifests, 0);
+    assert_eq!(root_mismatch_counts.effective_state_checkpoints, 0);
     assert!(
         !stores
             .event_seal_committer
@@ -1679,6 +1773,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     assert_eq!(cas_counts.dependency_objects, 0);
     assert_eq!(cas_counts.dependency_edges, 0);
     assert_eq!(cas_counts.data_event_manifests, 0);
+    assert_eq!(cas_counts.effective_state_checkpoints, 0);
     assert!(
         stores
             .control_event_store

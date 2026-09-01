@@ -3,6 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState;
+use arkret_models_collaboration::events_payloads::{
+    ForkResolutionCollisionVariant, ForkResolutionSubject,
+};
+use base64::Engine;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::AcceptedEvent;
 use soland_services::federation::FEDERATION_FRONTIER_STATUS_PEER_STALE;
@@ -577,6 +581,12 @@ impl FrontierExchangeWorker {
             let mut retry = Vec::new();
             let mut progress = false;
             for submission in pending {
+                let existing = self
+                    .state
+                    .event_queries()
+                    .canonical_event(submission.event.event_id.as_str())
+                    .await
+                    .map_err(|error| error.to_string())?;
                 match crate::routing::events::event_log::admit_frontier_backfill_event(
                     &self.state,
                     peer_id.as_str(),
@@ -593,7 +603,21 @@ impl FrontierExchangeWorker {
                     Err(error) if error.code == "dependency_missing" => retry.push(submission),
                     Err(error) => {
                         if error.quarantine_event_id.is_some() {
-                            return Err(error.code);
+                            let subject = self
+                                .confirmed_evidence_subject(
+                                    &submission.event,
+                                    existing.as_ref(),
+                                    &error.code,
+                                )
+                                .await?;
+                            self.record_confirmed_evidence(
+                                peer_id,
+                                remote.realm_id.as_str(),
+                                &error.code,
+                                subject,
+                            )
+                            .await?;
+                            return Err("confirmed_evidence_recorded".to_owned());
                         }
                         return Err(format!("{}:{}", error.code, error.message));
                     }
@@ -631,6 +655,123 @@ impl FrontierExchangeWorker {
             .await
             .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
         Ok(admitted)
+    }
+
+    async fn confirmed_evidence_subject(
+        &self,
+        event: &arkret_wire::Event,
+        existing: Option<&AcceptedEvent>,
+        reason: &str,
+    ) -> Result<ForkResolutionSubject, String> {
+        match reason {
+            "witness_disagreement" => {
+                let existing = existing.ok_or_else(|| {
+                    "schema_violation:collision_evidence_missing_original_variant".to_owned()
+                })?;
+                let incoming = arkret_canonical::canonical_json_bytes(
+                    &event.digest_payload().map_err(|error| error.to_string())?,
+                )
+                .map_err(|error| format!("schema_violation:{error}"))?;
+                let mut variants = [existing.canonical_bytes.clone(), incoming]
+                    .into_iter()
+                    .map(|bytes| {
+                        arkret_wire::Base64UrlString::new(
+                            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+                        )
+                        .map(
+                            |canonical_event_bytes_b64u| ForkResolutionCollisionVariant {
+                                canonical_event_bytes_b64u,
+                            },
+                        )
+                        .map_err(|error| format!("schema_violation:{error}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                variants.sort_by(|left, right| {
+                    left.canonical_event_bytes_b64u
+                        .cmp(&right.canonical_event_bytes_b64u)
+                });
+                variants.dedup();
+                if variants.len() != 2 {
+                    return Err(
+                        "schema_violation:collision_evidence_variants_not_distinct".to_owned()
+                    );
+                }
+                Ok(ForkResolutionSubject::EventIdCollision {
+                    event_id: event.event_id.clone(),
+                    variants,
+                })
+            }
+            "fork_quarantine" => {
+                let mut sibling_event_digests = self
+                    .state
+                    .event_queries()
+                    .canonical_events()
+                    .await
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .filter(|record| {
+                        record.realm_id.as_deref() == Some(event.realm_id.as_str())
+                            && record.actor_id == event.actor_id.to_string()
+                            && record.actor_seq == event.actor_seq
+                    })
+                    .map(|record| {
+                        arkret_identifiers::Hash::new(record.canonical_digest)
+                            .map_err(|error| format!("schema_violation:{error}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                sibling_event_digests.push(
+                    arkret::signed_event_digest_claim(event)
+                        .map_err(|error| format!("schema_violation:{error}"))?,
+                );
+                sibling_event_digests.sort();
+                sibling_event_digests.dedup();
+                if !(2..=64).contains(&sibling_event_digests.len()) {
+                    return Err(
+                        "schema_violation:fork_evidence_sibling_set_out_of_range".to_owned()
+                    );
+                }
+                Ok(ForkResolutionSubject::EventSiblingBucket {
+                    actor_id: event.actor_id.clone(),
+                    actor_seq: event.actor_seq,
+                    prev_frontier_digest: None,
+                    sibling_event_digests,
+                })
+            }
+            _ => Err(format!(
+                "schema_violation:unregistered_confirmed_evidence_reason:{reason}"
+            )),
+        }
+    }
+
+    async fn record_confirmed_evidence(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+        reason: &str,
+        subject: ForkResolutionSubject,
+    ) -> Result<(), String> {
+        let evidence_scope_key = subject
+            .evidence_scope_key()
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let evidence_scope =
+            serde_json::to_value(subject).map_err(|error| format!("schema_violation:{error}"))?;
+        self.state
+            .federation()
+            .record_frontier_confirmed_evidence(
+                &soland_services::federation::FederationFrontierConfirmedEvidenceRecord {
+                    realm_id: realm_id.to_owned(),
+                    peer_id: peer_id.clone(),
+                    evidence_scope_key: evidence_scope_key.to_string(),
+                    reason: reason.to_owned(),
+                    evidence_scope,
+                    observed_at: chrono::Utc::now().timestamp(),
+                    resolution_kind: None,
+                    resolution_digest: None,
+                    resolved_at: None,
+                },
+            )
+            .await
+            .map_err(|error| error.to_string())
     }
 
     async fn probe_peer(
@@ -789,6 +930,7 @@ fn frontier_reduction_deferred(reason: &str) -> bool {
             | "temporarily_unavailable:dependency_budget"
             | "temporarily_unavailable:admission_round_budget"
             | "temporarily_unavailable:backfill_publication_evidence_unavailable"
+            | "confirmed_evidence_recorded"
     ) || reason.starts_with("temporarily_unavailable:checkpoint_store:")
 }
 
@@ -1022,9 +1164,31 @@ mod tests {
                 .await
                 .unwrap()
         );
+        let subject = ForkResolutionSubject::EventSiblingBucket {
+            actor_id: arkret_wire::ActorId::service(peer.clone()),
+            actor_seq: 7,
+            prev_frontier_digest: None,
+            sibling_event_digests: vec![
+                arkret_identifiers::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+                arkret_identifiers::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
+            ],
+        };
+        let scope_key = subject.evidence_scope_key().unwrap();
         state
             .federation()
-            .record_frontier_failure(realm, &peer, "fork_quarantine", 5)
+            .record_frontier_confirmed_evidence(
+                &soland_services::federation::FederationFrontierConfirmedEvidenceRecord {
+                    realm_id: realm.to_owned(),
+                    peer_id: peer.clone(),
+                    evidence_scope_key: scope_key.to_string(),
+                    reason: "fork_quarantine".to_owned(),
+                    evidence_scope: serde_json::to_value(&subject).unwrap(),
+                    observed_at: 5,
+                    resolution_kind: None,
+                    resolution_digest: None,
+                    resolved_at: None,
+                },
+            )
             .await
             .unwrap();
         assert!(
@@ -1041,6 +1205,56 @@ mod tests {
             inbound_peer_is_stale(&state, realm, peer.as_str())
                 .await
                 .unwrap()
+        );
+        assert!(
+            state
+                .federation()
+                .resolve_frontier_confirmed_evidence(
+                    realm,
+                    "sha256:wrong-scope",
+                    "fork_resolution_event",
+                    &format!("sha256:{}", "3".repeat(64)),
+                    7,
+                )
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+        let resolved = state
+            .federation()
+            .resolve_frontier_confirmed_evidence(
+                realm,
+                scope_key.as_str(),
+                "fork_resolution_event",
+                &format!("sha256:{}", "3".repeat(64)),
+                8,
+            )
+            .await
+            .unwrap();
+        assert_eq!(resolved, vec![peer.clone()]);
+        assert!(
+            !inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+        assert!(
+            state
+                .federation()
+                .resolve_frontier_confirmed_evidence(
+                    realm,
+                    scope_key.as_str(),
+                    "fork_resolution_event",
+                    &format!("sha256:{}", "3".repeat(64)),
+                    9,
+                )
+                .await
+                .unwrap()
+                .is_empty()
         );
     }
 
