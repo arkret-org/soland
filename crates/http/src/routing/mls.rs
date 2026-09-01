@@ -4906,7 +4906,7 @@ mod trust_binding_tests {
         let seed = [84; 32];
         let endpoint = CanonicalServiceUrl::new(&config.public_base_url).unwrap();
         let prepared = arkret_signatures::webvh::prepare_service_inception_with_did_key_seed(
-            &mut rand_core::OsRng,
+            &mut rand::rng(),
             &arkret_signatures::webvh::ServiceInceptionInput {
                 principal_endpoint: &endpoint.as_url(),
                 local_id: "service",

@@ -824,7 +824,7 @@ async fn signal_send_accepts_the_realm_scope_for_a_joined_member_body() {
         relayed[0].sender_actor_id,
         envelope.sender_actor_id.to_string()
     );
-    assert_eq!(relayed[0].sender_device_id, ALICE_DEVICE);
+    assert_eq!(relayed[0].sender_device_id.as_deref(), Some(ALICE_DEVICE));
     assert_eq!(
         relayed[0].envelope, envelope,
         "the relay holds the verbatim admitted envelope"
