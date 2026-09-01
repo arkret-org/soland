@@ -479,7 +479,9 @@ pub fn describe(
             scopes: vec!["openid".to_owned(), "profile".to_owned()],
             grant_exchange: AuthGrantExchange {
                 kind: AuthGrantExchangeKind::AccountHandoff,
+                extra: Default::default(),
             },
+            extra: Default::default(),
         });
     }
 
@@ -490,10 +492,10 @@ pub fn describe(
             origin: arkret_wire::WebOrigin::new(account_origin)
                 .expect("configured account authority base has a valid Web origin"),
             gate_account_base_url,
+            extra: Default::default(),
         }),
         methods,
         did_binding_methods: Vec::new(),
-        read: None,
         extra: Default::default(),
     };
     let local_extension_operations = local_extension_operations();
