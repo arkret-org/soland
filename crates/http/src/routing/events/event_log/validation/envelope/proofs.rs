@@ -745,6 +745,14 @@ async fn verify_with_installed_applet_registration_epoch(
     let Some(applet_id) = object.get("applet_id").and_then(Value::as_str) else {
         return Ok(None);
     };
+    // `applet_id` is also provenance on native administrator-authored Events
+    // (for example a formal managed-membership transition). Only delegated
+    // Events carrying `executed_by` use the installed Applet registration
+    // epoch as their producer-key authority; native Events continue through
+    // the ordinary actor proof path below.
+    if object.get("executed_by").is_none() {
+        return Ok(None);
+    }
     let fail = |code: &'static str, message: &'static str| {
         event_validation_error(StatusCode::BAD_REQUEST, code, message)
     };

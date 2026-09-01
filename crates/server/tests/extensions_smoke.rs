@@ -106,6 +106,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 }
 
 async fn dev_token(state: AppState) -> String {
+    ingest_extension_admin_document(&state).await;
     dev_token_for(state, "did:web:alice.example", "a11ce0000001").await
 }
 
@@ -2395,7 +2396,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     assert_eq!(
         revoke_preview["revoke_plan"]["capability_revocations"]
             .as_array()
-            .expect("revoke preview capability intents")
+            .unwrap_or_else(|| panic!("revoke preview capability intents: {revoke_preview}"))
             .len(),
         install["capability_grant_refs"]
             .as_array()
@@ -3079,12 +3080,12 @@ async fn admit_applet_managed_member(
     state: &AppState,
     app: &salvo::Service,
     token: &str,
-    _package: &AppletPackage,
+    package: &AppletPackage,
     realm_id: &str,
     member_id: &arkret_wire::ActorId,
     _install_grant_ref: &str,
 ) -> String {
-    let actor_did = Did::new("did:web:alice.example").unwrap();
+    let actor_did = Did::new("did:web:alice.example").expect("fixture admin DID");
     let actor_core_id = arkret_wire::project_did_to_core_id(&actor_did).unwrap();
     let verification_method =
         arkret_wire::DidUrl::new(format!("did:web:alice.example#{ALICE_DEVICE_ID}")).unwrap();
@@ -3120,14 +3121,23 @@ async fn admit_applet_managed_member(
     ));
     let authority_grant_ref = existing
         .iter()
-        .find(|event| {
-            event.actor_id == event_actor.to_string()
-                && event.realm_id.as_deref() == Some(realm_id.as_str())
-                && event.kind == arkret_wire::EventKind::CapabilityGrant.as_str()
+        .find(|record| {
+            record.actor_id == event_actor.to_string()
+                && record.realm_id.as_deref() == Some(realm_id.as_str())
+                && record.kind == arkret_wire::EventKind::CapabilityGrant.as_str()
+                && record
+                    .envelope
+                    .pointer("/payload/grant/actions")
+                    .and_then(Value::as_array)
+                    .is_some_and(|actions| {
+                        actions
+                            .iter()
+                            .any(|action| action == arkret_wire::CapabilityActionId::REALM_ADMIN)
+                    })
         })
-        .map(|event| {
+        .map(|record| {
             arkret_identifiers::GrantId::from_event_id(
-                &EventId::new(event.event_id.clone()).unwrap(),
+                &EventId::new(record.event_id.clone()).unwrap(),
             )
         })
         .expect("extension test Realm has Alice's accepted authority grant");
@@ -3159,6 +3169,7 @@ async fn admit_applet_managed_member(
     .unwrap();
     event.prev_refs = vec![EventId::new(frontier.event_id.clone()).unwrap()];
     event.seal_basis = Some(seal_basis);
+    event.applet_id = Some(package.applet_id.clone());
     event.authorization_ref = Some(authority_grant_ref.into());
     let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
         event,

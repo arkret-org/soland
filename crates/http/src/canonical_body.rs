@@ -264,7 +264,7 @@ mod tests {
             .body(body.clone())
             .send(&canonical_body_test_service(16 * 1024 * 1024))
             .await;
-        assert_eq!(response.status_code, None);
+        assert_eq!(response.status_code, Some(StatusCode::OK));
         assert_eq!(response.take_string().await.unwrap(), body);
     }
 
@@ -277,7 +277,7 @@ mod tests {
             .body(body.clone())
             .send(&canonical_body_test_service(16 * 1024 * 1024))
             .await;
-        assert_eq!(response.status_code, None);
+        assert_eq!(response.status_code, Some(StatusCode::OK));
         assert_eq!(response.take_string().await.unwrap(), body);
     }
 

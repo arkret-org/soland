@@ -1000,7 +1000,6 @@ pub async fn project_authorized_principal_device(
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
         serde_json::json!({
-            "principal_id": principal_id,
             "device_id": device_id,
             "device_public_key_did": device_public_key,
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
@@ -1034,6 +1033,14 @@ pub async fn project_authorized_principal_device(
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();
+    operation
+        .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
+        .expect("fixture DeviceAuthorize payload is canonical");
+    assert_eq!(
+        soland_domain::kinds::canonical_kind_for_operation(&operation),
+        Some(arkret_wire::EventKind::DeviceAuthorize),
+        "fixture DeviceAuthorize participates in local projection"
+    );
     let authorize_event_id = authorize.event_id.to_string();
     state
         .test_persistence()

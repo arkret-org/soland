@@ -1008,12 +1008,6 @@ async fn exact_managed_membership_removals(
             })
             .collect::<Vec<_>>()
     };
-    let capability_grant_refs = record
-        .install_response
-        .capability_grant_refs
-        .iter()
-        .map(ToString::to_string)
-        .collect::<std::collections::BTreeSet<_>>();
     let mut removals = Vec::new();
     for (projected_member, membership_event_ref) in current_members {
         let membership_event_ref = membership_event_ref.ok_or_else(|| {
@@ -1050,7 +1044,6 @@ async fn exact_managed_membership_removals(
         if let Some(intent) = classify_current_managed_membership(
             record.applet_id.as_str(),
             &record.effective_scope,
-            &capability_grant_refs,
             &managed_actor_ids,
             &projected_member,
             &membership_event_ref,
@@ -1068,7 +1061,6 @@ async fn exact_managed_membership_removals(
 fn classify_current_managed_membership(
     applet_id: &str,
     effective_scope: &arkret_wire::ScopeRef,
-    capability_grant_refs: &std::collections::BTreeSet<String>,
     managed_actor_ids: &std::collections::BTreeSet<arkret_wire::ActorId>,
     projected_member: &str,
     membership_event_ref: &str,
@@ -1098,27 +1090,13 @@ fn classify_current_managed_membership(
 
     let applet_matches =
         event.applet_id.as_ref().map(ToString::to_string).as_deref() == Some(applet_id);
-    let grant_matches = event
-        .authorization_ref
-        .as_ref()
-        .is_some_and(|grant| capability_grant_refs.contains(grant.as_str()));
     let scope_matches = event.scope_ref == *effective_scope;
 
     if !scope_matches {
-        if grant_matches {
-            return Err(incomplete_managed_membership_projection(format!(
-                "membership Event {membership_event_ref} uses this install grant outside its exact scope"
-            )));
-        }
         return Ok(None);
     }
-    if !applet_matches && !grant_matches {
+    if !applet_matches {
         return Ok(None);
-    }
-    if !applet_matches || !grant_matches {
-        return Err(incomplete_managed_membership_projection(format!(
-            "membership Event {membership_event_ref} does not cross-bind applet_id and the exact install grant"
-        )));
     }
     if !managed_actor_ids.contains(&member_id) {
         return Err(incomplete_managed_membership_projection(format!(
@@ -2157,14 +2135,12 @@ mod revoke_saga_tests {
             arkret_wire::DidCoreId::new("ak:did_core:web:bot.example").unwrap(),
             arkret_wire::DidCoreId::new("ak:did_core:web:service-a.example").unwrap(),
         ));
-        let grants = std::collections::BTreeSet::from([TARGET_GRANT.to_owned()]);
         let managed = std::collections::BTreeSet::from([member.clone()]);
         let reason = arkret_wire::ReasonCode::from_wire("requested_by_admin");
         let event = current_join_event(target_scope.clone(), &member, TARGET_GRANT);
         let intent = classify_current_managed_membership(
             APPLET_ID,
             &target_scope,
-            &grants,
             &managed,
             &member.to_string(),
             event.event_id.as_str(),
@@ -2183,12 +2159,11 @@ mod revoke_saga_tests {
             )
             .unwrap(),
         };
-        let other = current_join_event(other_scope, &member, "ak:grant:other-scope");
+        let other = current_join_event(other_scope, &member, TARGET_GRANT);
         assert!(
             classify_current_managed_membership(
                 APPLET_ID,
                 &target_scope,
-                &grants,
                 &managed,
                 &member.to_string(),
                 other.event_id.as_str(),
@@ -2201,20 +2176,18 @@ mod revoke_saga_tests {
     }
 
     #[test]
-    fn exact_install_membership_rejects_missing_ghost_projection_and_wrong_grant() {
+    fn exact_install_membership_rejects_missing_ghost_projection_and_ignores_other_applet() {
         let scope = realm_scope();
         let ghost = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:ghost.example").unwrap(),
             arkret_wire::DidCoreId::new("ak:did_core:web:service-a.example").unwrap(),
         ));
-        let grants = std::collections::BTreeSet::from([TARGET_GRANT.to_owned()]);
         let reason = arkret_wire::ReasonCode::from_wire("requested_by_admin");
         let event = current_join_event(scope.clone(), &ghost, TARGET_GRANT);
         assert!(
             classify_current_managed_membership(
                 APPLET_ID,
                 &scope,
-                &grants,
                 &std::collections::BTreeSet::new(),
                 &ghost.to_string(),
                 event.event_id.as_str(),
@@ -2224,19 +2197,23 @@ mod revoke_saga_tests {
             .is_err()
         );
 
-        let wrong_grant = current_join_event(scope.clone(), &ghost, "ak:grant:wrong-install");
+        let mut other_applet = current_join_event(scope.clone(), &ghost, TARGET_GRANT);
+        other_applet.applet_id = Some(
+            arkret_wire::AppletId::new("ak:applet:01904100-0000-7000-8000-000000000002".to_owned())
+                .unwrap(),
+        );
         assert!(
             classify_current_managed_membership(
                 APPLET_ID,
                 &scope,
-                &grants,
                 &std::collections::BTreeSet::from([ghost.clone()]),
                 &ghost.to_string(),
-                wrong_grant.event_id.as_str(),
-                &wrong_grant,
+                other_applet.event_id.as_str(),
+                &other_applet,
                 &reason,
             )
-            .is_err()
+            .unwrap()
+            .is_none()
         );
     }
 
