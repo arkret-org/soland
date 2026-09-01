@@ -85,6 +85,7 @@ mod tests {
                 granted_to_requester_scopes: vec!["direct_message".to_owned()],
                 status: "accepted".to_owned(),
                 request_event_ref: None,
+                request_slot_states: Vec::new(),
                 request_receipts: Vec::new(),
                 request_mirror_receipts: Vec::new(),
                 contact_round_evidence: None,

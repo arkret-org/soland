@@ -1147,7 +1147,7 @@ fn persistence_cursor_state(record: &crate::sync::CursorState) -> soland_storage
 fn application_cursor_revocation(record: CursorRevocation) -> crate::sync::CursorRevocationState {
     crate::sync::CursorRevocationState {
         cursor_digest: record.cursor_digest,
-        principal_id: record.principal_id,
+        account_id: record.account_id,
         device_id: record.device_id,
         scope: record.scope,
         reason_code: record.reason_code,
@@ -1159,7 +1159,7 @@ fn application_cursor_revocation(record: CursorRevocation) -> crate::sync::Curso
 fn persistence_cursor_revocation(record: &crate::sync::CursorRevocationState) -> CursorRevocation {
     CursorRevocation {
         cursor_digest: record.cursor_digest.clone(),
-        principal_id: record.principal_id.clone(),
+        account_id: record.account_id.clone(),
         device_id: record.device_id.clone(),
         scope: record.scope.clone(),
         reason_code: record.reason_code.clone(),

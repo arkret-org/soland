@@ -312,7 +312,7 @@ diesel::table! {
         id -> Uuid,
         cell_id -> Text,
         holder_id -> Text,
-        peer_id -> Text,
+        peer -> Jsonb,
         consent_scope -> Text,
         grant_dots -> Jsonb,
         revoked_dots -> Jsonb,
@@ -345,6 +345,7 @@ diesel::table! {
         granted_to_requester_scopes -> Array<Text>,
         status -> Text,
         request_event_ref -> Nullable<Bytea>,
+        request_slot_states -> Jsonb,
         request_receipts -> Jsonb,
         request_mirror_receipts -> Jsonb,
         contact_round_evidence -> Nullable<Jsonb>,
@@ -741,10 +742,11 @@ diesel::table! {
         subject_id -> Text,
         issuer_id -> Text,
         audience -> Nullable<Text>,
-        binding_state -> Text,
+        status -> Text,
+        revocation_digest -> Nullable<Text>,
+        fresh_until -> Timestamptz,
         visibility -> Nullable<Text>,
         expires_at -> Nullable<Timestamptz>,
-        revoked -> Bool,
         envelope -> Jsonb,
     }
 }
@@ -1200,6 +1202,7 @@ diesel::table! {
     recovery_policies (id) {
         id -> Uuid,
         principal_id -> Text,
+        station_id -> Text,
         version -> Int4,
         acceptance_basis -> Jsonb,
         trust_domain -> Text,
@@ -1778,7 +1781,7 @@ diesel::table! {
     sync_cursor_revocations (id) {
         id -> Uuid,
         cursor_digest -> Text,
-        principal_id -> Text,
+        account_id -> Jsonb,
         device_id -> Nullable<Text>,
         scope -> Text,
         reason_code -> Text,

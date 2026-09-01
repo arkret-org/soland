@@ -2530,6 +2530,19 @@ pub async fn assert_event_commit_unit_of_work_contract(
         granted_to_requester_scopes: Vec::new(),
         status: "pending".to_owned(),
         request_event_ref: Some(contact_event_ref.clone()),
+        request_slot_states: vec![crate::ContactRequestSlotState {
+            owner_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(principal_id.clone()).unwrap(),
+                DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+            )),
+            peer_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(format!("ak:did_core:web:contact-peer-{namespace}.example"))
+                    .unwrap(),
+                DidCoreId::new("ak:did_core:web:peer-principal.example").unwrap(),
+            )),
+            accepted_sequence: 7,
+            head_digest: Hash::new(format!("sha256:{}", "7".repeat(64))).unwrap(),
+        }],
         request_receipts: Vec::new(),
         request_mirror_receipts: Vec::new(),
         contact_round_evidence: None,
@@ -2610,6 +2623,16 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .as_ref()
             .map(arkret_wire::EventId::as_str),
         Some(contact_event_id.as_str())
+    );
+    let persisted_contact = stores
+        .contacts
+        .get(&contact_record.requester_id, &contact_record.target_id)
+        .await
+        .unwrap()
+        .expect("Contact projection retains request-slot CAS state");
+    assert_eq!(
+        persisted_contact.request_slot_states, contact_record.request_slot_states,
+        "request-slot predecessor and accepted local sequence survive the atomic Contact commit"
     );
     assert!(
         stores
@@ -4956,10 +4979,11 @@ pub async fn assert_member_identity_store_contract(
         ))
         .unwrap(),
         audience: Some("ak:service:directory".to_owned()),
-        binding_state: "bound".to_owned(),
+        status: "verified".to_owned(),
+        revocation_digest: None,
+        fresh_until: database_timestamp_now() + Duration::minutes(5),
         visibility: Some("public".to_owned()),
         expires_at: Some(database_timestamp_now() + Duration::hours(1)),
-        revoked: false,
         envelope: serde_json::json!({"subject_id": format!("ak:did_core:web:{namespace}.example")}),
     };
     store
@@ -4967,7 +4991,8 @@ pub async fn assert_member_identity_store_contract(
         .await
         .expect("cache handle claim");
     let mut revoked = claim.clone();
-    revoked.revoked = true;
+    revoked.status = "revoked".to_owned();
+    revoked.revocation_digest = Some(format!("sha256:{}", "d".repeat(64)));
     store
         .put_handle_claim(&revoked)
         .await
@@ -5292,7 +5317,9 @@ pub async fn assert_consent_projection_commit_contract(
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
         holder_principal_id: holder.clone(),
-        peer_principal_id: peer.clone(),
+        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+            principal_id: peer.clone(),
+        },
         consent_scope: "invite".to_owned(),
         grant_dots: BTreeMap::from([(
             dot.clone(),
@@ -5339,7 +5366,9 @@ pub async fn assert_consent_projection_commit_contract(
     let rebind_event_id = rebind_event.event_id.clone();
     let rebind_ack = contract_control_proposal_ack(&rebind_event, now);
     let mut rebound = granted.clone();
-    rebound.peer_principal_id = other_peer;
+    rebound.peer = arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+        principal_id: other_peer,
+    };
     let rejected = stores
         .unit_of_work
         .commit_event(consent_commit_request(

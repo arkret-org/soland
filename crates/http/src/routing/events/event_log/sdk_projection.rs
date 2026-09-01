@@ -544,10 +544,6 @@ pub(in crate::routing) fn validate_device_revoke_submission(
     envelope: &Value,
 ) -> Result<String, SubmitOneError> {
     let payload = envelope.get("payload").cloned().unwrap_or(Value::Null);
-    let principal_id = payload
-        .get("principal_id")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
     let device_id = payload
         .get("device_id")
         .and_then(Value::as_str)
@@ -557,13 +553,6 @@ pub(in crate::routing) fn validate_device_revoke_submission(
             StatusCode::BAD_REQUEST,
             "schema_violation",
             "ak.device.revoke payload.device_id is required",
-        ));
-    }
-    if principal_id != parsed.actor_id.as_str() {
-        return Err(SubmitOneError::new(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "ak.device.revoke payload.principal_id must be the submitting actor",
         ));
     }
     if device_id == session.device_id {

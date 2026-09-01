@@ -148,6 +148,17 @@ fn persistence_event_commit_request(
                     granted_to_requester_scopes: commit.record.granted_to_requester_scopes,
                     status: commit.record.status,
                     request_event_ref: commit.record.request_event_ref,
+                    request_slot_states: commit
+                        .record
+                        .request_slot_states
+                        .into_iter()
+                        .map(|state| soland_storage::ContactRequestSlotState {
+                            owner_id: state.owner_id,
+                            peer_id: state.peer_id,
+                            accepted_sequence: state.accepted_sequence,
+                            head_digest: state.head_digest,
+                        })
+                        .collect(),
                     request_receipts: commit.record.request_receipts,
                     request_mirror_receipts: commit.record.request_mirror_receipts,
                     contact_round_evidence: commit.record.contact_round_evidence,

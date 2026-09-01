@@ -1764,8 +1764,7 @@ async fn read_principal_resolution_audit(
         salvo::http::HeaderValue::from_static("no-store, no-transform"),
     );
     let evidence = PrincipalResolutionAuditEvidence {
-        principal_id: record.account_id.principal_id,
-        station_id: record.account_id.station_id,
+        account_id: record.account_id,
         principal_control_realm_id: record.pcr_realm_id,
         principal_genesis_receipt,
         principal_genesis_event: record.genesis_event,

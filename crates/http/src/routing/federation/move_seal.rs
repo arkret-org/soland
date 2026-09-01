@@ -409,11 +409,6 @@ async fn device_generation_event_seal_context(
             "stored bootstrap device authorization payload is invalid: {error}"
         ))
     })?;
-    if bootstrap_payload.principal_id != principal_id {
-        return Err(seal_admission_error(
-            "bootstrap device authorization principal differs from the Realm principal",
-        ));
-    }
     let bootstrap_required_delta = [
         bootstrap.canonical_digest.as_str(),
         bootstrap_authorize.canonical_digest.as_str(),

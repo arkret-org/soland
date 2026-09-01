@@ -106,10 +106,16 @@ fn signed_keypackage_claim_request(
     let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
         serde_json::from_value(json!({
             "claim_request_id": claim_request_id,
-            "target_principal_id": target_principal_id,
+            "target_account_id": {
+                "principal_id": target_principal_id,
+                "station_id": authority_id
+            },
             "target_device_ids": target_device_ids,
             "intended_realm_id": intended_realm_id,
-            "requester_id": requester_id,
+            "requester_account_id": {
+                "principal_id": requester_id,
+                "station_id": authority_id
+            },
             "claim_purpose": "realm_membership",
             "required_capabilities": required_capabilities,
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
@@ -1172,8 +1178,15 @@ async fn mls_lifecycle_end_to_end_body() {
     assert_eq!(device_messages.len(), 1, "{device_messages_json}");
     let device_message = &device_messages[0];
     assert_eq!(device_message["kind"], json!("ak.mls.welcome"));
+    assert_eq!(
+        device_message["sender_account_id"],
+        json!({"principal_id": alice_core, "station_id": state.service_id()})
+    );
     assert_eq!(device_message["sender_device_id"], json!(alice_device));
-    assert_eq!(device_message["recipient_principal_id"], json!(bob_core));
+    assert_eq!(
+        device_message["recipient_account_id"],
+        json!({"principal_id": bob_core, "station_id": state.service_id()})
+    );
     assert_eq!(device_message["recipient_device_id"], json!(bob_device));
     assert_eq!(
         device_message["expires_at"],

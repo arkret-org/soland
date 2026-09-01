@@ -47,10 +47,11 @@ pub struct HandleClaimEvidenceRecord {
     pub subject_id: arkret_wire::DidCoreId,
     pub issuer_id: arkret_wire::DidCoreId,
     pub audience: Option<String>,
-    pub binding_state: String,
+    pub status: String,
+    pub revocation_digest: Option<String>,
+    pub fresh_until: chrono::DateTime<chrono::Utc>,
     pub visibility: Option<String>,
     pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub revoked: bool,
     pub envelope: Value,
 }
 

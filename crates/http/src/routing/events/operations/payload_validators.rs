@@ -113,13 +113,6 @@ pub(crate) fn validate_account_data_set_payload(operation: &Operation) -> Result
     let key = payload.key.as_str();
     crate::routing::account_data_encryption::validate_encrypted_account_data_key(key)
         .map_err(|error| error.message())?;
-    if payload
-        .holder_id
-        .as_ref()
-        .is_some_and(|owner| owner != operation.context.sender.signing_principal_id())
-    {
-        return Err("account_data.set holder_id must match the authenticated actor");
-    }
     if payload.tombstone {
         return Ok(());
     }
@@ -566,12 +559,10 @@ mod tests {
             json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
         );
         assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
-        operation.payload["holder_id"] = json!(operation.context.sender.signing_principal_id());
-        assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
         operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
         assert_eq!(
             super::validate_account_data_set_payload(&operation),
-            Err("account_data.set holder_id must match the authenticated actor")
+            Err("account_data.set payload violates SDK artifact schema")
         );
     }
 

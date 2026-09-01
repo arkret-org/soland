@@ -484,8 +484,9 @@ fn signed_device_authorize_payload(
         )
     );
     let principal_id = crate::test_actor_id_str(ALICE_DID);
+    let account_id =
+        arkret_wire::AccountId::new(principal_id.clone(), crate::test_event::station_id());
     let unsigned = UnsignedDeviceAuthorizePayload::new(
-        principal_id.clone(),
         arkret_identifiers::DeviceId::new("ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6")
             .unwrap(),
         arkret_wire::NonEmptyString::new(device_public_key).unwrap(),
@@ -505,7 +506,7 @@ fn signed_device_authorize_payload(
     )
     .expect("valid unsigned device authorization");
     let input = unsigned
-        .device_possession_signature_input()
+        .device_possession_signature_input(&account_id)
         .expect("device signature input");
     let signature = signing_key.sign(&input);
     unsigned
@@ -522,8 +523,15 @@ fn device_authorize_validates_device_possession_signature() {
     let device_signer = SigningKey::from_bytes(&[7u8; 32]);
     let payload = signed_device_authorize_payload(&device_signer, &device_signer);
 
-    crate::routing::identity::device_signing::validate_device_authorize_binding(&state, &payload)
-        .unwrap();
+    crate::routing::identity::device_signing::validate_device_authorize_binding(
+        &state,
+        &payload,
+        &arkret_wire::AccountId::new(
+            crate::test_actor_id_str(ALICE_DID),
+            crate::test_event::station_id(),
+        ),
+    )
+    .unwrap();
 }
 
 #[test]
@@ -535,7 +543,12 @@ fn device_authorize_rejects_signature_from_wrong_device_key() {
 
     assert_eq!(
         crate::routing::identity::device_signing::validate_device_authorize_binding(
-            &state, &payload
+            &state,
+            &payload,
+            &arkret_wire::AccountId::new(
+                crate::test_actor_id_str(ALICE_DID),
+                crate::test_event::station_id(),
+            ),
         ),
         Err("device_authorize_device_signature_invalid")
     );

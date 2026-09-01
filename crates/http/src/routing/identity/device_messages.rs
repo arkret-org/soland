@@ -66,9 +66,9 @@ struct PreparedDeviceMessageTarget {
 struct DeviceMessageIntentPreimage<'a> {
     device_message_id: &'a arkret_wire::DeviceMessageId,
     kind: &'a arkret_wire::ProtocolKind,
-    sender_principal_id: &'a str,
+    sender_account_id: &'a arkret_wire::AccountId,
     sender_device_id: &'a str,
-    recipient_principal_id: &'a arkret_wire::DidCoreId,
+    recipient_account_id: &'a arkret_wire::AccountId,
     recipient_device_id: &'a arkret_wire::DeviceId,
     expires_at: chrono::DateTime<chrono::Utc>,
     content: &'a BTreeMap<String, Value>,
@@ -107,6 +107,8 @@ async fn send_device_messages(
 ) -> JsonResult<DeviceMessagesSendOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let sender_account_id =
+        super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
     let body = body.into_inner();
     let restricted_fresh_device_verification = state.config().development_mode
         && session.session_grant.is_none()
@@ -160,17 +162,19 @@ async fn send_device_messages(
         for (device_id, target) in devices {
             idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
             let message_key = arkret_canonical::canonical_sha256(&json!({
-                "sender_principal_id": session.actor,
+                "sender_account_id": sender_account_id,
                 "sender_device_id": session.device_id,
                 "device_message_id": target.device_message_id,
             }))
             .map_err(|error| AppError::internal(error.to_string()))?;
+            let recipient_account_id =
+                arkret_wire::AccountId::new(recipient.clone(), state.service_core_id().clone());
             let intent_digest = arkret_canonical::canonical_sha256(&DeviceMessageIntentPreimage {
                 device_message_id: &target.device_message_id,
                 kind: &target.kind,
-                sender_principal_id: &session.actor,
+                sender_account_id: &sender_account_id,
                 sender_device_id: &session.device_id,
-                recipient_principal_id: &recipient,
+                recipient_account_id: &recipient_account_id,
                 recipient_device_id: &device_id,
                 expires_at: target.expires_at,
                 content: &target.content,
@@ -284,6 +288,7 @@ async fn send_device_messages(
                 if let Some(object) = content.as_object_mut() {
                     // The send surface is device-authenticated, so the queued
                     // body records the `device` branch of the §8.2.1 sender XOR.
+                    object.insert("sender_account_id".to_owned(), json!(sender_account_id));
                     object.insert("sender_device_id".to_owned(), json!(session.device_id));
                 }
                 Some(DeviceMessageState {
@@ -425,7 +430,19 @@ pub(crate) async fn fanout_actor_private_update(
         | ActorPrivateDeviceUpdate::ReadCursor { sender, .. } => sender,
     };
     let (origin_device_id, sender_endpoint_id, sender_revocation_gate) = match sender {
-        DeviceMessageSender::Device { sender_device_id } => {
+        DeviceMessageSender::Device {
+            sender_account_id,
+            sender_device_id,
+        } => {
+            if sender_account_id.principal_id.as_str() != actor
+                || sender_account_id.station_id != state.service_core_id()
+            {
+                tracing::warn!(
+                    actor,
+                    "actor-private fanout rejected because sender AccountId differs from holder"
+                );
+                return 0;
+            }
             let sender_revocation_gate =
                 match super::device_generation::active_device_revocation_gate_selector(
                     state,
@@ -842,7 +859,7 @@ fn device_message_envelope_from_record(
     // would mean choosing a sender identity the producer never wrote down.
     let sender = <DeviceMessageSender as serde::Deserialize>::deserialize(&message.content).ok()?;
     if let DeviceMessageSender::Service { sender_id } = &sender
-        && (sender_id.as_str() != state.service_id() || message.sender != message.recipient)
+        && sender_id.as_str() != state.service_id()
     {
         // Fail closed on persisted rows that do not carry the exact local
         // service/holder binding the internal materializer wrote.
@@ -858,10 +875,11 @@ fn device_message_envelope_from_record(
         )
         .ok()?,
         kind,
-        sender_principal_id: arkret_identifiers::DidCoreId::new(message.sender.clone()).ok()?,
         sender,
-        recipient_principal_id: arkret_identifiers::DidCoreId::new(message.recipient.clone())
-            .ok()?,
+        recipient_account_id: arkret_wire::AccountId::new(
+            arkret_identifiers::DidCoreId::new(message.recipient.clone()).ok()?,
+            state.service_core_id().clone(),
+        ),
         recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
         sent_at: message.created_at,
         expires_at,
@@ -951,6 +969,10 @@ mod tests {
             controller,
             ActorPrivateDeviceUpdate::AccountData {
                 sender: DeviceMessageSender::Device {
+                    sender_account_id: arkret_wire::AccountId::new(
+                        arkret_wire::DidCoreId::new(controller.to_owned()).unwrap(),
+                        state.service_core_id(),
+                    ),
                     sender_device_id: arkret_identifiers::DeviceId::new(origin_device.to_owned())
                         .unwrap(),
                 },
@@ -1074,8 +1096,7 @@ mod tests {
                 "service sender must parse without repair"
             );
             let envelope = &envelopes[0];
-            assert_eq!(envelope.sender_principal_id.as_str(), holder);
-            assert_eq!(envelope.recipient_principal_id.as_str(), holder);
+            assert_eq!(&envelope.recipient_account_id, &account_id);
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,

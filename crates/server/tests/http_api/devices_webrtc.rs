@@ -450,9 +450,15 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "subscribe response: {subscribe}"
     );
     assert_eq!(subscribe_messages[0]["kind"], "ak.key.verification.request");
-    assert_eq!(subscribe_messages[0]["sender_principal_id"], actor_core);
+    assert_eq!(
+        subscribe_messages[0]["sender_account_id"],
+        serde_json::json!({"principal_id": actor_core, "station_id": state.service_id()})
+    );
     assert_eq!(subscribe_messages[0]["sender_device_id"], new_device);
-    assert_eq!(subscribe_messages[0]["recipient_principal_id"], actor_core);
+    assert_eq!(
+        subscribe_messages[0]["recipient_account_id"],
+        serde_json::json!({"principal_id": actor_core, "station_id": state.service_id()})
+    );
     assert_eq!(
         subscribe_messages[0]["recipient_device_id"],
         existing_device

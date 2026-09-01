@@ -1764,7 +1764,6 @@ pub(crate) async fn project_test_authorized_device(
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({
-            "principal_id": actor_core,
             "device_id": device_id,
             "device_public_key_did": test_ed25519_multibase_public(signing_key),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",

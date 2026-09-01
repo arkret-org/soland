@@ -168,7 +168,13 @@ async fn authorize_account_device_pair(
         .map_err(|error| {
             AppError::param_invalid(format!("authorize_event payload invalid: {error}"))
         })?;
-    if authorize_payload.principal_id.as_str() != session.actor
+    if body
+        .authorize_event
+        .event
+        .actor_id
+        .signing_principal_id()
+        .as_str()
+        != session.actor
         || authorize_payload.device_id.as_str() != device_id
         || authorize_payload.device_public_key_did.as_str() != pair_pubkey.device_public_key
         || !matches!(

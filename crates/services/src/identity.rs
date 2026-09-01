@@ -167,7 +167,7 @@ pub struct ConsentGrantDot {
 pub struct ConsentCellRecord {
     pub cell_id: CellRef,
     pub holder_principal_id: DidCoreId,
-    pub peer_principal_id: DidCoreId,
+    pub peer: arkret_models_collaboration::account_lifecycle::ConsentPeer,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
@@ -188,6 +188,14 @@ pub struct MimiConsentCorrelation {
 }
 
 #[derive(Clone, Debug)]
+pub struct ContactRequestSlotState {
+    pub owner_id: arkret_wire::ActorId,
+    pub peer_id: arkret_wire::ActorId,
+    pub accepted_sequence: u64,
+    pub head_digest: Hash,
+}
+
+#[derive(Clone, Debug)]
 pub struct ContactRecord {
     pub requester_id: arkret_wire::ActorId,
     pub target_id: arkret_wire::ActorId,
@@ -197,6 +205,9 @@ pub struct ContactRecord {
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<EventId>,
+    /// Station-internal directional request-slot CAS heads. These are not
+    /// Contact-round continuity and never cross the wire by themselves.
+    pub request_slot_states: Vec<ContactRequestSlotState>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,
@@ -777,21 +788,16 @@ impl ConsentService {
     pub fn cells_for_pair(
         &self,
         holder_principal_id: impl AsRef<str>,
-        peer_principal_id: impl AsRef<str>,
+        peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
     ) -> Vec<ConsentCellRecord> {
-        let (Ok(holder_principal_id), Ok(peer_principal_id)) = (
-            DidCoreId::new(holder_principal_id.as_ref().to_owned()),
-            DidCoreId::new(peer_principal_id.as_ref().to_owned()),
-        ) else {
+        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
+        else {
             return Vec::new();
         };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| {
-                cell.holder_principal_id == holder_principal_id
-                    && cell.peer_principal_id == peer_principal_id
-            })
+            .filter(|cell| cell.holder_principal_id == holder_principal_id && &cell.peer == peer)
             .cloned()
             .collect()
     }
@@ -800,13 +806,11 @@ impl ConsentService {
     pub fn cells_for_intent(
         &self,
         holder_principal_id: impl AsRef<str>,
-        peer_principal_id: impl AsRef<str>,
+        peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
         consent_scope: &str,
     ) -> Vec<ConsentCellRecord> {
-        let (Ok(holder_principal_id), Ok(peer_principal_id)) = (
-            DidCoreId::new(holder_principal_id.as_ref().to_owned()),
-            DidCoreId::new(peer_principal_id.as_ref().to_owned()),
-        ) else {
+        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
+        else {
             return Vec::new();
         };
         self.runtime_cells
@@ -814,7 +818,7 @@ impl ConsentService {
             .values()
             .filter(|cell| {
                 cell.holder_principal_id == holder_principal_id
-                    && cell.peer_principal_id == peer_principal_id
+                    && &cell.peer == peer
                     && cell.consent_scope == consent_scope
             })
             .cloned()
@@ -1518,7 +1522,7 @@ pub struct AgentPairingService {
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyState {
     pub policy_id: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub version: u32,
     pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
@@ -1555,9 +1559,14 @@ pub enum PublishRecoveryPolicyResult {
 
 #[async_trait]
 pub trait RecoveryPolicyPort: Send + Sync {
-    async fn active_policy(&self, principal_id: &str)
-    -> ServiceResult<Option<RecoveryPolicyState>>;
-    async fn policy_history(&self, principal_id: &str) -> ServiceResult<Vec<RecoveryPolicyState>>;
+    async fn active_policy(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> ServiceResult<Option<RecoveryPolicyState>>;
+    async fn policy_history(
+        &self,
+        account_id: &arkret_wire::AccountId,
+    ) -> ServiceResult<Vec<RecoveryPolicyState>>;
     async fn insert_policy(&self, policy: RecoveryPolicyState) -> ServiceResult<()>;
 }
 
@@ -1573,16 +1582,16 @@ impl RecoveryPolicyService {
 
     pub async fn active_policy(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<RecoveryPolicyState>> {
-        self.policies.active_policy(principal_id).await
+        self.policies.active_policy(account_id).await
     }
 
     pub async fn policy_history(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Vec<RecoveryPolicyState>> {
-        self.policies.policy_history(principal_id).await
+        self.policies.policy_history(account_id).await
     }
 
     pub async fn publish_policy(
@@ -1590,10 +1599,7 @@ impl RecoveryPolicyService {
         command: PublishRecoveryPolicyCommand,
     ) -> ServiceResult<PublishRecoveryPolicyResult> {
         let policy = command.policy;
-        let existing = self
-            .policies
-            .active_policy(policy.principal_id.as_str())
-            .await?;
+        let existing = self.policies.active_policy(&policy.account_id).await?;
         if let Some(existing) = existing {
             if policy.version <= existing.version {
                 return Ok(PublishRecoveryPolicyResult::VersionNotMonotonic {
@@ -2096,7 +2102,7 @@ impl KeyBackupService {
     }
 
     /// Issue, or re-issue verbatim, the delete challenge for one
-    /// `(principal_id, backup_id, request_id)` (`key-management.md` §7.8.1).
+    /// `(account_id, backup_id, request_id)` (`key-management.md` §7.8.1).
     pub async fn issue_delete_challenge(
         &self,
         record: soland_storage::KeyBackupDeleteChallengeRecord,
@@ -3648,11 +3654,11 @@ mod tests {
     impl RecoveryPolicyPort for CurrentRecoveryPolicy {
         async fn active_policy(
             &self,
-            principal_id: &str,
+            account_id: &arkret_wire::AccountId,
         ) -> ServiceResult<Option<RecoveryPolicyState>> {
             Ok(Some(RecoveryPolicyState {
                 policy_id: "ak:policy:current".to_owned(),
-                principal_id: arkret_identifiers::DidCoreId::new(principal_id).unwrap(),
+                account_id: account_id.clone(),
                 version: 2,
                 acceptance_basis: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
@@ -3668,7 +3674,7 @@ mod tests {
 
         async fn policy_history(
             &self,
-            _principal_id: &str,
+            _account_id: &arkret_wire::AccountId,
         ) -> ServiceResult<Vec<RecoveryPolicyState>> {
             Ok(Vec::new())
         }

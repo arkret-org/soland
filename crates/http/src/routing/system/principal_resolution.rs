@@ -72,8 +72,7 @@ pub(crate) async fn current_public_principal_resolution(
     let projection_attestation =
         arkret_signatures::service_resolution::sign_principal_resolution_projection_attestation(
             PrincipalResolutionProjectionAttestationCore {
-                principal_id: authority.principal_id.clone(),
-                station_id: authority.station_id.clone(),
+                account_id: authority.clone(),
                 resolution_projection: record.projection.clone(),
                 method_history_evidence_digest,
                 issued_at,
@@ -87,8 +86,7 @@ pub(crate) async fn current_public_principal_resolution(
             AppError::internal(format!("principal resolution attestation failed: {error}"))
         })?;
     let evidence = PublicPrincipalResolution {
-        principal_id: authority.principal_id.clone(),
-        station_id: authority.station_id.clone(),
+        account_id: authority.clone(),
         resolution_projection: record.projection,
         method_history_evidence,
         projection_attestation,

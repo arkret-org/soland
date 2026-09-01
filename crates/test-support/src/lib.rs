@@ -253,7 +253,7 @@ pub fn app_state_with_identity(
         }
     };
     let projections = ProjectionService::new(
-        control_event_store,
+        control_event_store.clone(),
         seal_store.clone(),
         cell_store.clone(),
         cell_registry,
@@ -290,6 +290,7 @@ pub fn app_state_with_identity(
             persistence,
             projection: Some(projection),
             realms: Some(realms),
+            control_event_store: Some(control_event_store),
             seal_store: Some(seal_store),
             cell_store: Some(cell_store),
         },
@@ -308,6 +309,12 @@ pub trait AppStateTestExt {
     ) -> StoreResult<()>;
     fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
     fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
+    fn test_put_pending_control_event_with_ack(
+        &self,
+        event: &arkret_wire::Event,
+        ack: &arkret_wire::ControlProposalAck,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()>;
 
     /// Append sealed cell effects the way `apply_seal` commits them.
     ///
@@ -332,6 +339,7 @@ pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceSt
             persistence,
             projection: None,
             realms: None,
+            control_event_store: None,
             seal_store: None,
             cell_store: None,
         },
@@ -394,6 +402,24 @@ impl AppStateTestExt for AppState {
             .list_leaves(realm_id)
     }
 
+    fn test_put_pending_control_event_with_ack(
+        &self,
+        event: &arkret_wire::Event,
+        ack: &arkret_wire::ControlProposalAck,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
+        state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.control_event_store.clone())
+            .expect("test Control Event store is unavailable for this AppState")
+            .put_pending_with_ingress(
+                event,
+                &arkret_wire::ControlProposalIngress::AckRequired(ack.clone()),
+                digest_suite,
+            )
+    }
+
     fn test_append_sealed_effects(
         &self,
         realm_id: &RealmId,
@@ -417,6 +443,7 @@ struct StateTestResources {
     persistence: Arc<dyn PersistenceStore>,
     projection: Option<&'static Arc<Mutex<ProjectionState>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
+    control_event_store: Option<Arc<dyn ControlEventStore>>,
     seal_store: Option<Arc<dyn SealStore>>,
     cell_store: Option<Arc<dyn CellStore>>,
 }

@@ -19,9 +19,9 @@ use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
 use arkret_models_discovery::DirectoryIntent;
-use arkret_models_identity::handle::{Handle, HandleBindingState};
+use arkret_models_identity::handle::Handle;
 use arkret_models_identity::proof::DetachedPayloadProof;
-use arkret_models_identity::{HandleClaim, ServiceResolutionCarrier};
+use arkret_models_identity::{HandleClaim, HandleClaimStatus, ServiceResolutionCarrier};
 use arkret_wire::{
     AccountDataKey, InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface,
     UnknownInviteAction,
@@ -339,8 +339,8 @@ async fn receive_private_invite_delivery(
 ) -> Result<InviteDeliveryOutcome, AppError> {
     validate_invite_delivery_consistency(body, delivery, state)?;
 
-    // The inviter_id is the actor that signed the durable `ak.invite.create`
-    // event; it is the `peer` we test `denied_subject_ids` and the
+    // The inviter is the actor that signed the durable `ak.invite.create`
+    // event; it is the exact peer we test `denied_actor_ids` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
     let inviter_id = delivery
         .invite_event
@@ -348,8 +348,14 @@ async fn receive_private_invite_delivery(
         .signing_principal_id()
         .as_str()
         .to_owned();
+    let inviter_actor_id = &delivery.invite_event.actor_id;
     let subject_id = delivery.invite_address.account_id.principal_id.clone();
     let subject = subject_id.as_str().to_owned();
+    let same_station = delivery
+        .invite_event
+        .actor_id
+        .as_account_id()
+        .is_some_and(|inviter| inviter.station_id == delivery.invite_address.account_id.station_id);
 
     // Spec invite-addressing.md §5..§8 — resolve the subject's private
     // receive policy, derive the effective trust tier (downgrading
@@ -361,10 +367,12 @@ async fn receive_private_invite_delivery(
         state,
         &policy,
         &delivery.introduction_evidence,
+        inviter_actor_id,
         &inviter_id,
         &subject,
         delivery.invite_address.account_id.station_id.as_str(),
         source_id,
+        same_station,
     );
 
     if decision.action != InviteReceiveAction::Notify {
@@ -451,10 +459,15 @@ async fn receive_private_invite_delivery(
     // material itself: the invite token is transport material, never an Invite
     // read-model field (governance-objects.md §5.3), so it travels on the
     // actor-private account-data carrier instead.
+    let inviter_account_id = delivery
+        .invite_event
+        .actor_id
+        .as_account_id()
+        .ok_or_else(|| super::events::peer::schema_violation("invite author must be an account"))?;
     let credential_delivered = deliver_invite_credential(
         state,
         &delivery.invite_address.account_id,
-        &inviter_id,
+        inviter_account_id,
         body,
         &realm_id,
     )
@@ -851,7 +864,7 @@ async fn persist_private_invite_projection(
 async fn deliver_invite_credential(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
-    inviter_id: &str,
+    inviter_account_id: &arkret_wire::AccountId,
     body: &Value,
     realm_id: &str,
 ) -> Result<bool, AppError> {
@@ -927,8 +940,7 @@ async fn deliver_invite_credential(
         invite_id,
         realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("invite realm id is invalid: {error}")))?,
-        inviter_id: DidCoreId::new(inviter_id.to_owned())
-            .map_err(|error| AppError::internal(format!("inviter_id id is invalid: {error}")))?,
+        inviter_account_id: inviter_account_id.clone(),
         invite_token,
         received_at,
         expires_at,
@@ -1384,7 +1396,7 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Some(requester_id) = requester_id else {
         return false;
     };
-    let handle = handle_claim.handle.clone();
+    let handle = handle_claim.claim.handle.clone();
     let Ok(subject_id) = DidCoreId::new(subject.to_owned()) else {
         return false;
     };
@@ -1395,6 +1407,13 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
         state,
         &arkret_wire::AccountId::new(subject_id, station_id),
     );
+    let Ok(requester_station_id) = DidCoreId::new(source_id.to_owned()) else {
+        return false;
+    };
+    let requester_actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        requester_id.clone(),
+        requester_station_id,
+    ));
     let decision = match intent {
         Some(DirectoryIntent::ContactRequest) => {
             let evidence = ContactIntroductionEvidence::HandleClaim {
@@ -1424,10 +1443,12 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
                 state,
                 &policy,
                 &evidence,
+                &requester_actor_id,
                 requester_id.as_str(),
                 subject,
                 recipient_id,
                 source_id,
+                false,
             )
         }
         _ => return true,
@@ -1439,24 +1460,30 @@ fn evaluate_invite_receive(
     state: &AppState,
     policy: &InviteReceivePolicy,
     evidence: &IntroductionEvidence,
+    inviter_actor_id: &arkret_wire::ActorId,
     inviter_id: &str,
     subject: &str,
     recipient_id: &str,
     source_id: &str,
+    same_station: bool,
 ) -> ReceiveDecision {
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
 
-    // §5 — `denied_subject_ids` hit: MUST drop and force opaque disclosure so
+    // §5 — exact `denied_actor_ids` hit: MUST drop and force opaque disclosure so
     // the blocklist cannot leak through the response side channel.
     if policy
-        .denied_subject_ids
+        .denied_actor_ids
         .iter()
-        .any(|did| did.as_str() == inviter_id)
+        .any(|actor| actor == inviter_actor_id)
     {
         return ReceiveDecision {
             action: InviteReceiveAction::Drop,
-            effective_kind: evidence.kind(),
+            effective_kind: if same_station && evidence.kind() == "explicit_address" {
+                "same_station"
+            } else {
+                evidence.kind()
+            },
             trust_tier: TrustTier::Low,
             disclosed_outcome: None,
         };
@@ -1472,7 +1499,7 @@ fn evaluate_invite_receive(
         return opaque_drop(evidence.kind());
     }
 
-    let effective_kind: &'static str = match evidence {
+    let verified_kind: &'static str = match evidence {
         IntroductionEvidence::LocatorRef { principal_locator } => {
             if verified_locator_for_recipient(state, principal_locator, subject, recipient_id, now)
             {
@@ -1531,7 +1558,12 @@ fn evaluate_invite_receive(
                 "explicit_address"
             }
         }
-        other => other.kind(),
+        IntroductionEvidence::ExplicitAddress => "explicit_address",
+    };
+    let effective_kind = if verified_kind == "explicit_address" && same_station {
+        "same_station"
+    } else {
+        verified_kind
     };
 
     if kind_forbidden_by_constraints(constraints, effective_kind)
@@ -1698,11 +1730,18 @@ pub(crate) fn evaluate_contact_receive(
         ContactIntroductionEvidence::ExplicitAddress => "explicit_address",
     };
 
-    if policy
-        .denied_subject_ids
-        .iter()
-        .any(|did| did.as_str() == requester_id)
-        || principal_service_blocked(policy, constraints, source_id)
+    let requester_actor = DidCoreId::new(requester_id.to_owned())
+        .ok()
+        .zip(DidCoreId::new(source_id.to_owned()).ok())
+        .map(|(principal_id, station_id)| {
+            arkret_wire::ActorId::account(arkret_wire::AccountId::new(principal_id, station_id))
+        });
+    if requester_actor.as_ref().is_some_and(|requester| {
+        policy
+            .denied_actor_ids
+            .iter()
+            .any(|actor| actor == requester)
+    }) || principal_service_blocked(policy, constraints, source_id)
         || !principal_service_trusted(policy, constraints, source_id)
         || !subject_did_method_accepted(constraints, subject)
         || kind_forbidden_by_constraints(constraints, effective_kind)
@@ -1897,11 +1936,11 @@ fn principal_service_blocked(
     source_id: &str,
 ) -> bool {
     policy
-        .denied_principal_ids
+        .denied_source_ids
         .iter()
         .any(|did| did.as_str() == source_id)
         || constraints
-            .and_then(|constraints| constraints.denied_principal_ids.as_ref())
+            .and_then(|constraints| constraints.denied_source_ids.as_ref())
             .is_some_and(|blocked| did_in_list(source_id, blocked))
 }
 
@@ -1910,13 +1949,12 @@ fn principal_service_trusted(
     constraints: Option<&ReceivePolicyConstraints>,
     source_id: &str,
 ) -> bool {
-    if !policy.trusted_principal_ids.is_empty()
-        && !did_in_list(source_id, &policy.trusted_principal_ids)
+    if !policy.trusted_source_ids.is_empty() && !did_in_list(source_id, &policy.trusted_source_ids)
     {
         return false;
     }
     constraints
-        .and_then(|constraints| constraints.trusted_principal_ids.as_ref())
+        .and_then(|constraints| constraints.trusted_source_ids.as_ref())
         .is_none_or(|trusted| did_in_list(source_id, trusted))
 }
 
@@ -1957,24 +1995,26 @@ fn handle_claim_evidence_valid(
     if handle_claim.validate().is_err() {
         return false;
     }
-    if &handle_claim.handle != handle {
+    if &handle_claim.claim.handle != handle {
         return false;
     }
-    if handle_claim.subject_account_id.principal_id.as_str() != subject
-        || handle_claim.subject_account_id.station_id.as_str() != recipient_id
+    if handle_claim.claim.subject_account_id.principal_id.as_str() != subject
+        || handle_claim.claim.subject_account_id.station_id.as_str() != recipient_id
     {
         return false;
     }
-    if handle_claim.binding_state != HandleBindingState::Verified {
+    if handle_claim.status != HandleClaimStatus::Verified
+        || now < handle_claim.as_of
+        || now >= handle_claim.fresh_until
+        || resolved_by.is_some_and(|resolver| resolver != &handle_claim.verifier_id)
+    {
         return false;
     }
     if handle_claim
+        .claim
         .expires_at
         .is_none_or(|expires_at| expires_at <= now)
     {
-        return false;
-    }
-    if handle_claim.proofs.is_empty() {
         return false;
     }
     if !handle_domain_allowed(policy, constraints, handle.domain()) {
@@ -2038,7 +2078,9 @@ fn handle_claim_matches_did_list(handle_claim: &HandleClaim, trusted: &[DidCoreI
     if trusted.is_empty() {
         return false;
     }
-    trusted.iter().any(|did| did == &handle_claim.issuer_id)
+    trusted
+        .iter()
+        .any(|did| did == &handle_claim.claim.issuer_id)
 }
 
 fn resolved_by_allowed(
@@ -2317,8 +2359,14 @@ mod invite_locator_security_tests {
                 );
             assert_eq!(envelopes.len(), 1, "queued service envelope is readable");
             let envelope = &envelopes[0];
-            assert_eq!(envelope.sender_principal_id.as_str(), PRODUCTION_HOLDER);
-            assert_eq!(envelope.recipient_principal_id.as_str(), PRODUCTION_HOLDER);
+            assert_eq!(
+                envelope.recipient_account_id.principal_id.as_str(),
+                PRODUCTION_HOLDER
+            );
+            assert_eq!(
+                envelope.recipient_account_id.station_id.as_str(),
+                state.service_id()
+            );
             assert_eq!(envelope.recipient_device_id.as_str(), device_id);
             assert!(matches!(
                 &envelope.sender,
@@ -2440,7 +2488,10 @@ mod invite_locator_security_tests {
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
             )
             .unwrap(),
-            inviter_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            inviter_account_id: arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+            ),
             invite_token: "opaque-token".to_owned(),
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
@@ -2475,7 +2526,10 @@ mod invite_locator_security_tests {
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W".to_owned(),
             )
             .unwrap(),
-            inviter_id: DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+            inviter_account_id: arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap(),
+                DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap(),
+            ),
             invite_token: invite_token.to_owned(),
             received_at: at,
             expires_at: chrono::DateTime::parse_from_rfc3339(expires_at)
@@ -2534,12 +2588,16 @@ mod invite_locator_security_tests {
         let state = production_holder_state().await;
         let delivery = production_invite_delivery(&state);
         let body = serde_json::to_value(&delivery).unwrap();
+        let inviter_account_id = arkret_wire::AccountId::new(
+            DidCoreId::new(PRODUCTION_INVITER.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
 
         assert!(
             deliver_invite_credential(
                 &state,
                 &delivery.invite_address.account_id,
-                PRODUCTION_INVITER,
+                &inviter_account_id,
                 &body,
                 PRODUCTION_REALM,
             )
@@ -2579,7 +2637,7 @@ mod invite_locator_security_tests {
             deliver_invite_credential(
                 &state,
                 &foreign,
-                PRODUCTION_INVITER,
+                &inviter_account_id,
                 &body,
                 PRODUCTION_REALM
             )
@@ -2720,11 +2778,15 @@ mod invite_locator_security_tests {
             DidCoreId::new("ak:did_core:web:carol.example").unwrap(),
             state.service_core_id().clone(),
         );
+        let inviter_account_id = arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            state.service_core_id().clone(),
+        );
         assert!(
             !deliver_invite_credential(
                 &state,
                 &account_id,
-                "ak:did_core:web:alice.example",
+                &inviter_account_id,
                 &body,
                 "ak:realm:AYkVIjHoT1TUr0UDS-J-SsVmyIMnmNBsp4GAAxZiFj2W",
             )

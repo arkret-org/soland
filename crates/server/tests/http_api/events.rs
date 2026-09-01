@@ -52,9 +52,9 @@ fn projected_cell_targets(envelope: &Value) -> std::collections::BTreeSet<String
 
 /// A presented Agent SessionGrant: the bearer JWT plus the holder (DPoP) key
 /// the introspected grant's `cnf_jkt` is bound to.
-struct AgentGrantPresentation {
-    grant_jwt: String,
-    holder_key: SigningKey,
+pub(super) struct AgentGrantPresentation {
+    pub(super) grant_jwt: String,
+    pub(super) holder_key: SigningKey,
 }
 
 /// Build the `Authorization`/`DPoP` header pair for one request. `htu` is the
@@ -121,7 +121,7 @@ async fn read_introspection_request(stream: &mut tokio::net::TcpStream) -> Vec<u
 /// Provision a Agent through the real ceremony, activate its runtime
 /// key through the storage port, and stand up a session-grant introspection
 /// mock that vouches for a grant scoped to exactly `granted_scopes`.
-async fn seed_agent_grant_session(
+pub(super) async fn seed_agent_grant_session(
     slug: &str,
     granted_scopes: &[&str],
 ) -> (AppState, AgentGrantPresentation) {
@@ -131,11 +131,14 @@ async fn seed_agent_grant_session(
         .await
         .expect("introspection mock binds");
     let mut config = test_config();
+    let authority_address = listener.local_addr().expect("mock address");
     config.session_grant_introspection_url = Some(format!(
         "http://{}/_arkret/admin/session-grants/introspect",
-        listener.local_addr().expect("mock address")
+        authority_address
     ));
     config.session_grant_introspection_bearer = Some(format!("introspection-bearer-{slug}"));
+    config.account_authority_url = Some(format!("http://{authority_address}"));
+    config.account_authority_id = Some(soland_test_support::fixture_station_id().to_string());
     let state = soland_test_support::app_state(config);
 
     let controller = "did:web:alice.example";
@@ -293,10 +296,6 @@ async fn seed_agent_grant_session(
 
     // 2/3 — the controller's signing-key binding, with a real detached JWS over
     // the exact transcript the pairing endpoint would verify.
-    let authorize_event_id = arkret_identifiers::EventId::from_digest(
-        arkret_canonical::DigestSuite::Sha256,
-        Sha256::digest(format!("agent-key-authorize-{slug}").as_bytes()).into(),
-    );
     let controller_core = fixture_actor_core_id(controller);
     let public_key = arkret_models_identity::agent_signer_evidence::AgentSigningPublicKey {
         kty: arkret_wire::NonEmptyString::new("OKP").unwrap(),
@@ -308,46 +307,20 @@ async fn seed_agent_grant_session(
     };
     let public_key_digest =
         arkret_signatures::agent_evidence::agent_signing_public_key_digest(&public_key).unwrap();
-    let mut signing_key_binding =
-        arkret_models_identity::agent_signer_evidence::AgentSigningKeyBinding {
-            core: arkret_models_identity::agent_signer_evidence::AgentSigningKeyBindingCore {
-                schema: arkret_wire::NonEmptyString::new(
-                    arkret_wire::SchemaId::AGENT_SIGNING_KEY_BINDING_V1,
-                )
-                .unwrap(),
-                agent_id: outcome.agent_id.clone(),
-                agent_key_id: arkret_wire::NonEmptyString::new("agent-runtime-key").unwrap(),
-                verification_method: verification_method.clone(),
-                public_key,
-                public_key_digest: public_key_digest.clone(),
-                issued_at: now,
-                expires_at: None,
-                controller_id: controller_core.clone(),
-            },
-            agent_key_authorize_event_id: authorize_event_id.clone(),
-            controller_proof: arkret_models_identity::agent_signer_evidence::AgentControllerProof {
-                kind: arkret_wire::NonEmptyString::new("detached_jws").unwrap(),
-                verification_method: arkret_wire::DidUrl::new(format!(
-                    "{controller}#{}",
-                    super::agents::CONTROLLER_DEVICE_ID
-                ))
-                .unwrap(),
-                jws: arkret_wire::NonEmptyString::new("pending").unwrap(),
-            },
-        };
-    let controller_proof_bytes =
-        arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(
-            &signing_key_binding,
-        )
-        .unwrap();
-    signing_key_binding.controller_proof.jws = arkret_wire::NonEmptyString::new(
-        arkret_signatures::jws::sign_jws_ed25519(
-            &controller_proof_bytes,
-            &SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
-        )
-        .expect("controller proof JWS signs"),
+    let agent_key_id = arkret_wire::NonEmptyString::new("agent-runtime-key").unwrap();
+    let binding_core = arkret_signatures::agent_evidence::prepare_agent_signing_key_binding_core(
+        outcome.agent_id.clone(),
+        agent_key_id.clone(),
+        verification_method.clone(),
+        &request.body.public_key,
+        now,
+        None,
+        controller_core.clone(),
     )
-    .unwrap();
+    .expect("signing key binding core builds");
+    let signing_key_binding_digest =
+        arkret_signatures::agent_evidence::agent_signing_key_binding_core_digest(&binding_core)
+            .expect("signing key binding core digest");
     let paired_request_digest =
         arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
             arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY_V1,
@@ -361,6 +334,160 @@ async fn seed_agent_grant_session(
             &request.body.proof_of_possession,
         )
         .unwrap();
+    let authorize_payload =
+        arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload {
+            agent_id: outcome.agent_id.clone(),
+            key_id: agent_key_id,
+            verification_method: verification_method.clone(),
+            public_key_digest: public_key_digest.clone(),
+            signing_key_binding_digest,
+            accountable_principal_id: controller_core.clone(),
+            agent_key_scope: serde_json::from_value(serde_json::json!({
+                "actions": [
+                    "ak.self.events.stream.subscribe.v1",
+                    "ak.self.events.read.scan.v1",
+                    "ak.self.events.command.submit.v1"
+                ],
+                "resources": [
+                    {"kind": "operation", "operation": "ak.self.events.stream.subscribe.v1"},
+                    {"kind": "operation", "operation": "ak.self.events.read.scan.v1"},
+                    {"kind": "operation", "operation": "ak.self.events.command.submit.v1"}
+                ],
+                "constraints": []
+            }))
+            .unwrap(),
+            audience: vec![state.service_id().clone()],
+            issued_at: now,
+            expires_at: None,
+            approval_evidence:
+                arkret_models_collaboration::events_payloads::agent::AgentKeyApprovalEvidence {
+                    kind: arkret_models_collaboration::events_payloads::agent::AgentKeyApprovalEvidenceKind::PairingRequest,
+                    evidence_ref: None,
+                    request_canonical_digest: Some(
+                        arkret_identifiers::Hash::new(paired_request_digest.as_str().to_owned())
+                            .unwrap(),
+                    ),
+                    pairing_request_id: Some(outcome.pairing_request_id.clone()),
+                    approved_by: Some(controller_core.clone()),
+                },
+            supersedes: Vec::new(),
+            revocation_check_ref: None,
+            runtime_attestation: None,
+        };
+    let agent_pcr_realm =
+        arkret_wire::RealmId::new(record.principal_control_realm_id.clone()).unwrap();
+    let genesis_record = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(agent_pcr_realm.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|event| event.kind == arkret_wire::EventKind::RealmCreate.as_str())
+        .expect("accepted Agent PCR genesis Event");
+    let genesis_event = serde_json::from_value::<arkret_wire::Event>(genesis_record.envelope)
+        .expect("typed Agent PCR genesis Event");
+    let genesis_seal_id = state
+        .test_seal_leaves(&agent_pcr_realm)
+        .unwrap()
+        .into_iter()
+        .next()
+        .expect("accepted Agent PCR genesis Seal");
+    let genesis_seal = state
+        .test_seal(&genesis_seal_id)
+        .unwrap()
+        .expect("stored Agent PCR genesis Seal");
+    let controller_verification_method = arkret_wire::DidUrl::new(format!(
+        "{controller}#{}",
+        super::agents::CONTROLLER_DEVICE_ID
+    ))
+    .unwrap();
+    let controller_signer = arkret_signatures::Ed25519PayloadSigner::new(
+        SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
+        arkret_wire::Did::new(controller.to_owned()).unwrap(),
+        controller_verification_method.clone(),
+    );
+    let timestamp_hex = format!("{:012x}", now.timestamp_millis());
+    let mut authorize_event = arkret_wire::test_support::raw_event_at(
+        arkret_wire::EventKind::AgentKeyAuthorize.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: agent_pcr_realm.clone(),
+        },
+        outcome.agent_id.clone(),
+        soland_test_support::fixture_station_id(),
+        1,
+        arkret_wire::Hlc::new(format!("{timestamp_hex}-0007-a13f9c2e")).unwrap(),
+        serde_json::to_value(&authorize_payload).unwrap(),
+        now,
+    )
+    .unwrap();
+    authorize_event.prev_refs = vec![genesis_event.event_id.clone()];
+    authorize_event.executed_by = Some(arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        controller_core.clone(),
+        state.service_core_id(),
+    )));
+    authorize_event.authorization_ref = Some(record.controller_authorization_ref.clone().into());
+    authorize_event.seal_basis = Some(genesis_seal.seal_basis());
+    authorize_event
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    let mut authorize_event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        authorize_event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("authorize Event finalizes");
+    arkret_signatures::sign_event(
+        &mut authorize_event,
+        &controller_signer,
+        &controller_verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    let authorize_event = authorize_event.into_event();
+    let agent_pcr_authority = arkret_bootstrap::AgentPcrGenesisAuthority::from_accepted_create(
+        &genesis_event,
+        &super::agents::genesis_projector,
+    )
+    .unwrap();
+    let proposal_member = arkret_wire::ControlProposalAuthorityAck::issue_with_signer(
+        agent_pcr_realm.clone(),
+        arkret_wire::Hash::new(
+            authorize_event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap(),
+        agent_pcr_authority.authority_set_ref().clone(),
+        now,
+        arkret_wire::ControlProposalDecisionPolicy::default(),
+        &controller_signer,
+    )
+    .unwrap();
+    let proposal_ack =
+        arkret_wire::ControlProposalAck::from_authority_acks_protocol_bounds(vec![proposal_member])
+            .unwrap();
+    let authorize_event_id = authorize_event.event_id.clone();
+    let binding_to_sign = arkret_signatures::agent_evidence::materialize_agent_signing_key_binding(
+        binding_core,
+        authorize_event_id.clone(),
+        controller_verification_method,
+    )
+    .expect("signing key binding materializes");
+    let controller_proof_bytes =
+        arkret_signatures::agent_evidence::agent_signing_key_binding_to_sign_bytes(
+            &binding_to_sign,
+        )
+        .unwrap();
+    let controller_jws = arkret_signatures::jws::sign_jws_ed25519(
+        &controller_proof_bytes,
+        &SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
+    )
+    .expect("controller proof JWS signs");
+    let signing_key_binding = arkret_signatures::agent_evidence::finish_agent_signing_key_binding(
+        binding_to_sign,
+        &controller_jws,
+    )
+    .expect("signing key binding finishes");
     let intent = soland_storage::AgentPairingCommitIntent {
         agent_id: outcome.agent_id.to_string(),
         approval_request_id: approval.approval_request_id.clone(),
@@ -404,6 +531,111 @@ async fn seed_agent_grant_session(
             .unwrap(),
         "runtime activation must match the pending intent"
     );
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &authorize_event,
+            Some(record.principal_control_realm_id.as_str()),
+            now,
+        ))
+        .await
+        .unwrap();
+    state
+        .test_put_pending_control_event_with_ack(
+            &authorize_event,
+            &proposal_ack,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+
+    // Freeze the accepted authorization into the successor Agent-PCR Seal.
+    // Current signer evidence is intentionally unavailable until both the
+    // key authorization and lifecycle cells have portable Seal witnesses.
+    let mut pcr_events = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(agent_pcr_realm.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
+        .collect::<Vec<_>>();
+    pcr_events.sort_by(|left, right| {
+        left.actor_seq
+            .cmp(&right.actor_seq)
+            .then_with(|| left.event_id.cmp(&right.event_id))
+    });
+    let predecessor_covered = genesis_seal
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let target = pcr_events
+        .iter()
+        .map(|event| {
+            arkret_wire::Hash::new(
+                event
+                    .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                    .unwrap(),
+            )
+            .unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let availability_request =
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueRequest {
+            realm_id: agent_pcr_realm.clone(),
+            predecessor_refs: vec![genesis_seal.id.clone()],
+            event_digests: target.difference(&predecessor_covered).cloned().collect(),
+        };
+    let app = app_from_state(state.clone());
+    let mut availability_response =
+        TestClient::post("http://server/_arkret/self/seals/availability-receipts")
+            .add_header("authorization", format!("Bearer {controller_token}"), true)
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&availability_request).unwrap())
+            .send(&app)
+            .await;
+    let availability_status = availability_response.status_code;
+    let availability_body = availability_response.take_string().await.unwrap();
+    assert_eq!(
+        availability_status,
+        Some(StatusCode::OK),
+        "availability receipt issuance failed: {availability_body}"
+    );
+    let availability = serde_json::from_str::<
+        arkret_models_collaboration::governance_dependencies::SealAvailabilityReceiptIssueOutcome,
+    >(&availability_body)
+    .unwrap();
+    let successor_seal = arkret_bootstrap::build_agent_pcr_event_seal(
+        &pcr_events,
+        Some(&genesis_seal),
+        Some(&availability),
+        arkret_wire::Hlc::new(format!("{timestamp_hex}-0009-a13f9c2e")).unwrap(),
+        &controller_signer,
+        &super::agents::genesis_projector,
+    )
+    .expect("successor Agent PCR Seal builds");
+    let mut seal_response = TestClient::post("http://server/_arkret/self/seals")
+        .add_header("authorization", format!("Bearer {controller_token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(arkret_canonical::canonical_json_bytes(&successor_seal).unwrap())
+        .send(&app)
+        .await;
+    let seal_status = seal_response.status_code;
+    let seal_body = seal_response.take_string().await.unwrap_or_default();
+    assert_eq!(seal_status, Some(StatusCode::OK), "{seal_body}");
+
+    state
+        .test_projection()
+        .lock()
+        .agent_authorized_keys
+        .entry(outcome.agent_id.to_string())
+        .or_default()
+        .insert(
+            "agent-runtime-key".to_owned(),
+            authorize_event_id.to_string(),
+        );
     assert_eq!(
         state
             .test_persistence()
@@ -478,14 +710,81 @@ async fn seed_agent_grant_session(
     >(outcome_json.clone())
     .expect("mock outcome matches the SDK introspection DTO");
     let response_body = serde_json::to_vec(&outcome_json).expect("serialize introspection");
+    let authority_id = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
+    let (_, authority_method) = state
+        .current_service_receipt_binding()
+        .await
+        .expect("fixture service receipt binding");
+    let authority_signing_key = state.notary_signing_key();
     tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 return;
             };
             let response_body = response_body.clone();
+            let authority_id = authority_id.clone();
+            let authority_method = authority_method.clone();
+            let authority_signing_key = authority_signing_key.clone();
             tokio::spawn(async move {
-                let _ = read_introspection_request(&mut stream).await;
+                let request = read_introspection_request(&mut stream).await;
+                let response_body = if request
+                    .starts_with(b"POST /_arkret/gate/account/controller-gate-attestations ")
+                {
+                    let body_start = request
+                        .windows(4)
+                        .position(|part| part == b"\r\n\r\n")
+                        .map(|index| index + 4)
+                        .expect("controller gate request headers");
+                    let request_body = serde_json::from_slice::<
+                        arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueRequestBody,
+                    >(&request[body_start..])
+                    .expect("typed controller gate request");
+                    let issued_at =
+                        arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+                    let basis = arkret_models_identity::agent_signer_evidence::ControllerAccountGateBasis::AccountBindingDefault {
+                        binding_version: 1,
+                        binding_frontier_digest: arkret_wire::Hash::new(
+                            arkret_canonical::sha256_digest(b"fixture account binding frontier"),
+                        )
+                        .unwrap(),
+                    };
+                    let mut gate = arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestation {
+                        schema: arkret_wire::NonEmptyString::new(
+                            arkret_wire::SchemaId::CONTROLLER_ACCOUNT_GATE_ATTESTATION_V1,
+                        )
+                        .unwrap(),
+                        principal_id: request_body.principal_id,
+                        eligibility: arkret_models_identity::agent_signer_evidence::ControllerAccountEligibility::Active,
+                        status: arkret_models_identity::agent_signer_evidence::ControllerAccountStatus::Active,
+                        basis,
+                        basis_digest: arkret_wire::Hash::new(
+                            arkret_canonical::sha256_digest(b"fixture account gate basis"),
+                        )
+                        .unwrap(),
+                        authority_id,
+                        verification_method: authority_method,
+                        issued_at,
+                        expires_at: issued_at + chrono::Duration::minutes(2),
+                        proof: arkret_models_identity::agent_signer_evidence::AgentDetachedJws {
+                            kind: arkret_wire::NonEmptyString::new("detached_jws").unwrap(),
+                            jws: arkret_wire::NonEmptyString::new("pending").unwrap(),
+                        },
+                    };
+                    arkret_signatures::agent_evidence::sign_controller_account_gate_attestation(
+                        &mut gate,
+                        authority_signing_key.as_ref(),
+                    )
+                    .expect("controller gate attestation signs");
+                    serde_json::to_vec(
+                        &arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueOutcome {
+                            request_id: request_body.request_id,
+                            controller_account_gate_attestation: gate,
+                        },
+                    )
+                    .expect("serialize controller gate outcome")
+                } else {
+                    response_body
+                };
                 let headers = format!(
                     "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
                     response_body.len()

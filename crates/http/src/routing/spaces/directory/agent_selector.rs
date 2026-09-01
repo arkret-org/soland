@@ -1,5 +1,6 @@
 use arkret_identifiers::DidCoreId;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_identity::HandleBindingState;
 use arkret_wire::SchemaId;
 
 use super::*;

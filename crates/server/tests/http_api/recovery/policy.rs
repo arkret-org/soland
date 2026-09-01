@@ -81,12 +81,10 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     seed_bearer_session(&state, token, &principal_id).await;
     let policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
+    let expected_account_id = fixture_account_id(&state, &principal_id);
 
     let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
-    assert_eq!(
-        body["principal_id"],
-        fixture_actor_core_id(&principal_id).as_str()
-    );
+    assert_eq!(body["account_id"], serde_json::json!(expected_account_id));
     assert_eq!(body["version"], 1);
 }
 
@@ -146,13 +144,11 @@ async fn recovery_policy_accepts_genesis_session_device_signature_body() {
         1,
         None,
     );
+    let expected_account_id = fixture_account_id(&state, &principal_id);
 
     let body =
         post_recovery_policy(state, token, &policy, &device_signing, StatusCode::CREATED).await;
-    assert_eq!(
-        body["principal_id"],
-        fixture_actor_core_id(&principal_id).as_str()
-    );
+    assert_eq!(body["account_id"], serde_json::json!(expected_account_id));
     assert_eq!(body["version"], 1);
 }
 
@@ -257,8 +253,8 @@ async fn recovery_policy_get_returns_active_and_history_body() {
     .await;
     assert_eq!(active["active_policy"]["version"], 2);
     assert_eq!(
-        active["active_policy"]["principal_id"],
-        fixture_actor_core_id(&principal_id).as_str()
+        active["active_policy"]["account_id"],
+        serde_json::json!(fixture_account_id(&state, &principal_id))
     );
 
     let history = get_recovery(

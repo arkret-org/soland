@@ -7,7 +7,7 @@ use super::{PersistenceResult, Utc, Value, async_trait};
 /// `challenge` holds the whole serialized challenge so the wire shape keeps one
 /// definition (the SDK type) instead of a column per member; the columns beside
 /// it are exactly the ones the two lookups need — by `challenge_id` to verify a
-/// DELETE, and by `(principal_id, backup_id, request_id)` to re-issue the same
+/// DELETE, and by `(account_id, backup_id, request_id)` to re-issue the same
 /// challenge while it is still valid.
 ///
 /// `consumed_at` is what makes the challenge single-use. It is set in the same
@@ -15,7 +15,7 @@ use super::{PersistenceResult, Utc, Value, async_trait};
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyBackupDeleteChallengeRecord {
     pub challenge_id: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub backup_id: String,
     pub request_id: String,
     pub challenge: Value,
@@ -35,7 +35,7 @@ pub trait KeyBackupStore: Send + Sync {
     async fn list_for_actor(&self, actor_id: &str) -> PersistenceResult<Vec<Value>>;
 
     /// Issue `record`, or return the still-valid challenge already issued for
-    /// the same `(principal_id, backup_id, request_id)`.
+    /// the same `(account_id, backup_id, request_id)`.
     ///
     /// §7.8.1 requires re-issuing the *same* challenge while it is valid, so a
     /// client retrying the issue call does not invalidate the challenge it is

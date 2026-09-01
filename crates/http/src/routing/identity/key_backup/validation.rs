@@ -398,7 +398,12 @@ pub(super) async fn validate_current_recovery_recipient(
 ) -> Result<(), AppError> {
     let policy = state
         .recovery_policies()
-        .active_policy(backup.actor_id.signing_principal_id().as_str())
+        .active_policy(backup.actor_id.as_account_id().ok_or_else(|| {
+            failed_precondition(
+                "recovery_public_key backup requires an account actor",
+                "recovery_policy_mismatch",
+            )
+        })?)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {

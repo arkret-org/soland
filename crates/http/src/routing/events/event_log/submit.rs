@@ -449,9 +449,14 @@ enum InternalEventBinding {
     AccountData {
         key: String,
     },
-    MimiModerationReport {
-        reporter_id: String,
-        target_ref: String,
+    /// Caller-authored MIMI report admitted without fabricating a local
+    /// bearer/session grant. The handler has already verified the closed
+    /// reporter-authority transcript; ordinary Event admission still checks
+    /// the producer proof, Realm membership/capability, actor CAS and reducer.
+    MimiReporter {
+        signer_actor_id: arkret_wire::ActorId,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: Option<arkret_wire::DidKey>,
     },
     ServiceFrankingProof {
         target_event_id: String,
@@ -492,7 +497,6 @@ impl InternalEventAdmission {
     pub(in crate::routing::events::event_log) fn is_applet_formal(&self) -> bool {
         matches!(self.binding, InternalEventBinding::AppletFormal { .. })
     }
-
     pub(in crate::routing) fn mimi_provider(
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
@@ -526,23 +530,26 @@ impl InternalEventAdmission {
         }
     }
 
-    pub(in crate::routing) fn mimi_moderation_report(
+    pub(in crate::routing) fn mimi_reporter(
         realm_id: impl Into<String>,
         actor_id: arkret_wire::ActorId,
-        reporter_id: impl Into<String>,
-        target_ref: impl Into<String>,
+        signer_actor_id: arkret_wire::ActorId,
+        device_id: impl Into<String>,
+        producer_verification_method: arkret_wire::DidUrl,
+        producer_signing_key: Option<arkret_wire::DidKey>,
     ) -> Self {
         Self {
             realm_id: realm_id.into(),
-            session_actor_id: actor_id.signing_principal_id().to_string(),
+            session_actor_id: signer_actor_id.signing_principal_id().to_string(),
             actor_id,
             kind: arkret_wire::EventKind::SelfModerationReport
                 .as_str()
                 .to_owned(),
-            device_id: String::new(),
-            binding: InternalEventBinding::MimiModerationReport {
-                reporter_id: reporter_id.into(),
-                target_ref: target_ref.into(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::MimiReporter {
+                signer_actor_id,
+                producer_verification_method,
+                producer_signing_key,
             },
         }
     }
@@ -700,19 +707,31 @@ impl InternalEventAdmission {
                 }
                 InternalEventBinding::AccountData { key } => {
                     object.get("payload").is_some_and(|payload| {
-                        payload.get("holder_id").is_none_or(|holder| {
-                            holder.as_str() == Some(self.actor_id.signing_principal_id().as_str())
-                        }) && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
+                        payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
-                InternalEventBinding::MimiModerationReport {
-                    reporter_id,
-                    target_ref,
-                } => object.get("payload").is_some_and(|payload| {
-                    payload.get("reporter_id").and_then(Value::as_str) == Some(reporter_id.as_str())
-                        && payload.get("target_ref").and_then(Value::as_str)
-                            == Some(target_ref.as_str())
-                }),
+                InternalEventBinding::MimiReporter {
+                    signer_actor_id,
+                    producer_verification_method,
+                    ..
+                } => {
+                    let event_signer = object
+                        .get("executed_by")
+                        .cloned()
+                        .and_then(|value| {
+                            serde_json::from_value::<arkret_wire::ActorId>(value).ok()
+                        })
+                        .unwrap_or_else(|| self.actor_id.clone());
+                    event_signer == *signer_actor_id
+                        && object
+                            .get("proofs")
+                            .and_then(Value::as_array)
+                            .and_then(|proofs| proofs.first())
+                            .and_then(Value::as_object)
+                            .and_then(|proof| proof.get("verification_method"))
+                            .and_then(Value::as_str)
+                            == Some(producer_verification_method.as_str())
+                }
                 InternalEventBinding::ServiceFrankingProof { target_event_id } => {
                     object
                         .get("payload")
@@ -836,6 +855,37 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing::events::event_log) fn mimi_reporter_producer_signing_key(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+        verification_method: &str,
+    ) -> Option<&arkret_wire::DidKey> {
+        if !self.matches(session, object) {
+            return None;
+        }
+        match &self.binding {
+            InternalEventBinding::MimiReporter {
+                producer_verification_method,
+                producer_signing_key: Some(producer_signing_key),
+                ..
+            } if producer_verification_method.as_str() == verification_method => {
+                Some(producer_signing_key)
+            }
+            _ => None,
+        }
+    }
+
+    pub(in crate::routing::events::event_log) fn is_mimi_agent_reporter(&self) -> bool {
+        matches!(
+            self.binding,
+            InternalEventBinding::MimiReporter {
+                producer_signing_key: Some(_),
+                ..
+            }
+        )
+    }
+
     /// Return whether this is one of the closed internal adapters whose
     /// producer is the local service principal itself.
     ///
@@ -851,7 +901,6 @@ impl InternalEventAdmission {
         matches!(
             self.binding,
             InternalEventBinding::MimiProvider { .. }
-                | InternalEventBinding::MimiModerationReport { .. }
                 | InternalEventBinding::ServiceFrankingProof { .. }
         ) && self.matches(session, object)
     }
@@ -865,6 +914,7 @@ impl InternalEventAdmission {
             && !matches!(
                 &self.binding,
                 InternalEventBinding::PeerFederatedEvent { .. }
+                    | InternalEventBinding::MimiReporter { .. }
             )
     }
 
@@ -3617,7 +3667,7 @@ pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_initial_event_submission_with_contact_projection,
     submit_initial_event_submission_with_device_pairing, submit_mimi_event_value,
-    submit_mimi_moderation_report_event_value,
+    submit_mimi_reporter_initial_event_submission,
 };
 pub(in crate::routing::events::event_log) use value::{
     replay_ackless_self_principal_ingress, submit_event_value_with_idempotency,

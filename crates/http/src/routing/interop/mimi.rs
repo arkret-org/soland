@@ -1,8 +1,8 @@
 //! MIMI (Messaging Layer Interop) provider-facade handlers.
 //!
 //! Surfaces under `/_arkret/open/mimi/*` plus the well-known
-//! `mimi-protocol-directory`. Writes from the MIMI side map into the
-//! canonical Arkret reducer chain:
+//! `mimi-protocol-directory`. Writes from the MIMI side use their
+//! operation-specific durable-effect contract:
 //!
 //!   * `POST /mimi/strands/{strand_id}/messages` -> emits a `MessageRecord` + a `ak.message.create`
 //!     projection event so the MIMI ingress shows up on the canonical Arkret timeline.
@@ -10,17 +10,16 @@
 //!     whenever the update body carries a `room_binding` block.
 //!   * `POST /mimi/strands/{strand_id}/notify` -> broadcasts a synthetic
 //!     `ak.open.mimi.command.notify.v1` projection event so live subscribers observe MIMI fanout.
-//!   * `POST /mimi/report-abuse` -> persists the moderation report row AND emits a
-//!     `ak.self.moderation.report` projection event so the audit timeline reflects the report.
+//!   * `POST /mimi/report-abuse` -> verifies the closed reporter authority and submits the exact
+//!     caller-authored `ak.self.moderation.report` Event through ordinary admission.
 //!
-//! Each canonical event carries `payload.mimi_provenance` metadata
-//! (provider id, original MIMI envelope hash, MIMI message id) so
-//! the receiving Arkret consumer can prove the message arrived
-//! through the MIMI facade rather than as a native signed Move.
+//! Canonical message-ingress Events carry `payload.mimi_provenance` metadata
+//! (provider id, original MIMI envelope hash, MIMI message id) so the receiver
+//! can distinguish MIMI ingress from a native signed Move.
 
 use std::collections::BTreeMap;
 
-use arkret_identifiers::{Did, EventId, Hash, ReportId};
+use arkret_identifiers::{EventId, Hash, ReportId};
 use arkret_models_collaboration::http_bodies::{
     MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome,
     MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
@@ -52,7 +51,7 @@ use soland_services::identity::MimiConsentCorrelation;
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
-    persist_mimi_facade_moderation_report_event, validate_moderation_report_safety,
+    validate_moderation_report_safety,
 };
 use super::{append_audit_log, now};
 use crate::ids;

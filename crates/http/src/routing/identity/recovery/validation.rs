@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) struct ValidatedRecoveryPolicy {
     pub policy_id: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub version: u32,
     pub trust_domain: TrustDomainId,
     pub allowed_proof_kinds: Vec<String>,
@@ -29,7 +29,7 @@ pub(super) fn validate_recovery_policy(
     require_const_string(payload, "schema", arkret_wire::SchemaId::RECOVERY_POLICY_V1)?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
-    let principal_id = typed.principal_id.clone();
+    let account_id = typed.account_id.clone();
     let version = require_u32_min(payload, "version", 1)?;
     let trust_domain = typed.trust_domain.clone();
     let allowed_proof_kinds = require_string_array(payload, "allowed_proof_kinds")?;
@@ -112,7 +112,7 @@ pub(super) fn validate_recovery_policy(
         .ok_or_else(|| AppError::param_invalid("auth_data.signature is required"))?;
     Ok(ValidatedRecoveryPolicy {
         policy_id,
-        principal_id,
+        account_id,
         version,
         trust_domain,
         allowed_proof_kinds,

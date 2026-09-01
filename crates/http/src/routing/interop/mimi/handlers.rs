@@ -495,6 +495,17 @@ enum MimiProofSigner<'a> {
     /// wire. The federated request families use this: the originator is a
     /// remote principal or provider that this service never holds devices for.
     DidController(&'a str),
+    /// A current Agent runtime key selected from the accepted Agent PCR/key
+    /// authorization state. The request never supplies this key material.
+    AgentRuntime { public_key: &'a [u8; 32] },
+}
+
+struct VerifiedMimiReporterAdmission {
+    actor_id: arkret_wire::ActorId,
+    signer_actor_id: arkret_wire::ActorId,
+    device_id: String,
+    verification_method: arkret_wire::DidUrl,
+    agent_signing_key: Option<arkret_wire::DidKey>,
 }
 
 /// Destination, replay-window and signature checks shared by every inbound
@@ -565,6 +576,16 @@ async fn verify_mimi_operation_proof(
                 state,
             )
             .await
+        }
+        MimiProofSigner::AgentRuntime { public_key } => {
+            arkret_signatures::verify_ed25519_detached_jws_payload_proof(
+                proof,
+                binding,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: public_key.to_vec(),
+                },
+            )
+            .map_err(|error| error.to_string())
         }
     };
     verified.map_err(|reason| {
@@ -800,7 +821,14 @@ async fn verify_mimi_consent_correlation(
                 .consents()
                 .holder_cell(body.actor_id.signing_principal_id(), &cell_id)
                 .filter(|cell| {
-                    cell.peer_principal_id.as_str() == correlation.requester_id
+                    (match &cell.peer {
+                        arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
+                            actor_id,
+                        } => actor_id.to_string() == correlation.requester_id,
+                        arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+                            principal_id,
+                        } => principal_id.as_str() == correlation.requester_id,
+                    })
                         && cell.consent_scope == correlation.purpose
                         && observed_dot_ids.iter().all(|observed_dot| {
                             observed_dot.as_str().is_some_and(|observed_dot| {
@@ -962,55 +990,31 @@ pub(super) async fn mimi_report_abuse(
     req: &mut Request,
 ) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
+    let typed = body.into_inner();
+    let body = typed_body_value(&typed, "mimi report abuse")?;
     let source_provider = verify_mimi_source_service_signature(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
-    // Extract room_id segment from MIMI URI
-    // `mimi://provider/rooms/<id>` so we can look up a bound Realm if any.
-    let mimi_room_id = body
-        .get("mimi_room_uri")
-        .and_then(Value::as_str)
-        .and_then(|uri| uri.rsplit('/').next())
-        .or_else(|| body.get("strand_id").and_then(Value::as_str))
-        .map(str::to_owned);
-    let bound_realm = match mimi_room_id.as_deref() {
-        Some(id) => mimi_bound_realm_id(state, id).await?,
-        None => None,
-    };
-    let realm_id = if let Some(realm_id) = body.get("realm_id").and_then(Value::as_str) {
-        realm_id.to_owned()
-    } else if let Some(bound) = bound_realm {
-        bound
-    } else {
-        return Err(AppError::param_invalid(
-            "mimi report requires `realm_id` or a `mimi_room_uri` that resolves to a bound Arkret Realm",
-        )
-        .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
-    };
-    let reporter_id = body
-        .get("reporter_did")
-        .or_else(|| body.get("reporter_id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::param_invalid("mimi report requires reporter_id"))?;
-    enforce_mimi_reporter_resolution(state, reporter_id, &body).await?;
-    let target_ref = body
-        .get("target_event_digest")
-        .or_else(|| body.get("target_ref"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::param_invalid("mimi report requires target_ref"))?;
+    if source_provider != typed.source_provider_id.as_str() {
+        return Err(mimi_reporter_resolution_required());
+    }
+    let realm_id = typed.realm_id.to_string();
+    let reporter_id = typed.reporter_id.as_str();
+    let target_ref = typed.target_ref.as_str();
     let evidence_package = body.get("evidence_package").unwrap_or(&Value::Null);
-    let franking_proof = body
-        .get("frank")
-        .or_else(|| body.get("franking_proof"))
-        .unwrap_or(&Value::Null);
+    let franking_proof = body.get("franking_proof").unwrap_or(&Value::Null);
+    let (event_payload, canonical_reason, description) =
+        validate_mimi_report_event_cross_binding(&typed, &body, &source_provider)?;
+    let reporter_admission = verify_mimi_reporter_authority(state, &typed).await?;
+    let event = &typed.report_event.event;
     let source_service = moderation_request_source_service(req);
     let source_ip_hash = moderation_request_source_ip_hash(req);
     let safety = validate_moderation_report_safety(
         state,
         &realm_id,
         reporter_id,
+        Some(&typed.reporter_authority.actor_id),
         target_ref,
         None,
         evidence_package,
@@ -1019,30 +1023,6 @@ pub(super) async fn mimi_report_abuse(
         &source_ip_hash,
     )
     .await?;
-    let canonical_reason = body
-        .get("abuse_reason_code")
-        .and_then(Value::as_str)
-        .filter(|reason| {
-            matches!(
-                *reason,
-                "spam"
-                    | "harassment"
-                    | "hate_speech"
-                    | "nsfw"
-                    | "illegal"
-                    | "misinformation"
-                    | "other"
-            )
-        })
-        .unwrap_or("other");
-    let description =
-        body.get("description")
-            .map(|value| {
-                value.as_str().map(str::to_owned).ok_or_else(|| {
-                    AppError::param_invalid("mimi report description must be a string")
-                })
-            })
-            .transpose()?;
     let effective_scope = serde_json::from_value(safety.effective_scope).map_err(|error| {
         AppError::param_invalid(format!("mimi report effective_scope invalid: {error}"))
     })?;
@@ -1066,7 +1046,7 @@ pub(super) async fn mimi_report_abuse(
         })?,
         effective_scope,
         target_ref: target_ref.to_owned(),
-        report_reason_code: canonical_reason.to_owned(),
+        report_reason_code: canonical_reason,
         description,
         reporter_id: arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
             AppError::param_invalid(format!("mimi report reporter_id invalid: {error}"))
@@ -1079,7 +1059,61 @@ pub(super) async fn mimi_report_abuse(
         evidence_package,
         franking_proof,
     };
-    let report_event_id = persist_mimi_facade_moderation_report_event(state, payload).await?;
+    let expected_payload = serde_json::to_value(&payload)
+        .map_err(|error| AppError::internal(format!("MIMI report payload encode: {error}")))?;
+    if &event_payload != &expected_payload {
+        return Err(mimi_reporter_resolution_required());
+    }
+    payload
+        .validate_provenance(&typed.reporter_id)
+        .map_err(|_| mimi_reporter_resolution_required())?;
+    let admission = crate::routing::events::event_log::InternalEventAdmission::mimi_reporter(
+        typed.realm_id.as_str(),
+        reporter_admission.actor_id.clone(),
+        reporter_admission.signer_actor_id.clone(),
+        reporter_admission.device_id.clone(),
+        reporter_admission.verification_method.clone(),
+        reporter_admission.agent_signing_key.clone(),
+    );
+    let admitted_at = now();
+    // This record is only the request-local carrier required by ordinary Event
+    // admission. Authority comes from the closed reporter transcript above;
+    // no bearer or SessionGrant is minted or inferred here.
+    let session = soland_services::identity::SessionIdentityState {
+        account_pk: None,
+        token_hash: format!("mimi-reporter-authority:{}", event.event_id),
+        actor: reporter_admission
+            .signer_actor_id
+            .signing_principal_id()
+            .to_string(),
+        device_id: reporter_admission.device_id,
+        audience: reporter_admission
+            .signer_actor_id
+            .route_service_id()
+            .to_string(),
+        session_public_key: None,
+        agent_session: None,
+        session_grant: None,
+        expires_at: admitted_at + chrono::Duration::minutes(5),
+        created_at: admitted_at,
+        revoked_at: None,
+    };
+    let report_event_id = event.event_id.to_string();
+    crate::routing::events::event_log::submit_mimi_reporter_initial_event_submission(
+        state,
+        &session,
+        typed.report_event.clone(),
+        &admission,
+    )
+    .await
+    .map_err(|error| {
+        crate::routing::events::event_log::submit_one_error_to_app_error(
+            "MIMI moderation report Event submit failed",
+            error.status,
+            error.code,
+            &error.message,
+        )
+    })?;
 
     // `report` is Event-derived: the id is the accepted
     // `ak.self.moderation.report` Event token retyped, so it exists only after
@@ -1101,7 +1135,7 @@ pub(super) async fn mimi_report_abuse(
             "routed_to_ids": [format!("{}#moderation", state.service_id())],
             "moderation_event_emitted": true,
             "report_event_id": report_event_id,
-            "reporter_resolution": "holder_claim_or_consent",
+            "reporter_resolution": "exact_actor_current_membership_room_binding",
         }),
     );
     json_ok(MimiReportAbuseOutcome {
@@ -1111,45 +1145,280 @@ pub(super) async fn mimi_report_abuse(
     })
 }
 
-pub(super) async fn enforce_mimi_reporter_resolution(
-    state: &AppState,
-    reporter_id: &str,
-    body: &Value,
-) -> Result<(), AppError> {
-    Did::new(reporter_id.to_owned())
-        .map_err(|error| AppError::param_invalid(format!("invalid reporter_id DID: {error}")))?;
-    if state
-        .identities()
-        .account(&arkret_wire::AccountId::new(
-            arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
-                AppError::param_invalid(format!("invalid reporter_id: {error}"))
-            })?,
-            state.service_core_id().clone(),
-        ))
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some()
+fn validate_mimi_report_event_cross_binding(
+    body: &MimiReportAbuseRequestBody,
+    body_value: &Value,
+    source_provider: &str,
+) -> Result<(Value, String, Option<String>), AppError> {
+    let canonical_reason = body_value
+        .get("abuse_reason_code")
+        .and_then(Value::as_str)
+        .filter(|reason| {
+            matches!(
+                *reason,
+                "spam"
+                    | "harassment"
+                    | "hate_speech"
+                    | "nsfw"
+                    | "illegal"
+                    | "misinformation"
+                    | "other"
+            )
+        })
+        .unwrap_or("other")
+        .to_owned();
+    let description = body_value
+        .get("description")
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| AppError::param_invalid("mimi report description must be a string"))
+        })
+        .transpose()?;
+    let event = &body.report_event.event;
+    let event_payload = serde_json::to_value(&event.payload)
+        .map_err(|error| AppError::internal(format!("MIMI report payload encode: {error}")))?;
+    let expected_scope = json!({"kind": "realm", "realm_id": body.realm_id.as_str()});
+    if event.kind != arkret_wire::EventKind::SelfModerationReport
+        || event.realm_id != body.realm_id
+        || event.scope_ref
+            != (arkret_wire::ScopeRef::Realm {
+                realm_id: body.realm_id.clone(),
+            })
+        || event.actor_id != body.reporter_authority.actor_id
+        || event_payload.get("realm_id") != Some(&Value::String(body.realm_id.to_string()))
+        || event_payload.get("effective_scope") != Some(&expected_scope)
+        || event_payload.get("target_ref")
+            != Some(&Value::String(body.target_ref.as_str().to_owned()))
+        || event_payload.get("report_reason_code") != Some(&Value::String(canonical_reason.clone()))
+        || event_payload.get("description") != body_value.get("description")
+        || event_payload.get("reporter_id") != Some(&Value::String(body.reporter_id.to_string()))
+        || event_payload.get("provenance").and_then(Value::as_str) != Some("mimi_facade")
+        || event_payload.get("source_provider_id")
+            != Some(&Value::String(source_provider.to_owned()))
+        || event_payload.get("evidence_package") != body_value.get("evidence_package")
+        || event_payload.get("franking_proof") != body_value.get("franking_proof")
+        || event_payload.get("evidence_refs").is_some()
     {
-        return Ok(());
+        return Err(mimi_reporter_resolution_required());
     }
-    let evidence = body.get("evidence_package").unwrap_or(&Value::Null);
-    let has_holder_claim = evidence
-        .get("reporter_holder_claim")
-        .or_else(|| body.get("reporter_holder_claim"))
-        .is_some_and(non_empty_json_value);
-    let has_consent_proof = evidence
-        .get("consent_proof")
-        .or_else(|| evidence.get("consent_ref"))
-        .or_else(|| body.get("consent_proof"))
-        .or_else(|| body.get("consent_ref"))
-        .is_some_and(non_empty_json_value);
-    if has_holder_claim || has_consent_proof {
-        return Ok(());
+    let producer_method = event
+        .proofs
+        .iter()
+        .find_map(arkret_wire::EventProof::as_producer)
+        .map(|proof| &proof.verification_method)
+        .ok_or_else(mimi_reporter_resolution_required)?;
+    if producer_method != &body.reporter_authority.proof.verification_method {
+        return Err(mimi_reporter_resolution_required());
     }
-    Err(AppError::capability_denied(
-        "MIMI abuse reporter_id requires local account, holder claim, or consent proof",
-    )
-    .with_wire_code("mimi_reporter_resolution_required"))
+    Ok((event_payload, canonical_reason, description))
+}
+
+fn mimi_reporter_resolution_required() -> AppError {
+    AppError::capability_denied("MIMI reporter authority is unavailable")
+        .with_wire_code("mimi_reporter_resolution_required")
+}
+
+async fn verify_mimi_reporter_authority(
+    state: &AppState,
+    body: &MimiReportAbuseRequestBody,
+) -> Result<VerifiedMimiReporterAdmission, AppError> {
+    let authority = &body.reporter_authority;
+    if authority.expires_at <= now()
+        || authority
+            .expires_at
+            .signed_duration_since(authority.proof.created_at)
+            > Duration::seconds(MIMI_OPERATION_PROOF_WINDOW_SECONDS)
+        || authority.actor_id.signing_principal_id() != &body.reporter_id
+    {
+        return Err(mimi_reporter_resolution_required());
+    }
+    let binding = body
+        .reporter_authority_binding_bytes()
+        .map_err(|_| mimi_reporter_resolution_required())?;
+    let event = &body.report_event.event;
+    let producer_method = event
+        .proofs
+        .iter()
+        .find_map(arkret_wire::EventProof::as_producer)
+        .map(|proof| &proof.verification_method)
+        .ok_or_else(mimi_reporter_resolution_required)?;
+    if producer_method != &authority.proof.verification_method {
+        return Err(mimi_reporter_resolution_required());
+    }
+    let admission = if let Some(executor) = event.executed_by.as_ref() {
+        if executor == &authority.actor_id
+            || event.authorization_ref.as_ref().is_none()
+            || executor.route_service_id() != authority.actor_id.route_service_id()
+        {
+            return Err(mimi_reporter_resolution_required());
+        }
+        let record = crate::routing::identity::agent_pcr::agent_record_for_actor(state, executor)
+            .await
+            .map_err(|_| mimi_reporter_resolution_required())?
+            .ok_or_else(mimi_reporter_resolution_required)?;
+        let controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
+            .or_else(|_| {
+                arkret_wire::Did::new(record.controller_id.clone())
+                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+            })
+            .map_err(|_| mimi_reporter_resolution_required())?;
+        let authorization_ref = record
+            .authorized_event_ref
+            .as_deref()
+            .ok_or_else(mimi_reporter_resolution_required)?;
+        let signing_key_binding = record
+            .authorized_signing_key_binding
+            .as_ref()
+            .ok_or_else(mimi_reporter_resolution_required)?;
+        if record.state
+            != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+            || controller_id != *authority.actor_id.signing_principal_id()
+            || event
+                .authorization_ref
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref()
+                != Some(authorization_ref)
+            || record.authorized_verification_method.as_deref()
+                != Some(authority.proof.verification_method.as_str())
+            || record.authorized_public_key_digest.as_deref()
+                != Some(signing_key_binding.core.public_key_digest.as_str())
+            || signing_key_binding.agent_key_authorize_event_id.as_str() != authorization_ref
+            || signing_key_binding.core.agent_id != *executor.signing_principal_id()
+            || signing_key_binding.core.verification_method != authority.proof.verification_method
+        {
+            return Err(mimi_reporter_resolution_required());
+        }
+        crate::routing::identity::agent_pcr::validate_agent_controller_binding(
+            state,
+            &record,
+            now(),
+        )
+        .await
+        .map_err(|_| mimi_reporter_resolution_required())?;
+        if !crate::routing::mls::current_agent_key_authorization_matches_method(
+            state,
+            executor.signing_principal_id(),
+            authorization_ref,
+            authority.proof.verification_method.as_str(),
+        )
+        .await
+        {
+            return Err(mimi_reporter_resolution_required());
+        }
+        let public_key_digest = arkret_signatures::agent_evidence::agent_signing_public_key_digest(
+            &signing_key_binding.core.public_key,
+        )
+        .map_err(|_| mimi_reporter_resolution_required())?;
+        if public_key_digest != signing_key_binding.core.public_key_digest {
+            return Err(mimi_reporter_resolution_required());
+        }
+        let raw_public_key: [u8; 32] =
+            arkret_canonical::base64url_decode(signing_key_binding.core.public_key.key.as_str())
+                .map_err(|_| mimi_reporter_resolution_required())?
+                .try_into()
+                .map_err(|_| mimi_reporter_resolution_required())?;
+        verify_mimi_operation_proof(
+            state,
+            &binding,
+            &authority.proof,
+            MimiProofSigner::AgentRuntime {
+                public_key: &raw_public_key,
+            },
+            "MIMI reporter authority",
+        )
+        .await
+        .map_err(|_| mimi_reporter_resolution_required())?;
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&raw_public_key);
+        let signing_key = arkret_wire::DidKey::new(format!("did:key:{multibase}"))
+            .map_err(|_| mimi_reporter_resolution_required())?;
+        VerifiedMimiReporterAdmission {
+            actor_id: authority.actor_id.clone(),
+            signer_actor_id: executor.clone(),
+            device_id: String::new(),
+            verification_method: authority.proof.verification_method.clone(),
+            agent_signing_key: Some(signing_key),
+        }
+    } else {
+        if event.authorization_ref.is_some() {
+            return Err(mimi_reporter_resolution_required());
+        }
+        let device_id = authority
+            .proof
+            .verification_method
+            .as_str()
+            .rsplit_once('#')
+            .and_then(|(_, fragment)| arkret_identifiers::DeviceId::new(fragment.to_owned()).ok())
+            .ok_or_else(mimi_reporter_resolution_required)?;
+        let account = authority
+            .actor_id
+            .as_account_id()
+            .cloned()
+            .ok_or_else(mimi_reporter_resolution_required)?;
+        verify_mimi_operation_proof(
+            state,
+            &binding,
+            &authority.proof,
+            MimiProofSigner::PrincipalDevice {
+                authority: account,
+                device_id: device_id.clone(),
+            },
+            "MIMI reporter authority",
+        )
+        .await
+        .map_err(|_| mimi_reporter_resolution_required())?;
+        VerifiedMimiReporterAdmission {
+            actor_id: authority.actor_id.clone(),
+            signer_actor_id: authority.actor_id.clone(),
+            device_id: device_id.to_string(),
+            verification_method: authority.proof.verification_method.clone(),
+            agent_signing_key: None,
+        }
+    };
+
+    let actor_key = authority.actor_id.to_string();
+    let projection = state.projections().snapshot();
+    let member_matches = projection
+        .member(body.realm_id.as_str(), &actor_key)
+        .is_some_and(|member| {
+            member.state == "join"
+                && member.membership_event_ref.as_deref()
+                    == Some(authority.membership_event_id.as_str())
+        });
+    drop(projection);
+    if !member_matches {
+        return Err(mimi_reporter_resolution_required());
+    }
+
+    let room_binding = current_mimi_room_binding_for_uri(state, body.mimi_room_uri.as_str())
+        .await?
+        .ok_or_else(mimi_reporter_resolution_required)?;
+    let payload = mimi_room_binding_security_payload(&room_binding.binding);
+    let scope = payload.get("binding_scope").and_then(Value::as_object);
+    let provider_matches = payload
+        .get("hub_provider_id")
+        .and_then(Value::as_str)
+        .is_some_and(|provider| provider == body.source_provider_id.as_str())
+        || payload
+            .get("follower_provider_ids")
+            .and_then(Value::as_array)
+            .is_some_and(|providers| {
+                providers
+                    .iter()
+                    .any(|provider| provider.as_str() == Some(body.source_provider_id.as_str()))
+            });
+    if room_binding.event_id != authority.room_binding_event_id.as_str()
+        || payload.get("status").and_then(Value::as_str) != Some("accepted")
+        || room_binding.realm_id != body.realm_id.as_str()
+        || scope.and_then(|value| value.get("strand_id"))
+            != Some(&Value::String(body.strand_id.to_string()))
+        || !provider_matches
+    {
+        return Err(mimi_reporter_resolution_required());
+    }
+    Ok(admission)
 }
 
 #[endpoint(
@@ -1260,6 +1529,206 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
         .with_wire_code("egress_policy_denied")
         .with_reason_detail(error)
 }
+
+#[cfg(test)]
+mod reporter_event_binding_tests {
+    use arkret_models_collaboration::http_bodies::MimiReporterAuthority;
+    use arkret_wire::{
+        AccountId, ActorId, Audience, DidCoreId, DidUrl, EventInitialSubmission, EventProof, Hash,
+        MimiRoomUri, NonEmptyString, PayloadProof, ProducerEventProof, ScopeRef, StrandId,
+        proof_kind,
+    };
+
+    use super::*;
+
+    fn event_id(seed: &[u8]) -> arkret_wire::EventId {
+        arkret_wire::EventId::from_event_digest(
+            &Hash::new(arkret_canonical::sha256_digest(seed)).unwrap(),
+        )
+        .unwrap()
+    }
+
+    fn request() -> MimiReportAbuseRequestBody {
+        let created_at = now();
+        let reporter_id = DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let source_provider_id = DidCoreId::new("ak:did_core:web:provider.example").unwrap();
+        let actor_id = ActorId::account(AccountId::new(
+            reporter_id.clone(),
+            DidCoreId::new("ak:did_core:web:station.example").unwrap(),
+        ));
+        let realm_id = arkret_wire::RealmId::new(
+            "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
+        )
+        .unwrap();
+        let verification_method = DidUrl::new(
+            "did:web:alice.example#ak:device:01964137-0000-7000-8000-000000000901".to_owned(),
+        )
+        .unwrap();
+        let mut event = arkret_wire::test_support::raw_event_for_actor_at(
+            arkret_wire::EventKind::SelfModerationReport.as_str(),
+            ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
+            actor_id.clone(),
+            0,
+            arkret_wire::Hlc::new("019641370000-0000-00000001".to_owned()).unwrap(),
+            json!({
+                "realm_id": realm_id,
+                "effective_scope": {"kind": "realm", "realm_id": realm_id},
+                "target_ref": realm_id,
+                "report_reason_code": "spam",
+                "reporter_id": reporter_id,
+                "provenance": "mimi_facade",
+                "source_provider_id": source_provider_id,
+            }),
+            created_at,
+        )
+        .unwrap();
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
+        event.proofs = vec![EventProof::Producer(ProducerEventProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
+            verification_method: verification_method.clone(),
+            event_digest,
+            signer_resolution_evidence_ref: None,
+            signer_resolution_evidence_digest: None,
+            created_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "e30..c2ln".to_owned(),
+        })];
+        let mut request = MimiReportAbuseRequestBody {
+            strand_id: StrandId::new(
+                "ak:strand:AaCQjogT126mXVYM2VaV0guWrFdS4nCOsDP-Ft0iWyKp".to_owned(),
+            )
+            .unwrap(),
+            mimi_room_uri: MimiRoomUri::new("mimi://provider.example/rooms/room-1").unwrap(),
+            realm_id,
+            target_ref: NonEmptyString::new(
+                "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
+            )
+            .unwrap(),
+            reporter_id,
+            source_provider_id,
+            reporter_authority: MimiReporterAuthority {
+                actor_id,
+                membership_event_id: event_id(b"membership"),
+                room_binding_event_id: event_id(b"room-binding"),
+                expires_at: created_at + Duration::minutes(5),
+                proof: PayloadProof {
+                    kind: proof_kind::DETACHED_JWS.to_owned(),
+                    verification_method,
+                    payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                    created_at,
+                    domain: Some("ak:trust_domain:example.com".to_owned()),
+                    audience: Some(Audience::Single(
+                        "ak:did_core:web:station.example".to_owned(),
+                    )),
+                    proof_purpose: None,
+                    jws: "e30..c2ln".to_owned(),
+                },
+            },
+            report_event: EventInitialSubmission {
+                event,
+                authorization_lease: None,
+                cba_proof_bundles: Vec::new(),
+                control_proposal_ack: None,
+                membership_compensation_evidence: None,
+            },
+            abuse_reason_code: NonEmptyString::new("spam").unwrap(),
+            evidence_package: None,
+            franking_proof: None,
+            description: None,
+        };
+        request.reporter_authority.proof.payload_digest = request.payload_digest().unwrap();
+        request
+    }
+
+    fn assert_cross_binding_rejected(request: &MimiReportAbuseRequestBody) {
+        let value = serde_json::to_value(request).unwrap();
+        let error = validate_mimi_report_event_cross_binding(
+            request,
+            &value,
+            request.source_provider_id.as_str(),
+        )
+        .expect_err("cross-bound report must fail before state and rate-limit access");
+        assert_eq!(
+            error.wire_code_override.as_deref(),
+            Some("mimi_reporter_resolution_required")
+        );
+    }
+
+    #[test]
+    fn exact_caller_authored_report_event_cross_binding_is_accepted() {
+        let request = request();
+        let value = serde_json::to_value(&request).unwrap();
+        validate_mimi_report_event_cross_binding(
+            &request,
+            &value,
+            request.source_provider_id.as_str(),
+        )
+        .expect("exact caller-authored report Event binding");
+    }
+
+    #[test]
+    fn actor_provider_target_and_event_proof_method_swaps_fail_pre_state() {
+        let original = request();
+
+        let mut other_station = original.clone();
+        other_station.report_event.event.actor_id = ActorId::account(AccountId::new(
+            other_station.reporter_id.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ));
+        assert_cross_binding_rejected(&other_station);
+
+        let mut provider_swap = original.clone();
+        provider_swap.report_event.event.payload.insert(
+            "source_provider_id".to_owned(),
+            json!("ak:did_core:web:other.example"),
+        );
+        assert_cross_binding_rejected(&provider_swap);
+
+        let mut target_swap = original.clone();
+        target_swap.report_event.event.payload.insert(
+            "target_ref".to_owned(),
+            json!("ak:realm:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+        );
+        assert_cross_binding_rejected(&target_swap);
+
+        let mut method_swap = original;
+        method_swap.report_event.event.proofs[0]
+            .as_producer_mut()
+            .unwrap()
+            .verification_method = DidUrl::new("did:web:alice.example#other-device").unwrap();
+        assert_cross_binding_rejected(&method_swap);
+    }
+
+    #[test]
+    fn room_and_opaque_mutations_are_covered_by_holder_transcript() {
+        let original = request();
+
+        let mut room_swap = original.clone();
+        room_swap.mimi_room_uri = MimiRoomUri::new("mimi://provider.example/rooms/other").unwrap();
+        assert!(room_swap.reporter_authority_binding_bytes().is_err());
+
+        let mut opaque_swap = original;
+        opaque_swap.evidence_package = Some(
+            serde_json::from_value(json!({
+                "content_type": "application/json",
+                "payload_digest": format!("sha256:{}", "1".repeat(64)),
+                "payload": "e30"
+            }))
+            .unwrap(),
+        );
+        assert!(opaque_swap.reporter_authority_binding_bytes().is_err());
+    }
+}
+
 #[cfg(test)]
 mod consent_proof_tests {
     use arkret_identifiers::{ConsentId, DeviceId, Did, DidCoreId, Hash, Hlc, RealmId, StrandId};

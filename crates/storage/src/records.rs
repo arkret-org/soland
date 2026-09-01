@@ -133,7 +133,7 @@ pub struct AccountLifecycleRecord {
 #[derive(Clone, Debug)]
 pub struct RecoveryPolicyRecord {
     pub policy_id: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub version: u32,
     pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
@@ -243,17 +243,17 @@ pub struct BackupSeriesEraseProgressRecord {
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by
 /// `cursor_digest`; `same_device` / `same_session` match any cursor that
-/// resolves to the same authenticated `(principal_id, device_id)` binding —
-/// soland's stateful cursor binds principal + device (not a finer session
-/// handle), so `same_session` is enforced at the same `(principal, device)`
+/// resolves to the same authenticated `(account_id, device_id)` binding —
+/// soland's stateful cursor binds exact account + device (not a finer session
+/// handle), so `same_session` is enforced at the same `(account, device)`
 /// granularity as `same_device`. Entries are dropped once `expires_at` passes
 /// (the revoked cursor's maximum possible TTL).
 #[derive(Clone, Debug)]
 pub struct CursorRevocation {
     /// sha256 hex of the exact revoked `ak:cursor:` token (used by `this_cursor`).
     pub cursor_digest: String,
-    /// Authenticated principal that requested the revocation.
-    pub principal_id: arkret_identifiers::DidCoreId,
+    /// Exact authenticated account that requested the revocation.
+    pub account_id: arkret_wire::AccountId,
     /// Bound device for `same_device` / `same_session` scope (the caller's
     /// session device); `None` for `this_cursor`.
     pub device_id: Option<String>,

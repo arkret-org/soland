@@ -1,5 +1,5 @@
 use super::{
-    Bool, HandleClaimEvidenceRecord, Jsonb, MemberIdentityEventRecord, MemberIdentityStore,
+    HandleClaimEvidenceRecord, Jsonb, MemberIdentityEventRecord, MemberIdentityStore,
     MemberIdentitySubjectKey, Nullable, PersistenceError, PersistenceResult, PgPool,
     QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, pg_conn, sql_query,
 };
@@ -56,13 +56,15 @@ struct HandleClaimRow {
     #[diesel(sql_type = Nullable<Text>)]
     audience: Option<String>,
     #[diesel(sql_type = Text)]
-    binding_state: String,
+    status: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    revocation_digest: Option<String>,
+    #[diesel(sql_type = Timestamptz)]
+    fresh_until: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Nullable<Text>)]
     visibility: Option<String>,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    #[diesel(sql_type = Bool)]
-    revoked: bool,
     #[diesel(sql_type = Jsonb)]
     envelope: Value,
 }
@@ -74,17 +76,18 @@ impl From<HandleClaimRow> for HandleClaimEvidenceRecord {
             subject_id: row.subject_id,
             issuer_id: row.issuer_id,
             audience: row.audience,
-            binding_state: row.binding_state,
+            status: row.status,
+            revocation_digest: row.revocation_digest,
+            fresh_until: row.fresh_until,
             visibility: row.visibility,
             expires_at: row.expires_at,
-            revoked: row.revoked,
             envelope: row.envelope,
         }
     }
 }
 
 const HANDLE_CLAIM_COLUMNS: &str = "digest, subject_id, issuer_id, audience, \
-     binding_state, visibility, expires_at, revoked, envelope";
+     status, revocation_digest, fresh_until, visibility, expires_at, envelope";
 
 #[async_trait]
 impl MemberIdentityStore for PgMemberIdentityStore {
@@ -145,26 +148,28 @@ impl MemberIdentityStore for PgMemberIdentityStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO member_identity_handle_claims \
-             (digest, subject_id, issuer_id, audience, binding_state, visibility, \
-              expires_at, revoked, envelope) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             (digest, subject_id, issuer_id, audience, status, revocation_digest, \
+              fresh_until, visibility, expires_at, envelope) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (subject_id, digest) DO UPDATE SET \
                 issuer_id = EXCLUDED.issuer_id, \
                 audience = EXCLUDED.audience, \
-                binding_state = EXCLUDED.binding_state, \
+                status = EXCLUDED.status, \
+                revocation_digest = EXCLUDED.revocation_digest, \
+                fresh_until = EXCLUDED.fresh_until, \
                 visibility = EXCLUDED.visibility, \
                 expires_at = EXCLUDED.expires_at, \
-                revoked = EXCLUDED.revoked, \
                 envelope = EXCLUDED.envelope",
         )
         .bind::<Text, _>(&record.digest)
         .bind::<Text, _>(&record.subject_id)
         .bind::<Text, _>(&record.issuer_id)
         .bind::<Nullable<Text>, _>(&record.audience)
-        .bind::<Text, _>(&record.binding_state)
+        .bind::<Text, _>(&record.status)
+        .bind::<Nullable<Text>, _>(&record.revocation_digest)
+        .bind::<Timestamptz, _>(record.fresh_until)
         .bind::<Nullable<Text>, _>(&record.visibility)
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
-        .bind::<Bool, _>(record.revoked)
         .bind::<Jsonb, _>(&record.envelope)
         .execute(&mut *conn)
         .await

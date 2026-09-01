@@ -26,22 +26,22 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
         Ok(self.data.lock().get(policy_id).cloned())
     }
 
-    async fn get_active_for_principal(
+    async fn get_active_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let data = self.data.lock();
-        Ok(recovery_active_policy_locked(&data, principal_id))
+        Ok(recovery_active_policy_locked(&data, account_id))
     }
 
-    async fn list_for_principal(
+    async fn list_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
         let data = self.data.lock();
         let mut out: Vec<RecoveryPolicyRecord> = data
             .values()
-            .filter(|record| record.principal_id.as_str() == principal_id)
+            .filter(|record| &record.account_id == account_id)
             .cloned()
             .collect();
         out.sort_by_key(|p| std::cmp::Reverse(p.version));
@@ -58,16 +58,16 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
             )));
         }
         if data.values().any(|existing| {
-            existing.principal_id == record.principal_id && existing.version == record.version
+            existing.account_id == record.account_id && existing.version == record.version
         }) {
             return Err(PersistenceError::Conflict(format!(
-                "{}: recovery policy principal/version ({}, {}) already exists",
+                "{}: recovery policy account/version ({}, {}) already exists",
                 ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.principal_id,
+                record.account_id,
                 record.version
             )));
         }
-        if let Some(active) = recovery_active_policy_locked(&data, record.principal_id.as_str()) {
+        if let Some(active) = recovery_active_policy_locked(&data, &record.account_id) {
             if record.version <= active.version {
                 return Err(PersistenceError::Conflict(format!(
                     "{}: recovery policy version {} is not greater than active {}",
@@ -88,7 +88,7 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
             return Err(PersistenceError::Conflict(format!(
                 "{}: recovery genesis policy for `{}` must have version=1",
                 ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.principal_id
+                record.account_id
             )));
         }
         data.insert(record.policy_id.clone(), record);
@@ -243,7 +243,8 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             let session = sessions.get_mut(session_id).ok_or_else(|| {
                 PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
             })?;
-            if session.principal_id != record.resource.principal_id
+            if session.principal_id != record.resource.account_id.principal_id
+                || session.station_id != record.resource.account_id.station_id
                 || session.state != SessionState::Verified
                 || session.expires_at <= chrono::Utc::now()
             {
@@ -561,8 +562,13 @@ mod tests {
                 SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ),
             actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                arkret_wire::AccountId::new(
+                    arkret_wire::project_did_to_core_id(
+                        &Did::new("did:web:alice.example").unwrap(),
+                    )
                     .unwrap(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
                 arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
             )),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),

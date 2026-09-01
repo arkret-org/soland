@@ -404,7 +404,7 @@ pub struct AppConfig {
     /// these endpoints. Env: `SOLAND_ADMIN_PRINCIPAL_IDS` (comma-separated).
     pub admin_principal_ids: Vec<DidCoreId>,
     /// Maximum unacknowledged to-device messages retained per
-    /// `(recipient_principal_id, device_id)`. Older messages beyond this
+    /// `(recipient_account_id, device_id)`. Older messages beyond this
     /// capacity are dropped, and the device lost watermark is advanced so the
     /// next to-device response can carry `lost=true`.
     /// Env: `SOLAND_TO_DEVICE_QUEUE_CAPACITY` (default 10_000).
@@ -1757,9 +1757,9 @@ fn load_receive_policy_constraints(
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_HANDLE_ISSUERS")?;
     let trusted_directory_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
-    let trusted_principal_ids =
+    let trusted_source_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
-    let denied_principal_ids =
+    let denied_source_ids =
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
         env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
@@ -1774,8 +1774,8 @@ fn load_receive_policy_constraints(
         || allowed_handle_domains.is_some()
         || trusted_handle_issuer_ids.is_some()
         || trusted_directory_ids.is_some()
-        || trusted_principal_ids.is_some()
-        || denied_principal_ids.is_some()
+        || trusted_source_ids.is_some()
+        || denied_source_ids.is_some()
         || accepted_subject_did_methods.is_some();
     if !has_any_constraint {
         return Ok(None);
@@ -1794,8 +1794,8 @@ fn load_receive_policy_constraints(
             allowed_handle_domains,
             trusted_handle_issuer_ids,
             trusted_directory_ids,
-            trusted_principal_ids,
-            denied_principal_ids,
+            trusted_source_ids,
+            denied_source_ids,
             accepted_subject_did_methods,
         },
     ))

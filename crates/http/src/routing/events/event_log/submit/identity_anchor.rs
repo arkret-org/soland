@@ -453,6 +453,7 @@ pub(super) async fn submit_identity_anchor_batch(
             envelopes[0].clone(),
             typed_create.clone(),
             &first,
+            None,
             received_at,
         )
         .await?;
@@ -463,6 +464,7 @@ pub(super) async fn submit_identity_anchor_batch(
             envelopes[1].clone(),
             typed_authorize.clone(),
             &second,
+            None,
             received_at,
         )
         .await?;
@@ -813,25 +815,30 @@ fn validate_identity_anchor_candidate_preconditions(
         arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
             if did.as_str() == first.actor_id.as_str()
     );
-    if authorize.principal_id.as_str() != first.actor_id.as_str()
-        || authorize.authorization_binding_kind
-            != if is_bootstrap {
-                arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
-            } else {
-                arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
-            }
+    if authorize.authorization_binding_kind
+        != if is_bootstrap {
+            arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
+        } else {
+            arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
+        }
         || !authorized_by_root
     {
         return Err(unit_error(
             "candidate device authorization is not bound to the verified principal root",
         ));
     }
-    crate::routing::identity::device_signing::validate_device_authorize_binding(state, &authorize)
-        .map_err(|message| {
-            unit_error(format!(
-                "candidate device possession proof failed: {message}"
-            ))
-        })?;
+    let subject_account_id =
+        arkret_wire::AccountId::new(first.actor_id.clone(), state.service_core_id());
+    crate::routing::identity::device_signing::validate_device_authorize_binding(
+        state,
+        &authorize,
+        &subject_account_id,
+    )
+    .map_err(|message| {
+        unit_error(format!(
+            "candidate device possession proof failed: {message}"
+        ))
+    })?;
 
     let authorize_payload_digest =
         arkret_models_collaboration::events_payloads::typed_device_authorize_payload_digest(
@@ -1266,8 +1273,7 @@ async fn validate_unit_relationships(
             arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
                 if did.as_str() == first.actor_id.as_str()
         );
-        if authorize.principal_id.as_str() != first.actor_id.as_str()
-            || authorize.authorization_binding_kind
+        if authorize.authorization_binding_kind
                 != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::RegistrationAnchor
             || !authorized_by_root
             || authorize.recovery_session_id.is_some()
@@ -1306,7 +1312,6 @@ async fn validate_unit_relationships(
     if first.actor.as_account_id() != Some(&payload.account_id)
         || payload.account_id.station_id != state.service_core_id()
         || payload.replacement_authorize_payload_digest != replacement_payload_digest
-        || authorize.principal_id != payload.account_id.principal_id
         || authorize.authorization_binding_kind
             != arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizationBindingKind::PcrRecovery
     {
@@ -1546,7 +1551,6 @@ async fn validate_reanchor_recovery_session(
         || session_id != &reanchor.recovery_session_id
         || session.principal_id != reanchor.account_id.principal_id
         || session.station_id != reanchor.account_id.station_id
-        || session.principal_id != authorize.principal_id
         || session.requesting_device_id != authorize.device_id.as_str()
         || session.policy_id != reanchor.recovery_policy_id.as_str()
         || u64::from(session.policy_version) != reanchor.recovery_policy_version
@@ -1698,7 +1702,12 @@ async fn identity_anchor_device_projection(
     accepted_at: DateTime<Utc>,
 ) -> Result<soland_services::events::IdentityAnchorDeviceState, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
-    let principal_id = typed.principal_id.as_str();
+    let principal_id = authorize
+        .actor
+        .as_account_id()
+        .ok_or_else(|| unit_error("device authorization requires an account actor"))?
+        .principal_id
+        .as_str();
     let device_id = typed.device_id.as_str();
     let existing = state
         .identities()
@@ -2080,7 +2089,6 @@ mod tests {
         created_at: chrono::DateTime<chrono::Utc>,
     ) -> arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
         arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
-            principal_id: principal.clone(),
             device_id: arkret_identifiers::DeviceId::new(
                 "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
             )

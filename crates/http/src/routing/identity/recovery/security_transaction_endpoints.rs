@@ -11,10 +11,10 @@ use soland_services::identity::{
 
 use super::*;
 
-fn transaction_principal(request: &SecurityTransactionCreateRequest) -> &arkret_wire::DidCoreId {
+fn transaction_account(request: &SecurityTransactionCreateRequest) -> &arkret_wire::AccountId {
     match request {
-        SecurityTransactionCreateRequest::Recovery(request) => &request.principal_id,
-        SecurityTransactionCreateRequest::SecurityRotation(request) => &request.principal_id,
+        SecurityTransactionCreateRequest::Recovery(request) => &request.account_id,
+        SecurityTransactionCreateRequest::SecurityRotation(request) => &request.account_id,
     }
 }
 
@@ -78,7 +78,7 @@ async fn load_owned_security_transaction(
         .map_err(recovery_service_error)?
         .ok_or_else(|| AppError::not_found("security transaction not found"))?;
     let transaction_actor = transaction_account_actor(
-        &record.resource.principal_id,
+        &record.resource.account_id,
         &record.resource.coordinator_id,
         &state.service_core_id(),
     )?;
@@ -98,7 +98,7 @@ async fn load_owned_security_transaction(
 }
 
 fn transaction_account_actor(
-    principal_id: &DidCoreId,
+    account_id: &AccountId,
     coordinator_id: &DidCoreId,
     local_station_id: &DidCoreId,
 ) -> Result<ActorId, AppError> {
@@ -107,10 +107,10 @@ fn transaction_account_actor(
     if coordinator_id != local_station_id {
         return Err(AppError::not_found("security transaction not found"));
     }
-    Ok(ActorId::account(AccountId::new(
-        principal_id.clone(),
-        coordinator_id.clone(),
-    )))
+    if &account_id.station_id != coordinator_id {
+        return Err(AppError::not_found("security transaction not found"));
+    }
+    Ok(ActorId::account(account_id.clone()))
 }
 
 fn recovery_authorization_actor_matches(
@@ -139,10 +139,12 @@ pub(super) async fn security_transaction_create(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let request = body.into_inner();
-    if transaction_principal(&request).as_str() != session.actor {
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    if ActorId::account(transaction_account(&request).clone()) != session_actor {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "security transaction principal_id does not match the authenticated principal",
+            "security transaction account_id does not match the authenticated account",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("security_transaction_principal_isolation"));
@@ -161,7 +163,7 @@ pub(super) async fn security_transaction_create(
             AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
         })?;
     if transaction_account_actor(
-        &resource.principal_id,
+        &resource.account_id,
         &resource.coordinator_id,
         &state.service_core_id(),
     )? != crate::routing::identity::session_actor::session_actor_from_credential(
@@ -514,7 +516,7 @@ async fn continue_rotation_upload(
 ) -> JsonResult<SecurityTransaction> {
     let plan = rotation_plan(&transaction)?;
     let transaction_actor = transaction_account_actor(
-        &transaction.resource.principal_id,
+        &transaction.resource.account_id,
         &transaction.resource.coordinator_id,
         &state.service_core_id(),
     )?;
@@ -779,7 +781,7 @@ pub(crate) async fn backup_series_erase_command(
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let transaction_actor = transaction_account_actor(
-        &transaction.resource.principal_id,
+        &transaction.resource.account_id,
         &transaction.resource.coordinator_id,
         &state.service_core_id(),
     )?;
@@ -1201,7 +1203,7 @@ async fn continue_rotation_local_commit(
     }
     let expected_verification_method = format!(
         "{}#{}",
-        transaction.resource.principal_id, session.device_id
+        transaction.resource.account_id.principal_id, session.device_id
     );
     if attestation.auth_data.verification_method != expected_verification_method {
         return Err(AppError::conflict(
@@ -1211,7 +1213,7 @@ async fn continue_rotation_local_commit(
     }
     let device_key = resolve_session_device_key_for_genesis_policy(
         state,
-        transaction.resource.principal_id.as_str(),
+        transaction.resource.account_id.principal_id.as_str(),
         session,
     )
     .await?;
@@ -1323,7 +1325,8 @@ async fn continue_issue_terminal_receipt(
     if recovery_session.state != SessionState::Verified
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
-        || recovery_session.principal_id != transaction.resource.principal_id
+        || recovery_session.principal_id != transaction.resource.account_id.principal_id
+        || recovery_session.station_id != transaction.resource.account_id.station_id
         || recovery_session.station_id.as_str() != state.service_id()
         || recovery_session.requesting_device_id != expected_device_id.as_str()
         || recovery_session.policy_id != receipt.policy_id.as_str()
@@ -1349,7 +1352,7 @@ async fn continue_issue_terminal_receipt(
         || receipt.transaction_id != transaction.resource.transaction_id
         || receipt.transaction_request_digest != transaction.resource.request_digest
         || receipt.prepared_plan_digest != transaction.resource.prepared_plan_digest
-        || receipt.principal_id != transaction.resource.principal_id
+        || receipt.account_id != transaction.resource.account_id
         || receipt.recovery_session_id != *expected_recovery_session_id
         || receipt.new_device_id != *expected_device_id
         || receipt.identity_model != expected_model
@@ -1394,7 +1397,7 @@ async fn continue_issue_terminal_receipt(
             ))
         })?;
     let transaction_actor = transaction_account_actor(
-        &transaction.resource.principal_id,
+        &transaction.resource.account_id,
         &transaction.resource.coordinator_id,
         &state.service_core_id(),
     )?;
@@ -1415,8 +1418,7 @@ async fn continue_issue_terminal_receipt(
                 "accepted device authorization payload is invalid: {error}"
             ))
         })?;
-    if authorization_payload.principal_id != transaction.resource.principal_id
-        || authorization_payload.device_id != *expected_device_id
+    if authorization_payload.device_id != *expected_device_id
         || authorization_payload.recovery_session_id.as_ref() != Some(expected_recovery_session_id)
     {
         return Err(AppError::conflict(
@@ -1426,7 +1428,7 @@ async fn continue_issue_terminal_receipt(
     }
     let expected_verification_method = format!(
         "{}#{}",
-        transaction.resource.principal_id.as_str(),
+        transaction.resource.account_id.principal_id.as_str(),
         expected_device_id.as_str()
     );
     if attestation.auth_data.verification_method != expected_verification_method
@@ -1477,7 +1479,7 @@ async fn continue_issue_terminal_receipt(
                         .with_wire_code("security_transaction_failed_precondition")
                 })?;
             let recovery_account_id = arkret_wire::AccountId::new(
-                transaction.resource.principal_id.clone(),
+                transaction.resource.account_id.principal_id.clone(),
                 recovery_session.station_id.clone(),
             );
             if reanchor_event.actor_id
@@ -1588,7 +1590,10 @@ async fn continue_issue_terminal_receipt(
         transaction_id: transaction.resource.transaction_id.clone(),
         transaction_request_digest: transaction.resource.request_digest.clone(),
         prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
-        principal_id: transaction.resource.principal_id.clone(),
+        account_id: arkret_wire::AccountId::new(
+            transaction.resource.account_id.principal_id.clone(),
+            transaction.resource.coordinator_id.clone(),
+        ),
         coordinator_id: transaction.resource.coordinator_id.clone(),
         recovery_session_id: expected_recovery_session_id.clone(),
         terminal_receipt_id: receipt.receipt_id.clone(),
@@ -1914,15 +1919,17 @@ mod tests {
         let principal = core("alice");
         let local = core("station-a");
         let foreign = core("station-b");
-        let actor = transaction_account_actor(&principal, &local, &local).unwrap();
+        let local_account = AccountId::new(principal.clone(), local.clone());
+        let actor = transaction_account_actor(&local_account, &local, &local).unwrap();
         assert_eq!(
             actor,
             ActorId::account(AccountId::new(principal.clone(), local.clone()))
         );
-        assert!(transaction_account_actor(&principal, &foreign, &local).is_err());
+        assert!(transaction_account_actor(&local_account, &foreign, &local).is_err());
+        let foreign_account = AccountId::new(principal.clone(), foreign.clone());
         assert_ne!(
             actor,
-            transaction_account_actor(&principal, &foreign, &foreign).unwrap()
+            transaction_account_actor(&foreign_account, &foreign, &foreign).unwrap()
         );
     }
 
@@ -1930,7 +1937,8 @@ mod tests {
     fn backup_rotation_match_requires_the_exact_account_actor() {
         let principal = core("alice");
         let station = core("station-a");
-        let actor = transaction_account_actor(&principal, &station, &station).unwrap();
+        let account = AccountId::new(principal.clone(), station.clone());
+        let actor = transaction_account_actor(&account, &station, &station).unwrap();
         let expected = arkret_wire::BackupObjectRef {
             backup_id: arkret_wire::BackupId::new(
                 "ak:backup:01964137-0000-7000-8000-000000000001".to_owned(),
@@ -1983,7 +1991,8 @@ mod tests {
     fn terminal_recovery_requires_matching_full_actor_metadata_and_envelope() {
         let principal = core("alice");
         let local = core("station-a");
-        let actor = transaction_account_actor(&principal, &local, &local).unwrap();
+        let account = AccountId::new(principal.clone(), local.clone());
+        let actor = transaction_account_actor(&account, &local, &local).unwrap();
         let foreign = ActorId::account(AccountId::new(principal.clone(), core("station-b")));
         assert!(recovery_authorization_actor_matches(
             &actor.to_string(),

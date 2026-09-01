@@ -286,14 +286,12 @@ async fn validate_event_envelope_with_ingress(
         .map_err(|_| unsupported_digest_algorithm_error(&digest_suite))?;
     validate_content_bound_event_id(envelope, typed_digest_suite)?;
 
-    // A closed internal adapter (moderation
-    // report, MIMI ingress, ...) authors the Event on behalf of the
-    // authenticated caller under the service's own session, so its
-    // `actor_id` is the caller while `session.actor` is the service.
-    // `InternalEventAdmission::matches` binds that pairing exactly — session
-    // actor, session device, Event actor, Realm, kind and the per-binding
-    // payload — so it has to be resolved before the generic actor/session
-    // equality gate below, not after it.
+    // A closed internal adapter can carry an already authenticated Event into
+    // this pipeline without a local bearer session. The Event remains authored
+    // by its exact producer; `InternalEventAdmission::matches` binds the
+    // request-local carrier to the session actor/device, Event actor, Realm,
+    // kind and adapter-specific evidence. Resolve that binding before the
+    // generic actor/session equality gate below.
     let is_authorized_internal_adapter =
         internal_admission.is_some_and(|admission| admission.matches(session, object));
     let is_applet_managed_pcr_genesis = kind == "ak.realm.create"

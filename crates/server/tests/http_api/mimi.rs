@@ -308,6 +308,734 @@ fn identifier_commitment(identifier: &str) -> String {
     arkret_canonical::sha256_digest(identifier.as_bytes())
 }
 
+fn fixture_event_id(seed: &[u8]) -> arkret_wire::EventId {
+    arkret_wire::EventId::from_event_digest(
+        &arkret_wire::Hash::new(arkret_canonical::sha256_digest(seed)).unwrap(),
+    )
+    .unwrap()
+}
+
+async fn install_current_mimi_report_binding(
+    state: &AppState,
+    realm_id: &str,
+    room_uri: &str,
+    strand_id: &str,
+) -> (
+    arkret_wire::ActorId,
+    arkret_wire::EventId,
+    arkret_wire::EventId,
+) {
+    let reporter_did = "did:web:alice.example";
+    add_test_realm_member(state, realm_id, reporter_did);
+    let reporter_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        fixture_actor_core_id(reporter_did),
+        state.service_core_id(),
+    ));
+    let membership_event_id = fixture_event_id(b"mimi-reporter-membership");
+    state
+        .test_projection()
+        .lock()
+        .members
+        .get_mut(&(realm_id.to_owned(), reporter_actor.to_string()))
+        .expect("fixture joined member")
+        .membership_event_ref = Some(membership_event_id.to_string());
+
+    let created_at = chrono::Utc::now();
+    let room_event = arkret_wire::test_support::raw_event_for_actor_at(
+        arkret_wire::EventKind::MimiRoomBinding.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+        },
+        arkret_wire::ActorId::service(state.service_core_id()),
+        0,
+        arkret_wire::Hlc::new("019641370000-0000-00000044".to_owned()).unwrap(),
+        json!({
+            "profile": "ak.profile.mimi_interop.v1",
+            "mimi_room_uri": room_uri,
+            "binding_scope": {
+                "realm_id": realm_id,
+                "strand_id": strand_id,
+            },
+            "hub_provider_id": MIMI_SOURCE_SERVICE_ID,
+            "local_provider_role": "hub",
+            "follower_provider_ids": [],
+            "content_profile": "application/mimi-content",
+            "policy_root": MIMI_TEST_POLICY_ROOT,
+            "status": "accepted",
+            "created_at": "2026-09-01T00:00:00.000Z",
+        }),
+        created_at,
+    )
+    .unwrap();
+    let room_binding_event_id = room_event.event_id.clone();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &room_event,
+            Some(realm_id),
+            created_at,
+        ))
+        .await
+        .unwrap();
+    (reporter_actor, membership_event_id, room_binding_event_id)
+}
+
+async fn install_revoked_mimi_room_binding_head(
+    state: &AppState,
+    realm_id: &str,
+    room_uri: &str,
+    predecessor: arkret_wire::EventId,
+) {
+    let created_at = chrono::Utc::now();
+    let mut revoked = arkret_wire::test_support::raw_event_for_actor_at(
+        arkret_wire::EventKind::MimiRoomBinding.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+        },
+        arkret_wire::ActorId::service(state.service_core_id()),
+        1,
+        arkret_wire::Hlc::new("019641370001-0000-00000044".to_owned()).unwrap(),
+        json!({
+            "profile": "ak.profile.mimi_interop.v1",
+            "mimi_room_uri": room_uri,
+            "binding_scope": {
+                "realm_id": realm_id,
+                "strand_id": MIMI_TEST_STRAND_ID,
+            },
+            "hub_provider_id": MIMI_SOURCE_SERVICE_ID,
+            "local_provider_role": "hub",
+            "follower_provider_ids": [],
+            "content_profile": "application/mimi-content",
+            "policy_root": MIMI_TEST_POLICY_ROOT,
+            "status": "revoked",
+            "created_at": "2026-09-01T00:00:01.000Z",
+        }),
+        created_at,
+    )
+    .unwrap();
+    revoked.prev_refs = vec![predecessor];
+    revoked
+        .refresh_content_bound_identity_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &revoked,
+            Some(realm_id),
+            created_at,
+        ))
+        .await
+        .unwrap();
+}
+
+async fn install_parallel_mimi_room_binding_head(state: &AppState, realm_id: &str, room_uri: &str) {
+    let created_at = chrono::Utc::now();
+    let parallel = arkret_wire::test_support::raw_event_for_actor_at(
+        arkret_wire::EventKind::MimiRoomBinding.as_str(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+        },
+        arkret_wire::ActorId::service(state.service_core_id()),
+        1,
+        arkret_wire::Hlc::new("019641370002-0000-00000044".to_owned()).unwrap(),
+        json!({
+            "profile": "ak.profile.mimi_interop.v1",
+            "mimi_room_uri": room_uri,
+            "binding_scope": {
+                "realm_id": realm_id,
+                "strand_id": MIMI_TEST_STRAND_ID,
+            },
+            "hub_provider_id": MIMI_SOURCE_SERVICE_ID,
+            "local_provider_role": "hub",
+            "follower_provider_ids": [],
+            "content_profile": "application/mimi-content",
+            "policy_root": MIMI_TEST_POLICY_ROOT,
+            "status": "accepted",
+            "created_at": "2026-09-01T00:00:02.000Z",
+        }),
+        created_at,
+    )
+    .unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(soland_test_support::signed_event::canonical_event_record(
+            &parallel,
+            Some(realm_id),
+            created_at,
+        ))
+        .await
+        .unwrap();
+}
+
+async fn exact_human_mimi_report_body(
+    state: &AppState,
+    token: &str,
+    realm_id: &str,
+    room_uri: &str,
+) -> arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
+    let (reporter_actor, membership_event_id, room_binding_event_id) =
+        install_current_mimi_report_binding(state, realm_id, room_uri, MIMI_TEST_STRAND_ID).await;
+    let signing_key = SigningKey::from_bytes(&[21_u8; 32]);
+    project_test_authorized_device(
+        state,
+        "did:web:alice.example",
+        MIMI_TEST_DEVICE_ID,
+        &signing_key,
+    )
+    .await;
+    let mut report_event = signed_canonical_event(
+        "mimi-caller-authored-report",
+        arkret_wire::EventKind::SelfModerationReport.as_str(),
+        "did:web:alice.example",
+        MIMI_TEST_DEVICE_ID,
+        realm_id,
+        0,
+        Vec::new(),
+        json!({
+            "realm_id": realm_id,
+            "effective_scope": {"kind": "realm", "realm_id": realm_id},
+            "target_ref": realm_id,
+            "report_reason_code": "spam",
+            "reporter_id": "ak:did_core:web:alice.example",
+            "provenance": "mimi_facade",
+            "source_provider_id": MIMI_SOURCE_SERVICE_ID,
+        }),
+    );
+    move_event_to_actor_realm_frontier(
+        state,
+        token,
+        "did:web:alice.example",
+        realm_id,
+        &mut report_event,
+    )
+    .await;
+    let report_event: arkret_wire::Event = serde_json::from_value(report_event).unwrap();
+    assert_eq!(report_event.actor_id, reporter_actor);
+    let verification_method = report_event.proofs[0]
+        .as_producer()
+        .unwrap()
+        .verification_method
+        .clone();
+    let created_at = chrono::Utc::now();
+    let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
+        strand_id: arkret_wire::StrandId::new(MIMI_TEST_STRAND_ID.to_owned()).unwrap(),
+        mimi_room_uri: arkret_wire::MimiRoomUri::new(room_uri.to_owned()).unwrap(),
+        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+        target_ref: arkret_wire::NonEmptyString::new(realm_id.to_owned()).unwrap(),
+        reporter_id: fixture_actor_core_id("did:web:alice.example"),
+        source_provider_id: arkret_wire::DidCoreId::new(MIMI_SOURCE_SERVICE_ID).unwrap(),
+        reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
+            actor_id: reporter_actor,
+            membership_event_id,
+            room_binding_event_id,
+            expires_at: created_at + chrono::Duration::minutes(4),
+            proof: arkret_wire::PayloadProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method,
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                domain: Some(state.config().trust_domain.to_string()),
+                audience: Some(arkret_wire::Audience::Single(state.service_id().clone())),
+                proof_purpose: None,
+                jws: "pending".to_owned(),
+            },
+        },
+        report_event: arkret_wire::EventInitialSubmission::online(report_event),
+        abuse_reason_code: arkret_wire::NonEmptyString::new("spam").unwrap(),
+        evidence_package: None,
+        franking_proof: None,
+        description: None,
+    };
+    body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
+    body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &body.reporter_authority_binding_bytes().unwrap(),
+        &signing_key,
+    )
+    .unwrap();
+    body
+}
+
+fn resign_human_mimi_report_authority(
+    body: &mut arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody,
+) {
+    let signing_key = SigningKey::from_bytes(&[21_u8; 32]);
+    body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
+    body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &body.reporter_authority_binding_bytes().unwrap(),
+        &signing_key,
+    )
+    .unwrap();
+}
+
+fn sign_mimi_agent_report_event(
+    event: Value,
+    verification_method: &arkret_wire::DidUrl,
+    signing_key: &SigningKey,
+) -> arkret_wire::Event {
+    let signer_did =
+        arkret_identity::verification_method_did(verification_method.as_str()).unwrap();
+    let mut event: arkret_wire::Event = serde_json::from_value(event).unwrap();
+    event.proofs.clear();
+    let created_at = event.created_at;
+    let mut event = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+        event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        signing_key.clone(),
+        signer_did,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .unwrap();
+    event.into_event()
+}
+
+async fn exact_agent_mimi_report_body(
+    state: &AppState,
+    runtime_key: &SigningKey,
+    realm_id: &str,
+    room_uri: &str,
+) -> arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
+    let (reporter_actor, membership_event_id, room_binding_event_id) =
+        install_current_mimi_report_binding(state, realm_id, room_uri, MIMI_TEST_STRAND_ID).await;
+    let controller_token = dev_token(state.clone()).await;
+    let controller_id = fixture_actor_core_id("did:web:alice.example");
+    let records = state
+        .test_persistence()
+        .agents()
+        .list_for_controller(controller_id.as_str())
+        .await
+        .unwrap();
+    let record = records
+        .into_iter()
+        .next()
+        .expect("active Agent runtime fixture");
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(record.id.clone()).unwrap(),
+        state.service_core_id(),
+    ));
+    let verification_method = arkret_wire::DidUrl::new(
+        record
+            .authorized_verification_method
+            .clone()
+            .expect("current Agent verification method"),
+    )
+    .unwrap();
+    let authorization_ref = record
+        .authorized_event_ref
+        .clone()
+        .expect("current Agent authorization Event");
+    let mut report_event = signed_canonical_event(
+        "mimi-agent-caller-authored-report",
+        arkret_wire::EventKind::SelfModerationReport.as_str(),
+        "did:web:alice.example",
+        MIMI_TEST_DEVICE_ID,
+        realm_id,
+        0,
+        Vec::new(),
+        json!({
+            "realm_id": realm_id,
+            "effective_scope": {"kind": "realm", "realm_id": realm_id},
+            "target_ref": realm_id,
+            "report_reason_code": "spam",
+            "reporter_id": "ak:did_core:web:alice.example",
+            "provenance": "mimi_facade",
+            "source_provider_id": MIMI_SOURCE_SERVICE_ID,
+        }),
+    );
+    move_event_to_actor_realm_frontier(
+        state,
+        &controller_token,
+        "did:web:alice.example",
+        realm_id,
+        &mut report_event,
+    )
+    .await;
+    report_event["executed_by"] = serde_json::to_value(&agent_actor).unwrap();
+    report_event["authorization_ref"] = json!(authorization_ref);
+    let report_event =
+        sign_mimi_agent_report_event(report_event, &verification_method, runtime_key);
+    assert_eq!(report_event.actor_id, reporter_actor);
+
+    let created_at = chrono::Utc::now();
+    let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
+        strand_id: arkret_wire::StrandId::new(MIMI_TEST_STRAND_ID.to_owned()).unwrap(),
+        mimi_room_uri: arkret_wire::MimiRoomUri::new(room_uri.to_owned()).unwrap(),
+        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
+        target_ref: arkret_wire::NonEmptyString::new(realm_id.to_owned()).unwrap(),
+        reporter_id: fixture_actor_core_id("did:web:alice.example"),
+        source_provider_id: arkret_wire::DidCoreId::new(MIMI_SOURCE_SERVICE_ID).unwrap(),
+        reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
+            actor_id: reporter_actor,
+            membership_event_id,
+            room_binding_event_id,
+            expires_at: created_at + chrono::Duration::minutes(4),
+            proof: arkret_wire::PayloadProof {
+                kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+                verification_method,
+                payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
+                created_at,
+                domain: Some(state.config().trust_domain.to_string()),
+                audience: Some(arkret_wire::Audience::Single(state.service_id().clone())),
+                proof_purpose: None,
+                jws: "pending".to_owned(),
+            },
+        },
+        report_event: arkret_wire::EventInitialSubmission::online(report_event),
+        abuse_reason_code: arkret_wire::NonEmptyString::new("spam").unwrap(),
+        evidence_package: None,
+        franking_proof: None,
+        description: None,
+    };
+    body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
+    body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &body.reporter_authority_binding_bytes().unwrap(),
+        runtime_key,
+    )
+    .unwrap();
+    body
+}
+
+#[test]
+fn mimi_report_accepts_exact_human_authority_and_persists_caller_event() {
+    run_on_deep_stack(
+        "mimi_report_accepts_exact_human_authority_and_persists_caller_event",
+        || async {
+            let state = soland_test_support::app_state(test_config());
+            let token = dev_token(state.clone()).await;
+            let realm_id = demo_realm_id();
+            let room_uri = "mimi://provider.example/rooms/human-report";
+            let body = exact_human_mimi_report_body(&state, &token, realm_id, room_uri).await;
+            let event_id = body.report_event.event.event_id.clone();
+            let service = app_from_state(state.clone());
+
+            let response: Value = signed_mimi_post!(
+                state,
+                "http://server/_arkret/open/mimi/report-abuse",
+                serde_json::to_value(&body).unwrap(),
+                None
+            )
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            assert_eq!(response["status"], "queued", "response: {response}");
+            let stored = state
+                .test_persistence()
+                .events()
+                .get(event_id.as_str())
+                .await
+                .unwrap()
+                .expect("caller-authored report Event is durable");
+            let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
+            assert_eq!(stored.event_id, event_id);
+            assert_eq!(stored.actor_id, body.reporter_authority.actor_id);
+            assert!(matches!(
+                stored.proofs.as_slice(),
+                [
+                    arkret_wire::EventProof::Producer(_),
+                    arkret_wire::EventProof::StationAdmission(_)
+                ]
+            ));
+        },
+    );
+}
+
+#[test]
+fn mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence() {
+    run_on_deep_stack(
+        "mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence",
+        || async {
+            let (state, runtime) = super::events::seed_agent_grant_session(
+                "mimi-agent-reporter",
+                &["ak.self.events.command.submit.v1"],
+            )
+            .await;
+            let realm_id = demo_realm_id();
+            let room_uri = "mimi://provider.example/rooms/agent-report";
+            let body =
+                exact_agent_mimi_report_body(&state, &runtime.holder_key, realm_id, room_uri).await;
+            let event_id = body.report_event.event.event_id.clone();
+            let service = app_from_state(state.clone());
+
+            let response: Value = signed_mimi_post!(
+                state,
+                "http://server/_arkret/open/mimi/report-abuse",
+                serde_json::to_value(&body).unwrap(),
+                None
+            )
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            assert_eq!(response["status"], "queued", "response: {response}");
+            let stored = state
+                .test_persistence()
+                .events()
+                .get(event_id.as_str())
+                .await
+                .unwrap()
+                .expect("Agent-proxied caller Event is durable");
+            let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
+            let producer = stored.proofs[0].as_producer().unwrap();
+            assert!(producer.signer_resolution_evidence_ref.is_some());
+            assert!(producer.signer_resolution_evidence_digest.is_some());
+            let admission = stored.proofs[1].as_station_admission().unwrap();
+            assert_eq!(
+                admission.producer_signer_resolution_evidence_ref,
+                producer.signer_resolution_evidence_ref
+            );
+            assert_eq!(
+                admission.producer_signer_resolution_evidence_digest,
+                producer.signer_resolution_evidence_digest
+            );
+        },
+    );
+}
+
+#[test]
+fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
+    run_on_deep_stack(
+        "mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect",
+        || async {
+            let state = soland_test_support::app_state(test_config());
+            let token = dev_token(state.clone()).await;
+            let realm_id = demo_realm_id();
+            let room_uri = "mimi://provider.example/rooms/pre-state-rejection";
+            let valid = exact_human_mimi_report_body(&state, &token, realm_id, room_uri).await;
+            let event_id = valid.report_event.event.event_id.clone();
+            let mut target_swap = valid.clone();
+            target_swap.report_event.event.payload.insert(
+                "target_ref".to_owned(),
+                json!("ak:realm:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
+            );
+            resign_human_mimi_report_authority(&mut target_swap);
+
+            let mut stale_membership = valid.clone();
+            stale_membership.reporter_authority.membership_event_id =
+                fixture_event_id(b"stale-mimi-membership");
+            resign_human_mimi_report_authority(&mut stale_membership);
+
+            let mut stale_room_binding = valid.clone();
+            stale_room_binding.reporter_authority.room_binding_event_id =
+                fixture_event_id(b"stale-mimi-room-binding");
+            resign_human_mimi_report_authority(&mut stale_room_binding);
+
+            let mut provider_swap = valid.clone();
+            provider_swap.source_provider_id =
+                arkret_wire::DidCoreId::new("ak:did_core:web:other-provider.example".to_owned())
+                    .unwrap();
+            resign_human_mimi_report_authority(&mut provider_swap);
+
+            let mut room_swap = valid.clone();
+            room_swap.mimi_room_uri =
+                arkret_wire::MimiRoomUri::new("mimi://provider.example/rooms/other".to_owned())
+                    .unwrap();
+            resign_human_mimi_report_authority(&mut room_swap);
+
+            let mut expired = valid.clone();
+            expired.reporter_authority.proof.created_at -= chrono::Duration::minutes(10);
+            expired.reporter_authority.expires_at =
+                expired.reporter_authority.proof.created_at + chrono::Duration::minutes(4);
+            resign_human_mimi_report_authority(&mut expired);
+
+            // Opaque evidence is content only. Even when it is cross-bound
+            // into the caller Event and holder transcript, it cannot replace
+            // the exact current membership generation.
+            let mut opaque_only = stale_membership.clone();
+            let opaque: arkret_models_collaboration::objects::mimi::MimiOpaquePayload =
+                serde_json::from_value(json!({
+                    "content_type": "application/json",
+                    "payload_digest": format!("sha256:{}", "1".repeat(64)),
+                    "payload": "e30"
+                }))
+                .unwrap();
+            opaque_only.evidence_package = Some(opaque.clone());
+            opaque_only.report_event.event.payload.insert(
+                "evidence_package".to_owned(),
+                serde_json::to_value(opaque).unwrap(),
+            );
+            resign_human_mimi_report_authority(&mut opaque_only);
+            let service = app_from_state(state.clone());
+
+            for (label, forged) in [
+                ("target/Event swap", target_swap),
+                ("stale membership", stale_membership),
+                ("stale room binding", stale_room_binding),
+                ("provider swap", provider_swap),
+                ("room swap", room_swap),
+                ("expired authority", expired),
+                ("opaque without current membership", opaque_only),
+            ] {
+                let mut rejected = signed_mimi_post!(
+                    state,
+                    "http://server/_arkret/open/mimi/report-abuse",
+                    serde_json::to_value(&forged).unwrap(),
+                    None
+                )
+                .send(&service)
+                .await;
+                assert_eq!(rejected.status_code, Some(StatusCode::FORBIDDEN), "{label}");
+                let problem: Value = rejected.take_json().await.unwrap();
+                assert_eq!(
+                    problem_code(&problem),
+                    "mimi_reporter_resolution_required",
+                    "{label}: {problem}"
+                );
+            }
+            assert!(
+                !state
+                    .test_persistence()
+                    .events()
+                    .contains(event_id.as_str())
+                    .await
+                    .unwrap(),
+                "pre-state cross-binding rejection must not persist the caller Event"
+            );
+
+            // The valid request has the same complete reporter Actor, source
+            // provider, Realm, source IP and target. Its first accepted attempt
+            // would be rejected by the one-per-target bucket if the forged
+            // request above had consumed moderation capacity.
+            let accepted: Value = signed_mimi_post!(
+                state,
+                "http://server/_arkret/open/mimi/report-abuse",
+                serde_json::to_value(&valid).unwrap(),
+                None
+            )
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+            assert_eq!(accepted["status"], "queued", "response: {accepted}");
+            assert!(
+                state
+                    .test_persistence()
+                    .events()
+                    .contains(event_id.as_str())
+                    .await
+                    .unwrap(),
+                "the exact caller-authored Event must remain admissible"
+            );
+        },
+    );
+}
+
+#[test]
+fn mimi_report_rejects_revoked_room_head_without_event_or_rate_side_effect() {
+    run_on_deep_stack(
+        "mimi_report_rejects_revoked_room_head_without_event_or_rate_side_effect",
+        || async {
+            let state = soland_test_support::app_state(test_config());
+            let token = dev_token(state.clone()).await;
+            let realm_id = demo_realm_id();
+            let room_uri = "mimi://provider.example/rooms/revoked-report";
+            let body = exact_human_mimi_report_body(&state, &token, realm_id, room_uri).await;
+            let event_id = body.report_event.event.event_id.clone();
+            install_revoked_mimi_room_binding_head(
+                &state,
+                realm_id,
+                room_uri,
+                body.reporter_authority.room_binding_event_id.clone(),
+            )
+            .await;
+
+            let mut rejected = signed_mimi_post!(
+                state,
+                "http://server/_arkret/open/mimi/report-abuse",
+                serde_json::to_value(&body).unwrap(),
+                None
+            )
+            .send(&app_from_state(state.clone()))
+            .await;
+            assert_eq!(rejected.status_code, Some(StatusCode::FORBIDDEN));
+            let problem: Value = rejected.take_json().await.unwrap();
+            assert_eq!(problem_code(&problem), "mimi_reporter_resolution_required");
+            assert!(
+                !state
+                    .test_persistence()
+                    .events()
+                    .contains(event_id.as_str())
+                    .await
+                    .unwrap()
+            );
+            let rate_probe = state.record_moderation_report_attempt(
+                &body.reporter_authority.actor_id.to_string(),
+                Some(MIMI_SOURCE_SERVICE_ID),
+                realm_id,
+                "post-rejection-probe",
+                body.target_ref.as_str(),
+            );
+            assert!(
+                !rate_probe.rate_limited,
+                "revoked room binding must reject before moderation rate state"
+            );
+        },
+    );
+}
+
+#[test]
+fn mimi_report_rejects_ambiguous_room_heads_without_event_or_rate_side_effect() {
+    run_on_deep_stack(
+        "mimi_report_rejects_ambiguous_room_heads_without_event_or_rate_side_effect",
+        || async {
+            let state = soland_test_support::app_state(test_config());
+            let token = dev_token(state.clone()).await;
+            let realm_id = demo_realm_id();
+            let room_uri = "mimi://provider.example/rooms/ambiguous-report";
+            let body = exact_human_mimi_report_body(&state, &token, realm_id, room_uri).await;
+            let event_id = body.report_event.event.event_id.clone();
+            install_parallel_mimi_room_binding_head(&state, realm_id, room_uri).await;
+
+            let mut rejected = signed_mimi_post!(
+                state,
+                "http://server/_arkret/open/mimi/report-abuse",
+                serde_json::to_value(&body).unwrap(),
+                None
+            )
+            .send(&app_from_state(state.clone()))
+            .await;
+            assert_eq!(rejected.status_code, Some(StatusCode::FORBIDDEN));
+            let problem: Value = rejected.take_json().await.unwrap();
+            assert_eq!(problem_code(&problem), "mimi_reporter_resolution_required");
+            assert!(
+                !state
+                    .test_persistence()
+                    .events()
+                    .contains(event_id.as_str())
+                    .await
+                    .unwrap()
+            );
+            let rate_probe = state.record_moderation_report_attempt(
+                &body.reporter_authority.actor_id.to_string(),
+                Some(MIMI_SOURCE_SERVICE_ID),
+                realm_id,
+                "post-ambiguity-probe",
+                body.target_ref.as_str(),
+            );
+            assert!(
+                !rate_probe.rate_limited,
+                "ambiguous room heads must reject before moderation rate state"
+            );
+        },
+    );
+}
+
 #[test]
 #[ignore = "implementation-regression: MIMI service-attested sender authority and MLS frontier verification are incomplete"]
 fn mimi_provider_facade_contracts_work() {
@@ -519,28 +1247,6 @@ async fn mimi_provider_facade_contracts_work_body() {
             .contains("/mimi/proxy-download")
     );
     assert!(proxy["expires_at"].as_str().is_some());
-
-    let report_body = json!({
-        "strand_id": MIMI_TEST_STRAND_ID,
-        "mimi_room_uri": room_uri,
-        "realm_id": demo_realm_id(),
-        "target_ref": demo_realm_id(),
-        "reporter_id": "did:web:alice.example",
-        "abuse_reason_code": "spam",
-    });
-    let report: Value = signed_mimi_post!(
-        state,
-        "http://server/_arkret/open/mimi/report-abuse",
-        report_body,
-        None
-    )
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(report["status"], "queued");
-    assert!(report["report_id"].as_str().is_some());
 }
 
 #[test]
@@ -677,63 +1383,6 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain_body() {
         message_event["payload"]["metadata"]["mimi_provenance"]["facade"],
         "soland.mimi.v1"
     );
-
-    let report_resp: Value = signed_mimi_post!(
-        state,
-        "http://server/_arkret/open/mimi/report-abuse",
-        json!({
-            "strand_id": MIMI_TEST_STRAND_ID,
-            "mimi_room_uri": room_uri.clone(),
-            "realm_id": demo_realm,
-            "target_ref": demo_realm,
-            // mimi-interop.md §11: attribute a report only after the reporter_id
-            // resolves through a local account or valid consent/holder claim.
-            // This reducer-chain test uses the seeded local demo principal;
-            // fake consent references are not valid resolution evidence.
-            "reporter_id": "did:web:alice.example",
-            "abuse_reason_code": "spam",
-        }),
-        None
-    )
-    .send(&service)
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(
-        report_resp["status"], "queued",
-        "report response: {report_resp}"
-    );
-
-    let events_again: Value = TestClient::query("http://server/_arkret/self/events")
-        .json(&serde_json::json!({"realms": [demo_realm]}))
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let report_event = events_again["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|event| {
-            // `moderation_report_payload` names the reported object `target_ref`;
-            // it has no `target_event_digest` member to match on.
-            event_kind(event) == Some("ak.self.moderation.report")
-                && event["payload"]["target_ref"] == demo_realm
-        })
-        .unwrap_or_else(|| panic!("moderation.report event missing: {events_again}"));
-    // `mimi-interop.md` §11 is about *attribution*: the report must name the
-    // principal the facade resolved, not the provider that asserted it. The
-    // facade holds no key for that principal, so it authors the envelope under
-    // its own service DID and carries the resolved reporter_id in the payload, as
-    // required by `mimi-interop.md` §11.
-    assert_eq!(
-        report_event["payload"]["reporter_id"],
-        "did:web:alice.example"
-    );
-    assert_eq!(report_event["actor_id"], *state.service_id());
 
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(

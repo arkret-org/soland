@@ -108,7 +108,7 @@ pub(crate) async fn freeze_current_agent_signer_evidence(
     Ok((reference, digest))
 }
 
-async fn current_authenticated_agent_signer_evidence(
+pub(crate) async fn current_authenticated_agent_signer_evidence(
     state: &AppState,
     selector: &AgentSignerEvidenceQuerySelector,
 ) -> Result<
@@ -162,11 +162,22 @@ async fn current_authenticated_agent_signer_evidence(
     let account_authority_evidence =
         fetch_service_signer_evidence(state, &gate.authority_id, None, None, chrono::Utc::now())
             .await?;
+    // The current branch is also the standard cold-recipient federation
+    // branch.  When the verifier is a foreign recipient Station, retain its
+    // authenticated Service evidence in the closure instead of requiring the
+    // verifier to be this Agent Authority itself.
     let receiver_evidence =
         if current_observation.verifier_id == *local_service_evidence.signer_id() {
             local_service_evidence.clone()
         } else {
-            return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+            fetch_service_signer_evidence(
+                state,
+                &current_observation.verifier_id,
+                None,
+                None,
+                chrono::Utc::now(),
+            )
+            .await?
         };
     let root = arkret::build_agent_signer_resolution_evidence(
         agent_signer_evidence,
@@ -176,15 +187,40 @@ async fn current_authenticated_agent_signer_evidence(
         &receiver_evidence,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    Ok((
-        root,
-        vec![
-            local_service_evidence,
-            controller_evidence,
-            account_authority_evidence,
-            receiver_evidence,
-        ],
-    ))
+    let mut dependencies = Vec::new();
+    let mut digests = std::collections::BTreeSet::new();
+    for evidence in [
+        local_service_evidence,
+        controller_evidence,
+        account_authority_evidence,
+        receiver_evidence,
+    ] {
+        let digest = evidence
+            .canonical_sha256_digest()
+            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        if digests.insert(digest) {
+            dependencies.push(evidence);
+        }
+    }
+    Ok((root, dependencies))
+}
+
+pub(crate) async fn issue_current_authenticated_agent_signer_evidence(
+    state: &AppState,
+    selector: &AgentSignerEvidenceQuerySelector,
+) -> Result<
+    (
+        AuthenticatedSignerResolutionEvidence,
+        Vec<AuthenticatedSignerResolutionEvidence>,
+    ),
+    AgentSignerEvidenceQueryFailureReason,
+> {
+    reserve_evidence_challenge(state, selector).await?;
+    let (root, dependencies) = current_authenticated_agent_signer_evidence(state, selector).await?;
+    persist_agent_signer_evidence_closure(state, &root, &dependencies)
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    Ok((root, dependencies))
 }
 
 async fn historical_authenticated_agent_signer_evidence(

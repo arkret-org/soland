@@ -4,7 +4,7 @@ use super::{
     SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord, async_trait,
 };
 /// Durable recovery policy store. Implementations enforce policy_id
-/// uniqueness, `(principal_id, version)` uniqueness, and the per-principal
+/// uniqueness, `(account_id, version)` uniqueness, and the per-account
 /// supersedes/version monotonicity check before accepting a new snapshot.
 #[async_trait]
 pub trait RecoveryPolicyStore: Send + Sync {
@@ -12,15 +12,15 @@ pub trait RecoveryPolicyStore: Send + Sync {
         &self,
         policy_id: &str,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>>;
-    async fn get_active_for_principal(
+    async fn get_active_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>>;
     /// All policies for a principal, newest version first (REC-1 read API /
     /// UI audit history).
-    async fn list_for_principal(
+    async fn list_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>>;
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()>;
 }
@@ -224,7 +224,7 @@ pub fn validate_security_transaction_update(
     if existing.canonical_request != proposed.canonical_request
         || current.transaction_id != next.transaction_id
         || current.kind != next.kind
-        || current.principal_id != next.principal_id
+        || current.account_id != next.account_id
         || current.coordinator_id != next.coordinator_id
         || current.expires_at != next.expires_at
         || current.created_at != next.created_at
@@ -260,10 +260,10 @@ pub fn validate_security_transaction_update(
 #[doc(hidden)]
 pub fn recovery_active_policy_locked(
     data: &BTreeMap<String, RecoveryPolicyRecord>,
-    principal_id: &str,
+    account_id: &arkret_wire::AccountId,
 ) -> Option<RecoveryPolicyRecord> {
     data.values()
-        .filter(|record| record.principal_id.as_str() == principal_id)
+        .filter(|record| &record.account_id == account_id)
         .max_by_key(|record| record.version)
         .cloned()
 }

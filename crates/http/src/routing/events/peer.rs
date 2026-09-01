@@ -13,6 +13,7 @@ use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, PeerSealFrontierState,
     RealmSealFrontierView,
 };
+use arkret_models_collaboration::history_key::DirectorySourceRefAccess;
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
 };
@@ -957,6 +958,54 @@ async fn peer_events_resolve(
         }
         return json_ok(outcome);
     }
+    if let Some(access) = request.directory_source_ref_access.as_ref() {
+        verify_directory_source_ref_access(state, &source_id, access).await?;
+        let records = state
+            .event_queries()
+            .canonical_events()
+            .await
+            .map_err(|error| AppError::internal(format!("peer events resolve: {error}")))?;
+        let mut events = Vec::new();
+        let mut found_ids = BTreeSet::new();
+        for record in records {
+            if record.realm_id.as_deref() != Some(request.realm_id.as_str())
+                || !requested_ids.contains(record.event_id.as_str())
+            {
+                continue;
+            }
+            let event: arkret_wire::Event = serde_json::from_value(record.envelope.clone())
+                .map_err(|error| AppError::internal(format!("stored Event decode: {error}")))?;
+            let event_digest = arkret_wire::Hash::new(record.canonical_digest.clone())
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            found_ids.insert(record.event_id.clone());
+            events.push(retained_federation_submission(state, event, &event_digest).await?);
+        }
+        events.sort_by(|left, right| {
+            left.event
+                .event_id
+                .as_str()
+                .cmp(right.event.event_id.as_str())
+        });
+        let outcome = PeerEventsResolveOutcome {
+            events,
+            missing_event_ids: request
+                .event_ids
+                .iter()
+                .filter(|event_id| !found_ids.contains(event_id.as_str()))
+                .cloned()
+                .collect(),
+            missing_event_digests: Vec::new(),
+        };
+        let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
+            .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
+        if response_bytes.len() > request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::LimitExceeded,
+                "peer dependency response exceeds max_response_bytes",
+            ));
+        }
+        return json_ok(outcome);
+    }
     let records = state
         .event_queries()
         .canonical_events()
@@ -1029,6 +1078,165 @@ async fn peer_events_resolve(
         ));
     }
     json_ok(outcome)
+}
+
+async fn verify_directory_source_ref_access(
+    state: &AppState,
+    source_id: &str,
+    access: &DirectorySourceRefAccess,
+) -> Result<(), AppError> {
+    let deny = || AppError::capability_denied("peer Event selector is unavailable");
+    if source_id != access.directory_id.as_str()
+        || access.source_id != state.service_core_id()
+        || access.expires_at <= now()
+    {
+        return Err(deny());
+    }
+    let signer_did =
+        arkret_identity::verification_method_did(access.proof.verification_method.as_str())
+            .map_err(|_| deny())?;
+    let signer_service_id = arkret_wire::project_did_to_core_id(&signer_did).map_err(|_| deny())?;
+    if signer_service_id != access.source_id {
+        return Err(deny());
+    }
+    // Accept either the current service assertion method or a method proven
+    // effective by authenticated history at `created_at`. This preserves
+    // valid short-lived carriers across key rotation without treating the
+    // current local notary key as the only possible source authority.
+    let current_method = format!("{}#notary-key", state.service_resolution_commitment().did);
+    let verification_key = if access.proof.verification_method.as_str() == current_method {
+        state.notary_signing_key().verifying_key()
+    } else {
+        crate::jws_verify::resolve_ed25519_pubkey_at(
+            state,
+            access.proof.verification_method.as_str(),
+            access.proof.created_at,
+        )
+        .await
+        .map_err(|_| deny())?
+    };
+    let binding = access.proof_binding_bytes().map_err(|_| deny())?;
+    arkret_signatures::verify_ed25519_detached_jws_payload_proof(
+        &access.proof,
+        &binding,
+        &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+            bytes: verification_key.to_bytes().to_vec(),
+        },
+    )
+    .map_err(|_| deny())?;
+
+    let accepted = state
+        .event_queries()
+        .canonical_event(access.discovery_event_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("discovery Event lookup: {error}")))?
+        .ok_or_else(deny)?;
+    let event: arkret_wire::Event =
+        serde_json::from_value(accepted.envelope).map_err(|_| deny())?;
+    if event.realm_id != access.realm_id
+        || event.event_id != access.discovery_event_id
+        || !matches!(
+            event.kind.as_str(),
+            "ak.realm.discovery"
+                | "ak.organization.discovery"
+                | "ak.actor.discovery"
+                | "ak.applet.discovery"
+                | "ak.handle.discovery"
+        )
+    {
+        return Err(deny());
+    }
+    let listed = event
+        .payload
+        .get("value")
+        .and_then(|value| value.get("directory_ids"))
+        .and_then(Value::as_array)
+        .is_some_and(|ids| {
+            ids.iter()
+                .any(|id| id.as_str() == Some(access.directory_id.as_str()))
+        });
+    let active = !matches!(
+        event
+            .payload
+            .get("value")
+            .and_then(|value| value.get("discoverability"))
+            .and_then(Value::as_str),
+        Some("secret" | "unlisted") | None
+    );
+    if !listed || !active {
+        return Err(deny());
+    }
+    let accepted_frontier = std::iter::once(event.event_id.as_str())
+        .chain(event.prev_refs.iter().map(|event_id| event_id.as_str()))
+        .chain(event.refs.iter().map(|event_ref| event_ref.id.as_str()))
+        .collect::<BTreeSet<_>>();
+    if access
+        .source_refs
+        .iter()
+        .any(|event_id| !accepted_frontier.contains(event_id.as_str()))
+    {
+        return Err(deny());
+    }
+
+    let resource_key = discovery_event_resource_key(&event).ok_or_else(deny)?;
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("discovery current-state lookup: {error}")))?;
+    let mut candidates = Vec::new();
+    for record in records {
+        let candidate: arkret_wire::Event =
+            serde_json::from_value(record.envelope).map_err(|error| {
+                AppError::internal(format!("stored discovery Event decode: {error}"))
+            })?;
+        if candidate.kind == event.kind
+            && candidate.realm_id == event.realm_id
+            && discovery_event_resource_key(&candidate).as_deref() == Some(resource_key.as_str())
+        {
+            candidates.push(candidate);
+        }
+    }
+    let candidate_ids = candidates
+        .iter()
+        .map(|candidate| candidate.event_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let superseded = candidates
+        .iter()
+        .flat_map(|candidate| candidate.prev_refs.iter())
+        .filter(|event_id| candidate_ids.contains(event_id.as_str()))
+        .map(|event_id| event_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut heads = candidates
+        .iter()
+        .filter(|candidate| !superseded.contains(candidate.event_id.as_str()));
+    let current = heads.next().ok_or_else(deny)?;
+    if current.event_id != access.discovery_event_id || heads.next().is_some() {
+        return Err(deny());
+    }
+    Ok(())
+}
+
+fn discovery_event_resource_key(event: &arkret_wire::Event) -> Option<String> {
+    discovery_payload_resource_key(event.kind.clone(), event.realm_id.as_str(), &event.payload)
+}
+
+fn discovery_payload_resource_key(
+    kind: arkret_wire::EventKind,
+    realm_id: &str,
+    payload: &std::collections::BTreeMap<String, Value>,
+) -> Option<String> {
+    match kind.as_str() {
+        "ak.realm.discovery" => Some(realm_id.to_owned()),
+        "ak.organization.discovery" => payload
+            .get("organization_principal_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        "ak.actor.discovery" | "ak.applet.discovery" | "ak.handle.discovery" => payload
+            .get("resource_id")
+            .and_then(|value| arkret_canonical::canonical_json_string(value).ok()),
+        _ => None,
+    }
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.frontier", tags("events"))]

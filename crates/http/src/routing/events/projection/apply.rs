@@ -924,12 +924,10 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     let Some(account_id) = operation.context.sender.as_account_id() else {
         return;
     };
-    if account_id.station_id != state.service_core_id()
-        || account_id.principal_id != typed.principal_id
-    {
+    if account_id.station_id != state.service_core_id() {
         return;
     }
-    let principal_id = typed.principal_id.as_str();
+    let principal_id = account_id.principal_id.as_str();
     let device_id = typed.device_id.as_str();
     let device_public_key = typed.device_public_key_did.trim();
     if device_public_key.is_empty() {

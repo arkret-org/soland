@@ -33,9 +33,14 @@ pub(crate) async fn validate_device_authorization_binding(
                 format!("invalid ak.device.authorize payload: {error}"),
             )
         })?;
-    if payload.principal_id.as_str() != actor_id {
+    let Some(subject_account_id) = event.actor_id.as_account_id() else {
         return Err(device_authorization_invalid(
-            "device authorization principal does not match actor_id",
+            "device authorization requires an account actor",
+        ));
+    };
+    if subject_account_id.principal_id.as_str() != actor_id {
+        return Err(device_authorization_invalid(
+            "device authorization actor mismatch",
         ));
     }
     match (&payload.authorization_binding_kind, &payload.authorized_by) {
@@ -51,8 +56,7 @@ pub(crate) async fn validate_device_authorization_binding(
                         .identity_anchor_candidate_device
                         .as_ref()
                         .is_some_and(|candidate| {
-                            candidate.principal_id == payload.principal_id
-                                && candidate.device_id == payload.device_id
+                            candidate.device_id == payload.device_id
                                 && candidate.device_public_key_did == payload.device_public_key_did
                                 && candidate.hpke_key == payload.hpke_key
                                 && candidate.algorithms == payload.algorithms
@@ -136,8 +140,12 @@ pub(crate) async fn validate_device_authorization_binding(
             ));
         }
     }
-    crate::routing::identity::device_signing::validate_device_authorize_binding(state, &payload)
-        .map_err(device_authorization_invalid)
+    crate::routing::identity::device_signing::validate_device_authorize_binding(
+        state,
+        &payload,
+        subject_account_id,
+    )
+    .map_err(device_authorization_invalid)
 }
 
 fn device_authorization_invalid(message: impl Into<String>) -> EventValidationError {

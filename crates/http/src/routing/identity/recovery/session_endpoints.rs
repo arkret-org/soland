@@ -237,7 +237,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
     let expected_methods = quorum
         .member_ids
         .iter()
-        .map(|device_id| format!("{}#{}", active.principal_id, device_id))
+        .map(|device_id| format!("{}#{}", active.account_id.principal_id, device_id))
         .collect::<BTreeSet<_>>();
     let declared_methods = rule
         .issuers
@@ -267,7 +267,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .collect::<BTreeSet<_>>();
     let events = state
         .event_queries()
-        .accepted_events_for_actor(active.principal_id.as_str())
+        .accepted_events_for_actor(active.account_id.principal_id.as_str())
         .await
         .map_err(recovery_service_error)?;
     for member in &quorum.member_ids {
@@ -550,7 +550,7 @@ pub(super) async fn recovery_session_create(
     // requested trust_domain MUST match it (no domain confusion).
     let active = state
         .recovery_policies()
-        .active_policy(&principal)
+        .active_policy(&account_id)
         .await
         .map_err(recovery_service_error)?
         .ok_or_else(|| {

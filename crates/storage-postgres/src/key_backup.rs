@@ -11,6 +11,8 @@ struct KeyBackupDeleteChallengeRow {
     #[diesel(sql_type = Text)]
     principal_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Text)]
+    station_id: arkret_identifiers::DidCoreId,
+    #[diesel(sql_type = Text)]
     backup_id: String,
     #[diesel(sql_type = Text)]
     request_id: String,
@@ -28,7 +30,7 @@ impl From<KeyBackupDeleteChallengeRow> for KeyBackupDeleteChallengeRecord {
     fn from(row: KeyBackupDeleteChallengeRow) -> Self {
         Self {
             challenge_id: row.challenge_id,
-            principal_id: row.principal_id,
+            account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
             backup_id: row.backup_id,
             request_id: row.request_id,
             challenge: row.challenge,
@@ -39,7 +41,7 @@ impl From<KeyBackupDeleteChallengeRow> for KeyBackupDeleteChallengeRecord {
     }
 }
 
-const DELETE_CHALLENGE_COLUMNS: &str = "challenge_id, principal_id, backup_id, request_id,      challenge, issued_at, expires_at, consumed_at";
+const DELETE_CHALLENGE_COLUMNS: &str = "challenge_id, principal_id, station_id, backup_id, request_id, challenge, issued_at, expires_at, consumed_at";
 /// SOL-02-004 — classify a `key_backups` INSERT failure. A unique violation on
 /// `key_backups_series_seq_key` means a concurrent successor PUT already
 /// claimed this `(actor_id, series_id, series_seq)` tuple; surface it as a
@@ -192,16 +194,17 @@ impl KeyBackupStore for PgKeyBackupStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        // The row is unique on `(principal_id, backup_id, request_id)`, and the
+        // The row is unique on `(principal_id, station_id, backup_id, request_id)`, and the
         // `DO UPDATE ... WHERE` guard only replaces it once the held challenge
         // is consumed or expired. So this statement mints a challenge exactly
         // when §7.8.1 says a new one is due, and returns no row exactly when a
         // still-valid one is held.
         let issued = sql_query(format!(
-            "INSERT INTO key_backup_delete_challenges              ({DELETE_CHALLENGE_COLUMNS})              VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)              ON CONFLICT (principal_id, backup_id, request_id) DO UPDATE SET                 challenge_id = EXCLUDED.challenge_id,                 challenge = EXCLUDED.challenge,                 issued_at = EXCLUDED.issued_at,                 expires_at = EXCLUDED.expires_at,                 consumed_at = NULL              WHERE key_backup_delete_challenges.consumed_at IS NOT NULL                 OR key_backup_delete_challenges.expires_at <= $8              RETURNING {DELETE_CHALLENGE_COLUMNS}"
+            "INSERT INTO key_backup_delete_challenges ({DELETE_CHALLENGE_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL) ON CONFLICT (principal_id, station_id, backup_id, request_id) DO UPDATE SET challenge_id = EXCLUDED.challenge_id, challenge = EXCLUDED.challenge, issued_at = EXCLUDED.issued_at, expires_at = EXCLUDED.expires_at, consumed_at = NULL WHERE key_backup_delete_challenges.consumed_at IS NOT NULL OR key_backup_delete_challenges.expires_at <= $9 RETURNING {DELETE_CHALLENGE_COLUMNS}"
         ))
         .bind::<Text, _>(&record.challenge_id)
-        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.account_id.principal_id)
+        .bind::<Text, _>(&record.account_id.station_id)
         .bind::<Text, _>(&record.backup_id)
         .bind::<Text, _>(&record.request_id)
         .bind::<Jsonb, _>(&record.challenge)
@@ -221,9 +224,10 @@ impl KeyBackupStore for PgKeyBackupStore {
         // so a client retrying the issue call does not invalidate the challenge
         // it is already signing.
         sql_query(format!(
-            "SELECT {DELETE_CHALLENGE_COLUMNS} FROM key_backup_delete_challenges              WHERE principal_id = $1 AND backup_id = $2 AND request_id = $3"
+            "SELECT {DELETE_CHALLENGE_COLUMNS} FROM key_backup_delete_challenges WHERE principal_id = $1 AND station_id = $2 AND backup_id = $3 AND request_id = $4"
         ))
-        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.account_id.principal_id)
+        .bind::<Text, _>(&record.account_id.station_id)
         .bind::<Text, _>(&record.backup_id)
         .bind::<Text, _>(&record.request_id)
         .get_result::<KeyBackupDeleteChallengeRow>(&mut *conn)

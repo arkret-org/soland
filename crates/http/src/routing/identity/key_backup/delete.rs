@@ -43,7 +43,7 @@ pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
 pub(super) const KEY_BACKUP_DELETE_OPERATION: &str =
     ServiceOperationId::SELF_KEYS_BACKUPS_RESOURCE_DELETE_V1;
 
-/// How long the `(principal_id, backup_id, request_id)` terminal outcome is
+/// How long the `(account_id, backup_id, request_id)` terminal outcome is
 /// replayable (§7.8.1 step 4). Matches the generic `Idempotency-Key` TTL.
 pub(super) const KEY_BACKUP_DELETE_IDEMPOTENCY_TTL_SECONDS: i64 = 86_400;
 
@@ -119,7 +119,7 @@ pub(super) async fn issue_key_backup_delete_challenge(
         challenge: random_base64url(32),
         nonce: random_base64url(16),
         operation: KEY_BACKUP_DELETE_OPERATION.to_owned(),
-        principal_id,
+        account_id: arkret_wire::AccountId::new(principal_id, state.service_core_id()),
         backup_id: typed_backup_id,
         audience,
         service_id,
@@ -130,7 +130,7 @@ pub(super) async fn issue_key_backup_delete_challenge(
 
     let record = soland_services::identity::KeyBackupDeleteChallengeRecord {
         challenge_id: challenge.challenge_id.as_str().to_owned(),
-        principal_id: challenge.principal_id.clone(),
+        account_id: challenge.account_id.clone(),
         backup_id: challenge.backup_id.as_str().to_owned(),
         request_id: challenge.request_id.as_str().to_owned(),
         challenge: serde_json::to_value(&challenge).map_err(|error| {
@@ -148,7 +148,7 @@ pub(super) async fn issue_key_backup_delete_challenge(
             AppError::internal(format!("delete challenge could not be issued: {error}"))
         })?;
     // The store returns the *held* challenge when one is still valid for this
-    // `(principal_id, backup_id, request_id)`, so a retry of this call keeps
+    // `(account_id, backup_id, request_id)`, so a retry of this call keeps
     // returning the challenge the client may already be signing.
     let issued: KeysBackupsDeleteChallenge =
         serde_json::from_value(issued.challenge).map_err(|error| {
@@ -302,9 +302,15 @@ async fn load_valid_challenge(
         serde_json::from_value(record.challenge).map_err(|error| {
             AppError::internal(format!("stored delete challenge is corrupt: {error}"))
         })?;
-    if challenge.principal_id.as_str() != actor_id {
+    let caller_account = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(actor_id.to_owned()).map_err(|error| {
+            AppError::capability_denied(format!("authenticated actor is invalid: {error}"))
+        })?,
+        state.service_core_id(),
+    );
+    if challenge.account_id != caller_account {
         return Err(AppError::capability_denied(
-            "key backup delete challenge belongs to another principal",
+            "key backup delete challenge belongs to another account",
         ));
     }
     if challenge.backup_id.as_str() != backup_id {
@@ -387,7 +393,7 @@ async fn verify_principal_signing_delete(
     let method_principal = arkret_wire::project_did_to_core_id(&method_did).map_err(|error| {
         AppError::capability_denied(format!("principal proof DID cannot be projected: {error}"))
     })?;
-    if method_principal != challenge.principal_id {
+    if method_principal != challenge.account_id.principal_id {
         return Err(AppError::capability_denied(
             "principal proof method does not belong to the challenge authority pair",
         ));
@@ -398,12 +404,9 @@ async fn verify_principal_signing_delete(
                 "principal proof device fragment is invalid: {error}"
             ))
         })?;
-    let station_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
-        .map_err(|error| AppError::internal(format!("local Station id is invalid: {error}")))?;
-    let authority_key = arkret_wire::AccountId::new(challenge.principal_id.clone(), station_id);
     let authority = state
         .persistence()
-        .principal_resolution_by_account_id(&authority_key)
+        .principal_resolution_by_account_id(&challenge.account_id)
         .await
         .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
         .ok_or_else(|| {
@@ -412,7 +415,7 @@ async fn verify_principal_signing_delete(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: challenge.principal_id.to_string(),
+            actor_id: challenge.account_id.principal_id.to_string(),
             device_id: device_id.to_string(),
         })
         .await
@@ -449,11 +452,7 @@ async fn verify_principal_signing_delete(
             AppError::capability_denied("principal proof authorization Event is unavailable")
         })?;
     if authorize_event.actor_id
-        != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            challenge.principal_id.clone(),
-            challenge.service_id.clone(),
-        ))
-        .to_string()
+        != arkret_wire::ActorId::account(challenge.account_id.clone()).to_string()
         || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
         || authorize_event.realm_id.as_deref() != Some(authority.pcr_realm_id.as_str())
     {
@@ -490,7 +489,7 @@ async fn verify_device_quorum_delete(
     expected_digest: &arkret_identifiers::Hash,
     canonical: &[u8],
 ) -> Result<(), AppError> {
-    let policy_k = current_device_quorum_k(state, challenge.principal_id.as_str()).await?;
+    let policy_k = current_device_quorum_k(state, &challenge.account_id).await?;
     // Equality, not `>=`: §7.8.1 says the request threshold MUST equal the
     // policy `k`, so a caller cannot declare a lower bar and cannot silently
     // pass a stale higher one either.
@@ -502,7 +501,7 @@ async fn verify_device_quorum_delete(
     }
     let devices = state
         .identities()
-        .devices_for_actor(challenge.principal_id.as_str())
+        .devices_for_actor(challenge.account_id.principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("device directory lookup failed: {error}")))?;
     let mut seen = std::collections::BTreeSet::new();
@@ -541,7 +540,7 @@ async fn verify_device_quorum_delete(
         // verification method has to name it rather than merely resolve to some
         // key of the principal.
         if !quorum_verification_method_matches(
-            challenge.principal_id.as_str(),
+            challenge.account_id.principal_id.as_str(),
             contribution.device_id.as_str(),
             device_public_key,
             contribution.proof.verification_method.as_str(),
@@ -599,9 +598,11 @@ async fn verify_trusted_recovery_service_delete(
         .ok_or_else(|| {
             AppError::capability_denied("key backup delete recovery session is unknown")
         })?;
-    if session.principal_id != challenge.principal_id {
+    if session.principal_id != challenge.account_id.principal_id
+        || session.station_id != challenge.account_id.station_id
+    {
         return Err(AppError::capability_denied(
-            "key backup delete recovery session belongs to another principal",
+            "key backup delete recovery session belongs to another account",
         ));
     }
     // The recovery-session states §7.8.1 accepts for the
@@ -619,7 +620,7 @@ async fn verify_trusted_recovery_service_delete(
             "key backup delete recovery session is expired for this proof",
         ));
     }
-    let policy = current_recovery_policy(state, challenge.principal_id.as_str()).await?;
+    let policy = current_recovery_policy(state, &challenge.account_id).await?;
     if !policy
         .allowed_proof_kinds
         .iter()
@@ -675,16 +676,16 @@ fn verify_detached_jws(key: &ed25519_dalek::VerifyingKey, canonical: &[u8], jws:
 
 async fn current_recovery_policy(
     state: &AppState,
-    principal_id: &str,
+    account_id: &arkret_wire::AccountId,
 ) -> Result<soland_services::identity::RecoveryPolicyState, AppError> {
     state
         .recovery_policies()
-        .active_policy(principal_id)
+        .active_policy(account_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::capability_denied(
-                "no accepted recovery policy for this principal (key-management.md §7.8.1)",
+                "no accepted recovery policy for this account (key-management.md §7.8.1)",
             )
         })
 }
@@ -692,8 +693,11 @@ async fn current_recovery_policy(
 /// The `k` of the principal's currently accepted device-quorum recovery policy.
 ///
 /// The same recovery-policy pointer set governs every destructive endpoint.
-async fn current_device_quorum_k(state: &AppState, principal_id: &str) -> Result<u32, AppError> {
-    let policy = current_recovery_policy(state, principal_id).await?;
+async fn current_device_quorum_k(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+) -> Result<u32, AppError> {
+    let policy = current_recovery_policy(state, account_id).await?;
     if !policy
         .allowed_proof_kinds
         .iter()

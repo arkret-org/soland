@@ -87,7 +87,7 @@ pub(super) fn router() -> Router {
 /// collection snapshot (`/_soland/admin/handles`).
 pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecord> {
     // Index handle-claim evidence by subject DID so account rows can pick
-    // up issuer / binding-state metadata when a directory-issued claim is
+    // up issuer / status metadata when a directory-issued claim is
     // cached locally.
     let claims_by_subject = state.handle_claims_snapshot();
 
@@ -104,8 +104,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
             let evidence = claims_by_subject.get(&account.principal_id);
             let primary_claim = evidence.and_then(|records| records.first());
             let status = match primary_claim {
-                Some(record) if record.revoked => "revoked".to_owned(),
-                Some(record) => record.binding_state.clone(),
+                Some(record) => record.status.clone(),
                 None => "active".to_owned(),
             };
             let handle = format!("@{}", localpart.localpart);

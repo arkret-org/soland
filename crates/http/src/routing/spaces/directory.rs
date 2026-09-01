@@ -41,16 +41,17 @@ use arkret_models_discovery::{
     RealmPreview, ServiceDescribe, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
-use arkret_models_identity::handle::HandleClaimKind;
 use arkret_models_identity::{
-    Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
-    ServiceResolutionCarrier,
+    Handle as SdkHandle, HandleClaim as SdkHandleClaim, HandleClaimCore, HandleClaimStatus,
+    HandleClaimVariant, HandleVisibility, ServiceResolutionCarrier,
+    handle_claim_proof_signing_bytes,
 };
 use arkret_server::{CursorAuthority, CursorAuthorityError, CursorBindingContext};
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AccountId, AddressLinkKind, Audience, CellFamilyId, JoinRule, PayloadProof, PayloadSigner,
-    RealmRef, TargetDescriptor, parse_address, proof_kind, target_digest,
+    AccountId, AddressLinkKind, Audience, CellFamilyId, Hash, JoinRule, PayloadProof,
+    PayloadProofPurpose, PayloadSigner, RealmRef, TargetDescriptor, parse_address, proof_kind,
+    target_digest,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

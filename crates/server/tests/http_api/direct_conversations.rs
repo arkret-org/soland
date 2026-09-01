@@ -94,19 +94,22 @@ fn normal_contact_evidence(
     round_material.extend(arkret_canonical::canonical_json_bytes(&contact_round).unwrap());
     let contact_round_id =
         arkret_wire::Hash::new(arkret_canonical::sha256_digest(round_material)).unwrap();
-    let current_proof =
-        |issuer: arkret_wire::AccountId, issuer_did: &str, head_event_ref: arkret_wire::EventId| {
-            ContactCurrentProof {
-                contact_round_id: contact_round_id.clone(),
-                issuer_id: arkret_wire::ActorId::account(issuer),
-                terminal: false,
-                accepted_frontier: vec![head_event_ref.clone()],
-                head_event_ref,
-                complete_through: 1,
-                fresh_until: now + chrono::Duration::hours(1),
-                signature: fixture_protocol_signature(issuer_did, now),
-            }
-        };
+    let current_proof = |subject: arkret_wire::AccountId,
+                         peer: ContactPeer,
+                         issuer_did: &str,
+                         head_event_ref: arkret_wire::EventId| {
+        ContactCurrentProof {
+            contact_round_id: contact_round_id.clone(),
+            issuer_id: subject.station_id,
+            peer,
+            terminal: false,
+            accepted_frontier: vec![head_event_ref.clone()],
+            head_event_ref,
+            complete_through: 1,
+            fresh_until: now + chrono::Duration::hours(1),
+            signature: fixture_protocol_signature(issuer_did, now),
+        }
+    };
     ContactRoundEvidenceBundle {
         contact_round_id: contact_round_id.clone(),
         previous_terminal_contact_round_id: None,
@@ -118,13 +121,27 @@ fn normal_contact_evidence(
             response_event_ref: response_event_ref.clone(),
             outgoing_slot_absence_digest: fixture_hash('5'),
             accepted_at: now,
-            issuer_id: arkret_wire::ActorId::account(target.clone()),
+            issuer_id: target.station_id.clone(),
             signature: fixture_protocol_signature("did:web:bob.example", now),
         }),
         glare_concurrency_attestations: None,
         current_proofs: vec![
-            current_proof(requester_id, "did:web:alice.example", request_event_ref),
-            current_proof(target, "did:web:bob.example", response_event_ref),
+            current_proof(
+                requester_id.clone(),
+                ContactPeer::Human {
+                    account_id: target.clone(),
+                },
+                "did:web:alice.example",
+                request_event_ref,
+            ),
+            current_proof(
+                target,
+                ContactPeer::Human {
+                    account_id: requester_id,
+                },
+                "did:web:bob.example",
+                response_event_ref,
+            ),
         ],
         continuity_checkpoint: None,
     }
@@ -200,6 +217,7 @@ async fn seed_accepted_direct_message_contact(
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
             request_event_ref: Some(request_event_ref),
+            request_slot_states: Vec::new(),
             request_receipts: evidence.request_receipts.clone(),
             request_mirror_receipts: Vec::new(),
             contact_round_evidence: Some(evidence),
@@ -348,7 +366,9 @@ async fn seed_remote_claim_prerequisites(
         )
         .unwrap(),
         holder_principal_id: core_id(BOB_DID),
-        peer_principal_id: core_id(alice),
+        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+            principal_id: core_id(alice),
+        },
         consent_scope: "direct_message".to_owned(),
         grant_dots: BTreeMap::from([(
             grant_dot.clone(),
@@ -404,8 +424,14 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let unsigned: arkret_models_crypto::PeerKeyPackagesClaimUnsignedRequest =
         serde_json::from_value(serde_json::json!({
             "claim_request_id": claim_request_id,
-            "target_principal_id": target,
-            "requester_id": requester_id,
+            "target_account_id": {
+                "principal_id": target,
+                "station_id": destination_id
+            },
+            "requester_account_id": {
+                "principal_id": requester_id,
+                "station_id": source_id
+            },
             "intended_realm_id": realm_id,
             "mls_group_id": "mls-group-0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
@@ -453,8 +479,8 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable_bo
     let request: arkret_models_crypto::PeerKeyPackagesClaimRequestBody =
         serde_json::from_value(serde_json::json!({
             "claim_request_id": unsigned.claim_request_id,
-            "target_principal_id": unsigned.target_principal_id,
-            "requester_id": unsigned.requester_id,
+            "target_account_id": unsigned.target_account_id,
+            "requester_account_id": unsigned.requester_account_id,
             "intended_realm_id": unsigned.intended_realm_id,
             "mls_group_id": unsigned.mls_group_id,
             "claim_purpose": unsigned.claim_purpose,
@@ -870,6 +896,7 @@ async fn direct_resolve_ignores_accepted_row_without_contact_fact_refs_body() {
             granted_to_requester_scopes: vec!["direct_message".to_owned()],
             status: "accepted".to_owned(),
             request_event_ref: None,
+            request_slot_states: Vec::new(),
             request_receipts: Vec::new(),
             request_mirror_receipts: Vec::new(),
             contact_round_evidence: None,

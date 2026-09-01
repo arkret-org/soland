@@ -1542,7 +1542,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 "stored replacement device authorization does not match the re-anchor payload digest",
             ));
         }
-        if &authorize_payload.principal_id != principal_id || authorize.actor_id != actor {
+        if authorize.actor_id != actor {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 "replacement device authorization principal differs from the re-anchor actor",

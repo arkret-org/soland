@@ -340,6 +340,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(system::peer_router())
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router())
+                .push(identity::current_signer_evidence::peer_router())
                 .push(federation::federation::erasure_receipts::router())
                 .push(governance_history::peer_router())
                 .push(mls::peer_router()),

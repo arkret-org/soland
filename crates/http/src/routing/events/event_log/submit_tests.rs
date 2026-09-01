@@ -543,4 +543,62 @@ mod internal_event_admission_tests {
 
         assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
     }
+
+    #[test]
+    fn mimi_agent_reporter_admission_binds_executor_method_and_evidence_freeze_lane() {
+        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+        let station_id = arkret_wire::DidCoreId::new("ak:did_core:web:station.example").unwrap();
+        let reporter = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            station_id.clone(),
+        ));
+        let agent = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:alice-agent.example").unwrap(),
+            station_id,
+        ));
+        let method = arkret_wire::DidUrl::new("did:web:alice-agent.example#runtime-1").unwrap();
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[9_u8; 32]);
+        let signing_key = arkret_wire::DidKey::new(format!("did:key:{multibase}")).unwrap();
+        let admission = InternalEventAdmission::mimi_reporter(
+            realm_id,
+            reporter.clone(),
+            agent.clone(),
+            "",
+            method.clone(),
+            Some(signing_key.clone()),
+        );
+        let session = internal_session(agent.signing_principal_id().as_str(), "");
+        let object = json!({
+            "actor_id": reporter,
+            "realm_id": realm_id,
+            "kind": arkret_wire::EventKind::SelfModerationReport.as_str(),
+            "executed_by": agent,
+            "authorization_ref": "did:web:alice-agent.example#authorized-event",
+            "proofs": [{
+                "kind": "detached_jws",
+                "verification_method": method,
+            }],
+        });
+        let object = object.as_object().unwrap();
+
+        assert!(admission.matches(&session, object));
+        assert!(admission.is_mimi_agent_reporter());
+        assert_eq!(
+            admission.mimi_reporter_producer_signing_key(&session, object, method.as_str(),),
+            Some(&signing_key)
+        );
+
+        let mut wrong_executor = object.clone();
+        wrong_executor.insert("executed_by".to_owned(), json!(reporter));
+        assert!(!admission.matches(&session, &wrong_executor));
+
+        let mut wrong_method = object.clone();
+        wrong_method
+            .get_mut("proofs")
+            .unwrap()
+            .as_array_mut()
+            .unwrap()[0]["verification_method"] =
+            json!("did:web:alice-agent.example#stale-runtime");
+        assert!(!admission.matches(&session, &wrong_method));
+    }
 }

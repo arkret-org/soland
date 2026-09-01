@@ -526,8 +526,7 @@ fn stage_consent_projection(
         cell_id: commit.cell.cell_id.clone(),
     };
     if let Some(current) = staged_cells.get(&key)
-        && (current.peer_principal_id != commit.cell.peer_principal_id
-            || current.consent_scope != commit.cell.consent_scope)
+        && (current.peer != commit.cell.peer || current.consent_scope != commit.cell.consent_scope)
     {
         return Err(PersistenceError::Conflict(
             "consent_intent_rebind".to_owned(),

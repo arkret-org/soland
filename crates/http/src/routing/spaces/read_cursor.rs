@@ -35,6 +35,11 @@ pub(super) async fn set_read_cursor(
 ) -> JsonResult<ReadMarkerOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let sender_account_id =
+        crate::routing::identity::auth_grant_dpop::authenticated_session_account_id(
+            state, &session,
+        )
+        .await?;
     let actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let submission = body.into_inner().advance_event;
@@ -72,6 +77,7 @@ pub(super) async fn set_read_cursor(
             &session.actor,
             ActorPrivateDeviceUpdate::ReadCursor {
                 sender: DeviceMessageSender::Device {
+                    sender_account_id,
                     sender_device_id: arkret_identifiers::DeviceId::new(session.device_id.clone())
                         .map_err(|error| {
                             AppError::internal(format!(

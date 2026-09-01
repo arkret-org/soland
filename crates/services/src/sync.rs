@@ -26,7 +26,7 @@ pub struct CursorState {
 #[derive(Clone, Debug)]
 pub struct CursorRevocationState {
     pub cursor_digest: String,
-    pub principal_id: arkret_identifiers::DidCoreId,
+    pub account_id: arkret_wire::AccountId,
     pub device_id: Option<String>,
     pub scope: String,
     pub reason_code: String,
@@ -166,7 +166,7 @@ impl SyncService {
     pub fn cursor_authority_revoked(
         &self,
         cursor_digest: &str,
-        principal_id: Option<&str>,
+        account_id: Option<&arkret_wire::AccountId>,
         device_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> bool {
@@ -174,9 +174,8 @@ impl SyncService {
         revocations.retain(|entry| entry.expires_at > now);
         revocations.iter().any(|entry| match entry.scope.as_str() {
             "this_cursor" => entry.cursor_digest == cursor_digest,
-            "same_device" | "same_session" => principal_id.is_some_and(|principal_id| {
-                entry.principal_id.as_str() == principal_id
-                    && entry.device_id.as_deref() == device_id
+            "same_device" | "same_session" => account_id.is_some_and(|account_id| {
+                &entry.account_id == account_id && entry.device_id.as_deref() == device_id
             }),
             _ => false,
         })

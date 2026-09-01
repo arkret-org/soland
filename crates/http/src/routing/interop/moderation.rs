@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingDataEventInclusionProof, FrankingProof, FrankingSealObservationOutcome,
-    FrankingSealObservationRequest, ModerationReportPayload,
+    FrankingSealObservationRequest,
 };
 use arkret_wire::{ActorId, EventKind, ScopeRef};
 use ed25519_dalek::Signer as _;
@@ -42,168 +42,6 @@ fn authored_event_wire_value(
     event: &arkret_wire::AuthoredEvent,
 ) -> Result<Value, serde_json::Error> {
     serde_json::to_value(event.event())
-}
-
-pub(crate) async fn persist_mimi_facade_moderation_report_event(
-    state: &AppState,
-    payload: ModerationReportPayload,
-) -> Result<String, AppError> {
-    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
-    let _service_event_guard = service_event_lock.lock().await;
-    let service_actor = state.service_id().as_str();
-    let records = state
-        .event_queries()
-        .canonical_events_for_realm_actor(payload.realm_id.as_str(), service_actor)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("moderation Event frontier lookup failed: {error}"))
-        })?;
-    let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
-    let actor_seq = max_actor_seq
-        .map(|value| {
-            value.checked_add(1).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierSequenceExhausted,
-                    "moderation Event actor sequence is exhausted",
-                )
-                .with_status(StatusCode::CONFLICT)
-            })
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let realm_id = payload.realm_id.clone();
-    let service_did = state.service_resolution_commitment().did.clone();
-    let service_actor_id = arkret_wire::project_did_to_core_id(&service_did)
-        .map_err(|error| AppError::internal(format!("service DID cannot be projected: {error}")))?;
-    let created_at = now();
-    let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
-        .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?;
-    let typed_payload = payload;
-    typed_payload
-        .validate_provenance(&service_actor_id)
-        .map_err(AppError::param_invalid)?;
-    if typed_payload.provenance
-        != Some(
-            arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
-        )
-        || typed_payload.source_provider_id.is_none()
-    {
-        return Err(AppError::param_invalid(
-            "service-authored moderation report requires MIMI facade provenance",
-        ));
-    }
-    let event_scope =
-        typed_payload
-            .effective_scope
-            .clone()
-            .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
-                realm_id: realm_id.clone(),
-            });
-    let reporter_id = typed_payload.reporter_id.as_str().to_owned();
-    let target_ref = typed_payload.target_ref.clone();
-    // Actor frontier and CBA basis are producer-signed envelope members, so
-    // they are resolved before authoring rather than written onto an Event that
-    // already carries an id.
-    let mut prev_refs = Vec::new();
-    if let Some(max_actor_seq) = max_actor_seq {
-        prev_refs = records
-            .iter()
-            .filter(|record| record.actor_seq == max_actor_seq)
-            .map(|record| {
-                EventId::new(record.event_id.clone()).map_err(|error| {
-                    AppError::internal(format!("moderation predecessor invalid: {error}"))
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        prev_refs.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        prev_refs.dedup();
-    }
-    let seal = crate::notary::ensure_realm_seal_head(state, &realm_id)
-        .map_err(|error| {
-            AppError::internal(format!("moderation Realm Seal lookup failed: {error}"))
-        })?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
-                "moderation target Realm has no accepted Seal",
-            )
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
-        })?;
-    let auth_context = arkret_wire::AuthContext {
-        key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
-        key_epoch: 0,
-        credential_epoch: None,
-    };
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
-    let mut event =
-        arkret_event_draft::TypedEventDraft::<arkret_wire::event_spec::SelfModerationReport>::new(
-            event_scope,
-            arkret_wire::ActorId::service(service_actor_id.clone()),
-            typed_payload,
-        )
-        .and_then(|draft| {
-            draft
-                .with_prev_refs(prev_refs)
-                .with_seal_ref(seal.id)
-                .with_auth_context(auth_context)
-                .author_with_digest_suite(actor_seq, hlc, created_at, digest_suite)
-        })
-        .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
-    let verification_method = arkret_wire::DidUrl::new(format!("{service_did}#notary-key"))
-        .map_err(|error| {
-            AppError::internal(format!(
-                "service notary verification method is invalid: {error}"
-            ))
-        })?;
-    let signer = arkret_signatures::Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        service_did,
-        verification_method.clone(),
-    );
-    arkret_signatures::sign_event(
-        &mut event,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-    )
-    .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
-    let event_id = event.event_id().to_string();
-    let session = soland_services::identity::SessionIdentityState {
-        account_pk: None,
-        token_hash: "moderation-report-service".to_owned(),
-        actor: state.service_id().clone(),
-        // Service session: this internal admission authenticates a service
-        // identity, which owns no device (see `envelope_core`).
-        device_id: String::new(),
-        audience: state.service_id().clone(),
-        session_public_key: None,
-        agent_session: None,
-        session_grant: None,
-        expires_at: created_at + chrono::Duration::minutes(5),
-        created_at,
-        revoked_at: None,
-    };
-    let envelope = authored_event_wire_value(&event).map_err(|error| {
-        AppError::internal(format!("moderation Event serialize failed: {error}"))
-    })?;
-    crate::routing::events::event_log::submit_mimi_moderation_report_event_value(
-        state,
-        &session,
-        envelope,
-        realm_id.as_str(),
-        &reporter_id,
-        &target_ref,
-    )
-    .await
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
-            format!("moderation Event admission failed: {}", error.message),
-        )
-        .with_status(error.status)
-        .with_wire_code(error.code)
-    })?;
-    Ok(event_id)
 }
 
 /// Persist the receiving service's canonical delivery receipt for one accepted
@@ -394,6 +232,7 @@ pub(super) async fn validate_moderation_report_safety(
     state: &AppState,
     realm_id: &str,
     reporter_id: &str,
+    reporter_actor: Option<&ActorId>,
     target_ref: &str,
     effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
@@ -401,8 +240,11 @@ pub(super) async fn validate_moderation_report_safety(
     source_service: Option<&str>,
     source_ip_hash: &str,
 ) -> Result<ModerationReportSafety, AppError> {
+    let rate_reporter = reporter_actor
+        .map(ToString::to_string)
+        .unwrap_or_else(|| reporter_id.to_owned());
     let rate = state.record_moderation_report_attempt(
-        reporter_id,
+        &rate_reporter,
         source_service,
         realm_id,
         source_ip_hash,
@@ -426,9 +268,7 @@ pub(super) async fn validate_moderation_report_safety(
     validate_moderation_report_content_safety(
         state,
         realm_id,
-        // MIMI's reported principal is provenance, not a verified Account or
-        // managed-account mapping. It cannot authorize a restricted Circle.
-        None,
+        reporter_actor,
         target_ref,
         effective_scope,
         evidence_package,
@@ -1652,6 +1492,7 @@ mod report_safety_tests {
             &state,
             REALM,
             REPORTER,
+            None,
             TARGET,
             None,
             &Value::Null,
@@ -1666,6 +1507,7 @@ mod report_safety_tests {
             &state,
             REALM,
             REPORTER,
+            None,
             TARGET,
             None,
             &Value::Null,

@@ -314,6 +314,7 @@ impl RrkAcquisitionWorker {
                 include_payload: Some(true),
                 max_response_bytes: Some(MAX_RESPONSE_BYTES as u32),
                 history_traversal_access: Some(access.clone()),
+                directory_source_ref_access: None,
             };
             let outcome: PeerEventsResolveOutcome = self
                 .peer_json(replica, "QUERY", "/_arkret/peer/events/resolve", &request)

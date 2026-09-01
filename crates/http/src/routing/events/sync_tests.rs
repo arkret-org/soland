@@ -93,10 +93,13 @@ fn stream_cursor_handle_binding(
     device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
 ) -> Vec<u8> {
+    let account_id = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(principal_id.to_owned()).unwrap(),
+        arkret_wire::DidCoreId::new(service_id.to_owned()).unwrap(),
+    );
     stream_cursor_handle_binding_with_notification_position(
-        principal_id,
+        Some(&account_id),
         device_id,
-        service_id,
         filter_digest,
         realms_positions,
         account_realms_positions,
@@ -104,6 +107,30 @@ fn stream_cursor_handle_binding(
         to_device_position,
         0,
     )
+}
+
+#[test]
+fn account_cursor_binding_separates_same_core_at_different_stations() {
+    let principal_id = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+    let station_a = arkret_wire::DidCoreId::new("ak:did_core:web:station-a.example").unwrap();
+    let station_b = arkret_wire::DidCoreId::new("ak:did_core:web:station-b.example").unwrap();
+    let account_a = arkret_wire::AccountId::new(principal_id.clone(), station_a);
+    let account_b = arkret_wire::AccountId::new(principal_id, station_b);
+    let positions = BTreeMap::new();
+    let bind = |account_id| {
+        stream_cursor_handle_binding_with_notification_position(
+            Some(account_id),
+            "ak:device:01904100-0000-7000-8000-000000000001",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            &positions,
+            &positions,
+            &positions,
+            0,
+            0,
+        )
+    };
+    assert_eq!(bind(&account_a), bind(&account_a));
+    assert_ne!(bind(&account_a), bind(&account_b));
 }
 
 #[test]
@@ -1113,44 +1140,28 @@ fn insert_member_identity_subject(state: &AppState) {
 }
 
 fn handle_claim(
-    state: &AppState,
+    _state: &AppState,
     issuer: &str,
     audience: &str,
     expires_at: DateTime<Utc>,
-    binding_state: &str,
+    status: &str,
     extra: Option<Value>,
 ) -> Value {
-    let mut claim = json!({
-        "schema": "ak.schema.handle_claim.v1",
-        "handle": "alice:soland.local",
-        "subject_account_id": roster_actor(ROSTER_SUBJECT).as_account_id(),
-        "issuer_id": issuer,
-        "binding_state": binding_state,
-        "claim_kind": "handle_binding",
-        "visibility": "public",
-        "audience": audience,
-        "created_at": arkret_canonical::format_timestamp_canonical(
-            now() - chrono::Duration::minutes(1)
-        ),
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "proofs": [{
-            "kind": "detached_jws",
-            "verification_method": format!("{issuer}#directory-handle-claim"),
-            "payload_digest": "sha256:unsigned-payload",
-            "jws": "detached"
-        }]
-    });
-    if let Some(extra) = extra
-        && let Some(object) = claim.as_object_mut()
-    {
-        object.insert("claims".to_owned(), extra);
-    }
-    // Keep tests honest: use the configured service DID unless a test is
-    // intentionally exercising issuer trust rejection.
-    if issuer == state.service_id() {
-        claim["issuer_id"] = json!(state.service_id());
-    }
-    claim
+    let status = serde_json::from_value::<arkret_models_identity::HandleClaimStatus>(json!(status))
+        .expect("fixture status");
+    let aliases = extra.into_iter().map(|value| value.to_string()).collect();
+    serde_json::to_value(crate::state::test_handle_claim(
+        roster_actor(ROSTER_SUBJECT)
+            .as_account_id()
+            .unwrap()
+            .clone(),
+        arkret_wire::DidCoreId::new(issuer).unwrap(),
+        (!audience.is_empty()).then(|| audience.to_owned()),
+        expires_at,
+        status,
+        aliases,
+    ))
+    .unwrap()
 }
 
 fn cache_claim(state: &AppState, claim: Value) -> String {
@@ -1367,15 +1378,18 @@ fn roster_preserves_two_stations_for_the_same_principal() {
 fn roster_rejects_a_handle_claim_for_the_same_principal_at_another_station() {
     let state = test_state();
     insert_member_identity_subject(&state);
-    let mut claim = handle_claim(
-        &state,
-        state.service_id(),
-        state.service_id(),
+    let claim = serde_json::to_value(crate::state::test_handle_claim(
+        arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(ROSTER_SUBJECT).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        ),
+        arkret_wire::DidCoreId::new(state.service_id()).unwrap(),
+        Some(state.service_id().to_owned()),
         now() + chrono::Duration::hours(1),
-        "verified",
-        None,
-    );
-    claim["subject_account_id"]["station_id"] = json!("ak:did_core:web:other-station.example");
+        arkret_models_identity::HandleClaimStatus::Verified,
+        Vec::new(),
+    ))
+    .unwrap();
     cache_claim(&state, claim);
     let realm = roster_realm(false, true);
     let session = roster_session(&state, ROSTER_CALLER);
@@ -1412,7 +1426,7 @@ fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
     );
     assert_eq!(row["handle_claim_digests"], json!([digest]));
     assert_eq!(
-        canonical_value_digest(&row["handle_claims"][0]),
+        row["handle_claims"][0]["claim_digest"],
         row["handle_claim_digests"][0].as_str().unwrap()
     );
     assert!(row.get("handle_claims_limited").is_none());
@@ -1427,7 +1441,7 @@ fn roster_hides_handle_claim_from_untrusted_issuer() {
         handle_claim(
             &state,
             "ak:did_core:web:evil.example",
-            state.service_id(),
+            "",
             now() + chrono::Duration::hours(1),
             "verified",
             None,
@@ -2610,7 +2624,10 @@ async fn revoked_cursor_returns_revoked_error() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                state.service_core_id(),
+            ),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "compromised".to_owned(),
@@ -2645,7 +2662,10 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         .sync()
         .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
-            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+            account_id: arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                state.service_core_id(),
+            ),
             device_id: None,
             scope: "this_cursor".to_owned(),
             reason_code: "stale".to_owned(),

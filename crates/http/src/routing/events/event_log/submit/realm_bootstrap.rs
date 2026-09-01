@@ -294,6 +294,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 envelope,
                 typed.clone(),
                 parsed,
+                None,
                 received_at,
             )
             .await?;

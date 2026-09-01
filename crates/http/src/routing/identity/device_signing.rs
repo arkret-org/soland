@@ -101,11 +101,12 @@ fn value_requires_attestation(value: &Value) -> bool {
 pub fn validate_device_authorize_binding(
     _state: &AppState,
     payload: &DeviceAuthorizePayload,
+    subject_account_id: &arkret_wire::AccountId,
 ) -> Result<(), &'static str> {
     match &payload.authorization_binding_kind {
         arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::RegistrationAnchor
         | arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::PcrRecovery => {
-            arkret_signatures::verify_device_authorize_possession(payload)
+            arkret_signatures::verify_device_authorize_possession(payload, subject_account_id)
                 .map_err(|_| "device_authorize_device_signature_invalid")
         }
         arkret_models_collaboration::events_payloads::DeviceAuthorizationBindingKind::AcceptedDevice => {
@@ -357,9 +358,7 @@ pub(crate) async fn current_device_authorization(
     else {
         return Ok(None);
     };
-    if authorization.principal_id != *actor.signing_principal_id()
-        || authorization.device_id != *device_id
-    {
+    if event.actor_id != actor.to_string() || authorization.device_id != *device_id {
         return Ok(None);
     }
     // Resolve all authority material before the final current-state gate;

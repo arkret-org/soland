@@ -667,6 +667,53 @@ async fn submit_initial_event_submission_with_commit_extensions(
     .await
 }
 
+/// Admit a caller-authored MIMI moderation report through the ordinary Event
+/// pipeline using the already verified reporter-authority context. This lane
+/// substitutes only for the absent local HTTP bearer/session binding; it does
+/// not mint a SessionGrant and does not bypass membership, capability, proof,
+/// actor-CAS or reducer checks.
+pub(in crate::routing) async fn submit_mimi_reporter_initial_event_submission(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+    admission: &InternalEventAdmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(submission.event.realm_id.as_str());
+    validate_initial_submission_in_context(
+        &submission,
+        arkret_wire::EventSubmitContext::Standard,
+        digest_suite,
+    )?;
+    super::validate_membership_compensation_semantics(
+        &submission.event,
+        submission.membership_compensation_evidence.as_ref(),
+    )?;
+    if submission.authorization_lease.is_some()
+        || submission.control_proposal_ack.is_some()
+        || submission.membership_compensation_evidence.is_some()
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "MIMI reporter Event forbids publication authority sidecars",
+        ));
+    }
+    let envelope = typed_event_to_canonical_value(submission.event)?;
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        SubmitEventContext {
+            internal_admission: Some(admission),
+            ..SubmitEventContext::empty()
+        },
+        SubmitMode::Commit(SubmitCommitOptions::none()),
+    )
+    .await
+}
+
 pub(super) async fn prepare_agent_membership_initial_event(
     state: &AppState,
     session: &SessionRecord,
@@ -825,33 +872,6 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         owner.clone(),
         session.device_id.as_str(),
         key,
-    );
-    submit_event_value_with_context(
-        state,
-        session,
-        envelope,
-        SubmitEventContext {
-            internal_admission: Some(&admission),
-            ..SubmitEventContext::empty()
-        },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
-    )
-    .await
-}
-
-pub(in crate::routing) async fn submit_mimi_moderation_report_event_value(
-    state: &AppState,
-    session: &SessionRecord,
-    envelope: Value,
-    realm_id: &str,
-    reporter_id: &str,
-    target_ref: &str,
-) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let admission = InternalEventAdmission::mimi_moderation_report(
-        realm_id,
-        arkret_wire::ActorId::service(state.service_core_id().clone()),
-        reporter_id,
-        target_ref,
     );
     submit_event_value_with_context(
         state,
@@ -1497,6 +1517,7 @@ pub(super) async fn accepted_event_envelope(
     envelope: Value,
     event: Event,
     parsed: &ValidatedEventEnvelope,
+    internal_admission: Option<&InternalEventAdmission>,
     accepted_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<
     (
@@ -1559,7 +1580,9 @@ pub(super) async fn accepted_event_envelope(
             format!("Station id is invalid: {error}"),
         )
     })?;
-    let producer_signer_evidence = if session.agent_session.is_some() {
+    let producer_signer_evidence = if session.agent_session.is_some()
+        || internal_admission.is_some_and(InternalEventAdmission::is_mimi_agent_reporter)
+    {
         let signer_id = event
             .executed_by
             .as_ref()
@@ -2201,7 +2224,7 @@ pub(super) async fn submit_event_value_with_context(
         context.internal_admission.is_some_and(|admission| {
             envelope
                 .as_object()
-                .is_some_and(|object| admission.matches(session, object))
+                .is_some_and(|object| admission.is_local_service_producer(session, object))
         });
     let _agent_membership_cascade_guard = if parsed.kind
         == arkret_wire::EventKind::MemberState.as_str()
@@ -2717,29 +2740,40 @@ pub(super) async fn submit_event_value_with_context(
         // bit for the write mode. Per 0016-agent-participation-policy.md §6,
         // missing materialised grants are preconditions, not auth-context
         // denials.
-        let agent_policy_operation = operation_with_unsigned_agent_context(operation, &envelope);
-        match validate_agent_reply_participation(
-            state,
-            std::slice::from_ref(&agent_policy_operation),
-        )
-        .await
+        // The MIMI reporter lane already verifies the closed, short-lived
+        // holder transcript and the current Agent proxy/key authorization.
+        // Its closed moderation payload cannot carry the ordinary
+        // agent_context/approval fields, so do not require that second,
+        // incompatible authorization profile for the same producer.
+        if !context
+            .internal_admission
+            .is_some_and(InternalEventAdmission::is_mimi_agent_reporter)
         {
-            Ok(mut approvals) => {
-                validated_agent_approval = approvals.pop();
-                if !approvals.is_empty() {
+            let agent_policy_operation =
+                operation_with_unsigned_agent_context(operation, &envelope);
+            match validate_agent_reply_participation(
+                state,
+                std::slice::from_ref(&agent_policy_operation),
+            )
+            .await
+            {
+                Ok(mut approvals) => {
+                    validated_agent_approval = approvals.pop();
+                    if !approvals.is_empty() {
+                        return Err(SubmitOneError::new(
+                            StatusCode::BAD_REQUEST,
+                            "schema_violation",
+                            "one Event operation cannot consume multiple agent approvals",
+                        ));
+                    }
+                }
+                Err(reason) => {
                     return Err(SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        "one Event operation cannot consume multiple agent approvals",
+                        StatusCode::PRECONDITION_FAILED,
+                        reason,
+                        reason,
                     ));
                 }
-            }
-            Err(reason) => {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
             }
         }
         // Policy validation always sees the whole submit batch, so facet
@@ -3346,6 +3380,7 @@ pub(super) async fn submit_event_value_with_context(
             envelope,
             submitted_event,
             &parsed,
+            context.internal_admission,
             received_at,
         )
         .await?;
@@ -4117,15 +4152,6 @@ async fn preflight_account_data_cas(
         )
     })?;
     let owner = operation.context.sender.to_string();
-    if payload.get("holder_id").is_some_and(|holder| {
-        holder.as_str() != Some(operation.context.sender.signing_principal_id().as_str())
-    }) {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "account_data holder_id does not match the Event signing principal",
-        ));
-    }
     let key = payload.get("key").and_then(Value::as_str).ok_or_else(|| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,

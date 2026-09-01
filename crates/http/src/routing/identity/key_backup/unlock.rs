@@ -154,7 +154,7 @@ pub(super) fn required_proof_string<'a>(
 
 pub(super) fn validate_key_backup_unlock_proof_shape(
     proof: &Value,
-    actor_id: &str,
+    account_id: &arkret_wire::AccountId,
     session_device_id: &str,
     backup: &Value,
 ) -> Result<(), AppError> {
@@ -168,9 +168,9 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
     backup
         .validate()
         .map_err(|error| schema_error(format!("invalid key backup envelope: {error}")))?;
-    if proof.principal_id.as_str() != actor_id {
+    if &proof.account_id != account_id {
         return Err(AppError::capability_denied(
-            "key backup unlock proof principal_id must match authenticated actor",
+            "key backup unlock proof account_id must match authenticated account",
         ));
     }
     if proof.requesting_device_id.as_str() != session_device_id {
@@ -256,6 +256,8 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
     proof: &Value,
     session: &soland_services::identity::SessionIdentityState,
 ) -> Result<(), AppError> {
+    let typed_proof = serde_json::from_value::<KeyBackupUnlockProof>(proof.clone())
+        .map_err(|error| schema_error(format!("invalid key backup unlock proof: {error}")))?;
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
     let Some(record) = state
         .recovery_sessions()
@@ -276,6 +278,8 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         return Ok(());
     };
     if record.principal_id.as_str() != session.actor
+        || record.principal_id != typed_proof.account_id.principal_id
+        || record.station_id != typed_proof.account_id.station_id
         || record.requesting_device_id != session.device_id
     {
         return Err(AppError::capability_denied(
@@ -330,7 +334,13 @@ pub(super) async fn verify_key_backup_unlock_proof(
     session: &soland_services::identity::SessionIdentityState,
     backup: &Value,
 ) -> Result<(), AppError> {
-    validate_key_backup_unlock_proof_shape(proof, &session.actor, &session.device_id, backup)?;
+    let account_id = arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+            AppError::capability_denied(format!("authenticated actor is invalid: {error}"))
+        })?,
+        state.service_core_id(),
+    );
+    validate_key_backup_unlock_proof_shape(proof, &account_id, &session.device_id, backup)?;
     enforce_recovery_session_binding_when_present(state, proof, session).await?;
     verify_key_backup_unlock_proof_signature(state, proof).await
 }

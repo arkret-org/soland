@@ -225,7 +225,7 @@ const DEVICE_PROJECTION_ATTESTATION_TTL_SECONDS: i64 = 300;
 /// nothing for that `(principal_id, device_id)` — which is also the
 /// anti-enumeration shape, since an omission is indistinguishable from "no
 /// relationship" and from "no such device".
-async fn attested_device_record(
+pub(crate) async fn attested_device_record(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
     device_id: &arkret_wire::DeviceId,

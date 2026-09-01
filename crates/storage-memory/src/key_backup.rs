@@ -54,7 +54,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
     ) -> PersistenceResult<KeyBackupDeleteChallengeRecord> {
         let mut challenges = self.delete_challenges.lock();
         if let Some(existing) = challenges.values().find(|held| {
-            held.principal_id == record.principal_id
+            held.account_id == record.account_id
                 && held.backup_id == record.backup_id
                 && held.request_id == record.request_id
                 && held.consumed_at.is_none()
@@ -65,7 +65,7 @@ impl KeyBackupStore for MemoryKeyBackupStore {
         // Drop any superseded row for the same triple so a stale challenge id
         // cannot be presented later.
         challenges.retain(|_, held| {
-            !(held.principal_id == record.principal_id
+            !(held.account_id == record.account_id
                 && held.backup_id == record.backup_id
                 && held.request_id == record.request_id)
         });

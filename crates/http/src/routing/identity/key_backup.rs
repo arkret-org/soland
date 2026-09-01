@@ -402,7 +402,10 @@ mod tests {
             challenge: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWJ5dGVz").unwrap(),
             nonce: arkret_wire::Base64UrlString::new("bm9uY2UtYnl0ZXM").unwrap(),
             operation: "ak.self.keys.backups.resource.delete.v1".to_owned(),
-            principal_id: DidCoreId::new(ACTOR.to_owned()).unwrap(),
+            account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(ACTOR.to_owned()).unwrap(),
+                DidCoreId::new("ak:did_core:web:soland.test".to_owned()).unwrap(),
+            ),
             backup_id: BackupId::new(BACKUP_ID.to_owned()).unwrap(),
             audience: arkret_wire::NonEmptyString::new("https://soland.test").unwrap(),
             service_id: DidCoreId::new("ak:did_core:web:soland.test".to_owned()).unwrap(),

@@ -292,7 +292,7 @@ async fn invite_delivery_read_model_projection_surfaces_via_authz_invites_body()
             arkret_models_collaboration::governance::invite_addressing::InviteDeliveryEntry {
                 invite_id: invite_id.clone(),
                 realm_id: RealmId::new(realm_id.clone()).unwrap(),
-                inviter_id: fixture_actor_core_id(alice_did),
+                inviter_account_id: fixture_account_id(&state, alice_did),
                 invite_token: projected.invite_token,
                 received_at,
                 expires_at: projected

@@ -544,7 +544,7 @@ fn application_consent_cell(
     crate::identity::ConsentCellRecord {
         cell_id: cell.cell_id,
         holder_principal_id: cell.holder_principal_id,
-        peer_principal_id: cell.peer_principal_id,
+        peer: cell.peer,
         consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
@@ -572,7 +572,7 @@ pub(crate) fn storage_consent_cell(
     soland_storage::ConsentCellRecord {
         cell_id: cell.cell_id,
         holder_principal_id: cell.holder_principal_id,
-        peer_principal_id: cell.peer_principal_id,
+        peer: cell.peer,
         consent_scope: cell.consent_scope,
         grant_dots: cell
             .grant_dots
@@ -604,6 +604,16 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
         granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
+        request_slot_states: record
+            .request_slot_states
+            .into_iter()
+            .map(|state| crate::identity::ContactRequestSlotState {
+                owner_id: state.owner_id,
+                peer_id: state.peer_id,
+                accepted_sequence: state.accepted_sequence,
+                head_digest: state.head_digest,
+            })
+            .collect(),
         request_receipts: record.request_receipts,
         request_mirror_receipts: record.request_mirror_receipts,
         contact_round_evidence: record.contact_round_evidence,
@@ -629,6 +639,16 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
         granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
+        request_slot_states: record
+            .request_slot_states
+            .into_iter()
+            .map(|state| soland_storage::ContactRequestSlotState {
+                owner_id: state.owner_id,
+                peer_id: state.peer_id,
+                accepted_sequence: state.accepted_sequence,
+                head_digest: state.head_digest,
+            })
+            .collect(),
         request_receipts: record.request_receipts,
         request_mirror_receipts: record.request_mirror_receipts,
         contact_round_evidence: record.contact_round_evidence,
@@ -1519,7 +1539,7 @@ fn application_recovery_policy(
 ) -> crate::identity::RecoveryPolicyState {
     crate::identity::RecoveryPolicyState {
         policy_id: record.policy_id,
-        principal_id: record.principal_id,
+        account_id: record.account_id,
         version: record.version,
         acceptance_basis: record.acceptance_basis,
         trust_domain: record.trust_domain,
@@ -1538,7 +1558,7 @@ fn persistence_recovery_policy(
 ) -> soland_storage::RecoveryPolicyRecord {
     soland_storage::RecoveryPolicyRecord {
         policy_id: policy.policy_id,
-        principal_id: policy.principal_id,
+        account_id: policy.account_id,
         version: policy.version,
         acceptance_basis: policy.acceptance_basis,
         trust_domain: policy.trust_domain,
@@ -1556,24 +1576,24 @@ fn persistence_recovery_policy(
 impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     async fn active_policy(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<crate::identity::RecoveryPolicyState>> {
         Ok(self
             .0
             .recovery_policies()
-            .get_active_for_principal(principal_id)
+            .get_active_for_account(account_id)
             .await?
             .map(application_recovery_policy))
     }
 
     async fn policy_history(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Vec<crate::identity::RecoveryPolicyState>> {
         Ok(self
             .0
             .recovery_policies()
-            .list_for_principal(principal_id)
+            .list_for_account(account_id)
             .await?
             .into_iter()
             .map(application_recovery_policy)

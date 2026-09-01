@@ -594,6 +594,27 @@ async fn claim_keypackage_at_destination(
     body: &PeerKeyPackagesClaimRequestBody,
     authorization: VerifiedClaimAuthorization,
 ) -> JsonResult<PeerKeyPackagesClaimOutcome> {
+    let target_principal_id = body
+        .unsigned_request()
+        .target_principal_id()
+        .ok_or_else(|| peer_claim_schema_violation("claim target identity is incomplete"))?;
+    let requester_id = body
+        .unsigned_request()
+        .requester_principal_id(&body.requester_authorization)
+        .ok_or_else(|| peer_claim_schema_violation("claim requester identity is incomplete"))?;
+    let target_rate_limit_key = if let Some(account_id) = &body.target_account_id {
+        account_id
+            .canonical_key()
+            .map_err(|error| AppError::internal(format!("target AccountId key: {error}")))?
+    } else if let Some(agent_id) = &body.target_agent_id {
+        agent_id.as_str().to_owned()
+    } else if let Some(method) = &body.target_pairwise_verification_method {
+        method.as_str().to_owned()
+    } else {
+        return Err(peer_claim_schema_violation(
+            "claim target rate-limit identity is incomplete",
+        ));
+    };
     let body_value = serde_json::to_value(body)
         .map_err(|error| AppError::internal(format!("KeyPackage claim serialize: {error}")))?;
     let source_id = body.service_binding.source_id.as_str().to_owned();
@@ -610,10 +631,10 @@ async fn claim_keypackage_at_destination(
     {
         return replay_peer_claim(existing, &request_digest);
     }
-    if state.peer_keypackage_claim_rate_limited(&source_id, body.target_principal_id.as_str()) {
+    if state.peer_keypackage_claim_rate_limited(&source_id, &target_rate_limit_key) {
         tracing::warn!(
             %source_id,
-            target_principal_id = %body.target_principal_id,
+            target_rate_limit_key,
             reason = "keypackage_claim_rate_limited",
             "peer KeyPackage claim rejected by protocol quota"
         );
@@ -625,8 +646,8 @@ async fn claim_keypackage_at_destination(
     if !policy_authorized {
         tracing::warn!(
             %source_id,
-            requester_id = %body.requester_id,
-            target_principal_id = %body.target_principal_id,
+            requester_id = %requester_id,
+            target_principal_id = %target_principal_id,
             policy_authorized,
             "peer KeyPackage claim authorization rejected"
         );
@@ -645,14 +666,15 @@ async fn claim_keypackage_at_destination(
         .iter()
         .map(ToString::to_string)
         .collect::<BTreeSet<_>>();
-    let target_principal_id = body.target_principal_id.as_str();
+    let target_principal_id = target_principal_id.as_str();
     let target_keypackage_ref = body
         .target_keypackage_ref
         .as_ref()
         .map(|reference| reference.as_str());
     let trust_selector = current_keypackage_claim_trust_selector(
         state,
-        &body.target_principal_id,
+        &arkret_wire::DidCoreId::new(target_principal_id.to_owned())
+            .map_err(|_| peer_claim_schema_violation("claim target identity is invalid"))?,
         &target_device_ids,
         Some(body.intended_realm_id.as_str()),
         body.target_pairwise_verification_method
@@ -1043,12 +1065,16 @@ async fn verify_peer_claim_source_attestation(
     } = &body.requester_authorization
         && !verification_method_binds_core_device(
             verification_method,
-            &body.requester_id,
+            &body
+                .requester_account_id
+                .as_ref()
+                .ok_or_else(|| peer_claim_schema_violation("device requester omits AccountId"))?
+                .principal_id,
             requester_device_id,
         )
     {
         return Err(peer_claim_schema_violation(
-            "requester device verification method must bind requester_id and requester_device_id",
+            "requester device verification method must bind requester AccountId principal and requester_device_id",
         ));
     }
     validate_peer_claim_time_window(&body)?;
@@ -1137,10 +1163,18 @@ async fn verify_local_claim_participant_authorization(
         return Ok(false);
     }
     let authorization = &body.requester_authorization;
+    let requester_id = body
+        .unsigned_request()
+        .requester_principal_id(authorization)
+        .ok_or_else(|| peer_claim_schema_violation("claim requester identity is incomplete"))?;
+    let target_principal_id = body
+        .unsigned_request()
+        .target_principal_id()
+        .ok_or_else(|| peer_claim_schema_violation("claim target identity is incomplete"))?;
     let reject = |reason: &'static str| {
         tracing::warn!(
-            requester_id = %body.requester_id,
-            target_principal_id = %body.target_principal_id,
+            requester_id = %requester_id,
+            target_principal_id = %target_principal_id,
             reason,
             "peer KeyPackage participant authorization rejected"
         );
@@ -1158,13 +1192,13 @@ async fn verify_local_claim_participant_authorization(
                 .as_ref()
                 .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
             || arkret_models_crypto::MlsEndpointIdentity::minimal_metadata_pairwise(
-                body.requester_id.clone(),
+                requester_id.clone(),
                 verification_method.clone(),
             )
             .is_err()
             || ensure_pairwise_realm_affinity(
                 state,
-                &body.requester_id,
+                &requester_id,
                 verification_method,
                 &body.intended_realm_id,
                 body.service_binding.source_id.as_str(),
@@ -1218,7 +1252,7 @@ async fn verify_local_claim_participant_authorization(
                 verification_method.as_str(),
             )
             .await
-            || requester_agent_id != &body.requester_id
+            || requester_agent_id != &requester_id
         {
             return reject("agent_authorization_stale");
         }
@@ -1283,7 +1317,7 @@ async fn verify_local_claim_participant_authorization(
         let facet =
             crate::routing::identity::device_signing::try_resolve_device_signing_directory_facet(
                 state,
-                body.requester_id.as_str(),
+                requester_id.as_str(),
                 device_id.as_str(),
             )
             .await
@@ -1299,11 +1333,7 @@ async fn verify_local_claim_participant_authorization(
             .map(ToString::to_string)
             .as_deref()
             != Some(device_authorize_event_id.as_str())
-            || !verification_method_binds_core_device(
-                verification_method,
-                &body.requester_id,
-                device_id,
-            )
+            || !verification_method_binds_core_device(verification_method, &requester_id, device_id)
         {
             return reject("local_device_directory_binding");
         }
@@ -1333,10 +1363,18 @@ async fn peer_claim_policy_authorized(
     body: &PeerKeyPackagesClaimRequestBody,
     source_id: &str,
 ) -> Result<bool, AppError> {
+    let target_principal_id = body
+        .unsigned_request()
+        .target_principal_id()
+        .ok_or_else(|| peer_claim_schema_violation("claim target identity is incomplete"))?;
+    let requester_id = body
+        .unsigned_request()
+        .requester_principal_id(&body.requester_authorization)
+        .ok_or_else(|| peer_claim_schema_violation("claim requester identity is incomplete"))?;
     let target_authority_current = if let Some(method) = &body.target_pairwise_verification_method {
         ensure_pairwise_realm_affinity(
             state,
-            &body.target_principal_id,
+            &target_principal_id,
             method,
             &body.intended_realm_id,
             state.service_id(),
@@ -1348,21 +1386,21 @@ async fn peer_claim_policy_authorized(
         &body.target_agent_verification_method,
         &body.target_agent_key_authorize_event_id,
     ) {
-        agent_id == &body.target_principal_id
-            && current_agent_key_authorization_matches_method(
-                state,
-                agent_id,
-                event_id.as_str(),
-                method.as_str(),
-            )
-            .await
+        current_agent_key_authorization_matches_method(
+            state,
+            agent_id,
+            event_id.as_str(),
+            method.as_str(),
+        )
+        .await
     } else {
         state
             .identities()
-            .account(&arkret_wire::AccountId::new(
-                body.target_principal_id.clone(),
-                state.service_core_id().clone(),
-            ))
+            .account(
+                body.target_account_id
+                    .as_ref()
+                    .ok_or_else(|| peer_claim_schema_violation("human target omits AccountId"))?,
+            )
             .await
             .map_err(|error| AppError::internal(format!("target authority lookup: {error}")))?
             .is_some()
@@ -1378,7 +1416,7 @@ async fn peer_claim_policy_authorized(
                 crate::routing::federation::federation::joined_actor_for_principal_route(
                     state,
                     body.intended_realm_id.as_str(),
-                    &body.requester_id,
+                    &requester_id,
                     &source,
                 )
             else {
@@ -1410,7 +1448,7 @@ async fn peer_claim_policy_authorized(
                 crate::routing::federation::federation::joined_actor_for_principal_route(
                     state,
                     body.intended_realm_id.as_str(),
-                    &body.target_principal_id,
+                    &target_principal_id,
                     &state.service_core_id(),
                 )
             else {
@@ -1435,15 +1473,20 @@ async fn peer_claim_policy_authorized(
             let scope = "direct_message";
             let contact = crate::routing::identity::account::accepted_contact_for_pair(
                 state,
-                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    body.target_principal_id.clone(),
-                    state.service_core_id().clone(),
-                )),
-                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    body.requester_id.clone(),
-                    arkret_wire::DidCoreId::new(source_id.to_owned())
-                        .map_err(|_| AppError::param_invalid("invalid source_id"))?,
-                )),
+                &arkret_wire::ActorId::account(body.target_account_id.clone().ok_or_else(
+                    || {
+                        peer_claim_schema_violation(
+                            "direct-conversation target must be an AccountId",
+                        )
+                    },
+                )?),
+                &arkret_wire::ActorId::account(body.requester_account_id.clone().ok_or_else(
+                    || {
+                        peer_claim_schema_violation(
+                            "direct-conversation requester must be an AccountId",
+                        )
+                    },
+                )?),
                 scope,
             )
             .await?;
@@ -1462,17 +1505,14 @@ async fn peer_claim_policy_authorized(
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        body.requester_id.clone(),
-                        arkret_wire::DidCoreId::new(source_id.to_owned())
-                            .map_err(|_| AppError::param_invalid("invalid source_id"))?,
-                    )),
+                    arkret_wire::ActorId::account(body.requester_account_id.clone().ok_or_else(|| {
+                        peer_claim_schema_violation("direct-conversation requester must be an AccountId")
+                    })?),
                 ),
                 arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
-                    arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        body.target_principal_id.clone(),
-                        state.service_core_id().clone(),
-                    )),
+                    arkret_wire::ActorId::account(body.target_account_id.clone().ok_or_else(|| {
+                        peer_claim_schema_violation("direct-conversation target must be an AccountId")
+                    })?),
                 ),
             )
             .map_err(|_| peer_claim_failed())?;
@@ -1632,13 +1672,18 @@ async fn validate_welcome_peer_claim_ledger(
         || receipt.source_id.as_str() != source_id
         || required_destination_service_id
             .is_some_and(|expected| receipt.destination_id.as_str() != expected)
-        || !welcome_requester_matches_receipt(
-            actor_id,
-            &welcome.claim_envelope.requester_actor_id,
-            &request.requester_id,
-            &receipt.source_id,
-        )
-        || &request.target_principal_id != recipient_actor_id
+        || request
+            .requester_account_id
+            .as_ref()
+            .is_some_and(|account| {
+                !welcome_requester_matches_receipt(
+                    actor_id,
+                    &welcome.claim_envelope.requester_actor_id,
+                    &account.principal_id,
+                    &account.station_id,
+                )
+            })
+        || request.target_principal_id().as_ref() != Some(recipient_actor_id)
         || request.intended_realm_id.as_str() != realm_id
         || request.mls_group_id.as_str() != welcome.mls_group_id.as_str()
         || request.expires_at != receipt.expires_at
@@ -2070,16 +2115,24 @@ async fn claim_keypackage(
     let session = aa.authenticated_session(state, req).await?;
 
     let body = body.into_inner();
+    let requester_id = body
+        .unsigned_request()
+        .requester_principal_id(&body.requester_authorization)
+        .ok_or_else(|| peer_claim_schema_violation("claim requester identity is incomplete"))?;
+    let target_principal_id = body
+        .unsigned_request()
+        .target_principal_id()
+        .ok_or_else(|| peer_claim_schema_violation("claim target identity is incomplete"))?;
     let session_actor =
         crate::routing::identity::session_actor::validated_session_actor(state, &session).await?;
-    if !matches!(
+    if matches!(
         &body.requester_authorization,
-        PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. }
-    ) && session_actor
-        != arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            body.requester_id.clone(),
-            body.service_binding.source_id.clone(),
-        ))
+        PeerKeyPackageRequesterAuthorization::Device { .. }
+    ) && session_actor.as_account_id() != body.requester_account_id.as_ref()
+        || matches!(
+            &body.requester_authorization,
+            PeerKeyPackageRequesterAuthorization::Agent { .. }
+        ) && session_actor.signing_principal_id() != &requester_id
     {
         return Err(AppError::capability_denied(
             "requester account must match the calling session and source Station",
@@ -2106,21 +2159,18 @@ async fn claim_keypackage(
         PeerKeyPackageRequesterAuthorization::MinimalMetadataPairwise { .. } => {}
         _ => {
             return Err(AppError::capability_denied(
-                "requester_id authorization must match the authenticated session",
+                "requester authorization must match the authenticated session AccountId",
             ));
         }
     }
     if !verify_local_claim_participant_authorization(state, &peer_body).await? {
         return Err(AppError::capability_denied(
-            "requester_id authorization is not current at the source service",
+            "requester authorization is not current at the source service",
         ));
     }
     let authorization = VerifiedClaimAuthorization::for_verified_request(&peer_body)?;
     if body.claim_purpose == PeerKeyPackageClaimPurpose::RealmMembership {
-        let requester_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            body.requester_id.clone(),
-            state.service_core_id().clone(),
-        ));
+        let requester_actor = session_actor.clone();
         let requester_is_current_member = state
             .projections()
             .snapshot()
@@ -2131,17 +2181,26 @@ async fn claim_keypackage(
             .is_some_and(|member| member.state == "join");
         if !requester_is_current_member {
             return Err(AppError::capability_denied(
-                "requester_id has no current source-side Realm membership",
+                "requester identity has no current source-side Realm membership",
             ));
         }
     }
     if body.service_binding.destination_id.as_str() != local_service_id {
         let destination = body.service_binding.destination_id.as_str();
         let snapshot = state.projections().snapshot();
-        let target_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            body.target_principal_id.clone(),
-            body.service_binding.destination_id.clone(),
-        ));
+        let target_actor = body
+            .target_account_id
+            .clone()
+            .map(arkret_wire::ActorId::account)
+            .or_else(|| {
+                crate::routing::federation::federation::joined_actor_for_principal_route(
+                    state,
+                    body.intended_realm_id.as_str(),
+                    &target_principal_id,
+                    &body.service_binding.destination_id,
+                )
+            })
+            .ok_or_else(|| AppError::capability_denied("target actor route is not current"))?;
         let target_binding = snapshot
             .member(body.intended_realm_id.as_str(), &target_actor.to_string())
             .filter(|member| member.state == "join")
@@ -2614,10 +2673,13 @@ async fn consume_keypackages(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let durable_receipt = &body.recipient_durable_receipt;
+    let recipient_principal_id = durable_receipt
+        .recipient_principal_id()
+        .ok_or_else(|| AppError::param_invalid("durable recipient identity is incomplete"))?;
     if !matches!(
         &durable_receipt.recipient,
         arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise { .. }
-    ) && durable_receipt.recipient_principal_id.as_str() != session.actor
+    ) && recipient_principal_id.as_str() != session.actor
     {
         return Err(AppError::capability_denied(
             "durable recipient principal must match the calling principal",
@@ -2634,7 +2696,7 @@ async fn consume_keypackages(
     let cached_keypackage = verify_keypackage_consumer_signature(
         state,
         &session,
-        &durable_receipt.recipient_principal_id,
+        &recipient_principal_id,
         &durable_receipt.recipient,
         Some(&durable_receipt.realm_id),
         &keypackage_refs,
@@ -2920,6 +2982,9 @@ async fn validate_recipient_durable_receipt(
     cached_keypackage: Option<&MlsKeyPackageRow>,
 ) -> Result<arkret_models_collaboration::events_payloads::MlsWelcomePayload, AppError> {
     let receipt = &body.recipient_durable_receipt;
+    let recipient_principal_id = receipt
+        .recipient_principal_id()
+        .ok_or_else(|| AppError::param_invalid("durable recipient identity is incomplete"))?;
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
         || receipt.recipient_id.as_str() != state.service_id()
     {
@@ -2977,7 +3042,7 @@ async fn validate_recipient_durable_receipt(
     verify_keypackage_consumer_signature(
         state,
         session,
-        &receipt.recipient_principal_id,
+        &recipient_principal_id,
         &receipt.recipient,
         Some(&receipt.realm_id),
         std::slice::from_ref(&receipt.key_package_ref.to_string()),
@@ -3109,25 +3174,26 @@ fn keypackage_record_matches_consumer(
     session: &SessionRecord,
 ) -> bool {
     let receipt = &body.recipient_durable_receipt;
-    if record.actor_id != receipt.recipient_principal_id.as_str() {
-        return false;
-    }
     match &receipt.recipient {
         arkret_models_crypto::RecipientMlsDurableSigner::Device {
+            recipient_account_id,
             recipient_device_id,
             ..
         } => {
-            session.actor == record.actor_id
+            record.actor_id == recipient_account_id.principal_id.as_str()
+                && session.actor == record.actor_id
                 && record.device_id.as_deref() == Some(recipient_device_id.as_str())
                 && record.endpoint_verification_method.is_none()
                 && record.intended_realm_id.is_none()
         }
         arkret_models_crypto::RecipientMlsDurableSigner::Agent {
+            recipient_agent_id,
             recipient_agent_verification_method,
             agent_key_authorize_event_id,
             ..
         } => {
-            session.actor == record.actor_id
+            record.actor_id == recipient_agent_id.as_str()
+                && session.actor == record.actor_id
                 && record.device_id.is_none()
                 && record.endpoint_verification_method.as_deref()
                     == Some(recipient_agent_verification_method.as_str())
@@ -3138,7 +3204,13 @@ fn keypackage_record_matches_consumer(
         arkret_models_crypto::RecipientMlsDurableSigner::MinimalMetadataPairwise {
             recipient_pairwise_verification_method,
         } => {
-            record.device_id.is_none()
+            recipient_pairwise_verification_method
+                .as_str()
+                .split_once('#')
+                .and_then(|(controller, _)| arkret_wire::Did::new(controller.to_owned()).ok())
+                .and_then(|did| arkret_wire::project_did_to_core_id(&did).ok())
+                .is_some_and(|principal_id| principal_id.as_str() == record.actor_id)
+                && record.device_id.is_none()
                 && record.endpoint_verification_method.as_deref()
                     == Some(recipient_pairwise_verification_method.as_str())
                 && record.intended_realm_id.as_deref()
@@ -3541,6 +3613,9 @@ fn welcome_recipient_matches_consumer(
     body: &KeyPackagesConsumeRequestBody,
 ) -> bool {
     let receipt = &body.recipient_durable_receipt;
+    let Some(recipient_principal_id) = receipt.recipient_principal_id() else {
+        return false;
+    };
     match (&welcome.recipient, &receipt.recipient) {
         (
             arkret_models_collaboration::events_payloads::MlsWelcomeRecipient::Device {
@@ -3551,7 +3626,7 @@ fn welcome_recipient_matches_consumer(
                 ..
             },
         ) => {
-            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+            welcome.recipient_principal_id.as_ref() == Some(&recipient_principal_id)
                 && recipient_device_id == durable_recipient_device_id
         }
         (
@@ -3566,7 +3641,7 @@ fn welcome_recipient_matches_consumer(
                 agent_key_authorize_event_id: durable_agent_key_authorize_event_id,
             },
         ) => {
-            welcome.recipient_principal_id.as_ref() == Some(&receipt.recipient_principal_id)
+            welcome.recipient_principal_id.as_ref() == Some(&recipient_principal_id)
                 && recipient_agent_id == durable_recipient_agent_id
                 && recipient_agent_verification_method
                     == durable_recipient_agent_verification_method
@@ -3583,7 +3658,7 @@ fn welcome_recipient_matches_consumer(
             },
         ) => {
             welcome.recipient_principal_id.is_none()
-                && recipient_pairwise_actor_id == &receipt.recipient_principal_id
+                && recipient_pairwise_actor_id == &recipient_principal_id
                 && recipient_pairwise_verification_method
                     == durable_recipient_pairwise_verification_method
         }
@@ -3596,7 +3671,10 @@ fn projected_welcome_matches_consumer(
     body: &KeyPackagesConsumeRequestBody,
 ) -> bool {
     let receipt = &body.recipient_durable_receipt;
-    if row.recipient_actor_id != receipt.recipient_principal_id.as_str() {
+    let Some(recipient_principal_id) = receipt.recipient_principal_id() else {
+        return false;
+    };
+    if row.recipient_actor_id != recipient_principal_id.as_str() {
         return false;
     }
     match &receipt.recipient {
@@ -4998,7 +5076,7 @@ mod trust_binding_tests {
             arkret_wire::NonEmptyString::new("did:web:requester.example#signing-key").unwrap();
         welcome.claim_receipt.source_id = actor.route_service_id().clone();
         welcome.claim_receipt.destination_id = state.service_core_id();
-        welcome.claim_receipt.request.requester_id = actor.signing_principal_id().clone();
+        welcome.claim_receipt.request.requester_account_id = actor.as_account_id().cloned();
         welcome.claim_receipt.request.expires_at = expires_at;
         welcome.claim_receipt.claimed_at = at;
         welcome.claim_receipt.expires_at = expires_at;
@@ -5105,9 +5183,15 @@ mod trust_binding_tests {
         let signed_at = arkret_canonical::normalize_timestamp_canonical(now());
         let mut body: PeerKeyPackagesClaimRequestBody = serde_json::from_value(serde_json::json!({
             "claim_request_id": URL_SAFE_NO_PAD.encode([71_u8; 16]),
-            "target_principal_id": "ak:did_core:web:claim-target.example",
+            "target_account_id": {
+                "principal_id": "ak:did_core:web:claim-target.example",
+                "station_id": destination.clone()
+            },
             "target_device_ids": ["ak:device:01904100-0000-7000-8000-000000000002"],
-            "requester_id": "ak:did_core:web:claim-requester.example",
+            "requester_account_id": {
+                "principal_id": "ak:did_core:web:claim-requester.example",
+                "station_id": source.clone()
+            },
             "intended_realm_id": "ak:realm:ARaz6Z8HFGLoPkpji4ac9NxCUjXT81HDezufw7yJGiju",
             "mls_group_id": "claim-authorization-fixture",
             "claim_purpose": "realm_membership",
@@ -5200,7 +5284,12 @@ mod trust_binding_tests {
             unreachable!();
         };
         state.identities().save_device_if_absent(soland_services::identity::DeviceIdentity {
-            actor_id: local.requester_id.to_string(),
+            actor_id: local
+                .requester_account_id
+                .as_ref()
+                .expect("device requester has an exact account")
+                .principal_id
+                .to_string(),
             device_id: requester_device_id.to_string(),
             display_name: None,
             verification_state: "verified".to_owned(),

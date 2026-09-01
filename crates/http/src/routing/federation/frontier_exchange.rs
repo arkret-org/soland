@@ -360,6 +360,7 @@ impl FrontierExchangeWorker {
                     include_payload: Some(true),
                     max_response_bytes: Some(8 * 1024 * 1024),
                     history_traversal_access: None,
+                    directory_source_ref_access: None,
                 };
                 let (outcome, domain, size): (PeerEventsResolveOutcome, _, _) = self
                     .peer_query(peer_id, "/_arkret/peer/events/resolve", &request)

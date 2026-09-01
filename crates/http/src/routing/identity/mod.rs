@@ -13,6 +13,7 @@ pub(crate) mod auth;
 pub(crate) mod auth_grant_dpop;
 pub(crate) mod consent;
 pub(crate) mod contact_federation;
+pub(crate) mod current_signer_evidence;
 pub(crate) mod device_generation;
 pub(super) mod device_messages;
 pub(crate) mod device_pairing_open;
@@ -104,6 +105,7 @@ pub fn protocol_router() -> Router {
                 .push(account_data::router())
                 // Spec `consent` group (`ak.self.consent.*`).
                 .push(consent::router())
+                .push(current_signer_evidence::self_router())
                 .push(keys::router())
                 .push(key_backup::protocol_router())
                 .push(recovery::self_protocol_router())

@@ -33,7 +33,6 @@ fn controller_founding_authorize_payload(
     };
 
     let mut payload = DeviceAuthorizePayload {
-        principal_id: arkret_wire::project_did_to_core_id(actor).unwrap(),
         device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
         device_public_key_did: arkret_wire::NonEmptyString::new(format!(
             "did:key:{}",
@@ -57,7 +56,12 @@ fn controller_founding_authorize_payload(
         ),
         recovery_session_id: None,
     };
-    let possession_input = payload.device_possession_signature_input().unwrap();
+    let possession_input = payload
+        .device_possession_signature_input(&arkret_wire::AccountId::new(
+            arkret_wire::project_did_to_core_id(actor).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+        ))
+        .unwrap();
     payload.device_signature = SignatureMaterial::NonEmptyString(
         arkret_wire::NonEmptyString::new(arkret_canonical::base64url_encode(
             ed25519_dalek::Signer::sign(signing_key, &possession_input).to_bytes(),
@@ -607,7 +611,10 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .recovery_policies()
         .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: controller_id.clone(),
+            account_id: arkret_wire::AccountId::new(
+                controller_id.clone(),
+                state.service_core_id().clone(),
+            ),
             version: 1,
             acceptance_basis: arkret_wire::LeaseBasisRef::Seal(
                 arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64)))

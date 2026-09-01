@@ -14,6 +14,8 @@ pub use app_state::{
     build_realm_directory, development_demo_genesis_event, development_demo_realm_id,
     getrandom_seed, realm_genesis_payload,
 };
+#[cfg(test)]
+pub(crate) use member_identity::test_handle_claim;
 pub(crate) use member_identity::{
     HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,
     MemberIdentityReplacementEdge, MemberIdentitySnapshot, MemberIdentitySubjectKey,

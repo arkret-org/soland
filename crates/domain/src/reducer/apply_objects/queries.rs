@@ -543,7 +543,28 @@ impl ProjectionState {
                     // selected by the exact principal authority pair. A
                     // projection's current did is not a substitute for
                     // that accepted pair binding.
-                    if !principal_admission_gate_allows(gate, member, None) {
+                    let actor = serde_json::from_str::<arkret_wire::ActorId>(member)
+                        .map_err(|_| "gate_check_failed")?;
+                    let subject_class = match &actor {
+                        arkret_wire::ActorId::Service { .. } => {
+                            PrincipalAdmissionSubjectClass::Service
+                        }
+                        arkret_wire::ActorId::Account { account_id }
+                            if self
+                                .agent_lifecycles
+                                .contains_key(account_id.principal_id.as_str())
+                                || self.agent_membership_bindings.contains_key(&(
+                                    operation.realm_id.to_string(),
+                                    member.to_owned(),
+                                )) =>
+                        {
+                            PrincipalAdmissionSubjectClass::Agent
+                        }
+                        arkret_wire::ActorId::Account { .. } => {
+                            PrincipalAdmissionSubjectClass::Human
+                        }
+                    };
+                    if !principal_admission_gate_allows(gate, member, subject_class, None) {
                         return Err("gate_check_failed");
                     }
                 }

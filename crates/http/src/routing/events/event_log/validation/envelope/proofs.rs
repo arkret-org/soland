@@ -153,7 +153,6 @@ pub(crate) async fn validate_event_proofs(
         realm_bootstrap_contexts.iter().find_map(|context| {
             let candidate = context.identity_anchor_candidate_device.as_ref()?;
             (context.actor_id == event_actor.to_string()
-                && candidate.principal_id == payload.principal_id
                 && candidate.device_id == payload.device_id
                 && candidate.device_public_key_did == payload.device_public_key_did
                 && candidate.hpke_key == payload.hpke_key
@@ -546,6 +545,27 @@ pub(crate) async fn validate_event_proofs(
             .await?
             {
                 return Ok(signing_key);
+            }
+            if let Some(signing_key) = internal_admission.and_then(|admission| {
+                admission.mimi_reporter_producer_signing_key(session, object, &verification_method)
+            }) {
+                let material = root_anchor_event_public_key(signing_key.as_str())?;
+                arkret_signatures::verify_ed25519_detached_jws_proof_with_digest_suite(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
+                    &material,
+                    digest_suite,
+                )
+                .map_err(|error| {
+                    tracing::debug!(%error, "MIMI Agent reporter Event proof failed");
+                    event_validation_error(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        "MIMI Agent reporter Event proof is invalid",
+                    )
+                })?;
+                return Ok(signing_key.clone());
             }
             if let Some(signing_key) = verify_with_active_agent_session(
                 state,

@@ -276,7 +276,13 @@ async fn validate_one_operation_policy(
             >(operation.payload.clone())
             .map_err(|_| "ak.device.authorize payload violates SDK artifact schema")?;
             crate::routing::identity::device_signing::validate_device_authorize_binding(
-                state, &payload,
+                state,
+                &payload,
+                operation
+                    .context
+                    .sender
+                    .as_account_id()
+                    .ok_or("ak.device.authorize requires an account actor")?,
             )?;
         }
         validate_direct_conversation_realm_policy(state, operation)?;

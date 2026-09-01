@@ -184,6 +184,8 @@ struct ContactRow {
     #[diesel(sql_type = Nullable<Binary>)]
     request_event_ref: Option<Vec<u8>>,
     #[diesel(sql_type = Jsonb)]
+    request_slot_states: Value,
+    #[diesel(sql_type = Jsonb)]
     request_receipts: Value,
     #[diesel(sql_type = Jsonb)]
     request_mirror_receipts: Value,
@@ -246,6 +248,7 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
             .as_deref()
             .map(format_contact_event_ref)
             .transpose()?,
+        request_slot_states: decode_contact_json(row.request_slot_states, "request_slot_states")?,
         request_receipts: decode_contact_json(row.request_receipts, "request_receipts")?,
         request_mirror_receipts: decode_contact_json(
             row.request_mirror_receipts,
@@ -277,7 +280,7 @@ fn contact_record_from_row(row: ContactRow) -> PersistenceResult<ContactRecord> 
         updated_at: row.updated_at,
     })
 }
-const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id AS peer_host_id, peer_service_resolution, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(
@@ -306,6 +309,8 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let request_slot_states =
+            encode_contact_json(&record.request_slot_states, "request_slot_states")?;
         let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
         let request_mirror_receipts =
             encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
@@ -321,8 +326,8 @@ impl ContactStore for PgContactStore {
         let control_outcomes = encode_contact_json(&record.control_outcomes, "control_outcomes")?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, peer_service_resolution, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+             (id, requester_id, target_id, contact_round_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, request_slot_states, request_receipts, request_mirror_receipts, contact_round_evidence, contact_round_evidence_history, control_outcomes, response_event_ref, tombstone_event_ref, message, peer_id, peer_service_resolution, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
              ON CONFLICT (requester_id, target_id) DO UPDATE SET \
                 contact_round_id = EXCLUDED.contact_round_id, \
                 version = EXCLUDED.version, \
@@ -330,6 +335,7 @@ impl ContactStore for PgContactStore {
                 granted_to_requester_scopes = EXCLUDED.granted_to_requester_scopes, \
                 status = EXCLUDED.status, \
                 request_event_ref = EXCLUDED.request_event_ref, \
+                request_slot_states = EXCLUDED.request_slot_states, \
                 request_receipts = EXCLUDED.request_receipts, \
                 request_mirror_receipts = EXCLUDED.request_mirror_receipts, \
                 contact_round_evidence = EXCLUDED.contact_round_evidence, \
@@ -351,6 +357,7 @@ impl ContactStore for PgContactStore {
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_ref())?)
+        .bind::<Jsonb, _>(&request_slot_states)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
         .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
@@ -382,6 +389,8 @@ impl ContactStore for PgContactStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let request_slot_states =
+            encode_contact_json(&record.request_slot_states, "request_slot_states")?;
         let request_receipts = encode_contact_json(&record.request_receipts, "request_receipts")?;
         let request_mirror_receipts =
             encode_contact_json(&record.request_mirror_receipts, "request_mirror_receipts")?;
@@ -399,12 +408,12 @@ impl ContactStore for PgContactStore {
             "UPDATE contacts SET requester_id = $1, target_id = $2, \
                 contact_round_id = $3, version = $4, granted_to_target_scopes = $5, \
                 granted_to_requester_scopes = $6, status = $7, request_event_ref = $8, \
-                request_receipts = $9, request_mirror_receipts = $10, contact_round_evidence = $11, \
-                contact_round_evidence_history = $12, control_outcomes = $13, response_event_ref = $14, \
-                tombstone_event_ref = $15, message = $16, peer_id = $17, \
-                peer_service_resolution = $18, updated_at = $19 \
+                request_slot_states = $9, request_receipts = $10, request_mirror_receipts = $11, \
+                contact_round_evidence = $12, contact_round_evidence_history = $13, \
+                control_outcomes = $14, response_event_ref = $15, tombstone_event_ref = $16, \
+                message = $17, peer_id = $18, peer_service_resolution = $19, updated_at = $20 \
              WHERE ((requester_id = $1 AND target_id = $2) OR \
-                    (requester_id = $2 AND target_id = $1)) AND updated_at = $20",
+                    (requester_id = $2 AND target_id = $1)) AND updated_at = $21",
         )
         .bind::<Text, _>(record.requester_id.to_string())
         .bind::<Text, _>(record.target_id.to_string())
@@ -415,17 +424,14 @@ impl ContactStore for PgContactStore {
         .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
         .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
-        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.request_event_ref.as_ref(),
-        )?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.request_event_ref.as_ref())?)
+        .bind::<Jsonb, _>(&request_slot_states)
         .bind::<Jsonb, _>(&request_receipts)
         .bind::<Jsonb, _>(&request_mirror_receipts)
         .bind::<Nullable<Jsonb>, _>(contact_round_evidence.as_ref())
         .bind::<Jsonb, _>(&contact_round_evidence_history)
         .bind::<Jsonb, _>(&control_outcomes)
-        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
-            record.response_event_ref.as_ref(),
-        )?)
+        .bind::<Nullable<Binary>, _>(parse_contact_event_ref(record.response_event_ref.as_ref())?)
         .bind::<Nullable<Binary>, _>(parse_contact_event_ref(
             record.tombstone_event_ref.as_ref(),
         )?)
@@ -735,8 +741,8 @@ struct ConsentCellRow {
     cell_id: CellRef,
     #[diesel(sql_type = Text)]
     holder_principal_id: DidCoreId,
-    #[diesel(sql_type = Text)]
-    peer_principal_id: DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    peer: Value,
     #[diesel(sql_type = Text)]
     consent_scope: String,
     #[diesel(sql_type = Jsonb)]
@@ -765,7 +771,7 @@ impl ConsentCellRow {
         let record = ConsentCellRecord {
             cell_id: self.cell_id,
             holder_principal_id: self.holder_principal_id,
-            peer_principal_id: self.peer_principal_id,
+            peer: serde_json::from_value(self.peer).expect("persisted consent peer is valid"),
             consent_scope: self.consent_scope,
             grant_dots: decode_grant_dots(&self.grant_dots),
             revoked_dots,
@@ -774,7 +780,7 @@ impl ConsentCellRow {
         (key, record)
     }
 }
-const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder_principal_id, peer_id AS peer_principal_id, consent_scope, grant_dots, revoked_dots, updated_at";
+const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder_principal_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(

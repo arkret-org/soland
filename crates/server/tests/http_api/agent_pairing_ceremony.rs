@@ -573,4 +573,136 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         activated_record.authorized_verification_method.as_deref(),
         Some(verification_method.as_str())
     );
+
+    // The controller's Principal Control Realm is an ordinary, non-minimal-
+    // metadata disclosure context. Add the now-active Agent as a member so
+    // the authenticated controller can resolve that Agent's current signer
+    // through the public self HTTP surface without any pre-seeded evidence
+    // cache.
+    let disclosure_realm = soland_test_support::fixture_principal_control_realm(controller);
+    let membership = add_test_realm_member(&state, &disclosure_realm, outcome.did.as_str());
+    assert_eq!(
+        membership["ok"], true,
+        "Agent disclosure membership: {membership}"
+    );
+    let request =
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceQueryRequestBody {
+            request_id: arkret_wire::RequestId::new(
+                "ak:request:019b0000-0000-7000-8000-000000000225",
+            )
+            .unwrap(),
+            realm_id: arkret_wire::RealmId::new(disclosure_realm).unwrap(),
+            operation_id: arkret_wire::ServiceOperationId::SelfSignalCommandSendV1,
+            request_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+                b"cold Agent Signal envelope",
+            ))
+            .unwrap(),
+            recipient_account_id: controller_authority.clone(),
+            challenge: arkret_wire::NonEmptyString::new(format!(
+                "ak.challenge:{}",
+                "A".repeat(32)
+            ))
+            .unwrap(),
+            queries: vec![
+                arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceSelector::Agent {
+                    actor: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                        outcome.agent_id.clone(),
+                        service_core.clone(),
+                    )),
+                    verification_method: verification_method.clone(),
+                },
+            ],
+        };
+    let expected_observation_operation = request.agent_observation_operation_id().unwrap();
+    let mut evidence_response =
+        TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&request)
+            .send(&app)
+            .await;
+    let evidence_status = evidence_response.status_code;
+    let evidence_body = evidence_response.take_string().await.unwrap();
+    assert_eq!(evidence_status, Some(StatusCode::OK), "{evidence_body}");
+    let outcome = serde_json::from_str::<
+        arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceQueryOutcome,
+    >(&evidence_body)
+    .unwrap();
+    outcome
+        .validate_for_request(&request, chrono::Utc::now())
+        .unwrap();
+    arkret_signatures::current_signer_evidence::verify_current_signer_evidence_outcome(
+        &outcome,
+        &state.notary_signing_key().verifying_key(),
+        chrono::Utc::now(),
+    )
+    .unwrap();
+    assert_eq!(outcome.response.issuer_id, service_core);
+    assert_eq!(outcome.response.verifier_id, state.service_core_id());
+    let arkret_models_collaboration::current_signer_evidence::CurrentSignerEvidenceItem::Agent {
+        actor,
+        verification_method: returned_method,
+        authenticated_signer_evidence,
+        dependencies,
+    } = outcome
+        .response
+        .evidences
+        .first()
+        .expect("origin authority omitted current Agent evidence")
+    else {
+        panic!("origin authority returned the wrong current signer branch")
+    };
+    assert_eq!(returned_method, &verification_method);
+    assert!(!dependencies.is_empty());
+    let arkret_models_identity::AuthenticatedSignerResolutionEvidence::Agent {
+        signer_id,
+        agent_signer_evidence,
+        ..
+    } = authenticated_signer_evidence
+    else {
+        panic!("current Agent item did not contain an authenticated Agent root")
+    };
+    assert_eq!(signer_id, actor.signing_principal_id());
+    let arkret_models_identity::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
+        admission_evidence,
+        current_observation,
+        ..
+    } = agent_signer_evidence.as_ref()
+    else {
+        panic!("Signal current evidence unexpectedly contained historical Agent evidence")
+    };
+    assert_eq!(
+        admission_evidence
+            .agent_authority_snapshot
+            .core
+            .authorization
+            .status,
+        arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus::Active
+    );
+    assert_eq!(
+        current_observation.operation_id,
+        expected_observation_operation
+    );
+    assert_eq!(current_observation.request_digest, request.request_digest);
+    assert_eq!(current_observation.verifier_id, state.service_core_id());
+    assert_eq!(
+        current_observation.audience_id,
+        controller_authority.principal_id
+    );
+    assert_eq!(current_observation.challenge, request.challenge);
+
+    let mut wrong_request = request.clone();
+    wrong_request.challenge =
+        arkret_wire::NonEmptyString::new(format!("ak.challenge:{}", "B".repeat(32))).unwrap();
+    assert!(
+        outcome
+            .validate_for_request(&wrong_request, chrono::Utc::now())
+            .is_err(),
+        "current Agent evidence must not replay under a different request challenge"
+    );
+    assert!(
+        outcome
+            .validate_for_request(&request, outcome.response.expires_at)
+            .is_err(),
+        "expired current Agent evidence must fail closed"
+    );
 }

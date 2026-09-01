@@ -145,7 +145,7 @@ async fn create_and_dispatch_local_realm_invite(
         ),
         pinned_record_digest: None,
     };
-    let introduction_evidence = IntroductionEvidence::SameStation;
+    let introduction_evidence = IntroductionEvidence::ExplicitAddress;
     let introduction_evidence_digest = arkret_canonical::canonical_sha256(&introduction_evidence)
         .expect("same-station evidence digest");
     let mut invite_event = signed_canonical_event(
@@ -1291,7 +1291,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
     assert_eq!(bob_invites["invites"][0]["realm_id"], invite_realm_id);
     assert_eq!(
         bob_invites["invites"][0]["introduction_evidence_digest"],
-        arkret_canonical::canonical_sha256(&IntroductionEvidence::SameStation)
+        arkret_canonical::canonical_sha256(&IntroductionEvidence::ExplicitAddress)
             .expect("same-station evidence digest")
     );
     // The private delivery token is transport material and MUST NOT be surfaced

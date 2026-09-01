@@ -1831,10 +1831,10 @@ impl AppState {
     pub fn peer_keypackage_claim_rate_limited(
         &self,
         source_id: &str,
-        target_principal_id: &str,
+        target_identity_key: &str,
     ) -> bool {
         self.runtime_guards
-            .peer_keypackage_claim_rate_limited(source_id, target_principal_id)
+            .peer_keypackage_claim_rate_limited(source_id, target_identity_key)
     }
 
     /// Spec `identity/key-management.md` §7.8 — record a full-ciphertext

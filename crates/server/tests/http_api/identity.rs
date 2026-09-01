@@ -49,7 +49,6 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         .founding_device_descriptor
         .expect("fixture PCR founding device descriptor");
     let authorize_payload = DeviceAuthorizePayload {
-        principal_id: principal_id.clone(),
         device_id: descriptor.device_id.clone(),
         device_public_key_did: descriptor.device_public_key_did.clone(),
         hpke_key: descriptor.hpke_key.clone(),

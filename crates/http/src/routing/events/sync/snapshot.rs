@@ -692,10 +692,10 @@ pub(super) fn roster_members_for_realm(
                             .iter()
                             .map(|claim| HandleClaimDigestInput {
                                 claim_digest: claim.digest.clone(),
-                                binding_state: claim.binding_state.clone(),
-                                expires_at: claim.expires_at.map(|expires_at| {
-                                    arkret_canonical::format_timestamp_canonical(expires_at)
-                                }),
+                                status: serde_json::from_value(Value::String(claim.status.clone()))
+                                    .expect("stored HandleClaim status was typed at ingestion"),
+                                revocation_digest: claim.revocation_digest.clone(),
+                                fresh_until: claim.fresh_until,
                             })
                             .collect();
                         if let Some(digest) = crate::state::display_state_digest(
@@ -840,7 +840,8 @@ fn handle_claim_visible_to_caller(
 ) -> bool {
     let claim_account = claim
         .envelope
-        .get("subject_account_id")
+        .get("claim")
+        .and_then(|core| core.get("subject_account_id"))
         .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value.clone()).ok());
     if claim_account.as_ref() != Some(subject_account_id) {
         return false;
@@ -849,7 +850,10 @@ fn handle_claim_visible_to_caller(
     if !trusted_handle_claim_issuer(context, claim) {
         return false;
     }
-    if claim.revoked || claim.binding_state != "verified" {
+    if claim.status != "verified" || claim.revocation_digest.is_some() {
+        return false;
+    }
+    if claim.fresh_until <= context.now {
         return false;
     }
     if claim
@@ -1470,9 +1474,7 @@ async fn account_data_events(
         let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
             continue;
         };
-        let holder_id = event.payload.get("holder_id").and_then(Value::as_str);
-        let holder_authored =
-            event.actor_id == actor && holder_id.is_none_or(|holder_id| holder_id == session.actor);
+        let holder_authored = event.actor_id == actor;
         if !holder_authored {
             continue;
         }

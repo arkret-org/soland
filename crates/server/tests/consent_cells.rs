@@ -110,17 +110,24 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
         })
     );
 
-    let response = TestClient::get(format!(
-        "http://server/_arkret/self/consent/cells/{bob}?peer={alice}&consent_scope=direct_message"
-    ))
-    .add_header("Authorization", format!("Bearer {bob_token}"), true)
-    .add_header(
-        "Arkret-Operation",
-        arkret_wire::ServiceOperationId::SELF_CONSENT_RESOURCE_GET_V1,
-        true,
-    )
-    .send(&app)
-    .await;
+    let peer = serde_json::json!({
+        "kind": "actor",
+        "actor_id": fixture_account_actor(&state, alice_did),
+    });
+    let mut cell_url = url::Url::parse("http://server/_arkret/self/consent/cell").unwrap();
+    cell_url
+        .query_pairs_mut()
+        .append_pair("peer", &serde_json::to_string(&peer).unwrap())
+        .append_pair("consent_scope", "direct_message");
+    let response = TestClient::get(cell_url.as_str())
+        .add_header("Authorization", format!("Bearer {bob_token}"), true)
+        .add_header(
+            "Arkret-Operation",
+            arkret_wire::ServiceOperationId::SELF_CONSENT_RESOURCE_GET_V1,
+            true,
+        )
+        .send(&app)
+        .await;
     assert_eq!(response.status_code.unwrap(), StatusCode::NOT_FOUND);
 }
 
@@ -161,8 +168,10 @@ async fn invite_receive_policy_get_set_round_trips() {
     custom.holder_allowed_introduction_kinds = vec!["consent_grant".to_owned()];
     custom.explicit_address_behavior = InviteReceiveAction::Drop;
     custom.unknown_invites = UnknownInviteAction::Drop;
-    // The policy owner is an Account; this explicitly principal-wide denylist remains DidCore.
-    custom.denied_subject_ids = vec![mallory.clone()];
+    custom.denied_actor_ids = vec![arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        mallory.clone(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:remote.example").unwrap(),
+    ))];
     let mut stored_response = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
         .add_header(

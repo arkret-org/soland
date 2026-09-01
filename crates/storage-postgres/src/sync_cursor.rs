@@ -153,12 +153,12 @@ impl SyncCursorStore for PgSyncCursorStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO sync_cursor_revocations \
-             (id, cursor_digest, principal_id, device_id, scope, reason_code, revoked_at, expires_at) \
+             (id, cursor_digest, account_id, device_id, scope, reason_code, revoked_at, expires_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind::<sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.cursor_digest)
-        .bind::<Text, _>(&record.principal_id)
+        .bind::<Jsonb, _>(serde_json::to_value(&record.account_id).map_err(PersistenceError::database)?)
         .bind::<Nullable<Text>, _>(&record.device_id)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.reason_code)
@@ -178,7 +178,7 @@ impl SyncCursorStore for PgSyncCursorStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT cursor_digest, principal_id, device_id, scope, reason_code, revoked_at, expires_at \
+            "SELECT cursor_digest, account_id, device_id, scope, reason_code, revoked_at, expires_at \
              FROM sync_cursor_revocations WHERE expires_at > $1 \
              ORDER BY revoked_at ASC",
         )
@@ -193,8 +193,8 @@ impl SyncCursorStore for PgSyncCursorStore {
 struct CursorRevocationRow {
     #[diesel(sql_type = Text)]
     cursor_digest: String,
-    #[diesel(sql_type = Text)]
-    principal_id: arkret_identifiers::DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    account_id: Value,
     #[diesel(sql_type = Nullable<Text>)]
     device_id: Option<String>,
     #[diesel(sql_type = Text)]
@@ -210,7 +210,8 @@ impl From<CursorRevocationRow> for CursorRevocation {
     fn from(row: CursorRevocationRow) -> Self {
         Self {
             cursor_digest: row.cursor_digest,
-            principal_id: row.principal_id,
+            account_id: serde_json::from_value(row.account_id)
+                .expect("stored cursor revocation account_id passed the database constraint"),
             device_id: row.device_id,
             scope: row.scope,
             reason_code: row.reason_code,

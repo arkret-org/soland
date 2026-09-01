@@ -1,28 +1,40 @@
 use super::*;
 
-/// REC-1 read APIs — resolve the principal to read recovery state for, enforcing
-/// principal isolation: a caller may only read its OWN recovery state. The
-/// principal is the authenticated actor; an optional `?principal_id=` query MUST
-/// match it (else 403).
-pub(super) async fn resolve_recovery_read_principal(
+/// Resolve the exact AccountId for a self recovery-policy read. The optional
+/// selector is canonical JSON for that same account; principal-only selectors
+/// are not accepted.
+pub(super) async fn resolve_recovery_read_account(
     aa: &AuthArgs,
     state: &AppState,
     req: &mut Request,
-    principal_id_param: Option<String>,
-) -> Result<String, AppError> {
+    account_id_param: Option<String>,
+) -> Result<arkret_wire::AccountId, AppError> {
     let session = aa.authenticated_session(state, req).await?;
-    let principal = session.actor;
-    if let Some(requested) = principal_id_param.filter(|p| !p.trim().is_empty())
-        && requested != principal
-    {
-        return Err(AppError::new(
+    let session_actor =
+        crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
+    let account_id = session_actor.as_account_id().cloned().ok_or_else(|| {
+        AppError::new(
             ErrorCode::CapabilityDenied,
-            "principal_id does not match the authenticated principal",
+            "recovery policy requires an account actor",
         )
         .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("recovery_principal_isolation"));
+        .with_wire_code("recovery_account_isolation")
+    })?;
+    if let Some(requested) = account_id_param.filter(|value| !value.trim().is_empty()) {
+        let requested: arkret_wire::AccountId = serde_json::from_str(&requested).map_err(|_| {
+            AppError::param_invalid("account_id must be RFC 8785 JCS(AccountId)")
+                .with_wire_code("schema_violation")
+        })?;
+        if requested != account_id {
+            return Err(AppError::new(
+                ErrorCode::CapabilityDenied,
+                "account_id does not match the authenticated account",
+            )
+            .with_status(StatusCode::FORBIDDEN)
+            .with_wire_code("recovery_account_isolation"));
+        }
     }
-    Ok(principal)
+    Ok(account_id)
 }
 
 pub(super) fn typed_recovery_policy_summary(
@@ -46,7 +58,7 @@ pub(super) fn typed_recovery_policy_summary(
     Ok(RecoveryPolicySummary {
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
-        principal_id: record.principal_id.clone(),
+        account_id: record.account_id.clone(),
         version: u64::from(record.version),
         acceptance_basis_ref: record.acceptance_basis.clone(),
         recovery_policy_ref: None,
@@ -87,7 +99,7 @@ fn recovery_policy_publish_outcome(
     Ok(RecoveryPolicyPublishOutcome {
         policy_id: PolicyId::new(record.policy_id.clone())
             .map_err(|error| stored_recovery_type_error("policy id", error))?,
-        principal_id: record.principal_id.clone(),
+        account_id: record.account_id.clone(),
         version: u64::from(record.version),
         acceptance_basis_ref: record.acceptance_basis.clone(),
         accepted_at: record.accepted_at,
@@ -163,16 +175,15 @@ pub(super) fn recovery_policy_acceptance_basis(
 )]
 pub(super) async fn recovery_policy_get(
     aa: AuthArgs,
-    principal_id: QueryParam<String, false>,
+    account_id: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RecoveryPolicyActiveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let principal =
-        resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
+    let account = resolve_recovery_read_account(&aa, state, req, account_id.into_inner()).await?;
     let active = state
         .recovery_policies()
-        .active_policy(&principal)
+        .active_policy(&account)
         .await
         .map_err(recovery_service_error)?;
     let active_policy = active
@@ -181,10 +192,7 @@ pub(super) async fn recovery_policy_get(
         .transpose()?;
     let recovery_policy_ref = active_policy.as_ref().map(recovery_policy_ref_from_summary);
     json_ok(RecoveryPolicyActiveOutcome {
-        principal_id: Some(
-            arkret_identifiers::DidCoreId::new(principal)
-                .map_err(|error| stored_recovery_type_error("principal_id", error))?,
-        ),
+        account_id: Some(account),
         active_policy,
         recovery_policy_ref,
         as_of: active.as_ref().map(|record| record.accepted_at),
@@ -202,16 +210,15 @@ pub(super) async fn recovery_policy_get(
 )]
 pub(super) async fn recovery_policies_get(
     aa: AuthArgs,
-    principal_id: QueryParam<String, false>,
+    account_id: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<SolandRecoveryPoliciesOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let principal =
-        resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
+    let account = resolve_recovery_read_account(&aa, state, req, account_id.into_inner()).await?;
     let policies = state
         .recovery_policies()
-        .policy_history(&principal)
+        .policy_history(&account)
         .await
         .map_err(recovery_service_error)?;
     let policies = policies
@@ -256,10 +263,19 @@ pub(super) async fn recovery_policy_put(
     let validated = validate_recovery_policy(&payload)?;
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
-    if validated.principal_id.as_str() != session.actor || request.event.actor_id != session_actor {
+    if validated.account_id
+        != *session_actor.as_account_id().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::CapabilityDenied,
+                "recovery policy requires an account actor",
+            )
+            .with_status(StatusCode::FORBIDDEN)
+        })?
+        || request.event.actor_id != session_actor
+    {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
-            "Event actor and recovery policy principal must match the authenticated principal",
+            "Event actor and recovery policy account must match the authenticated account",
         )
         .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
@@ -283,7 +299,7 @@ pub(super) async fn recovery_policy_put(
     }
     let existing = state
         .recovery_policies()
-        .active_policy(validated.principal_id.as_str())
+        .active_policy(&validated.account_id)
         .await
         .map_err(recovery_service_error)?;
 
@@ -355,7 +371,7 @@ pub(super) async fn recovery_policy_put(
     let accepted_at = chrono::Utc::now();
     let policy = RecoveryPolicyState {
         policy_id: validated.policy_id,
-        principal_id: validated.principal_id,
+        account_id: validated.account_id,
         version: validated.version,
         acceptance_basis,
         trust_domain: validated.trust_domain.into_string(),
@@ -408,7 +424,7 @@ pub(super) async fn recovery_policy_put(
         arkret_wire::ServiceOperationId::ROOT_IDENTITY_RECOVERY_POLICY_COMMAND_PUBLISH_V1,
         json!({
             "policy_id": record.policy_id.clone(),
-            "principal_id": record.principal_id.clone(),
+            "account_id": record.account_id.clone(),
             "version": record.version,
             "trust_domain": record.trust_domain.clone(),
         }),

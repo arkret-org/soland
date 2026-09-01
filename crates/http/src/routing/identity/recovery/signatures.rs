@@ -17,7 +17,8 @@ pub(super) async fn verify_recovery_policy_auth_signature(
     existing: Option<&RecoveryPolicyState>,
 ) -> Result<(), AppError> {
     let primary =
-        verify_recovery_auth_signature(state, payload, record.principal_id.as_str()).await;
+        verify_recovery_auth_signature(state, payload, record.account_id.principal_id.as_str())
+            .await;
     if primary.is_ok() {
         return primary;
     }
@@ -42,7 +43,7 @@ pub(super) fn recovery_policy_uses_session_device(
         .is_some_and(|verification_method| {
             recovery_policy_verification_method_matches_session(
                 verification_method,
-                record.principal_id.as_str(),
+                record.account_id.principal_id.as_str(),
                 &session.device_id,
             )
         })
@@ -71,7 +72,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
     record: &ValidatedRecoveryPolicy,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
-    if session.actor != record.principal_id.as_str() {
+    if session.actor != record.account_id.principal_id.as_str() {
         return Err(AppError::new(
             ErrorCode::CapabilityDenied,
             "session actor does not match recovery policy principal",
@@ -91,7 +92,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         .ok_or_else(|| AppError::param_invalid("auth_data.verification_method is required"))?;
     if !recovery_policy_verification_method_matches_session(
         verification_method,
-        record.principal_id.as_str(),
+        record.account_id.principal_id.as_str(),
         &session.device_id,
     ) {
         return Err(recovery_signature_error(format!(
@@ -100,9 +101,12 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         )));
     }
 
-    let device_key =
-        resolve_session_device_key_for_genesis_policy(state, record.principal_id.as_str(), session)
-            .await?;
+    let device_key = resolve_session_device_key_for_genesis_policy(
+        state,
+        record.account_id.principal_id.as_str(),
+        session,
+    )
+    .await?;
     let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
         AppError::param_invalid(format!("recovery policy violates SDK shape: {error}"))
             .with_wire_code("schema_violation")

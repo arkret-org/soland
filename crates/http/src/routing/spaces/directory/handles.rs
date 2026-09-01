@@ -216,12 +216,12 @@ pub(super) fn local_handle_resolution_outcome(
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
     Ok(DirectoryHandleResolutionOutcome {
-        account_id: handle_claim.subject_account_id.clone(),
+        account_id: handle_claim.claim.subject_account_id.clone(),
         handle: canonical_handle,
         verified: true,
         claims: Some(vec![handle_claim.clone()]),
         source_refs: Vec::new(),
-        expires_at: handle_claim.expires_at,
+        expires_at: handle_claim.claim.expires_at,
     })
 }
 
@@ -381,17 +381,24 @@ async fn validate_remote_handle_resolution(
         .as_ref()
         .and_then(|claims| claims.first())
         .ok_or_else(|| "remote handle resolution requires a handle claim".to_owned())?;
+    let peer_verifier = DidCoreId::new(peer_id.to_owned())
+        .map_err(|error| format!("remote verifier id invalid: {error}"))?;
     claim
-        .validate_remote_resolution(Some(audience.as_str()), Some(&outcome.account_id), now())
+        .validate_remote_resolution(
+            Some(audience.as_str()),
+            Some(&outcome.account_id),
+            std::slice::from_ref(&peer_verifier),
+            now(),
+        )
         .map_err(|error| format!("remote handle claim invalid: {error}"))?;
     verify_remote_handle_claim_proof(state, peer_id, audience.as_str(), claim).await?;
     if claim.handle_canonical() != Some(lookup.canonical.as_str()) {
         return Err("remote handle claim handle mismatch".to_owned());
     }
-    if claim.subject_account_id != outcome.account_id {
+    if claim.claim.subject_account_id != outcome.account_id {
         return Err("remote handle claim subject mismatch".to_owned());
     }
-    if claim.issuer_id.as_str() != peer_id {
+    if claim.claim.issuer_id.as_str() != peer_id || claim.verifier_id.as_str() != peer_id {
         return Err("remote handle claim issuer service mismatch".to_owned());
     }
     Ok(())
@@ -403,55 +410,57 @@ async fn verify_remote_handle_claim_proof(
     expected_audience: &str,
     claim: &SdkHandleClaim,
 ) -> Result<(), String> {
-    let mut unsigned_claim = claim.clone();
-    unsigned_claim.proofs.clear();
-    let canonical_bytes = canonical::canonical_json_bytes(&unsigned_claim)
-        .map_err(|error| format!("canonicalize remote handle claim: {error}"))?;
-    let expected_digest = canonical::sha256_digest(&canonical_bytes);
-    let mut last_error = None;
-    for proof in &claim.proofs {
-        if proof.kind != proof_kind::DETACHED_JWS {
-            last_error = Some("remote handle claim proof kind must be detached_jws".to_owned());
-            continue;
-        }
-        if proof.payload_digest.as_str() != expected_digest {
-            last_error = Some("remote handle claim proof payload_digest mismatch".to_owned());
-            continue;
-        }
-        if !proof_audience_covers_expected(proof.audience.as_ref(), expected_audience) {
-            last_error = Some("remote handle claim proof audience mismatch".to_owned());
-            continue;
-        }
-        if let Err(error) = crate::jws_verify::validate_verification_method_controller(
-            peer_id,
-            &proof.verification_method,
-        ) {
-            last_error = Some(error);
-            continue;
-        }
-        let result = if state.config().development_mode {
-            crate::jws_verify::verify_jws_shape(
-                &canonical_bytes,
-                &proof.jws,
-                &proof.verification_method,
-                peer_id,
-            )
-        } else {
-            crate::jws_verify::verify_did_controlled_jws_async(
-                &canonical_bytes,
-                &proof.jws,
-                &proof.verification_method,
-                peer_id,
-                state,
-            )
-            .await
-        };
-        match result {
-            Ok(()) => return Ok(()),
-            Err(error) => last_error = Some(error),
-        }
+    verify_handle_claim_proof(
+        state,
+        &claim.claim.proofs[0],
+        claim.claim.issuer_id.as_str(),
+        None,
+    )
+    .await?;
+    verify_handle_claim_proof(
+        state,
+        &claim.claim.proofs[1],
+        claim.claim.subject_account_id.station_id.as_str(),
+        None,
+    )
+    .await?;
+    verify_handle_claim_proof(state, &claim.status_proof, peer_id, Some(expected_audience)).await
+}
+
+async fn verify_handle_claim_proof(
+    state: &AppState,
+    proof: &PayloadProof,
+    controller: &str,
+    expected_audience: Option<&str>,
+) -> Result<(), String> {
+    if expected_audience
+        .is_some_and(|expected| !proof_audience_covers_expected(proof.audience.as_ref(), expected))
+    {
+        return Err("remote handle claim proof audience mismatch".to_owned());
     }
-    Err(last_error.unwrap_or_else(|| "remote handle claim proof verification failed".to_owned()))
+    crate::jws_verify::validate_verification_method_controller(
+        controller,
+        &proof.verification_method,
+    )?;
+    let signing_bytes = handle_claim_proof_signing_bytes(proof)
+        .map_err(|error| format!("handle claim proof transcript: {error}"))?;
+    if state.config().development_mode {
+        crate::jws_verify::verify_jws_shape(
+            &signing_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            controller,
+        )
+    } else {
+        crate::jws_verify::verify_did_controlled_jws_async(
+            &signing_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            controller,
+            state,
+        )
+        .await
+    }
 }
 
 fn proof_audience_covers_expected(audience: Option<&Audience>, expected: &str) -> bool {
@@ -532,7 +541,7 @@ pub(super) async fn resolve_handle(
             // from the freshly signed claim so the top-level response field
             // matches handle-claim.schema.json (arkret-spec @ 7157ee8). The
             // request's `@alice` UI form is normalized away here.
-            let canonical_handle = handle_claim.handle.canonical().to_owned();
+            let canonical_handle = handle_claim.claim.handle.canonical().to_owned();
             json_ok(local_handle_resolution_outcome(
                 canonical_handle,
                 handle_claim,
@@ -626,60 +635,85 @@ pub(super) async fn signed_handle_claim(
             "invalid subject principal id for handle claim: {err}"
         ))
     })?;
-    let signer_did = state.service_resolution_commitment().did.clone();
     let signer_id = DidCoreId::new(service_id).map_err(|err| {
         AppError::internal(format!(
             "invalid serving service id for handle claim: {err}"
         ))
     })?;
-    let created_at = now();
-    let expires_at = created_at + chrono::Duration::hours(24);
-    let mut claim = SdkHandleClaim {
-        schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
+    let issued_at = now();
+    let expires_at = issued_at + chrono::Duration::hours(24);
+    let placeholder = handle_claim_proof(
+        state,
+        Hash::new(format!("sha256:{}", "0".repeat(64))).map_err(|error| {
+            AppError::internal(format!("handle claim placeholder digest: {error}"))
+        })?,
+        PayloadProofPurpose::IssuerAttestation,
+        issued_at,
+        None,
+    )?;
+    let mut core = HandleClaimCore {
+        schema: HandleClaimCore::SCHEMA.to_owned(),
         handle,
         handle_aliases: vec![handle_alias],
         subject_account_id: AccountId::new(subject, state.service_core_id().clone()),
-        issuer_id: signer_id,
-        vouching_id: None,
-        binding_state: HandleBindingState::Verified,
-        claim_kind: Some(HandleClaimKind::HandleBinding),
-        visibility: Some(HandleVisibility::Public),
-        audience: Some(audience.to_owned()),
-        challenge: None,
-        claim_scope: BTreeMap::new(),
-        claims: Vec::new(),
-        created_at,
+        issuer_id: signer_id.clone(),
+        claim: HandleClaimVariant::HandleBinding,
+        visibility: HandleVisibility::Public,
+        audience: None,
+        issued_at,
         expires_at: Some(expires_at),
-        verified_at: None,
         source_refs: Vec::new(),
-        proofs: Vec::new(),
+        proofs: [placeholder.clone(), placeholder],
     };
-    let canonical_bytes = canonical::canonical_json_bytes(&claim).map_err(|err| {
-        AppError::internal(format!("handle claim canonicalization failed: {err}"))
-    })?;
-    let signer = Ed25519PayloadSigner::new(
-        (*state.notary_signing_key()).clone(),
-        signer_did.clone(),
-        arkret_wire::DidUrl::new(format!("{signer_did}#directory-handle-claim")).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "directory claim verification method is invalid: {error}"
-                ))
-            },
+    let claim_digest = core
+        .claim_digest()
+        .map_err(|error| AppError::internal(format!("handle claim core digest failed: {error}")))?;
+    core.proofs = [
+        handle_claim_proof(
+            state,
+            claim_digest.clone(),
+            PayloadProofPurpose::IssuerAttestation,
+            issued_at,
+            None,
         )?,
-    );
-    let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
-        .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
-    claim.proofs.push(PayloadProof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: signature.verification_method,
-        payload_digest: signature.payload_digest,
-        created_at: signature.created_at,
-        domain: None,
-        audience: Some(Audience::Single(audience.to_owned())),
-        proof_purpose: None,
-        jws: signature.jws,
-    });
+        handle_claim_proof(
+            state,
+            claim_digest.clone(),
+            PayloadProofPurpose::HolderAcceptance,
+            issued_at,
+            None,
+        )?,
+    ];
+    let fresh_until = issued_at + chrono::Duration::minutes(5);
+    let placeholder = handle_claim_proof(
+        state,
+        claim_digest.clone(),
+        PayloadProofPurpose::StatusAttestation,
+        issued_at,
+        Some(audience),
+    )?;
+    let mut claim = SdkHandleClaim {
+        schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
+        claim: core,
+        claim_digest,
+        status: HandleClaimStatus::Verified,
+        as_of: issued_at,
+        verifier_id: signer_id,
+        verified_at: Some(issued_at),
+        revocation: None,
+        revocation_digest: None,
+        fresh_until,
+        status_proof: placeholder,
+    };
+    claim.status_proof = handle_claim_proof(
+        state,
+        claim.status_digest().map_err(|error| {
+            AppError::internal(format!("handle claim status digest failed: {error}"))
+        })?,
+        PayloadProofPurpose::StatusAttestation,
+        issued_at,
+        Some(audience),
+    )?;
     claim
         .validate()
         .map_err(|err| AppError::internal(format!("handle claim validation failed: {err}")))?;
@@ -687,6 +721,51 @@ pub(super) async fn signed_handle_claim(
         let _ = state.cache_handle_claim(envelope).await;
     }
     Ok(claim)
+}
+
+fn handle_claim_proof(
+    state: &AppState,
+    payload_digest: Hash,
+    proof_purpose: PayloadProofPurpose,
+    created_at: DateTime<Utc>,
+    audience: Option<&str>,
+) -> Result<PayloadProof, AppError> {
+    let signer_did = state.service_resolution_commitment().did.clone();
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{signer_did}#directory-handle-claim"))
+            .map_err(|error| AppError::internal(format!("handle claim method: {error}")))?;
+    let domain = match proof_purpose {
+        PayloadProofPurpose::IssuerAttestation | PayloadProofPurpose::HolderAcceptance => {
+            arkret_models_identity::HANDLE_CLAIM_PROOF_DOMAIN
+        }
+        PayloadProofPurpose::StatusAttestation => {
+            arkret_models_identity::HANDLE_CLAIM_STATUS_DOMAIN
+        }
+        PayloadProofPurpose::RevocationAuthorization => {
+            arkret_models_identity::HANDLE_CLAIM_REVOCATION_DOMAIN
+        }
+        PayloadProofPurpose::GovernanceAuthorization => {
+            return Err(AppError::internal("invalid HandleClaim proof purpose"));
+        }
+    };
+    let mut proof = PayloadProof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        verification_method,
+        payload_digest,
+        created_at,
+        domain: Some(domain.to_owned()),
+        audience: audience.map(|value| Audience::Single(value.to_owned())),
+        proof_purpose: Some(proof_purpose),
+        jws: String::new(),
+    };
+    let signing_bytes = handle_claim_proof_signing_bytes(&proof)
+        .map_err(|error| AppError::internal(format!("handle claim transcript: {error}")))?;
+    proof.jws = arkret_signatures::jws::sign_jws_ed25519(
+        &signing_bytes,
+        state.notary_signing_key().as_ref(),
+    )
+    .map_err(|error| AppError::internal(format!("handle claim sign: {error}")))?;
+    Ok(proof)
 }
 
 #[salvo::oapi::endpoint(
@@ -967,31 +1046,22 @@ pub(super) fn subject_handle_claim_visible(
     let Ok(parsed_claim) = serde_json::from_value::<SdkHandleClaim>(claim.clone()) else {
         return false;
     };
-    if &parsed_claim.subject_account_id != subject {
+    if parsed_claim.validate().is_err() || &parsed_claim.claim.subject_account_id != subject {
         return false;
     }
     if subject_handle_claim_handle(claim).is_none() {
         return false;
     }
-    if parsed_claim.binding_state != HandleBindingState::Verified {
-        return false;
-    }
-    if claim
-        .get("revoked")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || claim.get("revoked_at").is_some()
+    if parsed_claim.status != HandleClaimStatus::Verified
+        || as_of < parsed_claim.as_of
+        || as_of >= parsed_claim.fresh_until
     {
         return false;
     }
-    if claim
-        .get("visibility")
-        .and_then(Value::as_str)
-        .is_some_and(|visibility| visibility == "private")
-    {
+    if parsed_claim.claim.visibility == HandleVisibility::Private {
         return false;
     }
-    if let Some(created_at) = subject_handle_claim_time(claim, "created_at")
+    if let Some(created_at) = subject_handle_claim_time(claim, "issued_at")
         && created_at > as_of
     {
         return false;
@@ -1002,10 +1072,10 @@ pub(super) fn subject_handle_claim_visible(
     if expires_at <= as_of {
         return false;
     }
-    if parsed_claim.issuer_id.as_str() != state.service_id().as_str() {
+    if parsed_claim.claim.issuer_id.as_str() != state.service_id().as_str() {
         return false;
     }
-    let Some(audience) = claim.get("audience").and_then(Value::as_str) else {
+    let Some(audience) = parsed_claim.claim.audience.as_deref() else {
         return true;
     };
     let mut allowed_audiences = BTreeSet::new();
@@ -1021,29 +1091,32 @@ pub(super) fn subject_handle_claim_visible(
 
 pub(super) fn subject_handle_claim_time(claim: &Value, field: &str) -> Option<DateTime<Utc>> {
     claim
-        .get(field)
+        .get("claim")
+        .and_then(|core| core.get(field))
         .and_then(Value::as_str)
         .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
         .map(|value| value.with_timezone(&Utc))
 }
 
 pub(super) fn subject_handle_claim_handle(claim: &Value) -> Option<&str> {
-    claim.get("handle").and_then(Value::as_str)
+    claim
+        .get("claim")
+        .and_then(|core| core.get("handle"))
+        .and_then(Value::as_str)
 }
 
 pub(super) fn subject_handle_claim_dedupe_key(claim: &Value) -> Option<String> {
-    let account_id = claim.get("subject_account_id")?;
+    let core = claim.get("claim")?;
+    let account_id = core.get("subject_account_id")?;
     Some(format!(
         "{}|{}|{}|{}|{}",
         subject_handle_claim_handle(claim)?,
         account_id.get("principal_id").and_then(Value::as_str)?,
         account_id.get("station_id").and_then(Value::as_str)?,
-        claim
-            .get("issuer_id")
+        core.get("issuer_id")
             .and_then(Value::as_str)
             .unwrap_or_default(),
-        claim
-            .get("audience")
+        core.get("audience")
             .and_then(Value::as_str)
             .unwrap_or_default(),
     ))
@@ -1055,17 +1128,22 @@ pub(super) fn subject_handle_claim_sort_key(claim: &Value) -> (String, String, S
             .unwrap_or_default()
             .to_owned(),
         claim
+            .get("claim")
+            .unwrap_or(&Value::Null)
             .get("issuer_id")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
         claim
+            .get("claim")
+            .unwrap_or(&Value::Null)
             .get("audience")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),
         claim
-            .get("created_at")
+            .get("claim")
+            .and_then(|core| core.get("issued_at"))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_owned(),

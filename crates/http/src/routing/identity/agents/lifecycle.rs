@@ -257,7 +257,7 @@ pub(super) async fn provision_agent(
                 arkret_wire::AccountId::new(controller_id.clone(), controller_station_id);
             let active_recovery_policy = state
                 .recovery_policies()
-                .active_policy(controller_id.as_str())
+                .active_policy(&controller_authority)
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("controller recovery policy lookup failed: {error}"))

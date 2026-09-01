@@ -240,11 +240,64 @@ pub(crate) fn validate_principal_admission_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
     validate_auto_resolve(gate, true)?;
-    let has_allowed_methods = validate_did_method_list(gate, "allowed_did_methods")?;
-    let has_allowed_ids = validate_did_list(gate, "allowed_principal_ids")?;
-    let has_denied_ids = validate_did_list(gate, "denied_principal_ids")?;
-    if !(has_allowed_methods || has_allowed_ids || has_denied_ids) {
+    validate_did_method_list(gate, "allowed_did_methods")?;
+    validate_account_id_list(gate, "allowed_account_ids")?;
+    validate_account_id_list(gate, "denied_account_ids")?;
+    validate_actor_id_list(gate, "allowed_actor_ids")?;
+    validate_actor_id_list(gate, "denied_actor_ids")?;
+    validate_did_list(gate, "allowed_principal_core_ids")?;
+    validate_did_list(gate, "denied_principal_core_ids")?;
+    if ![
+        "allowed_did_methods",
+        "allowed_account_ids",
+        "denied_account_ids",
+        "allowed_actor_ids",
+        "denied_actor_ids",
+        "allowed_principal_core_ids",
+        "denied_principal_core_ids",
+    ]
+    .iter()
+    .any(|field| gate.contains_key(*field))
+    {
         return Err("principal_admission_requires_selector");
+    }
+    Ok(())
+}
+
+fn validate_account_id_list(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<(), &'static str> {
+    let Some(values) = object.get(field) else {
+        return Ok(());
+    };
+    let Some(values) = values.as_array() else {
+        return Err("principal_admission_accounts_invalid");
+    };
+    if values
+        .iter()
+        .any(|value| serde_json::from_value::<arkret_wire::AccountId>(value.clone()).is_err())
+    {
+        return Err("principal_admission_accounts_invalid");
+    }
+    Ok(())
+}
+
+fn validate_actor_id_list(
+    object: &serde_json::Map<String, Value>,
+    field: &str,
+) -> Result<(), &'static str> {
+    let Some(values) = object.get(field) else {
+        return Ok(());
+    };
+    let Some(values) = values.as_array() else {
+        return Err("principal_admission_actors_invalid");
+    };
+    if values
+        .iter()
+        .any(|value| serde_json::from_value::<arkret_wire::ActorId>(value.clone()).is_err())
+    {
+        return Err("principal_admission_actors_invalid");
     }
     Ok(())
 }
@@ -442,31 +495,62 @@ pub(crate) fn normalize_policy_did_method(value: &str) -> Option<&str> {
     .then_some(method)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PrincipalAdmissionSubjectClass {
+    Human,
+    Agent,
+    Service,
+}
+
 pub(crate) fn principal_admission_gate_allows(
     gate: &serde_json::Map<String, Value>,
     member: &str,
+    subject_class: PrincipalAdmissionSubjectClass,
     resolved_did: Option<&arkret_identifiers::Did>,
 ) -> bool {
     if !principal_admission_gate_has_selector(gate) {
         return false;
     }
-    let Ok(member_id) = arkret_identifiers::DidCoreId::new(member.to_owned()) else {
+    let Ok(actor_id) = serde_json::from_str::<arkret_wire::ActorId>(member) else {
         return false;
     };
-    if did_list_contains(gate, "denied_principal_ids", member) {
+    let member_id = actor_id.signing_principal_id();
+    if did_list_contains(gate, "denied_principal_core_ids", member_id.as_str()) {
         return false;
     }
-    if did_list_non_empty(gate, "allowed_principal_ids")
-        && !did_list_contains(gate, "allowed_principal_ids", member)
+    if gate.contains_key("allowed_principal_core_ids")
+        && !did_list_contains(gate, "allowed_principal_core_ids", member_id.as_str())
     {
         return false;
+    }
+    let actor_value = serde_json::to_value(&actor_id).ok();
+    match subject_class {
+        PrincipalAdmissionSubjectClass::Human => {
+            let Some(account_id) = actor_id.as_account_id() else {
+                return false;
+            };
+            let account_value = serde_json::to_value(account_id).ok();
+            if json_list_contains(gate, "denied_account_ids", account_value.as_ref())
+                || (gate.contains_key("allowed_account_ids")
+                    && !json_list_contains(gate, "allowed_account_ids", account_value.as_ref()))
+            {
+                return false;
+            }
+        }
+        PrincipalAdmissionSubjectClass::Agent | PrincipalAdmissionSubjectClass::Service => {
+            if json_list_contains(gate, "denied_actor_ids", actor_value.as_ref())
+                || (gate.contains_key("allowed_actor_ids")
+                    && !json_list_contains(gate, "allowed_actor_ids", actor_value.as_ref()))
+            {
+                return false;
+            }
+        }
     }
     if let Some(methods) = gate.get("allowed_did_methods").and_then(Value::as_array)
         && !methods.is_empty()
     {
         let Some(did) = resolved_did.filter(|did| {
-            arkret_wire::project_did_to_core_id(did)
-                .is_ok_and(|projected| projected.as_str() == member_id.as_str())
+            arkret_wire::project_did_to_core_id(did).is_ok_and(|projected| projected == *member_id)
         }) else {
             return false;
         };
@@ -483,12 +567,29 @@ pub(crate) fn principal_admission_gate_allows(
 }
 
 pub(crate) fn principal_admission_gate_has_selector(gate: &serde_json::Map<String, Value>) -> bool {
-    did_list_non_empty(gate, "allowed_principal_ids")
-        || did_list_non_empty(gate, "denied_principal_ids")
-        || gate
-            .get("allowed_did_methods")
+    [
+        "allowed_did_methods",
+        "allowed_account_ids",
+        "denied_account_ids",
+        "allowed_actor_ids",
+        "denied_actor_ids",
+        "allowed_principal_core_ids",
+        "denied_principal_core_ids",
+    ]
+    .iter()
+    .any(|field| gate.contains_key(*field))
+}
+
+fn json_list_contains(
+    gate: &serde_json::Map<String, Value>,
+    field: &str,
+    expected: Option<&Value>,
+) -> bool {
+    expected.is_some_and(|expected| {
+        gate.get(field)
             .and_then(Value::as_array)
-            .is_some_and(|values| !values.is_empty())
+            .is_some_and(|values| values.iter().any(|value| value == expected))
+    })
 }
 
 pub(crate) fn did_list_non_empty(gate: &serde_json::Map<String, Value>, field: &str) -> bool {

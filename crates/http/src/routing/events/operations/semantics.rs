@@ -152,14 +152,11 @@ fn validate_moderation_report_provenance(
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     }
     payload.validate_provenance(operation.context.sender.signing_principal_id())?;
-    if payload.provenance
-        == Some(
-            arkret_models_collaboration::events_payloads::moderation::ModerationReportProvenance::MimiFacade,
-        )
-        && operation.context.sender.signing_principal_id().as_str() != state.service_id()
-    {
-        return Err("MIMI facade moderation report must be authored by the local service");
-    }
+    // MIMI reports are caller-authored ordinary Events. The interop handler
+    // verifies the authenticated provider and exact reporter authority before
+    // admission; provenance never authorizes the local facade to substitute
+    // its service actor or signature.
+    let _ = state;
     Ok(())
 }
 

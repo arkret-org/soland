@@ -166,19 +166,6 @@ pub(super) async fn project_account_data_set(
         return;
     }
     let owner = operation.context.sender.to_string();
-    if operation
-        .payload
-        .get("holder_id")
-        .is_some_and(|holder| holder.as_str() != Some(account_id.principal_id.as_str()))
-    {
-        tracing::warn!(
-            owner,
-            origin,
-            account_data_key,
-            "ak.account_data.set holder_id does not match the accepted Account principal"
-        );
-        return;
-    }
     let Some(expected_revision) = operation
         .payload
         .get("expected_revision")
@@ -252,7 +239,10 @@ pub(super) async fn project_account_data_set(
             );
             return;
         };
-        let sender = DeviceMessageSender::Device { sender_device_id };
+        let sender = DeviceMessageSender::Device {
+            sender_account_id: account_id.clone(),
+            sender_device_id,
+        };
         let content = ActorPrivateAccountDataUpdate {
             operation: if tombstone {
                 ActorPrivateAccountDataOperation::Delete
@@ -299,6 +289,10 @@ pub(super) async fn fanout_projection_effect_private_update(
         marker.actor_id.signing_principal_id().as_str(),
         ActorPrivateDeviceUpdate::ReadCursor {
             sender: DeviceMessageSender::Device {
+                sender_account_id: match marker.actor_id.as_account_id() {
+                    Some(account_id) => account_id.clone(),
+                    None => return,
+                },
                 sender_device_id: marker.device_id.clone(),
             },
             content: ActorPrivateReadCursorUpdate {
@@ -377,20 +371,6 @@ mod tests {
                 .is_none()
         );
         operation.context.sender = actor;
-        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
-        project_account_data_set(&state, state.service_id(), "", &operation).await;
-        assert_eq!(
-            state
-                .account_data()
-                .entry(&actor_key, "ak.dnd_schedule")
-                .await
-                .unwrap()
-                .unwrap()
-                .payload,
-            first.payload
-        );
-
-        operation.payload["holder_id"] = json!(principal);
         operation.payload["body"] = json!({"opaque": "second"});
         project_account_data_set(&state, principal.as_str(), "", &operation).await;
         let second = state

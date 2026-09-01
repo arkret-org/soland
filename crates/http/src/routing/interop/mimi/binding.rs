@@ -68,6 +68,67 @@ pub(super) async fn latest_mimi_room_binding(
     Ok(None)
 }
 
+/// Resolve the unique current binding by the full canonical room URI.
+pub(super) async fn current_mimi_room_binding_for_uri(
+    state: &AppState,
+    room_uri: &str,
+) -> Result<Option<MimiRoomBindingProjection>, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
+    let mut candidates = Vec::new();
+    for record in records {
+        let event: arkret_wire::Event = serde_json::from_value(record.envelope)
+            .map_err(|error| AppError::internal(format!("MIMI binding decode failed: {error}")))?;
+        if event.kind != arkret_wire::EventKind::MimiRoomBinding
+            || event.payload.get("mimi_room_uri").and_then(Value::as_str) != Some(room_uri)
+        {
+            continue;
+        }
+        candidates.push(event);
+    }
+    let candidate_ids = candidates
+        .iter()
+        .map(|event| event.event_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let superseded = candidates
+        .iter()
+        .flat_map(|event| event.prev_refs.iter())
+        .filter(|event_id| candidate_ids.contains(event_id.as_str()))
+        .map(|event_id| event_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut heads = candidates
+        .iter()
+        .filter(|event| !superseded.contains(event.event_id.as_str()));
+    let current = heads.next();
+    if heads.next().is_some() {
+        return Err(
+            AppError::capability_denied("MIMI room binding is ambiguous")
+                .with_wire_code("mimi_reporter_resolution_required"),
+        );
+    }
+    current
+        .map(|event| {
+            let realm_id = event
+                .payload
+                .get("binding_scope")
+                .and_then(|scope| scope.get("realm_id"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    AppError::capability_denied("MIMI room binding has no current Realm")
+                        .with_wire_code("mimi_reporter_resolution_required")
+                })?;
+            Ok(MimiRoomBindingProjection {
+                event_id: event.event_id.to_string(),
+                realm_id: realm_id.to_owned(),
+                binding: Value::Object(event.payload.clone().into_iter().collect()),
+            })
+        })
+        .transpose()
+}
+
 pub(super) async fn mimi_bound_realm_id(
     state: &AppState,
     room_id: &str,

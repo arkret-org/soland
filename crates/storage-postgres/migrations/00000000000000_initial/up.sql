@@ -1241,7 +1241,7 @@ CREATE TABLE public.consent_cells (
     id uuid PRIMARY KEY,
     cell_id text NOT NULL,
     holder_id text NOT NULL,
-    peer_id text NOT NULL,
+    peer jsonb NOT NULL,
     consent_scope text NOT NULL,
     grant_dots jsonb DEFAULT '{}'::jsonb NOT NULL,
     revoked_dots jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -1252,7 +1252,7 @@ ALTER TABLE ONLY public.consent_cells
     ADD CONSTRAINT consent_cells_holder_cell_key UNIQUE (holder_id, cell_id);
 
 CREATE INDEX consent_cells_holder_intent_idx
-    ON public.consent_cells USING btree (holder_id, peer_id, consent_scope);
+    ON public.consent_cells USING btree (holder_id, consent_scope);
 
 -- Private service-local MIMI request correlation. These rows are not consent
 -- cells and do not represent accepted protocol state; they only bind the
@@ -1288,6 +1288,9 @@ CREATE TABLE public.contacts (
     -- log at all and a foreign key would reject the legitimate federated case.
     -- Stored in the same 33-octet form `canonical_events.id` uses.
     request_event_ref bytea CHECK (octet_length(request_event_ref) = 33),
+    -- Directional Station-internal request-slot CAS heads. They are separate
+    -- from Contact-round continuity and are never exposed as wire state.
+    request_slot_states jsonb DEFAULT '[]'::jsonb NOT NULL,
     request_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
     request_mirror_receipts jsonb DEFAULT '[]'::jsonb NOT NULL,
     contact_round_evidence jsonb,
@@ -1700,6 +1703,7 @@ CREATE INDEX key_backups_device_idx ON public.key_backups USING btree (device_id
 CREATE TABLE public.key_backup_delete_challenges (
     challenge_id text NOT NULL,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     backup_id text NOT NULL,
     request_id text NOT NULL,
     challenge jsonb NOT NULL,
@@ -1708,7 +1712,7 @@ CREATE TABLE public.key_backup_delete_challenges (
     consumed_at timestamp with time zone,
     PRIMARY KEY (challenge_id),
     CONSTRAINT key_backup_delete_challenges_request_key
-        UNIQUE (principal_id, backup_id, request_id)
+        UNIQUE (principal_id, station_id, backup_id, request_id)
 );
 
 CREATE INDEX key_backup_delete_challenges_expiry_idx
@@ -2516,6 +2520,7 @@ CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_
 CREATE TABLE public.recovery_policies (
     id uuid PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    station_id text NOT NULL CHECK (station_id LIKE 'ak:did_core:%'),
     version integer NOT NULL,
     acceptance_basis jsonb NOT NULL,
     trust_domain text NOT NULL,
@@ -2531,9 +2536,9 @@ CREATE TABLE public.recovery_policies (
 );
 
 ALTER TABLE ONLY public.recovery_policies
-    ADD CONSTRAINT recovery_policies_principal_id_version_key UNIQUE (principal_id, version);
+    ADD CONSTRAINT recovery_policies_account_id_version_key UNIQUE (principal_id, station_id, version);
 
-CREATE INDEX recovery_policies_principal_active_idx ON public.recovery_policies USING btree (principal_id, version DESC);
+CREATE INDEX recovery_policies_account_active_idx ON public.recovery_policies USING btree (principal_id, station_id, version DESC);
 
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_supersedes_fkey FOREIGN KEY (supersedes) REFERENCES public.recovery_policies(id);
@@ -2668,7 +2673,13 @@ CREATE INDEX sync_cursor_handles_stream_idx ON public.sync_cursor_handles USING 
 CREATE TABLE public.sync_cursor_revocations (
     id uuid PRIMARY KEY,
     cursor_digest text NOT NULL,
-    principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
+    account_id jsonb NOT NULL CHECK (
+        jsonb_typeof(account_id) = 'object'
+        AND account_id ? 'principal_id'
+        AND account_id ? 'station_id'
+        AND jsonb_typeof(account_id->'principal_id') = 'string'
+        AND jsonb_typeof(account_id->'station_id') = 'string'
+    ),
     device_id text,
     scope text NOT NULL,
     reason_code text NOT NULL,
@@ -3017,10 +3028,11 @@ CREATE TABLE public.member_identity_handle_claims (
     subject_id text NOT NULL CHECK (subject_id LIKE 'ak:did_core:%'),
     issuer_id text NOT NULL CHECK (issuer_id LIKE 'ak:did_core:%'),
     audience text,
-    binding_state text NOT NULL,
+    status text NOT NULL,
+    revocation_digest text,
+    fresh_until timestamp with time zone NOT NULL,
     visibility text,
     expires_at timestamp with time zone,
-    revoked boolean NOT NULL DEFAULT false,
     envelope jsonb NOT NULL,
     PRIMARY KEY (subject_id, digest)
 );

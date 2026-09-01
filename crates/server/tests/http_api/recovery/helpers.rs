@@ -523,7 +523,10 @@ pub(crate) async fn seed_recovery_policy(
         .recovery_policies()
         .insert(RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
-            principal_id: principal_core,
+            account_id: arkret_wire::AccountId::new(
+                principal_core,
+                state.service_core_id().clone(),
+            ),
             version,
             acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),

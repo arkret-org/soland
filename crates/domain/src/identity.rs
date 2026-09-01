@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, DidCoreId, EventId, Hash};
+use arkret_models_collaboration::account_lifecycle::ConsentPeer;
 use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
@@ -35,11 +36,20 @@ pub struct ConsentGrantDot {
 pub struct ConsentCellRecord {
     pub cell_id: CellRef,
     pub holder_principal_id: DidCoreId,
-    pub peer_principal_id: DidCoreId,
+    pub peer: ConsentPeer,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,
     pub revoked_dots: BTreeSet<String>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContactRequestSlotState {
+    pub owner_id: ActorId,
+    pub peer_id: ActorId,
+    pub accepted_sequence: u64,
+    pub head_digest: Hash,
 }
 
 #[derive(Clone, Debug)]
@@ -52,6 +62,9 @@ pub struct ContactRecord {
     pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<EventId>,
+    /// Station-internal directional request-slot CAS heads. These are not
+    /// Contact-round continuity and never cross the wire by themselves.
+    pub request_slot_states: Vec<ContactRequestSlotState>,
     pub request_receipts: Vec<RequestAcceptanceReceipt>,
     pub request_mirror_receipts: Vec<PeerContactMirrorReceipt>,
     pub contact_round_evidence: Option<ContactRoundEvidenceBundle>,

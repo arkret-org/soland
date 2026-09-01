@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) async fn enforce_recovery_policy_ref_typed(
     state: &AppState,
-    actor_id: &str,
+    _actor_id: &str,
     backup: &KeyBackup,
 ) -> Result<(), AppError> {
     let Some((ref_policy_id, ref_version)) = typed_recovery_policy_ref(backup) else {
@@ -11,12 +11,14 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
 
     let active = state
         .recovery_policies()
-        .active_policy(actor_id)
+        .active_policy(backup.actor_id.as_account_id().ok_or_else(|| {
+            AppError::capability_denied("recovery policy key backup requires an account actor")
+        })?)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::conflict(format!(
-                "no accepted recovery policy for principal `{actor_id}`"
+                "no accepted recovery policy for exact backup account"
             ))
             .with_wire_code("recovery_policy_mismatch")
         })?;

@@ -17,6 +17,8 @@ struct RecoveryPolicyRow {
     policy_id: Uuid,
     #[diesel(sql_type = Text)]
     principal_id: arkret_identifiers::DidCoreId,
+    #[diesel(sql_type = Text)]
+    station_id: arkret_identifiers::DidCoreId,
     #[diesel(sql_type = Integer)]
     version: i32,
     #[diesel(sql_type = Jsonb)]
@@ -56,7 +58,7 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
         })?;
         Ok(Self {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
-            principal_id: row.principal_id,
+            account_id: arkret_wire::AccountId::new(row.principal_id, row.station_id),
             version,
             acceptance_basis,
             trust_domain: row.trust_domain,
@@ -71,20 +73,21 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
     }
 }
 impl PgRecoveryPolicyStore {
-    async fn get_by_principal_version(
+    async fn get_by_account_version(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
         version: u32,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE principal_id = $1 AND version = $2",
+             FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 AND version = $3",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(&account_id.principal_id)
+        .bind::<Text, _>(&account_id.station_id)
         .bind::<Integer, _>(version as i32)
         .get_result::<RecoveryPolicyRow>(&mut *conn)
         .await
@@ -103,7 +106,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
@@ -115,20 +118,21 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         .transpose()
     }
 
-    async fn get_active_for_principal(
+    async fn get_active_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE principal_id = $1 \
+             FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(&account_id.principal_id)
+        .bind::<Text, _>(&account_id.station_id)
         .get_result::<RecoveryPolicyRow>(&mut *conn)
         .await
         .optional().map_err(PersistenceError::database)?
@@ -136,20 +140,21 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         .transpose()
     }
 
-    async fn list_for_principal(
+    async fn list_for_account(
         &self,
-        principal_id: &str,
+        account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, station_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
-             FROM recovery_policies WHERE principal_id = $1 \
+             FROM recovery_policies WHERE principal_id = $1 AND station_id = $2 \
              ORDER BY version DESC, accepted_at DESC",
         )
-        .bind::<Text, _>(principal_id)
+        .bind::<Text, _>(&account_id.principal_id)
+        .bind::<Text, _>(&account_id.station_id)
         .get_results::<RecoveryPolicyRow>(&mut *conn)
         .await.map_err(PersistenceError::database)?;
         rows.into_iter()
@@ -171,20 +176,20 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             )));
         }
         if self
-            .get_by_principal_version(record.principal_id.as_str(), record.version)
+            .get_by_account_version(&record.account_id, record.version)
             .await
             .map_err(PersistenceError::database)?
             .is_some()
         {
             return Err(PersistenceError::Conflict(format!(
-                "{}: recovery policy principal/version ({}, {}) already exists",
+                "{}: recovery policy account/version ({}, {}) already exists",
                 ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.principal_id,
+                record.account_id,
                 record.version
             )));
         }
         if let Some(active) = self
-            .get_active_for_principal(record.principal_id.as_str())
+            .get_active_for_account(&record.account_id)
             .await
             .map_err(PersistenceError::database)?
         {
@@ -208,7 +213,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             return Err(PersistenceError::Conflict(format!(
                 "{}: recovery genesis policy for `{}` must have version=1",
                 ConflictCode::RecoveryPolicyVersionNotMonotonic,
-                record.principal_id
+                record.account_id
             )));
         }
 
@@ -217,12 +222,13 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO recovery_policies \
-             (id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+             (id, principal_id, station_id, version, trust_domain, allowed_proof_kinds, supersedes, \
               acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
         )
         .bind::<sql_types::Uuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
-        .bind::<Text, _>(&record.principal_id)
+        .bind::<Text, _>(&record.account_id.principal_id)
+        .bind::<Text, _>(&record.account_id.station_id)
         .bind::<Integer, _>(record.version as i32)
         .bind::<Text, _>(&record.trust_domain)
         .bind::<Array<Text>, _>(&record.allowed_proof_kinds)

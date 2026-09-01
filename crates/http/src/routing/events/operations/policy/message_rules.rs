@@ -234,7 +234,7 @@ pub(super) async fn validate_applet_registration_authz(
     Err("applet_registration_unauthorized")
 }
 
-/// Control-stream events carry their owning principal in `payload.principal_id`.
+/// Control-stream events derive their exact owning account from the verified envelope actor.
 pub(super) const PRINCIPAL_CONTROL_EVENT_KINDS: &[&str] = &[
     arkret_wire::event_kind_str::DEVICE_AUTHORIZE,
     arkret_wire::event_kind_str::DEVICE_LIST_UPDATE,
@@ -252,13 +252,8 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
     if !PRINCIPAL_CONTROL_EVENT_KINDS.contains(&kind.as_str()) {
         return Ok(());
     }
-    let principal = operation
-        .payload
-        .get("principal_id")
-        .and_then(Value::as_str)
-        .ok_or("principal_control_event_missing_principal_id")?;
     let snapshot = state.projections().snapshot();
-    if principal == operation.context.sender.signing_principal_id().as_str()
+    if operation.context.sender.as_account_id().is_some()
         && snapshot.realm_is_principal_control_for_actor(
             operation.realm_id.as_str(),
             &operation.context.sender.to_string(),

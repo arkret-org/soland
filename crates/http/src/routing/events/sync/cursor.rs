@@ -49,14 +49,34 @@ pub enum SyncCursorError {
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
 pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";
 
-fn cursor_principal_device(session: Option<&SessionIdentityState>) -> (String, String) {
-    let principal_id = session
-        .map(|session| session.actor.clone())
-        .unwrap_or_else(|| "anonymous".to_owned());
+fn cursor_account_device(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+) -> (Option<arkret_wire::AccountId>, String) {
+    let account_id = session.map(|session| {
+        arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(session.actor.clone())
+                .expect("authenticated actor must be a DID core id"),
+            state.service_core_id(),
+        )
+    });
     let device_id = session
         .map(|session| session.device_id.clone())
         .unwrap_or_else(|| "anonymous".to_owned());
-    (principal_id, device_id)
+    (account_id, device_id)
+}
+
+fn cursor_binding_subject(account_id: Option<&arkret_wire::AccountId>) -> String {
+    account_id.map_or_else(
+        || "anonymous".to_owned(),
+        |account_id| {
+            String::from_utf8(
+                arkret_canonical::canonical_json_bytes(account_id)
+                    .expect("AccountId canonicalization cannot fail"),
+            )
+            .expect("AccountId canonical JSON is UTF-8")
+        },
+    )
 }
 
 pub async fn sync_token_for_client_sync(
@@ -92,7 +112,8 @@ pub async fn sync_token_for_client_sync_frontiers(
     notification_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
-    let (principal_id, device_id) = cursor_principal_device(session);
+    let (account_id, device_id) = cursor_account_device(state, session);
+    let binding_subject = cursor_binding_subject(account_id.as_ref());
     let device_positions = BTreeMap::from([(device_id.clone(), issued_at.timestamp_micros())]);
     let filter_digest = sync_filter_digest(filter);
     let positions = json!({
@@ -108,9 +129,8 @@ pub async fn sync_token_for_client_sync_frontiers(
     // unchanged frontier re-mints the SAME handle and the upsert only
     // refreshes the row's expiry instead of growing the table.
     let binding = stream_cursor_handle_binding_with_notification_position(
-        &principal_id,
+        account_id.as_ref(),
         &device_id,
-        state.service_id(),
         &filter_digest,
         &realms_positions,
         &account_realms_positions,
@@ -128,7 +148,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         state,
         CursorState {
             handle: handle.clone(),
-            binding_subject: Some(principal_id),
+            binding_subject: Some(binding_subject),
             device_id: Some(device_id),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
@@ -151,15 +171,11 @@ pub(crate) async fn sync_token_for_events_query(
     event_id: &str,
 ) -> String {
     let issued_at = chrono::Utc::now();
-    let (principal_id, device_id) = cursor_principal_device(session);
+    let (account_id, device_id) = cursor_account_device(state, session);
+    let binding_subject = cursor_binding_subject(account_id.as_ref());
     let target = json!({ "event_id": event_id });
-    let binding = events_query_cursor_handle_binding(
-        &principal_id,
-        &device_id,
-        state.service_id(),
-        filter_digest,
-        &target,
-    );
+    let binding =
+        events_query_cursor_handle_binding(account_id.as_ref(), &device_id, filter_digest, &target);
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
@@ -170,7 +186,7 @@ pub(crate) async fn sync_token_for_events_query(
         state,
         CursorState {
             handle: handle.clone(),
-            binding_subject: Some(principal_id),
+            binding_subject: Some(binding_subject),
             device_id: Some(device_id),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
@@ -193,12 +209,10 @@ pub(crate) async fn sync_barrier_token_for_event(
 ) -> String {
     let issued_at = chrono::Utc::now();
     let target = json!({ "event_id": event_id });
-    let binding = barrier_cursor_handle_binding(
-        &session.actor,
-        &session.device_id,
-        state.service_id(),
-        &target,
-    );
+    let (account_id, _) = cursor_account_device(state, Some(session));
+    let account_id = account_id.expect("authenticated barrier cursor has an account");
+    let binding_subject = cursor_binding_subject(Some(&account_id));
+    let binding = barrier_cursor_handle_binding(&account_id, &session.device_id, &target);
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour barrier cursor is valid")
@@ -210,7 +224,7 @@ pub(crate) async fn sync_barrier_token_for_event(
         state,
         CursorState {
             handle,
-            binding_subject: Some(session.actor.clone()),
+            binding_subject: Some(binding_subject),
             device_id: Some(session.device_id.clone()),
             service_id: DidCoreId::new(state.service_id().clone())
                 .expect("AppState service_id must be a validated DID core id"),
@@ -297,9 +311,8 @@ pub(crate) fn derive_cursor_handle(cursor_key: &[u8], canonical_binding: &[u8]) 
 }
 
 pub(crate) fn stream_cursor_handle_binding_with_notification_position(
-    principal_id: &str,
+    account_id: Option<&arkret_wire::AccountId>,
     device_id: &str,
-    service_id: &str,
     filter_digest: &str,
     realms_positions: &BTreeMap<String, i64>,
     account_realms_positions: &BTreeMap<String, i64>,
@@ -308,9 +321,8 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
     notification_position: i64,
 ) -> Vec<u8> {
     let binding = json!({
-        "principal_id": principal_id,
+        "account_id": account_id,
         "device_id": device_id,
-        "service_id": service_id,
         "filter_digest": filter_digest,
         "purpose": STREAM_CURSOR_PURPOSE,
         "realms": realms_positions,
@@ -324,16 +336,14 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
 }
 
 pub(crate) fn events_query_cursor_handle_binding(
-    principal_id: &str,
+    account_id: Option<&arkret_wire::AccountId>,
     device_id: &str,
-    service_id: &str,
     filter_digest: &str,
     target: &Value,
 ) -> Vec<u8> {
     let binding = json!({
-        "principal_id": principal_id,
+        "account_id": account_id,
         "device_id": device_id,
-        "service_id": service_id,
         "filter_digest": filter_digest,
         "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
@@ -343,15 +353,13 @@ pub(crate) fn events_query_cursor_handle_binding(
 }
 
 fn barrier_cursor_handle_binding(
-    principal_id: &str,
+    account_id: &arkret_wire::AccountId,
     device_id: &str,
-    service_id: &str,
     target: &Value,
 ) -> Vec<u8> {
     let binding = json!({
-        "principal_id": principal_id,
+        "account_id": account_id,
         "device_id": device_id,
-        "service_id": service_id,
         "purpose": BARRIER_CURSOR_PURPOSE,
         "target": target,
     });
@@ -680,7 +688,8 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
             "cursor handle purpose does not match stream",
         ));
     }
-    let (expected_binding_subject, expected_device) = cursor_principal_device(session);
+    let (expected_account_id, expected_device) = cursor_account_device(state, session);
+    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
     if record.binding_subject.as_deref() != Some(expected_binding_subject.as_str()) {
         return Err(SyncCursorError::Mismatch(
             "cursor binding subject does not match request actor",
@@ -746,7 +755,9 @@ pub(crate) async fn parse_and_validate_barrier_cursor(
             "cursor handle purpose does not match barrier",
         ));
     }
-    if record.binding_subject.as_deref() != Some(session.actor.as_str()) {
+    let (expected_account_id, _) = cursor_account_device(state, Some(session));
+    let expected_binding_subject = cursor_binding_subject(expected_account_id.as_ref());
+    if record.binding_subject.as_deref() != Some(expected_binding_subject.as_str()) {
         return Err(SyncCursorError::Mismatch(
             "barrier cursor binding subject does not match request actor",
         ));
@@ -928,9 +939,14 @@ pub(super) async fn account_cursor_revoke(
     };
     let application_record = soland_services::sync::CursorRevocationState {
         cursor_digest: sha256_hex(cursor.as_bytes()),
-        principal_id: arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-            AppError::internal(format!("authenticated principal_id is invalid: {error}"))
-        })?,
+        account_id: arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+                AppError::internal(format!(
+                    "authenticated account principal is invalid: {error}"
+                ))
+            })?,
+            state.service_core_id(),
+        ),
         device_id,
         scope: scope_value.to_owned(),
         reason_code: reason_code.to_owned(),
@@ -970,9 +986,10 @@ fn cursor_authority_revoked(
     now_ms: i64,
 ) -> bool {
     let digest = sha256_hex(token.as_bytes());
+    let (account_id, _) = cursor_account_device(state, session);
     state.sync().cursor_authority_revoked(
         &digest,
-        session.map(|session| session.actor.as_str()),
+        account_id.as_ref(),
         session.map(|session| session.device_id.as_str()),
         chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
     )

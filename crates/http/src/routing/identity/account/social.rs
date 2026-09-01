@@ -209,15 +209,17 @@ pub(crate) async fn contact_continuity_checkpoint(
                 })
             })?;
         let peer_id = peer_id.clone();
-        let peer_principal_id = peer.signing_principal_id().clone();
-        let peer_account_id = peer.as_account_id().cloned().unwrap_or_else(|| {
-            arkret_wire::AccountId::new(peer_principal_id.clone(), peer_id.clone())
-        });
+        let peer_account_id = peer.as_account_id().cloned().ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "Contact peer address requires an accepted account participant binding",
+            )
+        })?;
         let contact_address =
-            arkret_models_collaboration::governance::peer_contact::PeerContactAddress::station(
-                peer_principal_id,
-                peer_account_id,
-                peer_id.clone(),
+            arkret_models_collaboration::governance::peer_contact::PeerContactAddress::for_recipient(
+                arkret_models_collaboration::contact_operations::ContactPeer::Human {
+                    account_id: peer_account_id,
+                },
                 service_resolution,
             );
         let proposal =

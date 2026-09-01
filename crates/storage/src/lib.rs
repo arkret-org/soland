@@ -12,7 +12,7 @@ pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use serde_json::Value;
 pub use soland_domain::identity::{
-    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord,
+    ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord, ContactRequestSlotState,
 };
 pub(crate) use uuid::Uuid;
 
