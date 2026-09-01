@@ -455,10 +455,11 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
         );
         // Two siblings resolved against the same accepted CBA basis are
         // concurrent by construction.
-        input.operation.payload.as_object_mut().unwrap().insert(
-            "conflict_basis".to_owned(),
-            serde_json::json!("ak:seal:01904100-0000-7000-8000-f00000000001"),
-        );
+        input.operation.context.seal_basis = Some(arkret_wire::SealBasis {
+            leaves: vec![
+                arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "1".repeat(64))).unwrap(),
+            ],
+        });
         input
     };
     let active = sibling("active");
@@ -503,6 +504,54 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
             join.event_id.as_str(),
             CALL_STATE_ROSTER_WRITE_INDEX
         ))
+    );
+}
+
+#[test]
+fn payload_conflict_labels_do_not_create_a_cba_sibling_relation() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:ASReu6ls3Ao5vTK0TGXBCAvLLQChFejCEmN9KaSceZOt";
+    let call_id = "ak:call:AUpx7jJEjRU7iQXaC0uYvYWiJBQSgQFPt1aXgWqBx5mg";
+    let initial = call_input(
+        arkret_wire::EventKind::CallState.as_str(),
+        realm,
+        serde_json::json!({
+            "call_id": call_id,
+            "state_transition": {"from": null, "to": "ringing"}
+        }),
+    );
+    apply_call(&mut state, &initial, &hlc);
+
+    let transition = |to: &str| {
+        let mut input = call_input(
+            arkret_wire::EventKind::CallState.as_str(),
+            realm,
+            serde_json::json!({
+                "call_id": call_id,
+                "state_transition": {"from": "ringing", "to": to}
+            }),
+        );
+        input.operation.payload.as_object_mut().unwrap().insert(
+            "conflict_basis".to_owned(),
+            Value::String("legacy-label".to_owned()),
+        );
+        input
+    };
+    apply_call(&mut state, &transition("active"), &hlc);
+    assert!(matches!(
+        apply_call(&mut state, &transition("missed"), &hlc),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
+    ));
+    assert_eq!(
+        state
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_STATE_V1,
+                call_id
+            ))
+            .unwrap(),
+        &Value::String("active".to_owned())
     );
 }
 

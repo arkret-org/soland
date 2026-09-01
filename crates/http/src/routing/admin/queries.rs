@@ -320,7 +320,7 @@ fn audit_matches_kind(entry: &AdminAuditEntry, kind: &str) -> bool {
         || entry
             .payload
             .as_ref()
-            .and_then(|payload| payload.get("kind").or_else(|| payload.get("type")))
+            .and_then(|payload| payload.get("kind"))
             .and_then(Value::as_str)
             == Some(kind)
 }
@@ -767,6 +767,25 @@ mod tests {
         let error = paginate_by_id(vec!["a", "b"], Some("zz"), 2, |row| row)
             .expect_err("unresolvable cursor must fail");
         assert_eq!(error.status, Some(salvo::http::StatusCode::GONE));
+    }
+
+    #[test]
+    fn audit_kind_filter_uses_only_the_canonical_kind_member() {
+        let canonical = audit_entry_from_record(&json!({
+            "audit_id": "audit-1",
+            "action": "other",
+            "payload": {"kind": "target"}
+        }))
+        .unwrap();
+        assert!(audit_matches_kind(&canonical, "target"));
+
+        let retired = audit_entry_from_record(&json!({
+            "audit_id": "audit-2",
+            "action": "other",
+            "payload": {"type": "target"}
+        }))
+        .unwrap();
+        assert!(!audit_matches_kind(&retired, "target"));
     }
 
     /// Production-mode admin-principal gate: a session whose actor is not

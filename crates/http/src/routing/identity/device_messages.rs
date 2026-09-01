@@ -805,11 +805,7 @@ fn device_message_envelope_from_record(
     message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
     let kind = arkret_wire::wire_strings::ProtocolKind::new(
-        message
-            .content
-            .get("kind")
-            .or_else(|| message.content.get("type"))
-            .and_then(Value::as_str)?,
+        message.content.get("kind").and_then(Value::as_str)?,
     )
     .ok()?;
     let content_value = message

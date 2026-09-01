@@ -359,8 +359,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
 ) -> Result<ValidatedAgentApprovalNonce, &'static str> {
     let request_id = operation
         .payload
-        .get("approval_request_id")
-        .or_else(|| operation.payload.get("request_id"))
+        .get("request_id")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .ok_or("agent_act_on_behalf_approval_request_id_missing")?;

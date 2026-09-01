@@ -673,11 +673,7 @@ pub fn validate_agent_approval_nonce_commit(
                 .get("authorization_ref")
                 .and_then(Value::as_str)
                 == Some(commit.authorization_ref.as_str())
-            && projection
-                .payload
-                .get("approval_request_id")
-                .or_else(|| projection.payload.get("request_id"))
-                .and_then(Value::as_str)
+            && projection.payload.get("request_id").and_then(Value::as_str)
                 == Some(commit.request_id.as_str())
             && projection
                 .payload

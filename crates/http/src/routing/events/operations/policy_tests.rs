@@ -1372,7 +1372,7 @@ fn act_on_behalf_message(
     }
     if let Some((request_id, approval_nonce)) = approval {
         let object = payload.as_object_mut().expect("payload object");
-        object.insert("approval_request_id".to_owned(), json!(request_id));
+        object.insert("request_id".to_owned(), json!(request_id));
         object.insert("approval_nonce".to_owned(), json!(approval_nonce));
     }
     op(
@@ -1925,7 +1925,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
             "authorization_ref": grant_id.as_str(),
             "agent_context": agent_context(agent, grant_id.as_str()),
             "view_id": "ak:view:AaV0Wjp3LhZKUfcpa_CaAadjRsbPDxliKCkc9QbmZsyu",
-            "approval_request_id": "request-7c4",
+            "request_id": "request-7c4",
             "approval_nonce": "nonce-7c4"
         }),
     );

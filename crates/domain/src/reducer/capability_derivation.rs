@@ -161,10 +161,6 @@ pub(crate) fn inheritance_allowed_capability_bundles(payload: &Value) -> Vec<Str
 pub(crate) fn derive_requested_actions(payload: &Value) -> BTreeSet<String> {
     let mut out = string_set_field(payload, "actions");
     out.extend(string_set_field(payload, "capabilities"));
-    if let Some(bundle) = payload.get("bundle") {
-        out.extend(string_set_field(bundle, "actions"));
-        out.extend(string_set_field(bundle, "capabilities"));
-    }
     out
 }
 
@@ -172,23 +168,12 @@ pub(crate) fn derive_requested_actions(payload: &Value) -> BTreeSet<String> {
 /// and is `additionalProperties:false` over the grant root, so `resources` is
 /// the only carrier a grant can present.
 pub(crate) fn derive_requested_resources(payload: &Value) -> Vec<Value> {
-    let mut out = value_array_field(payload, "resources");
-    if let Some(bundle) = payload.get("bundle") {
-        out.extend(value_array_field(bundle, "resources"));
-    }
-    out
+    value_array_field(payload, "resources")
 }
 
 pub(crate) fn derive_requested_capability_bundles(payload: &Value) -> BTreeSet<String> {
     let mut out = string_set_field(payload, "capability_bundles");
     out.extend(string_set_field(payload, "allowed_capability_bundles"));
-    if let Some(bundle) = payload.get("bundle") {
-        out.extend(string_set_from_value(bundle));
-        out.extend(string_set_field(bundle, "id"));
-        out.extend(string_set_field(bundle, "bundle_id"));
-        out.extend(string_set_field(bundle, "capability_bundles"));
-        out.extend(string_set_field(bundle, "bundle_ids"));
-    }
     out
 }
 
@@ -196,12 +181,6 @@ pub(crate) fn expiry_from_payload(payload: &Value) -> Option<chrono::DateTime<ch
     payload
         .get("expires_at")
         .and_then(Value::as_str)
-        .or_else(|| {
-            payload
-                .get("bundle")
-                .and_then(|bundle| bundle.get("expires_at"))
-                .and_then(Value::as_str)
-        })
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc))
 }
@@ -232,19 +211,9 @@ pub(crate) fn capability_grant_cells(
 }
 
 pub(crate) fn grant_ids_match(value: &Value, id: &str) -> bool {
-    [
-        "id",
-        "grant_id",
-        "capability_id",
-        "event_id",
-        "operation_id",
-    ]
-    .into_iter()
-    .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
-        || value
-            .get("grant")
-            .map(|grant| grant_ids_match(grant, id))
-            .unwrap_or(false)
+    ["id", "grant_id"]
+        .into_iter()
+        .any(|field| value.get(field).and_then(Value::as_str) == Some(id))
 }
 
 pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapshot {
@@ -263,13 +232,7 @@ pub(crate) fn grant_snapshot_from_value(value: &Value) -> CapabilityGrantSnapsho
     constraints.extend(value_array_field(value, "constraints"));
 
     let mut capability_bundles = string_set_field(body, "capability_bundles");
-    capability_bundles.extend(string_set_field(body, "bundle_ids"));
-    capability_bundles.extend(string_set_field(body, "bundles"));
-    capability_bundles.extend(string_set_field(body, "bundle"));
     capability_bundles.extend(string_set_field(value, "capability_bundles"));
-    capability_bundles.extend(string_set_field(value, "bundle_ids"));
-    capability_bundles.extend(string_set_field(value, "bundles"));
-    capability_bundles.extend(string_set_field(value, "bundle"));
 
     let realm_id = body
         .get("realm_id")
@@ -484,4 +447,50 @@ pub(crate) fn validate_derived_capability(
         effective_resources,
         effective_capability_bundles,
     })
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn capability_derivation_ignores_unregistered_bundle_carriers() {
+        let payload = json!({
+            "capability_bundles": ["canonical"],
+            "bundle_ids": ["legacy-ids"],
+            "bundles": ["legacy-plural"],
+            "bundle": {"id": "legacy-wrapper", "actions": ["legacy-action"]},
+            "actions": ["canonical-action"],
+            "resources": [{"kind": "realm"}],
+            "expires_at": "2026-09-02T00:00:00.000Z"
+        });
+        assert_eq!(
+            derive_requested_capability_bundles(&payload),
+            BTreeSet::from(["canonical".to_owned()])
+        );
+        assert_eq!(
+            derive_requested_actions(&payload),
+            BTreeSet::from(["canonical-action".to_owned()])
+        );
+        assert_eq!(derive_requested_resources(&payload).len(), 1);
+        assert_eq!(
+            expiry_from_payload(&payload),
+            Some("2026-09-02T00:00:00Z".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn grant_lookup_ignores_non_grant_identifier_spellings() {
+        assert!(grant_ids_match(&json!({"id": "grant-1"}), "grant-1"));
+        assert!(grant_ids_match(&json!({"grant_id": "grant-1"}), "grant-1"));
+        for field in ["capability_id", "event_id", "operation_id"] {
+            assert!(!grant_ids_match(&json!({field: "grant-1"}), "grant-1"));
+        }
+        assert!(!grant_ids_match(
+            &json!({"grant": {"id": "grant-1"}}),
+            "grant-1"
+        ));
+    }
 }

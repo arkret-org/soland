@@ -1182,9 +1182,6 @@ impl ProjectionState {
                 "updated_at".to_owned(),
                 Value::String(arkret_canonical::format_timestamp_canonical(now)),
             );
-            if let Some(bundle) = operation.payload.get("bundle") {
-                value.insert("bundle".to_owned(), bundle.clone());
-            }
             self.cells
                 .insert(cell_id, CellState::Value(Value::Object(value)));
         }
@@ -1398,18 +1395,9 @@ fn validate_call_fsm_edge(
 fn call_fsm_conflict_basis(operation: &Operation) -> String {
     operation
         .context
-        .seal_ref
+        .seal_basis
         .as_ref()
-        .map(ToString::to_string)
-        .or_else(|| {
-            operation
-                .payload
-                .get("conflict_basis")
-                .or_else(|| operation.payload.get("state_witness"))
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty())
-                .map(ToOwned::to_owned)
-        })
+        .and_then(|basis| arkret_canonical::canonical_sha256(basis).ok())
         .unwrap_or_else(|| operation.operation_id.to_string())
 }
 

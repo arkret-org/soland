@@ -1603,7 +1603,6 @@ impl PeerReadAuthz {
         let membership = payload
             .get("membership")
             .and_then(Value::as_str)
-            .or_else(|| payload.get("state").and_then(Value::as_str))
             .unwrap_or_default();
         match membership {
             "join" | "active" => {
@@ -1672,9 +1671,8 @@ impl PeerReadAuthz {
         };
         let actor = actor_id.to_string();
         let state = payload
-            .get("state")
+            .get("membership")
             .and_then(Value::as_str)
-            .or_else(|| payload.get("membership").and_then(Value::as_str))
             .unwrap_or_default();
         match state {
             "join" | "active" => {
@@ -2331,6 +2329,17 @@ mod membership_identity_tests {
         assert!(authz.realm_members[&realm].contains_key(&local.to_string()));
         assert!(!authz.realm_members[&realm].contains_key(&foreign.to_string()));
 
+        let state_only = record(
+            "ak.member.state",
+            &local,
+            json!({"member_id": foreign, "state": "join"}),
+        );
+        authz.apply_member_record(&state_only);
+        assert!(
+            !authz.realm_members[&realm].contains_key(&foreign.to_string()),
+            "retired state alias must not grant peer visibility"
+        );
+
         let circle = "ak:circle:ATOTi3sw4NO_6LjlHGedSYTeT3Leu2J3Tb49M1gn9cFN";
         for actor in [&local, &foreign] {
             authz.apply_circle_member_record(&record(
@@ -2340,6 +2349,15 @@ mod membership_identity_tests {
             ));
         }
         assert_eq!(authz.circle_members[circle].len(), 2);
+        authz.apply_circle_member_record(&record(
+            "ak.circle.member.state",
+            &foreign,
+            json!({"circle_id": circle, "member_id": foreign, "state": "leave"}),
+        ));
+        assert!(
+            authz.circle_members[circle].contains_key(&foreign.to_string()),
+            "retired state alias must not revoke canonical circle membership"
+        );
         authz.apply_circle_member_record(&record(
             "ak.circle.member.state",
             &foreign,

@@ -471,11 +471,7 @@ fn patch_touches_calendar(payload: &Value) -> bool {
             return true;
         }
         if path == "metadata.fields" {
-            return value
-                .get("value")
-                .or_else(|| value.get("$value"))
-                .or_else(|| value.get("fields"))
-                .or(Some(value))
+            return canonical_patch_set_value(value)
                 .and_then(Value::as_object)
                 .is_some_and(|fields| {
                     fields.contains_key(
@@ -484,9 +480,7 @@ fn patch_touches_calendar(payload: &Value) -> bool {
                 });
         }
         if path == "metadata" {
-            return value
-                .get("value")
-                .or_else(|| value.get("$value"))
+            return canonical_patch_set_value(value)
                 .and_then(|metadata| metadata.get("fields"))
                 .and_then(Value::as_object)
                 .is_some_and(|fields| {
@@ -508,24 +502,34 @@ fn patch_touches_due_schedule(payload: &Value) -> bool {
             return true;
         }
         if path == "metadata.fields" {
-            return value
-                .get("value")
-                .or_else(|| value.get("$value"))
-                .or_else(|| value.get("fields"))
-                .or(Some(value))
+            return canonical_patch_set_value(value)
                 .and_then(Value::as_object)
                 .is_some_and(|fields| fields.contains_key("due_at"));
         }
         if path == "metadata" {
-            return value
-                .get("value")
-                .or_else(|| value.get("$value"))
+            return canonical_patch_set_value(value)
                 .and_then(|metadata| metadata.get("fields"))
                 .and_then(Value::as_object)
                 .is_some_and(|fields| fields.contains_key("due_at"));
         }
         false
     })
+}
+
+/// Resolve the two shapes admitted by `patch.schema.json`: a direct value or
+/// an explicit `{ "$op": "set" | "add", "value": ... }` operation.
+/// Unset/remove operations carry no replacement value and cannot introduce a
+/// calendar or due-date field.
+fn canonical_patch_set_value(value: &Value) -> Option<&Value> {
+    let Some(object) = value.as_object() else {
+        return Some(value);
+    };
+    let Some(op) = object.get("$op").and_then(Value::as_str) else {
+        return Some(value);
+    };
+    matches!(op, "set" | "add")
+        .then(|| object.get("value"))
+        .flatten()
 }
 
 fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
@@ -640,6 +644,25 @@ mod tests {
 
     fn test_state() -> AppState {
         AppState::new(test_config(), Db { pool: None })
+    }
+
+    #[test]
+    fn schedule_patch_detection_accepts_only_canonical_patch_values() {
+        assert!(patch_touches_calendar(&json!({
+            "patch": {"metadata": {"fields": {"calendar": {"start": "now"}}}}
+        })));
+        assert!(patch_touches_due_schedule(&json!({
+            "patch": {"metadata.fields": {
+                "$op": "set",
+                "value": {"due_at": "2026-09-01T00:00:00.000Z"}
+            }}
+        })));
+        assert!(!patch_touches_calendar(&json!({
+            "patch": {"metadata": {"$value": {"fields": {"calendar": {}}}}}
+        })));
+        assert!(!patch_touches_due_schedule(&json!({
+            "patch": {"metadata.fields": {"fields": {"due_at": "legacy"}}}
+        })));
     }
 
     fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
