@@ -1267,7 +1267,7 @@ async fn events_describe_and_single_event_submit_work_body() {
                 fixture_actor_core_id("did:web:alice.example"),
                 state.service_core_id(),
             )),
-            "ak.self.events.command.submit",
+            "ak.self.events.command.submit.v1",
             "single-event-atomic-commit",
         )
         .await

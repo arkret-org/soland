@@ -3676,7 +3676,9 @@ pub(super) fn event_realm_id_from_value(value: &Value) -> Option<String> {
     Some(arkret_wire::derive_genesis_realm_id(&event_id).into_string())
 }
 
+mod admission;
 mod commit;
+mod commit_prepare;
 mod control_ack;
 mod device_gate;
 mod duplicate;
@@ -3687,7 +3689,9 @@ mod preflight;
 mod projection_preflight;
 mod value;
 
+use admission::*;
 use commit::*;
+use commit_prepare::*;
 use control_ack::*;
 use device_gate::*;
 use duplicate::*;

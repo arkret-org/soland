@@ -1935,7 +1935,7 @@ async fn verify_membership_compensation_signature<T: serde::Serialize>(
     })
 }
 
-async fn validate_membership_compensation_live_state(
+pub(super) async fn validate_membership_compensation_live_state(
     state: &AppState,
     event: &Event,
     evidence: &arkret_wire::MembershipCompensationSubmissionEvidence,
@@ -2417,156 +2417,17 @@ pub(super) async fn submit_event_value_with_context(
     {
         return Ok(response);
     }
-    let service = state.event_queries();
-    if let Some(evidence) = context.membership_compensation_evidence {
-        validate_membership_compensation_live_state(state, &submitted_event, evidence).await?;
-    }
-    if parsed.kind == arkret_wire::EventKind::RealmCreate.as_str()
-        && service
-            .realm_event_stats(parsed.realm_id.as_str())
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("events store unavailable: {error}"),
-                )
-            })?
-            .count
-            > 0
-    {
-        return Err(realm_already_exists_error());
-    }
-    let mut scoped_actor_records = service
-        .canonical_events_for_realm_actor(parsed.realm_id.as_str(), &actor_key)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("events store unavailable: {error}"),
-            )
-        })?;
-    scoped_actor_records.extend(
-        context
-            .moderation_atomic_preceding_events
-            .into_iter()
-            .flat_map(|events| events.values())
-            .filter(|record| {
-                record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
-                    && record.actor_id == actor_key
-            })
-            .cloned(),
-    );
-    if let Some(max_seq) = scoped_actor_records
-        .iter()
-        .map(|record| record.actor_seq)
-        .max()
-        && parsed.actor_seq < max_seq
-        && !context
-            .internal_admission
-            .is_some_and(InternalEventAdmission::is_peer_replication)
-    {
-        let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "frontier_sequence_exhausted",
-                "actor sequence is exhausted",
-            )
-        })?;
-        let mut frontier_event_ids = scoped_actor_records
-            .iter()
-            .filter(|record| record.actor_seq == max_seq)
-            .map(|record| {
-                EventId::new(record.event_id.clone()).map_err(|_| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        "stored event_id is invalid",
-                    )
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        frontier_event_ids.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-        frontier_event_ids.dedup();
-        let current_frontier = super::super::endpoints::build_realm_actor_frontier(
-            state,
-            parsed.realm_id.clone(),
-            parsed.actor.clone(),
-            next_actor_seq,
-            frontier_event_ids,
-        )
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("actor frontier unavailable: {error}"),
-            )
-        })?;
-        return Err(SubmitOneError::new(
-            StatusCode::CONFLICT,
-            "cas_conflict",
-            "actor_seq is older than the accepted actor frontier",
-        )
-        .with_details(
-            arkret_models_collaboration::event_sync::EventsActorCasConflictProblem {
-                accepted: false,
-                current_frontier,
-            },
-        ));
-    }
-    let mut max_actor_predecessor_seq = None;
-    for prev_ref in &parsed.prev_refs {
-        let predecessor = service
-            .canonical_event(prev_ref.as_str())
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("events store unavailable: {error}"),
-                )
-            })?
-            .or_else(|| {
-                context
-                    .moderation_atomic_preceding_events
-                    .and_then(|events| events.get(prev_ref.as_str()))
-                    .cloned()
-            });
-        if predecessor.is_none() {
-            return Err(SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "prev_refs must reference accepted events",
-            ));
-        }
-        let predecessor = predecessor.expect("presence checked above");
-        if predecessor.realm_id.as_deref() != Some(parsed.realm_id.as_str()) {
-            return Err(SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "prev_refs must not reference an Event in another Realm",
-            ));
-        }
-        if predecessor.actor_id == actor_key {
-            max_actor_predecessor_seq = Some(
-                max_actor_predecessor_seq.map_or(predecessor.actor_seq, |current: u64| {
-                    current.max(predecessor.actor_seq)
-                }),
-            );
-        }
-    }
-    if max_actor_predecessor_seq
-        .is_some_and(|predecessor_seq| predecessor_seq.checked_add(1) != Some(parsed.actor_seq))
-        || (max_actor_predecessor_seq.is_none() && parsed.actor_seq != 0)
-    {
-        return Err(SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "prev_refs must include the preceding actor sequence in the same Realm",
-        ));
-    }
-    enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
+    let scoped_actor_records = admit_event_sequence(EventSequenceAdmissionContext {
+        state,
+        session,
+        parsed: &parsed,
+        submitted_event: &submitted_event,
+        actor_key: &actor_key,
+        membership_compensation_evidence: context.membership_compensation_evidence,
+        moderation_atomic_preceding_events: context.moderation_atomic_preceding_events,
+        internal_admission: context.internal_admission,
+    })
+    .await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
     // A registered kind that reaches here MUST yield a projection Operation.
@@ -2790,152 +2651,31 @@ pub(super) async fn submit_event_value_with_context(
             .push(ack.clone());
     }
     apply_delivery_summary_from_intents(&mut accepted_response, &outbox);
-    let device_revocation_transition =
-        if let Some(target_device_id) = device_revoke_target_device_id.as_deref() {
-            let control_proposal_ack = control_proposal_ack.clone().ok_or_else(|| {
-                SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    "ak.device.revoke requires a canonical Control Proposal Ack",
-                )
-            })?;
-            let selector =
-            crate::routing::identity::device_generation::active_device_revocation_gate_selector(
-                state,
-                parsed.actor_id.as_str(),
-                target_device_id,
-            )
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    if error.is_not_found() {
-                        StatusCode::FORBIDDEN
-                    } else {
-                        StatusCode::INTERNAL_SERVER_ERROR
-                    },
-                    if error.is_not_found() {
-                        "device_unauthorized"
-                    } else {
-                        "internal_error"
-                    },
-                    format!("revoke target device authorization unavailable: {error}"),
-                )
-            })?;
-            Some(soland_storage::DeviceRevocationTransition {
-                selector,
-                proposal_event_id: parsed.event_id.to_string(),
-                proposal_digest: parsed.canonical_digest.clone(),
-                control_proposal_ack,
-            })
-        } else {
-            None
-        };
-    let agent_approval_nonce =
-        validated_agent_approval.map(|approval| soland_storage::AgentApprovalNonceCommit {
-            agent_id: approval.agent_id,
-            authorization_ref: approval.authorization_ref,
-            request_id: approval.request_id,
-            approval_nonce: approval.approval_nonce,
-            event_id: parsed.event_id.to_string(),
-            expires_at: approval.expires_at,
-            consumed_at: received_at,
-        });
-    let membership_compensation_evidence = context
-        .membership_compensation_evidence
-        .map(|evidence| -> Result<_, SubmitOneError> {
-            let canonical_bytes =
-                arkret_canonical::canonical_json_bytes(evidence).map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        format!("membership compensation evidence is not canonicalizable: {error}"),
-                    )
-                })?;
-            Ok(soland_storage::MembershipCompensationEvidenceRecord {
-                event_id: parsed.event_id.to_string(),
-                event_digest: parsed.canonical_digest.clone(),
-                admission_id: evidence.delegation.core.admission_id.to_string(),
-                delegation_digest: evidence.delegation.delegation_digest.to_string(),
-                canonical_bytes,
-                evidence: evidence.clone(),
-            })
-        })
-        .transpose()?;
-    let command = soland_services::events::CommitAcceptedEventCommand {
-        replicated: context
-            .internal_admission
-            .is_some_and(InternalEventAdmission::is_peer_replication),
-        membership_compensation_evidence,
-        governance_dependencies: governance_dependency.into_iter().collect(),
-        device_pairing_authorization: commit_options
-            .as_ref()
-            .and_then(|options| options.device_pairing)
-            .and_then(|admission| admission.commit_authorization.clone()),
-        contact_projection: commit_options
-            .as_ref()
-            .and_then(|options| options.contact_projection.cloned()),
-        consent_projection: consent_admission
-            .as_ref()
-            .map(crate::routing::identity::consent::ConsentAdmission::commit),
-        event: soland_services::events::AcceptedEvent {
-            event_id: parsed.event_id.to_string(),
-            actor_id: actor_key.clone(),
-            actor_seq: parsed.actor_seq,
-            realm_id: Some(parsed.realm_id.to_string()),
-            kind: parsed.kind.clone(),
-            schema_id: parsed.schema_id.clone(),
-            digest_suite: parsed.digest_suite,
-            canonical_digest: parsed.canonical_digest.clone(),
-            canonical_bytes: accepted_canonical_bytes.clone(),
-            envelope,
-            received_at,
-        },
-        control_proposal_ingress: match (
-            ackless_self_principal_ingress.clone(),
-            control_proposal_ack.clone(),
-        ) {
-            (Some(class), None) => Some(ControlProposalIngress::AcklessSelfPrincipal(class)),
-            (None, Some(ack)) => Some(ControlProposalIngress::AckRequired(ack)),
-            _ => None,
-        },
-        device_revocation_transition,
-        device_revocation_gate: local_device_revocation_gate,
-        projections: projected_event
-            .iter()
-            .map(|event| soland_services::events::ProjectedEvent {
-                event_id: event.event_id.clone(),
-                realm_id: event.realm_id.clone(),
-                event_kind: event.event_kind.clone(),
-                operation_kind: event.operation_kind.clone(),
-                operation_id: event.operation_id.clone(),
-                sender: event.sender.clone(),
-                payload: event.payload.clone(),
-                created_at: event.created_at,
-                received_at: event.received_at,
-            })
-            .collect(),
-        idempotency: commit_options
-            .as_ref()
-            .and_then(|options| options.idempotency.as_ref())
-            .map(|source| match source {
-                SubmitCommitIdempotency::Prepared(record) => record.clone(),
-                SubmitCommitIdempotency::CommitKey(record) => {
-                    let created_at = now();
-                    soland_services::events::IdempotentResponse {
-                        authenticated_actor: record.authenticated_actor.clone(),
-                        operation_id: record.operation_id.clone(),
-                        key: record.key.clone(),
-                        request_hash: record.request_hash.clone(),
-                        status: StatusCode::OK.as_u16() as i32,
-                        body: serde_json::to_value(&accepted_response.outcome)
-                            .unwrap_or_else(|_| json!({"status": "accepted"})),
-                        created_at,
-                        expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
-                    }
-                }
-            }),
+    let PreparedAcceptedEventCommand {
+        command,
+        agent_approval_nonce,
+    } = prepare_accepted_event_command(AcceptedEventCommandPreparation {
+        state,
+        parsed: &parsed,
+        actor_key: &actor_key,
+        envelope,
+        accepted_canonical_bytes: &accepted_canonical_bytes,
+        governance_dependency,
+        projected_event: projected_event.as_ref(),
+        accepted_response: &accepted_response,
         deliveries: outbox,
-    };
+        device_revoke_target_device_id: device_revoke_target_device_id.as_deref(),
+        control_proposal_ack: control_proposal_ack.as_ref(),
+        local_device_revocation_gate,
+        validated_agent_approval,
+        membership_compensation_evidence: context.membership_compensation_evidence,
+        internal_admission: context.internal_admission,
+        consent_admission: consent_admission.as_ref(),
+        ackless_self_principal_ingress: ackless_self_principal_ingress.as_ref(),
+        commit_options: commit_options.as_ref(),
+        received_at,
+    })
+    .await?;
     if let Some(slot) = deferred_agent_membership {
         if parsed.kind != arkret_wire::EventKind::MemberState.as_str()
             || command.device_revocation_transition.is_some()
