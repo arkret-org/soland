@@ -1529,10 +1529,13 @@ async fn notification_account_data_events(
     state: &AppState,
     session: &SessionIdentityState,
 ) -> Vec<arkret_wire::Event> {
+    let Some(recipient_actor) = session_actor(state, session) else {
+        return Vec::new();
+    };
     let rows = state
         .deliveries()
         .list_recipient_notifications(soland_services::delivery::ListRecipientNotificationsQuery {
-            recipient_id: session.actor.clone(),
+            recipient_id: recipient_actor.to_string(),
         })
         .await
         .unwrap_or_default();
@@ -1549,10 +1552,7 @@ async fn notification_account_data_events(
         let Ok(Value::Object(payload)) = serde_json::to_value(row.notification) else {
             continue;
         };
-        event.actor_id = match session_actor(state, session) {
-            Some(actor) => actor,
-            None => continue,
-        };
+        event.actor_id = recipient_actor.clone();
         event.payload = payload.into_iter().collect();
         mark_event_as_projection_only(&mut event);
         events.push(event);

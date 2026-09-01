@@ -502,8 +502,9 @@ impl ProjectionState {
         let Some(actor_id) = operation
             .payload
             .get("watcher_actor_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+            .map(|actor| actor.to_string())
         else {
             return ProjectionEffect::Rejected {
                 reason: "missing_watcher_actor_id".to_owned(),
