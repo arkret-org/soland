@@ -199,9 +199,9 @@ pub struct ProjectionState {
     /// session progress is not a durable Arkret event and is not mirrored here.
     pub applets: BTreeMap<AppletId, AppletProjection>,
     /// R3 spec-sync (2026-05-27, arkret-spec b47ff6ec) — FSM lifecycle
-    /// state for each agent_id. Driven by
+    /// state for each complete canonical Agent Account ActorId. Driven by
     /// `ak.agent.{pause,resume,deactivate}` (REDU-1). Default `Active`
-    /// for any agent_id we've seen; `Deactivated` is terminal
+    /// for any Agent Account we've seen; `Deactivated` is terminal
     /// (no transition out, no resume after).
     pub agent_lifecycles: BTreeMap<String, AgentLifecycleState>,
     /// Actor-private action approval queue keyed by `request_id`.

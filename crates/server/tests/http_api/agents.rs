@@ -288,6 +288,28 @@ pub(crate) async fn seed_active_controller_device_generation(
     let now = chrono::Utc::now();
     let generation_ref = 1_u64;
     let signing_key = SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED);
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
+            .expect("fixture verification method is a DID URL");
+    let controller_document = serde_json::json!({
+        "id": controller,
+        "verificationMethod": [{
+            "id": verification_method,
+            "type": "Multikey",
+            "controller": controller,
+            "publicKeyMultibase": test_ed25519_multibase_public(&signing_key),
+        }],
+        "authentication": [verification_method],
+        "assertionMethod": [verification_method],
+    });
+    let normalized_controller_document: arkret_models_identity::DidDocument =
+        serde_json::from_value(controller_document.clone()).unwrap();
+    let document_digest =
+        arkret_canonical::canonical_sha256(&normalized_controller_document).unwrap();
+    let document_digest_hex = document_digest
+        .strip_prefix("sha256:")
+        .expect("canonical document digest has SHA-256 suite");
+    let document_version = format!("synthetic-jcs-sha256:{document_digest_hex}");
     state
         .test_persistence()
         .webvh()
@@ -296,8 +318,8 @@ pub(crate) async fn seed_active_controller_device_generation(
             did: controller.to_owned(),
             seq: 1,
             operation: serde_json::json!({
-                "versionId": generation_ref,
-                "state": { "id": controller }
+                "versionId": document_version,
+                "state": controller_document
             }),
             created_at: now,
         })
@@ -308,10 +330,8 @@ pub(crate) async fn seed_active_controller_device_generation(
         .webvh()
         .put_document(soland_storage::WebvhDocumentRecord {
             did: controller.to_owned(),
-            did_document: serde_json::json!({
-                "id": controller
-            }),
-            key_log_head: Some(format!("sha256:{}", "1".repeat(64))),
+            did_document: controller_document,
+            key_log_head: Some(document_digest.clone()),
             seq: 1,
             method_evidence: serde_json::json!({"mode": "test"}),
             fetched_at: now,
@@ -329,8 +349,8 @@ pub(crate) async fn seed_active_controller_device_generation(
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
         did: actor.clone(),
-        method_history_head: format!("sha256:{}", "1".repeat(64)),
-        version_id: "1-Qmfixture".to_owned(),
+        method_history_head: document_digest,
+        version_id: document_version,
     };
     let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
@@ -369,9 +389,6 @@ pub(crate) async fn seed_active_controller_device_generation(
         .as_account_id()
         .expect("PCR bootstrap actor is an account")
         .clone();
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
-            .expect("fixture verification method is a DID URL");
     let bootstrap_signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         actor.clone(),

@@ -983,7 +983,11 @@ impl ProjectionState {
                 .and_then(Value::as_str)
                 == Some("agent_control")
         {
-            let agent_id = operation.context.sender.signing_principal_id().to_string();
+            if operation.context.sender.as_account_id().is_none() {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
             let actor_key = match operation.context.sender.canonical_key() {
                 Ok(actor_key) => actor_key,
                 Err(_) => {
@@ -992,7 +996,7 @@ impl ProjectionState {
                     };
                 }
             };
-            let actor_subject = match arkret_wire::composite_subject(&[actor_key]) {
+            let actor_subject = match arkret_wire::composite_subject(&[actor_key.as_str()]) {
                 Ok(subject) => subject,
                 Err(_) => {
                     return ProjectionEffect::Rejected {
@@ -1031,12 +1035,12 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             }
-            if self.cells.contains_key(&cell) || self.agent_lifecycles.contains_key(&agent_id) {
+            if self.cells.contains_key(&cell) || self.agent_lifecycles.contains_key(&actor_key) {
                 return ProjectionEffect::Rejected {
                     reason: "invalid_agent_lifecycle_transition".to_owned(),
                 };
             }
-            Some((agent_id, cell))
+            Some((actor_key, cell))
         } else {
             None
         };
@@ -1388,11 +1392,11 @@ impl ProjectionState {
                 // the internal FSM state `uninitialized` to the first public
                 // state `active`. Provision admission only reserves/declares
                 // the future PCR and must never activate this cell early.
-                if let Some((agent_id, cell)) = agent_status {
+                if let Some((agent_actor_id, cell)) = agent_status {
                     self.cells
                         .insert(cell, CellState::Value(Value::String("active".to_owned())));
                     self.agent_lifecycles
-                        .insert(agent_id, AgentLifecycleState::Active);
+                        .insert(agent_actor_id, AgentLifecycleState::Active);
                 }
             }
             arkret_wire::EventKind::RealmProfile => {

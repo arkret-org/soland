@@ -604,12 +604,12 @@ fn sign_mimi_agent_report_event(
 async fn exact_agent_mimi_report_body(
     state: &AppState,
     runtime_key: &SigningKey,
+    controller_token: &str,
     realm_id: &str,
     room_uri: &str,
 ) -> arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
     let (reporter_actor, membership_event_id, room_binding_event_id) =
         install_current_mimi_report_binding(state, realm_id, room_uri, MIMI_TEST_STRAND_ID).await;
-    let controller_token = dev_token(state.clone()).await;
     let controller_id = fixture_actor_core_id("did:web:alice.example");
     let records = state
         .test_persistence()
@@ -656,7 +656,7 @@ async fn exact_agent_mimi_report_body(
     );
     move_event_to_actor_realm_frontier(
         state,
-        &controller_token,
+        controller_token,
         "did:web:alice.example",
         realm_id,
         &mut report_event,
@@ -759,15 +759,23 @@ fn mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence() {
     run_on_deep_stack(
         "mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence",
         || async {
+            let slug = "mimi-agent-reporter";
             let (state, runtime) = super::events::seed_agent_grant_session(
-                "mimi-agent-reporter",
+                slug,
                 &["ak.self.events.command.submit.v1"],
             )
             .await;
+            let controller_token = format!("agent-grant-controller-{slug}");
             let realm_id = demo_realm_id();
             let room_uri = "mimi://provider.example/rooms/agent-report";
-            let body =
-                exact_agent_mimi_report_body(&state, &runtime.holder_key, realm_id, room_uri).await;
+            let body = exact_agent_mimi_report_body(
+                &state,
+                &runtime.holder_key,
+                &controller_token,
+                realm_id,
+                room_uri,
+            )
+            .await;
             let event_id = body.report_event.event.event_id.clone();
             let service = app_from_state(state.clone());
 
@@ -792,17 +800,18 @@ fn mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence() {
                 .expect("Agent-proxied caller Event is durable");
             let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
             let producer = stored.proofs[0].as_producer().unwrap();
-            assert!(producer.signer_resolution_evidence_ref.is_some());
-            assert!(producer.signer_resolution_evidence_digest.is_some());
+            assert!(producer.signer_resolution_evidence_ref.is_none());
+            assert!(producer.signer_resolution_evidence_digest.is_none());
             let admission = stored.proofs[1].as_station_admission().unwrap();
-            assert_eq!(
-                admission.producer_signer_resolution_evidence_ref,
-                producer.signer_resolution_evidence_ref
-            );
-            assert_eq!(
-                admission.producer_signer_resolution_evidence_digest,
-                producer.signer_resolution_evidence_digest
-            );
+            let evidence_ref = admission
+                .producer_signer_resolution_evidence_ref
+                .as_ref()
+                .expect("Agent admission retains the frozen producer evidence ref");
+            let evidence_digest = admission
+                .producer_signer_resolution_evidence_digest
+                .as_ref()
+                .expect("Agent admission retains the frozen producer evidence digest");
+            assert_eq!(evidence_ref.content_digest().unwrap(), *evidence_digest);
         },
     );
 }

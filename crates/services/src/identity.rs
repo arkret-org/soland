@@ -3772,10 +3772,12 @@ mod tests {
             .publish_policy(PublishRecoveryPolicyCommand {
                 policy: RecoveryPolicyState {
                     policy_id: "ak:policy:stale".to_owned(),
-                    principal_id: arkret_identifiers::DidCoreId::new(
-                        "ak:did_core:web:alice.example",
-                    )
-                    .unwrap(),
+                    account_id: arkret_wire::AccountId::new(
+                        arkret_identifiers::DidCoreId::new("ak:did_core:web:alice.example")
+                            .unwrap(),
+                        arkret_identifiers::DidCoreId::new("ak:did_core:web:principal.example")
+                            .unwrap(),
+                    ),
                     version: 2,
                     acceptance_basis: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),

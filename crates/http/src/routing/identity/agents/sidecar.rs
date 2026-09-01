@@ -219,7 +219,7 @@ async fn agent_record_is_desired_sidecar_member(
         realm_member_joined(state, realm_id, &agent_actor.to_string()) && {
             let projection = state.projections().snapshot();
             !matches!(
-                projection.agent_lifecycles.get(agent_id),
+                projection.agent_lifecycles.get(&agent_actor.to_string()),
                 Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
             ) && projection.agent_has_authorized_key(agent_id)
         },

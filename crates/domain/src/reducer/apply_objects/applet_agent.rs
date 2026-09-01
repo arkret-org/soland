@@ -148,9 +148,24 @@ impl ProjectionState {
                 reason: "agent_lifecycle_missing_agent_id".to_owned(),
             };
         };
+        let Some(agent_account) = operation.context.sender.as_account_id() else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_lifecycle_actor_not_account".to_owned(),
+            };
+        };
+        if agent_account.principal_id.as_str() != agent_id {
+            return ProjectionEffect::Rejected {
+                reason: "agent_lifecycle_actor_mismatch".to_owned(),
+            };
+        }
+        let Ok(agent_actor_id) = operation.context.sender.canonical_key() else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_lifecycle_actor_invalid".to_owned(),
+            };
+        };
         let current = self
             .agent_lifecycles
-            .get(&agent_id)
+            .get(&agent_actor_id)
             .copied()
             .unwrap_or_default();
         // FSM guard. Terminal `Deactivated` rejects any transition.
@@ -177,7 +192,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        self.agent_lifecycles.insert(agent_id.clone(), target);
+        self.agent_lifecycles.insert(agent_actor_id, target);
         if matches!(
             target,
             AgentLifecycleState::Paused | AgentLifecycleState::Deactivated
@@ -201,6 +216,21 @@ impl ProjectionState {
                 reason: "agent_action_request_missing_agent_id".to_owned(),
             };
         };
+        let Some(agent_account) = operation.context.sender.as_account_id() else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_actor_not_account".to_owned(),
+            };
+        };
+        if agent_account.principal_id.as_str() != agent_id {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_actor_mismatch".to_owned(),
+            };
+        }
+        let Ok(agent_actor_id) = operation.context.sender.canonical_key() else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_actor_invalid".to_owned(),
+            };
+        };
         let Some(request_id) = operation
             .payload
             .get("request_id")
@@ -213,7 +243,7 @@ impl ProjectionState {
         };
         match self
             .agent_lifecycles
-            .get(&agent_id)
+            .get(&agent_actor_id)
             .copied()
             .unwrap_or_default()
         {

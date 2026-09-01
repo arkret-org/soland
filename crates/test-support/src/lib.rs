@@ -20,8 +20,9 @@ use arkret_models_identity::service_identity::{
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
-    MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
+    CellRegistry, CellStore, ControlEventStore, ControlProposalIngress, MemoryCellStore,
+    MemoryControlEventStore, MemorySealStore, SealStore, StoreError, StoreResult,
+    compute_state_root,
 };
 use arkret_wire::{DidCoreId, Seal, ServiceKind, project_did_to_core_id};
 use async_trait::async_trait;
@@ -415,7 +416,7 @@ impl AppStateTestExt for AppState {
             .expect("test Control Event store is unavailable for this AppState")
             .put_pending_with_ingress(
                 event,
-                &arkret_wire::ControlProposalIngress::AckRequired(ack.clone()),
+                &ControlProposalIngress::AckRequired(ack.clone()),
                 digest_suite,
             )
     }

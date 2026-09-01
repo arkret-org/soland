@@ -284,7 +284,15 @@ pub(super) async fn agent_lifecycle_rejection_reason(
 
     let projected = {
         let projection = state.projections().snapshot();
-        projection.agent_lifecycles.get(agent_id).copied()
+        let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(agent_id)
+                .map_err(|_| "agent_principal_lookup_unavailable")?,
+            state.service_core_id(),
+        ));
+        projection
+            .agent_lifecycles
+            .get(&agent_actor.to_string())
+            .copied()
     };
     Ok(match projected {
         Some(arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused) => {

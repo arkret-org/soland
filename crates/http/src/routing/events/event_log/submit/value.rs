@@ -1719,7 +1719,8 @@ pub(super) async fn accepted_event_envelope(
             .as_ref()
             .map(|(reference, _)| reference.clone()),
         producer_signer_resolution_evidence_digest: producer_signer_evidence
-            .map(|(_, digest)| digest),
+            .as_ref()
+            .map(|(_, digest)| digest.clone()),
         signer_resolution_evidence_ref,
         signer_resolution_evidence_digest,
         accepted_at,

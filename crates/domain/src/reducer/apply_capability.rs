@@ -287,7 +287,7 @@ fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {
 /// absent from the registry default to high (registry fail-closed rule).
 fn validate_nonhuman_subject_grant_constraints(
     body: &Value,
-    subject_is_agent_or_service: impl Fn(&str) -> bool,
+    subject_is_agent_or_service: impl Fn(&arkret_wire::ActorId) -> bool,
 ) -> Result<(), &'static str> {
     use arkret_schema::CapabilityRiskTier;
 
@@ -297,7 +297,7 @@ fn validate_nonhuman_subject_grant_constraints(
     else {
         return Ok(());
     };
-    if !subject_is_agent_or_service(subject.signing_principal_id().as_str()) {
+    if !subject_is_agent_or_service(&subject) {
         return Ok(());
     }
     let Some(actions) = body.get("actions").and_then(Value::as_array) else {
@@ -1327,11 +1327,14 @@ impl ProjectionState {
         }
         if let Err(reason) =
             validate_nonhuman_subject_grant_constraints(grant_body(&operation.payload), |subject| {
-                self.agent_lifecycles.contains_key(subject)
-                    || self
-                        .applets
-                        .values()
-                        .any(|registration| registration.service_id.as_str() == subject)
+                let subject_key = subject.canonical_key().ok();
+                matches!(subject, arkret_wire::ActorId::Service { .. })
+                    || subject_key
+                        .as_deref()
+                        .is_some_and(|subject| self.agent_lifecycles.contains_key(subject))
+                    || self.applets.values().any(|registration| {
+                        &registration.service_id == subject.signing_principal_id()
+                    })
             })
         {
             return ProjectionEffect::Rejected {

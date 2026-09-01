@@ -263,7 +263,7 @@ fn controller_terminal_state_invalidates_agent_without_synthesizing_leave() {
         },
     );
     state.agent_lifecycles.insert(
-        BOB.to_owned(),
+        bob.clone(),
         arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
     );
     state

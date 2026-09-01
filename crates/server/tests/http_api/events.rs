@@ -118,6 +118,98 @@ async fn read_introspection_request(stream: &mut tokio::net::TcpStream) -> Vec<u
     }
 }
 
+pub(super) async fn bind_controller_gate_mock(config: &mut AppConfig) -> tokio::net::TcpListener {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("controller gate mock binds");
+    let authority_address = listener.local_addr().expect("mock address");
+    config.account_authority_url = Some(format!("http://{authority_address}"));
+    config.account_authority_id = Some(soland_test_support::fixture_station_id().to_string());
+    listener
+}
+
+pub(super) fn spawn_controller_gate_mock(listener: tokio::net::TcpListener, state: &AppState) {
+    use tokio::io::AsyncWriteExt;
+
+    let authority_id = arkret_wire::DidCoreId::new(state.service_id().clone()).unwrap();
+    let state = state.clone();
+    tokio::spawn(async move {
+        let (_, authority_method) = state
+            .current_service_receipt_binding()
+            .await
+            .expect("fixture service receipt binding");
+        let authority_signing_key = state.notary_signing_key();
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let authority_id = authority_id.clone();
+            let authority_method = authority_method.clone();
+            let authority_signing_key = authority_signing_key.clone();
+            tokio::spawn(async move {
+                let request = read_introspection_request(&mut stream).await;
+                let body_start = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                    .expect("controller gate request headers");
+                let request_body = serde_json::from_slice::<
+                    arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueRequestBody,
+                >(&request[body_start..])
+                .expect("typed controller gate request");
+                let issued_at = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+                let basis = arkret_models_identity::agent_signer_evidence::ControllerAccountGateBasis::AccountBindingDefault {
+                    binding_version: 1,
+                    binding_frontier_digest: arkret_wire::Hash::new(
+                        arkret_canonical::sha256_digest(b"fixture account binding frontier"),
+                    )
+                    .unwrap(),
+                };
+                let mut gate = arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestation {
+                    schema: arkret_wire::NonEmptyString::new(
+                        arkret_wire::SchemaId::CONTROLLER_ACCOUNT_GATE_ATTESTATION_V1,
+                    )
+                    .unwrap(),
+                    principal_id: request_body.principal_id,
+                    eligibility: arkret_models_identity::agent_signer_evidence::ControllerAccountEligibility::Active,
+                    status: arkret_models_identity::agent_signer_evidence::ControllerAccountStatus::Active,
+                    basis,
+                    basis_digest: arkret_wire::Hash::new(
+                        arkret_canonical::sha256_digest(b"fixture account gate basis"),
+                    )
+                    .unwrap(),
+                    authority_id,
+                    verification_method: authority_method,
+                    issued_at,
+                    expires_at: issued_at + chrono::Duration::minutes(2),
+                    proof: arkret_models_identity::agent_signer_evidence::AgentDetachedJws {
+                        kind: arkret_wire::NonEmptyString::new("detached_jws").unwrap(),
+                        jws: arkret_wire::NonEmptyString::new("pending").unwrap(),
+                    },
+                };
+                arkret_signatures::agent_evidence::sign_controller_account_gate_attestation(
+                    &mut gate,
+                    authority_signing_key.as_ref(),
+                )
+                .expect("controller gate attestation signs");
+                let response_body = serde_json::to_vec(
+                    &arkret_models_identity::agent_signer_evidence::ControllerAccountGateAttestationIssueOutcome {
+                        request_id: request_body.request_id,
+                        controller_account_gate_attestation: gate,
+                    },
+                )
+                .expect("serialize controller gate outcome");
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    response_body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&response_body).await.unwrap();
+            });
+        }
+    });
+}
+
 /// Provision a Agent through the real ceremony, activate its runtime
 /// key through the storage port, and stand up a session-grant introspection
 /// mock that vouches for a grant scoped to exactly `granted_scopes`.
@@ -127,18 +219,14 @@ pub(super) async fn seed_agent_grant_session(
 ) -> (AppState, AgentGrantPresentation) {
     use tokio::io::AsyncWriteExt;
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("introspection mock binds");
     let mut config = test_config();
+    let listener = bind_controller_gate_mock(&mut config).await;
     let authority_address = listener.local_addr().expect("mock address");
     config.session_grant_introspection_url = Some(format!(
         "http://{}/_arkret/admin/session-grants/introspect",
         authority_address
     ));
     config.session_grant_introspection_bearer = Some(format!("introspection-bearer-{slug}"));
-    config.account_authority_url = Some(format!("http://{authority_address}"));
-    config.account_authority_id = Some(soland_test_support::fixture_station_id().to_string());
     let state = soland_test_support::app_state(config);
 
     let controller = "did:web:alice.example";
@@ -625,6 +713,40 @@ pub(super) async fn seed_agent_grant_session(
     let seal_status = seal_response.status_code;
     let seal_body = seal_response.take_string().await.unwrap_or_default();
     assert_eq!(seal_status, Some(StatusCode::OK), "{seal_body}");
+
+    let effective = state
+        .test_effective_state_at(std::slice::from_ref(&successor_seal.id), &agent_pcr_realm)
+        .unwrap();
+    let key_cell = arkret_wire::CellRef::new(
+        arkret_signatures::agent_evidence::agent_authorization_cell_ref(
+            &outcome.agent_id,
+            &arkret_wire::NonEmptyString::new("agent-runtime-key").unwrap(),
+        )
+        .unwrap()
+        .as_str()
+        .to_owned(),
+    )
+    .unwrap();
+    let lifecycle_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        outcome.agent_id.clone(),
+        state.service_core_id(),
+    ));
+    let lifecycle_actor_key = lifecycle_actor.canonical_key().unwrap();
+    let lifecycle_subject =
+        arkret_wire::composite_subject(&[lifecycle_actor_key.as_str()]).unwrap();
+    let lifecycle_cell = arkret_wire::CellRef::new(format!(
+        "ak:cell:{}:{lifecycle_subject}",
+        arkret_models_identity::agent_signer_evidence::AGENT_STATUS_COMPONENT
+    ))
+    .unwrap();
+    assert!(
+        effective.contains_key(&key_cell),
+        "missing Agent key witness cell"
+    );
+    assert!(
+        effective.contains_key(&lifecycle_cell),
+        "missing Agent lifecycle witness cell"
+    );
 
     state
         .test_projection()

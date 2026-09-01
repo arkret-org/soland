@@ -221,14 +221,21 @@ pub(super) fn validate_durable_agent_lifecycle(
             ));
         }
     };
+    let agent_account = event.actor_id.as_account_id().ok_or_else(|| {
+        AppError::capability_denied("lifecycle_event Agent actor must be an Account")
+    })?;
+    let executing_account = event
+        .executed_by
+        .as_ref()
+        .and_then(arkret_wire::ActorId::as_account_id)
+        .ok_or_else(|| {
+            AppError::capability_denied("lifecycle_event controller must be an Account")
+        })?;
     if event.kind.as_str() != event_kind
         || event.realm_id.as_str() != realm_id
-        || event.actor_id.signing_principal_id().as_str() != agent_id
-        || event
-            .executed_by
-            .as_ref()
-            .map(|actor| actor.signing_principal_id().as_str())
-            != Some(session.actor.as_str())
+        || agent_account.principal_id.as_str() != agent_id
+        || executing_account.principal_id.as_str() != session.actor.as_str()
+        || agent_account.station_id != executing_account.station_id
         || event.authorization_ref.as_deref() != Some(authorization_ref)
     {
         return Err(AppError::capability_denied(
@@ -259,7 +266,15 @@ pub(super) fn validate_durable_agent_lifecycle(
     // the producer. The payload fields that feed the projection were pinned
     // above, so the remaining check is that the contract derives exactly one
     // write, on this Agent's status cell, transitioning to `next_status`.
-    let expected_cell = format!("ak:cell:ak.component.agent.status.v1:{agent_id}");
+    let canonical_actor = event.actor_id.canonical_key().map_err(|error| {
+        AppError::param_invalid(format!("lifecycle_event Agent actor is invalid: {error}"))
+    })?;
+    let subject = arkret_wire::composite_subject(&[canonical_actor.as_str()]).map_err(|error| {
+        AppError::param_invalid(format!(
+            "lifecycle_event Agent status subject is invalid: {error}"
+        ))
+    })?;
+    let expected_cell = format!("ak:cell:ak.component.agent.status.v1:{subject}");
     let derived =
         arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
             .map_err(|error| {

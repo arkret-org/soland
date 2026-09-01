@@ -562,13 +562,8 @@ mod tests {
                 SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
             ),
             actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                arkret_wire::AccountId::new(
-                    arkret_wire::project_did_to_core_id(
-                        &Did::new("did:web:alice.example").unwrap(),
-                    )
+                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
                     .unwrap(),
-                    arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
-                ),
                 arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
             )),
             device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
@@ -757,8 +752,13 @@ mod tests {
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
-                arkret_wire::project_did_to_core_id(&Did::new("did:web:alice.example").unwrap())
+                arkret_wire::AccountId::new(
+                    arkret_wire::project_did_to_core_id(
+                        &Did::new("did:web:alice.example").unwrap(),
+                    )
                     .unwrap(),
+                    arkret_wire::DidCoreId::new("ak:did_core:web:principal.example").unwrap(),
+                ),
                 Utc::now() + Duration::hours(1),
                 revoke_unit,
                 hash('1'),

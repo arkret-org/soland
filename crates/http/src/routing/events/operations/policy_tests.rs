@@ -2083,11 +2083,11 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
         vec![arkret_wire::EventKind::MessageCreate.as_str().to_owned()],
         Vec::new(),
     );
+    let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
     state.test_projection().lock().agent_lifecycles.insert(
-        agent.to_owned(),
+        operation.context.sender.canonical_key().unwrap(),
         arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated,
     );
-    let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
 
     assert_eq!(
         validate_agent_reply_participation(&state, &[operation])

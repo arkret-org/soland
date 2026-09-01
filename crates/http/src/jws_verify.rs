@@ -571,6 +571,44 @@ async fn principal_authorized_device_binding_with_account_authority_async(
     ))
 }
 
+/// Resolve the current Ed25519 key for a principal device only after binding it
+/// to an exact local Account authority and its accepted PCR authorization.
+pub(crate) async fn resolve_principal_authorized_device_key_with_account_authority_async(
+    verification_method: &str,
+    authority: &arkret_wire::AccountId,
+    expected_device_id: &arkret_identifiers::DeviceId,
+    state: &AppState,
+) -> Result<VerifyingKey, PrincipalAuthorizedJwsError> {
+    let (verification_method, document, ..) =
+        principal_authorized_device_binding_with_account_authority_async(
+            verification_method,
+            authority,
+            expected_device_id,
+            state,
+        )
+        .await?;
+    let public_key_multibase = document
+        .verification_methods
+        .get(verification_method.as_str())
+        .ok_or_else(|| {
+            PrincipalAuthorizedJwsError::Verification(
+                "principal verification method is absent from the accepted device binding"
+                    .to_owned(),
+            )
+        })?;
+    let public_key =
+        arkret_canonical::decode_ed25519_multibase(public_key_multibase).map_err(|error| {
+            PrincipalAuthorizedJwsError::Verification(format!(
+                "principal verification method key is invalid: {error}"
+            ))
+        })?;
+    VerifyingKey::from_bytes(&public_key).map_err(|error| {
+        PrincipalAuthorizedJwsError::Verification(format!(
+            "principal verification method key is invalid: {error}"
+        ))
+    })
+}
+
 pub async fn verify_principal_authorized_jws_with_account_authority_async(
     canonical_bytes: &[u8],
     jws: &str,

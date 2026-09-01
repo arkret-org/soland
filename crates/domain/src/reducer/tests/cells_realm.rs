@@ -1367,7 +1367,9 @@ fn agent_genesis_activates_agent_status_cell_once() {
         "Agent genesis unexpectedly rejected: {effect:?}; writes={writes:?}"
     );
     assert_eq!(
-        state.agent_lifecycles.get(agent_id.as_str()),
+        state
+            .agent_lifecycles
+            .get(&operation.context.sender.canonical_key().unwrap()),
         Some(&arkret_models_collaboration::agent_operations::AgentLifecycleState::Active)
     );
     let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(

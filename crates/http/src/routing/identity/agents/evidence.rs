@@ -1004,7 +1004,7 @@ async fn produce_current_agent_signer_evidence(
 
     let lifecycle = accepted_current_lifecycle(state, &agent, agent_id, &realm_id).await?;
     let lifecycle_seal = covering_seal(state, &lifecycle.event)?;
-    let lifecycle_cell_ref = lifecycle_cell_ref(agent_id)?;
+    let lifecycle_cell_ref = lifecycle_cell_ref(&agent_actor)?;
     let (lifecycle_value, lifecycle_proof) =
         witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref)?;
     let lifecycle_value: AgentLifecycleStatus = serde_json::from_value(lifecycle_value)
@@ -1253,9 +1253,15 @@ fn witnessed_cell(
 }
 
 fn lifecycle_cell_ref(
-    agent_id: &DidCoreId,
+    agent_actor_id: &arkret_wire::ActorId,
 ) -> Result<NonEmptyString, AgentSignerEvidenceQueryFailureReason> {
-    let subject = arkret_wire::composite_subject(&[agent_id.as_str()])
+    if agent_actor_id.as_account_id().is_none() {
+        return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
+    }
+    let canonical_actor = agent_actor_id
+        .canonical_key()
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let subject = arkret_wire::composite_subject(&[canonical_actor.as_str()])
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     non_empty(&format!("ak:cell:{AGENT_STATUS_COMPONENT}:{subject}"))
 }
@@ -1383,12 +1389,26 @@ async fn verify_current_evidence(
     if binding.agent_id != *agent_id || binding.verification_method != *verification_method {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
-    let controller_key = crate::jws_verify::resolve_ed25519_pubkey_async(
-        state,
-        binding.controller_proof.verification_method.as_str(),
-    )
-    .await
-    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let controller_device_id = binding
+        .controller_proof
+        .verification_method
+        .as_str()
+        .rsplit_once('#')
+        .and_then(|(_, fragment)| arkret_wire::DeviceId::new(fragment.to_owned()).ok())
+        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let controller_account = arkret_wire::AccountId::new(
+        binding.controller_id.clone(),
+        state.service_core_id().clone(),
+    );
+    let controller_key =
+        crate::jws_verify::resolve_principal_authorized_device_key_with_account_authority_async(
+            binding.controller_proof.verification_method.as_str(),
+            &controller_account,
+            &controller_device_id,
+            state,
+        )
+        .await
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let authority_key = crate::jws_verify::resolve_ed25519_pubkey_async(
         state,
         outer_attestation.verification_method.as_str(),
@@ -1422,9 +1442,15 @@ async fn verify_current_evidence(
             if seal_keys.contains_key(method.as_str()) {
                 continue;
             }
-            let key = crate::jws_verify::resolve_ed25519_pubkey_async(state, method.as_str())
-                .await
-                .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+            let key = if method == &binding.controller_proof.verification_method {
+                controller_key
+            } else {
+                crate::jws_verify::resolve_ed25519_pubkey_async(state, method.as_str())
+                    .await
+                    .map_err(|_| {
+                        AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+                    })?
+            };
             seal_keys.insert(method.as_str().to_owned(), key);
         }
     }
@@ -1433,8 +1459,13 @@ async fn verify_current_evidence(
     let binding_digest =
         arkret_signatures::agent_evidence::agent_signing_key_binding_digest(binding)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let agent_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        agent_id.clone(),
+        state.service_core_id().clone(),
+    ));
     let state_context = arkret_signatures::agent_evidence::AgentEvidenceStateVerificationContext {
         signer_id: agent_id,
+        signer_actor_id: &agent_actor,
         agent_key_id: &binding.agent_key_id,
         controller_id: &binding.controller_id,
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
@@ -1541,11 +1572,26 @@ fn validate_lifecycle_witness(
     witness: &AgentLifecycleWitness,
 ) -> Result<(), arkret_signatures::agent_evidence::AgentEvidenceRejectedReason> {
     use arkret_signatures::agent_evidence::AgentEvidenceRejectedReason;
+    let actor = witness
+        .accepted_status_event
+        .actor_id
+        .as_account_id()
+        .ok_or(AgentEvidenceRejectedReason::SigningKeyMismatch)?;
+    let canonical_actor = witness
+        .accepted_status_event
+        .actor_id
+        .canonical_key()
+        .map_err(|_| AgentEvidenceRejectedReason::SigningKeyMismatch)?;
+    let lifecycle_subject = arkret_wire::composite_subject(&[canonical_actor.as_str()])
+        .map_err(|_| AgentEvidenceRejectedReason::SigningKeyMismatch)?;
+    let lifecycle_cell_ref = format!("ak:cell:{AGENT_STATUS_COMPONENT}:{lifecycle_subject}");
     if witness
         .accepted_status_event
         .actor_id
         .signing_principal_id()
         != &witness.agent_id
+        || actor.principal_id != witness.agent_id
+        || witness.cell_ref.as_str() != lifecycle_cell_ref
         || witness.accepted_status_event.realm_id != witness.seal.realm_id
         || witness.status != AgentLifecycleStatus::Active
     {

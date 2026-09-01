@@ -607,6 +607,7 @@ pub fn describe(
             "ak.operation_bundle.station.applet.v1".to_owned(),
             "ak.operation_bundle.station.applet_ghost.v1".to_owned(),
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
+            "ak.operation_bundle.station.current_signer_evidence.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
             "ak.operation_bundle.station.history_key_recovery.v1".to_owned(),
             "ak.operation_bundle.station.http_core.v1".to_owned(),
@@ -917,6 +918,9 @@ mod tests {
             .as_array()
             .expect("operation bundle ids are present");
         assert!(bundles.contains(&json!("ak.operation_bundle.station.describe.v1")));
+        assert!(bundles.contains(&json!(
+            "ak.operation_bundle.station.current_signer_evidence.v1"
+        )));
         assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.history_key_recovery.v1"
         )));

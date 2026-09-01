@@ -49,7 +49,10 @@ fn public_pairing_ceremony_activates_the_agent_runtime() {
 }
 
 async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
-    let state = soland_test_support::app_state(test_config());
+    let mut config = test_config();
+    let controller_gate = super::events::bind_controller_gate_mock(&mut config).await;
+    let state = soland_test_support::app_state(config);
+    super::events::spawn_controller_gate_mock(controller_gate, &state);
     let app = app_from_state(state.clone());
     let controller = "did:web:alice.example";
     let token = "agent-pairing-ceremony-session";
@@ -580,6 +583,11 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     // through the public self HTTP surface without any pre-seeded evidence
     // cache.
     let disclosure_realm = soland_test_support::fixture_principal_control_realm(controller);
+    let controller_membership = add_test_realm_member(&state, &disclosure_realm, controller);
+    assert_eq!(
+        controller_membership["ok"], true,
+        "controller disclosure membership: {controller_membership}"
+    );
     let membership = add_test_realm_member(&state, &disclosure_realm, outcome.did.as_str());
     assert_eq!(
         membership["ok"], true,
@@ -617,7 +625,13 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     let mut evidence_response =
         TestClient::post("http://server/_arkret/self/current-signer-evidence/query")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&request)
+            .add_header(
+                "arkret-operation",
+                arkret_wire::ServiceOperationId::SELF_CURRENT_SIGNER_EVIDENCE_READ_RESOLVE_V1,
+                true,
+            )
+            .add_header("content-type", "application/json", true)
+            .body(arkret_canonical::canonical_json_bytes(&request).unwrap())
             .send(&app)
             .await;
     let evidence_status = evidence_response.status_code;

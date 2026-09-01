@@ -245,16 +245,16 @@ pub(crate) fn validate_principal_admission_gate(
     validate_account_id_list(gate, "denied_account_ids")?;
     validate_actor_id_list(gate, "allowed_actor_ids")?;
     validate_actor_id_list(gate, "denied_actor_ids")?;
-    validate_did_list(gate, "allowed_principal_core_ids")?;
-    validate_did_list(gate, "denied_principal_core_ids")?;
+    validate_did_list(gate, "allowed_principal_ids")?;
+    validate_did_list(gate, "denied_principal_ids")?;
     if ![
         "allowed_did_methods",
         "allowed_account_ids",
         "denied_account_ids",
         "allowed_actor_ids",
         "denied_actor_ids",
-        "allowed_principal_core_ids",
-        "denied_principal_core_ids",
+        "allowed_principal_ids",
+        "denied_principal_ids",
     ]
     .iter()
     .any(|field| gate.contains_key(*field))
@@ -515,11 +515,11 @@ pub(crate) fn principal_admission_gate_allows(
         return false;
     };
     let member_id = actor_id.signing_principal_id();
-    if did_list_contains(gate, "denied_principal_core_ids", member_id.as_str()) {
+    if did_list_contains(gate, "denied_principal_ids", member_id.as_str()) {
         return false;
     }
-    if gate.contains_key("allowed_principal_core_ids")
-        && !did_list_contains(gate, "allowed_principal_core_ids", member_id.as_str())
+    if gate.contains_key("allowed_principal_ids")
+        && !did_list_contains(gate, "allowed_principal_ids", member_id.as_str())
     {
         return false;
     }
@@ -573,8 +573,8 @@ pub(crate) fn principal_admission_gate_has_selector(gate: &serde_json::Map<Strin
         "denied_account_ids",
         "allowed_actor_ids",
         "denied_actor_ids",
-        "allowed_principal_core_ids",
-        "denied_principal_core_ids",
+        "allowed_principal_ids",
+        "denied_principal_ids",
     ]
     .iter()
     .any(|field| gate.contains_key(*field))

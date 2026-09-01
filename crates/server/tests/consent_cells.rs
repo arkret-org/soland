@@ -9,6 +9,17 @@ use soland_http::{ids, service};
 
 const ACCOUNT_REGISTER_BEARER: &str = "soland-test-account-register-bearer";
 
+fn fixture_account_actor(
+    state: &soland_http::state::AppState,
+    principal_did: &str,
+) -> arkret_wire::ActorId {
+    let principal_id = arkret_wire::project_did_to_core_id(
+        &Did::new(principal_did.to_owned()).expect("fixture account DID"),
+    )
+    .expect("fixture account core id");
+    arkret_wire::ActorId::account(AccountId::new(principal_id, state.service_core_id()))
+}
+
 fn test_config() -> AppConfig {
     AppConfig {
         development_mode: true,
@@ -84,7 +95,6 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
     let app = service(state.clone());
     let alice_did = "did:web:opaque-consent-request-alice.example";
     let bob_did = "did:web:opaque-consent-request-bob.example";
-    let alice = "ak:did_core:web:opaque-consent-request-alice.example";
     let bob = "ak:did_core:web:opaque-consent-request-bob.example";
     let alice_token = dev_token(&state, &app, alice_did).await;
     let bob_token = dev_token(&state, &app, bob_did).await;
