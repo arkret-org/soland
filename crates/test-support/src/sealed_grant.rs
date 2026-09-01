@@ -112,10 +112,19 @@ pub async fn seal_accepted_capability_grant(
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let seal = Seal::sign_single(
+    let (control_event_set_root, completeness_root) = crate::test_seal_roots(
+        state,
+        &predecessors,
+        &[(event.clone(), record.digest_suite)],
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture accepted grant Seal roots");
+    let seal = Seal::sign_single_with_roots(
         realm.clone(),
         predecessors,
         vec![move_id.clone()],
+        control_event_set_root,
+        completeness_root,
         state_root,
         fixture_hlc_after(event.created_at, &format!("{grant_id}:accepted-seal")),
         arkret_canonical::DigestSuite::Sha256,

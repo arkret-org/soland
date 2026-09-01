@@ -64,6 +64,7 @@ const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
 const MAX_INVITE_QUARANTINE_ENTRIES: usize = 200;
 const INVITE_DELIVERY_CAS_ATTEMPTS: usize = 3;
+const INVITE_QUARANTINE_CAS_ATTEMPTS: usize = 8;
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("invites").post(peer_invites_submit))
@@ -972,6 +973,8 @@ async fn deliver_invite_credential(
             updated_at: received_at,
         };
         let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
+        #[cfg(test)]
+        tokio::task::yield_now().await;
         match account_data
             .compare_and_set(record, expected_revision)
             .await
@@ -1255,51 +1258,64 @@ async fn persist_invite_quarantine_entry(
 
     let account_data = state.account_data();
     let subject_actor = arkret_wire::ActorId::account(account_id.clone()).to_string();
-    let existing = account_data
-        .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let mut quarantine = existing
-        .as_ref()
-        .map(|record| serde_json::from_value::<InviteQuarantine>(record.payload.clone()))
-        .transpose()
-        .map_err(|error| AppError::internal(format!("invalid invite quarantine cell: {error}")))?
-        .unwrap_or_else(|| InviteQuarantine::new(received_at));
-    quarantine
-        .validate_holder(account_id)
-        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
-    quarantine.quarantine_entries.retain(|candidate| {
-        candidate.expires_at > received_at && candidate.entry_digest != entry.entry_digest
-    });
-    quarantine.quarantine_entries.push(entry);
-    if quarantine.quarantine_entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
-        let excess = quarantine.quarantine_entries.len() - MAX_INVITE_QUARANTINE_ENTRIES;
-        quarantine.quarantine_entries.drain(0..excess);
-    }
-    quarantine.updated_at = received_at;
-    quarantine
-        .validate_holder(account_id)
-        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
-    let payload = serde_json::to_value(&quarantine)
-        .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
-    let record = AccountDataState {
-        actor_id: subject_actor,
-        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
-        revision: existing.as_ref().map_or(1, |record| record.revision + 1),
-        payload,
-        tombstone: false,
-        updated_at: received_at,
-    };
-    let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
-    let applied = account_data
-        .compare_and_set(record.clone(), expected_revision)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let AccountDataCasOutcome::Applied(record) = applied else {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
-            "invite quarantine account data changed concurrently",
-        ));
+    let mut attempt = 0;
+    let record = loop {
+        let existing = account_data
+            .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let existing_cell = existing
+            .as_ref()
+            .map(|record| serde_json::from_value::<InviteQuarantine>(record.payload.clone()))
+            .transpose()
+            .map_err(|error| {
+                AppError::internal(format!("invalid invite quarantine cell: {error}"))
+            })?;
+        let quarantine =
+            merge_invite_quarantine_cell(existing_cell, entry.clone(), received_at, account_id)?;
+        let cell_updated_at = quarantine.updated_at;
+        let payload = serde_json::to_value(&quarantine)
+            .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
+        let record = AccountDataState {
+            actor_id: subject_actor.clone(),
+            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            revision: existing.as_ref().map_or(1, |record| record.revision + 1),
+            payload,
+            tombstone: false,
+            updated_at: cell_updated_at,
+        };
+        let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
+        match account_data
+            .compare_and_set(record, expected_revision)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?
+        {
+            AccountDataCasOutcome::Applied(record) => break record,
+            AccountDataCasOutcome::Conflict(_) => {
+                attempt += 1;
+                if attempt >= INVITE_QUARANTINE_CAS_ATTEMPTS {
+                    // Quarantine, policy drop, unknown holder and anti-abuse
+                    // drop are one opaque wire class. A hot CAS cell therefore
+                    // degrades to a silent local drop instead of exposing a
+                    // sender-visible `cas_conflict` discriminator.
+                    super::append_audit_log(
+                        state,
+                        Some(subject),
+                        "peer.invites.quarantine",
+                        json!({
+                            "invitee_id": subject,
+                            "source_id": source_id,
+                            "inviter_id": inviter_id,
+                            "invite_event_id": invite_event_id,
+                            "reason": "concurrent_write_saturation",
+                        }),
+                        "skipped",
+                    )
+                    .await;
+                    return Ok(false);
+                }
+            }
+        }
     };
     fanout_actor_private_update(
         state,
@@ -1332,6 +1348,37 @@ async fn persist_invite_quarantine_entry(
     )
     .await;
     Ok(true)
+}
+
+fn merge_invite_quarantine_cell(
+    existing: Option<InviteQuarantine>,
+    new_entry: InviteQuarantineEntry,
+    received_at: chrono::DateTime<chrono::Utc>,
+    account_id: &arkret_wire::AccountId,
+) -> Result<InviteQuarantine, AppError> {
+    let mut quarantine = existing.unwrap_or_else(|| InviteQuarantine::new(received_at));
+    quarantine
+        .validate_holder(account_id)
+        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
+    let updated_at = quarantine.updated_at.max(received_at);
+    quarantine.quarantine_entries.retain(|candidate| {
+        candidate.expires_at > updated_at && candidate.entry_digest != new_entry.entry_digest
+    });
+    quarantine.quarantine_entries.push(new_entry);
+    quarantine.quarantine_entries.sort_by(|left, right| {
+        left.received_at
+            .cmp(&right.received_at)
+            .then_with(|| left.entry_digest.as_str().cmp(right.entry_digest.as_str()))
+    });
+    if quarantine.quarantine_entries.len() > MAX_INVITE_QUARANTINE_ENTRIES {
+        let excess = quarantine.quarantine_entries.len() - MAX_INVITE_QUARANTINE_ENTRIES;
+        quarantine.quarantine_entries.drain(0..excess);
+    }
+    quarantine.updated_at = updated_at;
+    quarantine
+        .validate_holder(account_id)
+        .map_err(|error| AppError::internal(format!("invite quarantine binding: {error}")))?;
+    Ok(quarantine)
 }
 
 /// Effective trust tier of an introduction evidence kind, *after* any
@@ -2754,6 +2801,74 @@ mod invite_locator_security_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[tokio::test]
+    async fn concurrent_invite_quarantine_writes_merge_without_exposing_cas_conflict() {
+        let state = production_holder_state().await;
+        let delivery_a = production_invite_delivery(&state);
+        let body_a = serde_json::to_value(&delivery_a).unwrap();
+        let mut delivery_b = delivery_a.clone();
+        delivery_b.invite_event.event_id = arkret_identifiers::EventId::from_digest(
+            arkret_canonical::DigestSuite::Sha256,
+            [0x42; 32],
+        );
+        delivery_b.idempotency_key = "ak:idempotency:concurrent-quarantine-b".to_owned();
+        let body_b = serde_json::to_value(&delivery_b).unwrap();
+        let decision = ReceiveDecision {
+            action: InviteReceiveAction::Quarantine,
+            effective_kind: "explicit_address",
+            trust_tier: TrustTier::Low,
+            disclosed_outcome: None,
+        };
+
+        let (first, second) = tokio::join!(
+            persist_invite_quarantine_entry(
+                &state,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                PRODUCTION_INVITER,
+                &delivery_a,
+                &body_a,
+                &decision,
+            ),
+            persist_invite_quarantine_entry(
+                &state,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                "ak:did_core:web:second-inviter.example",
+                &delivery_b,
+                &body_b,
+                &decision,
+            ),
+        );
+        assert_eq!(first.expect("first quarantine outcome"), true);
+        assert_eq!(second.expect("second quarantine outcome"), true);
+
+        let cell = state
+            .account_data()
+            .entry(
+                &arkret_wire::ActorId::account(delivery_a.invite_address.account_id.clone())
+                    .to_string(),
+                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            )
+            .await
+            .expect("invite quarantine cell")
+            .expect("concurrent quarantine writes");
+        let quarantine: InviteQuarantine = serde_json::from_value(cell.payload).unwrap();
+        quarantine
+            .validate_holder(&delivery_a.invite_address.account_id)
+            .unwrap();
+        assert_eq!(quarantine.quarantine_entries.len(), 2);
+        assert!(
+            quarantine
+                .quarantine_entries
+                .iter()
+                .any(|entry| { entry.source_peer_principal_id.as_str() == PRODUCTION_INVITER })
+        );
+        assert!(quarantine.quarantine_entries.iter().any(|entry| {
+            entry.source_peer_principal_id.as_str() == "ak:did_core:web:second-inviter.example"
+        }));
     }
 
     #[tokio::test]

@@ -75,18 +75,24 @@ impl Handler for RequestWireSizeLimitMiddleware {
         // multipart upload here would consume the very stream its handler needs.
         let observed = match declared {
             Some(length) => Some(length),
-            None if is_canonical_json_request(req) => {
-                req.payload().await.ok().map(|payload| payload.len())
-            }
+            None if is_canonical_json_request(req) => match req.payload().await {
+                Ok(payload) => Some(payload.len()),
+                Err(salvo::http::ParseError::PayloadTooLarge) => {
+                    write_payload_too_large(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
+                Err(_) => {
+                    let error = AppError::json_invalid("unable to read the request body");
+                    error.write(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
+            },
             None => None,
         };
         if observed.is_some_and(|length| length > self.max_bytes) {
-            let error = AppError::new(
-                ErrorCode::PayloadTooLarge,
-                "request body exceeds the transport wire limit",
-            )
-            .with_wire_code("payload_too_large");
-            error.write(req, depot, res).await;
+            write_payload_too_large(req, depot, res).await;
             ctrl.skip_rest();
             return;
         }
@@ -115,9 +121,19 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
         if is_canonical_json_request(req) {
             let method = req.method().as_str().to_owned();
             let path = req.uri().path().to_owned();
-            let Ok(payload) = req.payload().await else {
-                ctrl.call_next(req, depot, res).await;
-                return;
+            let payload = match req.payload().await {
+                Ok(payload) => payload,
+                Err(salvo::http::ParseError::PayloadTooLarge) => {
+                    write_payload_too_large(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
+                Err(_) => {
+                    let error = AppError::json_invalid("unable to read the request body");
+                    error.write(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
             };
             let class = WireBodyClass::NonStreamingJsonOperation {
                 max_canonical_body_bytes: operation_canonical_body_limit(&method, &path),
@@ -157,9 +173,41 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
     }
 }
 
+async fn write_payload_too_large(req: &mut Request, depot: &mut Depot, res: &mut Response) {
+    let error = AppError::new(
+        ErrorCode::PayloadTooLarge,
+        "request body exceeds the transport wire limit",
+    )
+    .with_wire_code("payload_too_large");
+    error.write(req, depot, res).await;
+}
+
 #[cfg(test)]
 mod tests {
+    use salvo::http::StatusCode;
+    use salvo::http::request::SecureMaxSize;
+    use salvo::test::{ResponseExt, TestClient};
+
     use super::*;
+
+    #[handler]
+    async fn echo_raw_body(req: &mut Request, res: &mut Response) {
+        let payload = req
+            .payload()
+            .await
+            .expect("middleware cached an admitted request body")
+            .clone();
+        res.write_body(payload).expect("write echoed request body");
+    }
+
+    fn canonical_body_test_service(max_wire_bytes: usize) -> Service {
+        let router = Router::new()
+            .hoop(SecureMaxSize::new(max_wire_bytes))
+            .hoop(RequestWireSizeLimitMiddleware::new(max_wire_bytes))
+            .hoop(CanonicalJsonBodyLimitMiddleware)
+            .push(Router::with_path("_arkret/peer/signal").post(echo_raw_body));
+        Service::new(router)
+    }
 
     #[test]
     fn operation_registry_supplies_lower_signal_limits() {
@@ -206,5 +254,56 @@ mod tests {
             "/_arkret/self/events/{event_id}",
             "/_arkret/self/events"
         ));
+    }
+
+    #[tokio::test]
+    async fn body_without_content_length_is_cached_byte_identically() {
+        let body = r#"{"value":"unchanged"}"#.to_owned();
+        let mut response = TestClient::post("http://server/_arkret/peer/signal")
+            .add_header("content-type", "application/json", true)
+            .body(body.clone())
+            .send(&canonical_body_test_service(16 * 1024 * 1024))
+            .await;
+        assert_eq!(response.status_code, None);
+        assert_eq!(response.take_string().await.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn chunked_body_above_salvo_default_but_within_operation_limit_is_admitted() {
+        let body = format!("\"{}\"", "a".repeat(70 * 1024));
+        let mut response = TestClient::post("http://server/_arkret/peer/signal")
+            .add_header("content-type", "application/json", true)
+            .add_header("transfer-encoding", "chunked", true)
+            .body(body.clone())
+            .send(&canonical_body_test_service(16 * 1024 * 1024))
+            .await;
+        assert_eq!(response.status_code, None);
+        assert_eq!(response.take_string().await.unwrap(), body);
+    }
+
+    #[tokio::test]
+    async fn body_above_operation_limit_is_payload_too_large() {
+        let body = format!("\"{}\"", "a".repeat(1_048_576));
+        let mut response = TestClient::post("http://server/_arkret/peer/signal")
+            .add_header("content-type", "application/json", true)
+            .body(body)
+            .send(&canonical_body_test_service(16 * 1024 * 1024))
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
+        let response_body = response.take_string().await.unwrap();
+        assert!(response_body.contains("payload_too_large"));
+    }
+
+    #[tokio::test]
+    async fn declared_body_above_wire_limit_is_rejected_before_handler() {
+        let mut response = TestClient::post("http://server/_arkret/peer/signal")
+            .add_header("content-type", "application/json", true)
+            .add_header("content-length", "129", true)
+            .body("{}")
+            .send(&canonical_body_test_service(128))
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::PAYLOAD_TOO_LARGE));
+        let response_body = response.take_string().await.unwrap();
+        assert!(response_body.contains("payload_too_large"));
     }
 }

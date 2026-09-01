@@ -204,13 +204,17 @@ pub fn router_with_rate_limiter_and_request_size_config(
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
         // scalability-constraints.md 2.1.8 orders the Content-Encoding rejection (step 3)
-        // ahead of the Content-Length precheck (step 4), so this hoop precedes SecureMaxSize:
-        // an encoded body must fail 415 on the coding, not 413 on a size it never legally had.
+        // ahead of every body read: an encoded body must fail 415 on the coding,
+        // not 413 on a size it never legally had.
         .hoop(soland_http::content_encoding::RejectContentEncodingMiddleware)
+        // SecureMaxSize only installs the bound used by Salvo's body reader;
+        // it does not read the request. Install it before the wire-size hoop so
+        // a no-Content-Length body is counted against 16 MiB instead of
+        // Salvo's unrelated 64 KiB fallback.
+        .hoop(SecureMaxSize::new(max_request_size_bytes))
         .hoop(soland_http::canonical_body::RequestWireSizeLimitMiddleware::new(
             max_request_size_bytes,
         ))
-        .hoop(SecureMaxSize::new(max_request_size_bytes))
         // Step 5: after the 16 MiB transport precheck, apply the independent
         // 8 MiB JCS-canonical operation-body bound to valid JSON.
         .hoop(soland_http::canonical_body::CanonicalJsonBodyLimitMiddleware)

@@ -152,10 +152,22 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let audit_seal = arkret_wire::Seal::sign_single(
+    let (control_event_set_root, completeness_root) = soland_test_support::test_seal_roots(
+        state,
+        std::slice::from_ref(&basis_seal.id),
+        &[
+            (genesis.clone(), arkret_canonical::DigestSuite::Sha256),
+            (authorize.clone(), arkret_canonical::DigestSuite::Sha256),
+        ],
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let audit_seal = arkret_wire::Seal::sign_single_with_roots(
         pcr_realm_id.clone(),
         vec![basis_seal.id.clone()],
         audit_delta,
+        control_event_set_root,
+        completeness_root,
         basis_seal.state_root.clone(),
         arkret_identifiers::Hlc::new("0196419b0000-0001-a11ce001").unwrap(),
         arkret_canonical::DigestSuite::Sha256,

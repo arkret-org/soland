@@ -283,7 +283,8 @@ async fn principal_method_history_evidence(
 }
 
 fn canonical_document_digest(document: &DidDocument) -> Result<Hash, AppError> {
-    canonical_digest(document)
+    arkret_identity::document_canonical_digest(document)
+        .map_err(|error| AppError::internal(format!("DID document digest failed: {error}")))
 }
 
 fn canonical_digest(value: &impl serde::Serialize) -> Result<Hash, AppError> {

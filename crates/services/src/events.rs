@@ -1040,7 +1040,7 @@ pub trait EventReadPort: Send + Sync {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<()>;
+    ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome>;
     async fn store_direct_conversation_founding_batch(
         &self,
         records: Vec<AcceptedEvent>,
@@ -1369,7 +1369,7 @@ impl EventQueryService {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<FederationDeliveryRecord>,
-    ) -> ServiceResult<()> {
+    ) -> ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
         self.events
             .store_realm_bootstrap_batch(
                 records,

@@ -4,7 +4,7 @@
 //! It is used only by the development-only conformance injection surface and
 //! integration-test support. Production protocol admission never calls it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, Did, DidCoreId, Hash, Hlc, RealmId};
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -89,6 +89,8 @@ pub struct ConformanceGrant {
 pub struct ConformanceRealmBasis {
     /// The closed authorization basis Seal cited by Events.
     pub seal: Seal,
+    /// Exact listed-set descriptors committed by the fixture Seal.
+    pub listed_control_events: Vec<arkret_state::ListedControlEvent>,
     pub ops: Vec<(CellRef, IssuedOp)>,
     /// Realm genesis value covered by `ops`. The development adapter mirrors
     /// this value into the application projection cache after the sealed cell
@@ -441,10 +443,14 @@ pub fn build_realm_basis(
         delta.push(notary_move);
     }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let seal = Seal::sign_single(
+    let (control_event_set_root, completeness_root, listed_control_events) =
+        fixture_seal_roots(&issuer, &delta)?;
+    let seal = Seal::sign_single_with_roots(
         realm.clone(),
         Vec::new(),
         delta,
+        control_event_set_root,
+        completeness_root,
         sealed_state_root(&realm, &ops)?,
         Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
         arkret_canonical::DigestSuite::Sha256,
@@ -454,11 +460,37 @@ pub fn build_realm_basis(
 
     Ok(ConformanceRealmBasis {
         seal,
+        listed_control_events,
         ops,
         genesis,
         reducer_profile,
         grants,
     })
+}
+
+fn fixture_seal_roots(
+    issuer: &arkret_wire::ActorId,
+    covered: &[Hash],
+) -> Result<(Hash, Hash, Vec<arkret_state::ListedControlEvent>), String> {
+    let covered_set = covered.iter().cloned().collect::<BTreeSet<_>>();
+    let control_event_set_root =
+        arkret_state::control_event_set_root(&covered_set, arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| error.to_string())?;
+    let listed = covered
+        .iter()
+        .enumerate()
+        .map(|(index, event_digest)| arkret_state::ListedControlEvent {
+            actor_id: issuer.clone(),
+            actor_seq: u64::try_from(index + 1).expect("fixture delta is bounded"),
+            event_digest: event_digest.clone(),
+        })
+        .collect::<Vec<_>>();
+    let completeness_root = arkret_state::control_event_completeness_root_from_listed(
+        &listed,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok((control_event_set_root, completeness_root, listed))
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {

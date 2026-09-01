@@ -70,6 +70,96 @@ pub(super) fn agent_record_is_materialized(record: &AgentPrincipalRecord) -> boo
         .unwrap_or(false)
 }
 
+pub(super) fn agent_runtime_scope_error(
+    reason: arkret_wire::ReasonCode,
+    message: impl Into<String>,
+) -> AppError {
+    AppError::new(ErrorCode::FailedPrecondition, message)
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code(reason.as_str())
+}
+
+fn validate_registered_agent_scope_actions(
+    scope: &AgentKeyScope,
+    layer: arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer,
+) -> Result<(), AppError> {
+    if let Some(action) = scope.actions.iter().find(|action| {
+        arkret_wire::ServiceOperationId::from_wire(action).is_none()
+            && arkret_schema::capability_action(action).is_none()
+    }) {
+        let reason = match layer {
+            arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer::Provision => {
+                arkret_wire::ReasonCode::AgentProvisionScopeMigrationRequired
+            }
+            arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer::KeyAuthorization => {
+                arkret_wire::ReasonCode::AgentKeyScopeReauthorizationRequired
+            }
+            arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer::Session => {
+                arkret_wire::ReasonCode::AgentSessionScopeRefreshRequired
+            }
+        };
+        return Err(agent_runtime_scope_error(
+            reason,
+            format!("Agent {layer:?} scope contains unregistered action {action}"),
+        ));
+    }
+    Ok(())
+}
+
+fn map_agent_runtime_deficiency(
+    deficiency: arkret_schema::agent_runtime_scope::AgentRuntimeScopeDeficiency,
+) -> AppError {
+    agent_runtime_scope_error(
+        deficiency.reason,
+        format!(
+            "Agent {:?} scope omits mandatory runtime operations: {}",
+            deficiency.layer,
+            deficiency.missing_operations.join(", ")
+        ),
+    )
+}
+
+/// Validate a proposed immutable Agent provision ceiling before reservation.
+pub(super) fn validate_agent_runtime_provision_scope(
+    provision_scope: &AgentKeyScope,
+) -> Result<(), AppError> {
+    use arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer;
+
+    validate_registered_agent_scope_actions(provision_scope, AgentRuntimeScopeLayer::Provision)?;
+    let deficiency = arkret_schema::agent_runtime_scope::assess_agent_runtime_provision_scope(
+        &provision_scope.actions,
+    )
+    .map_err(|_| {
+        agent_runtime_scope_error(
+            arkret_wire::ReasonCode::AgentProvisionScopeMigrationRequired,
+            "generated Agent runtime provision registry is inconsistent",
+        )
+    })?;
+    deficiency.map_or(Ok(()), |value| Err(map_agent_runtime_deficiency(value)))
+}
+
+/// Validate a proposed key ceiling against the immutable provision selection.
+pub(super) fn validate_agent_runtime_key_scopes(
+    provision_scope: &AgentKeyScope,
+    key_scope: &AgentKeyScope,
+) -> Result<(), AppError> {
+    use arkret_schema::agent_runtime_scope::AgentRuntimeScopeLayer;
+
+    validate_agent_runtime_provision_scope(provision_scope)?;
+    validate_registered_agent_scope_actions(key_scope, AgentRuntimeScopeLayer::KeyAuthorization)?;
+    let deficiency = arkret_schema::agent_runtime_scope::assess_agent_runtime_key_scopes(
+        &provision_scope.actions,
+        &key_scope.actions,
+    )
+    .map_err(|_| {
+        agent_runtime_scope_error(
+            arkret_wire::ReasonCode::AgentKeyScopeReauthorizationRequired,
+            "generated Agent runtime key registry is inconsistent",
+        )
+    })?;
+    deficiency.map_or(Ok(()), |value| Err(map_agent_runtime_deficiency(value)))
+}
+
 pub(super) async fn require_agent_controller(
     state: &AppState,
     session: &SessionRecord,
@@ -312,6 +402,61 @@ mod requested_scope_tests {
 
     fn resource(value: Value) -> arkret_wire::resource_selector::WireResourceSelector {
         serde_json::from_value(value).unwrap()
+    }
+
+    fn scope(actions: &[&str]) -> AgentKeyScope {
+        AgentKeyScope {
+            actions: actions.iter().map(|action| (*action).to_owned()).collect(),
+            resources: Vec::new(),
+            constraints: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn runtime_scope_assessment_uses_registered_layer_reasons() {
+        let interactive = [
+            "ak.self.events.stream.subscribe.v1",
+            "ak.self.events.read.scan.v1",
+            "ak.self.events.read.frontier.v1",
+            "ak.self.seals.read.frontier.v1",
+            "ak.self.events.command.submit.v1",
+        ];
+        let provision_without_seal = scope(&[
+            interactive[0],
+            interactive[1],
+            interactive[2],
+            interactive[4],
+        ]);
+        let error = validate_agent_runtime_provision_scope(&provision_without_seal).unwrap_err();
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::AGENT_PROVISION_SCOPE_MIGRATION_REQUIRED)
+        );
+
+        let provision = scope(&interactive);
+        let key_without_seal = scope(&[
+            interactive[0],
+            interactive[1],
+            interactive[2],
+            interactive[4],
+        ]);
+        let error = validate_agent_runtime_key_scopes(&provision, &key_without_seal).unwrap_err();
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::AGENT_KEY_SCOPE_REAUTHORIZATION_REQUIRED)
+        );
+    }
+
+    #[test]
+    fn unknown_scope_action_fails_closed_before_admission() {
+        let error = validate_agent_runtime_provision_scope(&scope(&[
+            "ak.self.events.read.future_unregistered.v1",
+        ]))
+        .unwrap_err();
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::AGENT_PROVISION_SCOPE_MIGRATION_REQUIRED)
+        );
     }
 
     #[test]

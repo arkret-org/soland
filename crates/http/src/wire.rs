@@ -874,9 +874,6 @@ pub fn describe(
             }))
             .expect("server limits must be a JSON object"),
         },
-        frontier: Vec::new(),
-        snapshot_frontier: Vec::new(),
-        last_materialized_at: None,
         extensions: Default::default(),
     }
 }

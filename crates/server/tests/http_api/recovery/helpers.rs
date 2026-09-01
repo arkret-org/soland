@@ -997,7 +997,6 @@ pub(crate) async fn post_recovery_policy(
             .expect("recovery policy Seal frontier");
         assert_eq!(leaves.len(), 1, "fixture recovery frontier must be linear");
         let mut pending = leaves.clone();
-        let mut covered = std::collections::BTreeSet::new();
         let mut predecessor_state_root = None;
         while let Some(seal_id) = pending.pop() {
             let seal = state
@@ -1007,7 +1006,6 @@ pub(crate) async fn post_recovery_policy(
             if predecessor_state_root.is_none() {
                 predecessor_state_root = Some(seal.state_root.clone());
             }
-            covered.extend(seal.delta);
             pending.extend(seal.predecessor_refs);
         }
         let event_digest = Hash::new(
@@ -1016,27 +1014,30 @@ pub(crate) async fn post_recovery_policy(
                 .unwrap(),
         )
         .unwrap();
-        covered.insert(event_digest.clone());
-        let control_root =
-            arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
-                .expect("recovery policy control root");
+        let (control_root, completeness_root) = soland_test_support::test_seal_roots(
+            &state,
+            &leaves,
+            &[(event.clone(), arkret_canonical::DigestSuite::Sha256)],
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("recovery policy Seal roots");
         let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
             state.notary_signing_key().to_bytes(),
             state.service_did(),
             state.service_verification_method("notary-key").unwrap(),
         );
-        let successor = arkret_wire::Seal::sign_single_kind_with_control_root(
+        let successor = arkret_wire::Seal::sign_single_with_roots(
             realm,
             leaves,
             vec![event_digest],
             control_root,
+            completeness_root,
             predecessor_state_root.expect("recovery policy predecessor state root"),
             arkret_identifiers::Hlc::new(format!(
                 "{:012x}-{logical:04x}-a11ce102",
                 chrono::Utc::now().timestamp_millis()
             ))
             .unwrap(),
-            arkret_wire::SealKind::Normal,
             arkret_canonical::DigestSuite::Sha256,
             &seal_signer,
         )

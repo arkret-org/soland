@@ -802,9 +802,11 @@ impl AppState {
                     && stored.did_document.assertion_method.contains(&method.id)
             })
             .ok_or_else(|| "runtime signer is not a current service assertion method".to_owned())?;
-        let document_bytes = arkret_canonical::canonical_json_bytes(&stored.did_document)
-            .map_err(|error| error.to_string())?;
-        let document_digest = Hash::new(arkret_canonical::sha256_digest(document_bytes))
+        let normalized_document: arkret_models_identity::DidDocument = serde_json::from_value(
+            serde_json::to_value(&stored.did_document).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+        let document_digest = arkret_identity::document_canonical_digest(&normalized_document)
             .map_err(|error| error.to_string())?;
         let assertion_method = arkret_wire::DidUrl::new(assertion_method.id.clone())
             .map_err(|error| error.to_string())?;

@@ -47,7 +47,7 @@ fn member_cell_for_actor(actor: &ActorId) -> Result<arkret_identifiers::CellRef,
         .map_err(|error| seal_admission_error(format!("member cell invalid: {error}")))
 }
 
-async fn verified_availability_dependency_writes(
+pub(crate) async fn verified_availability_dependency_writes(
     state: &AppState,
     seal: &Seal,
 ) -> Result<Vec<soland_storage::GovernanceDependencyWrite>, AppError> {
@@ -116,21 +116,9 @@ async fn verified_availability_dependency_writes(
             .or_insert(evidence_dependency);
     }
     let dependencies = dependencies_by_key.into_values().collect::<Vec<_>>();
-    let mut covered = state
-        .projections()
-        .predecessor_covered_events(&seal.predecessor_refs)
-        .map_err(app_error_from_seal_reject)?;
-    covered.extend(seal.delta.iter().cloned());
-    let mut events = BTreeMap::new();
-    for digest in covered {
-        let event = crate::notary::durable_control_event_by_digest(state, &digest)
-            .await
-            .map_err(|error| seal_admission_error(error.to_string()))?;
-        events.insert(digest, event);
-    }
     let (replay_context, events) = state
         .projections()
-        .seal_dependency_replay_context_with_events(seal, events)
+        .seal_dependency_replay_context(seal)
         .map_err(app_error_from_seal_reject)?;
     arkret::verify_seal_availability_dependencies_default(
         seal,
@@ -1567,10 +1555,46 @@ pub(crate) async fn apply_inbound_seal(
     } else {
         arkret_wire::event_envelope::EventSubmitContext::Standard
     };
-    state
+    let expected_store_frontier = state
         .projections()
-        .apply_seal_in_context(seal, verifier, context)
-        .map_err(app_error_from_seal_reject)
+        .realm_seal_leaves(&seal.realm_id)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("Seal frontier unavailable before atomic admission: {error}"),
+            )
+        })?;
+    let prepared = state
+        .projections()
+        .prepare_seal_in_context(seal, verifier, context)
+        .map_err(app_error_from_seal_reject)?;
+    let governance_dependencies = verified_availability_dependency_writes(state, seal).await?;
+    let digest_suite = state
+        .projections()
+        .seal_digest_suites(seal)
+        .map_err(app_error_from_seal_reject)?
+        .seal_digest_suite;
+    match state.projections().commit_event_seal_if_frontier(
+        seal,
+        digest_suite,
+        &expected_store_frontier,
+        &prepared.new_ops,
+        &prepared.covered_event_digests,
+        &BTreeSet::new(),
+        &governance_dependencies,
+    ) {
+        Ok(true) => Ok(prepared.effect),
+        Ok(false) => Err(AppError::new(
+            ErrorCode::FrontierUnavailable,
+            "Seal frontier changed during atomic admission".to_owned(),
+        )
+        .with_status(StatusCode::CONFLICT)),
+        Err(StoreError::Conflict(error)) => Err(seal_admission_error(error)),
+        Err(error) => Err(AppError::new(
+            ErrorCode::InternalError,
+            format!("commit inbound Seal atomically: {error}"),
+        )),
+    }
 }
 
 async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), AppError> {

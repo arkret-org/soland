@@ -1,3 +1,7 @@
+use soland_storage::{
+    MultisigLeaseCommand, MultisigLeaseDecision, MultisigLeaseState, decide_multisig_lease,
+};
+
 use super::{
     Arc, BTreeMap, MultisigPendingRecord, MultisigPendingStore, Mutex, PersistenceError,
     PersistenceResult, Value, async_trait,
@@ -85,29 +89,48 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         let Some(record) = data.get_mut(seal_id) else {
             return Ok((false, 0));
         };
-        let claimable = match (&record.claimed_by_node_id, record.claimed_until) {
-            (None, _) => true,
-            (Some(_), None) => true,
-            (Some(_), Some(deadline)) => deadline <= now,
-        };
-        if !claimable {
-            return Ok((false, record.claim_seq));
+        let state = MultisigLeaseState::from(&*record);
+        let decision = decide_multisig_lease(
+            Some(&state),
+            &MultisigLeaseCommand::TryClaim {
+                node_id: node_id.to_owned(),
+                now,
+                claimed_until,
+            },
+        )?;
+        match decision {
+            MultisigLeaseDecision::Update(next) => {
+                apply_lease_state(record, &next);
+                Ok((true, next.claim_seq))
+            }
+            MultisigLeaseDecision::Rejected { current_claim_seq } => Ok((false, current_claim_seq)),
+            MultisigLeaseDecision::Missing | MultisigLeaseDecision::Delete => Err(
+                PersistenceError::Internal("multisig claim decision is inconsistent".to_owned()),
+            ),
         }
-        record.claimed_by_node_id = Some(node_id.to_owned());
-        record.claimed_until = Some(claimed_until);
-        record.claim_seq += 1;
-        Ok((true, record.claim_seq))
     }
 
     async fn release_claim(&self, seal_id: &str, node_id: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock();
-        if let Some(record) = data.get_mut(seal_id)
-            && record.claimed_by_node_id.as_deref() == Some(node_id)
-        {
-            record.claimed_by_node_id = None;
-            record.claimed_until = None;
+        let Some(record) = data.get_mut(seal_id) else {
+            return Ok(());
+        };
+        let state = MultisigLeaseState::from(&*record);
+        match decide_multisig_lease(
+            Some(&state),
+            &MultisigLeaseCommand::Release {
+                node_id: node_id.to_owned(),
+            },
+        )? {
+            MultisigLeaseDecision::Update(next) => {
+                apply_lease_state(record, &next);
+                Ok(())
+            }
+            MultisigLeaseDecision::Rejected { .. } => Ok(()),
+            MultisigLeaseDecision::Missing | MultisigLeaseDecision::Delete => Err(
+                PersistenceError::Internal("multisig release decision is inconsistent".to_owned()),
+            ),
         }
-        Ok(())
     }
 
     async fn delete_with_fence(
@@ -117,14 +140,23 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         claim_seq: i64,
     ) -> PersistenceResult<bool> {
         let mut data = self.data.lock();
-        let matches = data
-            .get(seal_id)
-            .map(|r| r.claimed_by_node_id.as_deref() == Some(node_id) && r.claim_seq == claim_seq)
-            .unwrap_or(false);
-        if !matches {
+        let Some(record) = data.get(seal_id) else {
             return Ok(false);
+        };
+        let state = MultisigLeaseState::from(record);
+        match decide_multisig_lease(
+            Some(&state),
+            &MultisigLeaseCommand::DeleteWithFence {
+                node_id: node_id.to_owned(),
+                claim_seq,
+            },
+        )? {
+            MultisigLeaseDecision::Delete => Ok(data.remove(seal_id).is_some()),
+            MultisigLeaseDecision::Rejected { .. } => Ok(false),
+            MultisigLeaseDecision::Missing | MultisigLeaseDecision::Update(_) => Err(
+                PersistenceError::Internal("multisig delete decision is inconsistent".to_owned()),
+            ),
         }
-        Ok(data.remove(seal_id).is_some())
     }
 
     async fn renew_claim(
@@ -138,13 +170,47 @@ impl MultisigPendingStore for MemoryMultisigPendingStore {
         let Some(record) = data.get_mut(seal_id) else {
             return Ok(false);
         };
-        if record.claimed_by_node_id.as_deref() != Some(node_id) {
-            return Ok(false);
+        let state = MultisigLeaseState::from(&*record);
+        match decide_multisig_lease(
+            Some(&state),
+            &MultisigLeaseCommand::RenewWithFence {
+                node_id: node_id.to_owned(),
+                claim_seq,
+                claimed_until: new_claimed_until,
+            },
+        )? {
+            MultisigLeaseDecision::Update(next) => {
+                apply_lease_state(record, &next);
+                Ok(true)
+            }
+            MultisigLeaseDecision::Rejected { .. } => Ok(false),
+            MultisigLeaseDecision::Missing | MultisigLeaseDecision::Delete => Err(
+                PersistenceError::Internal("multisig renew decision is inconsistent".to_owned()),
+            ),
         }
-        if record.claim_seq != claim_seq {
-            return Ok(false);
-        }
-        record.claimed_until = Some(new_claimed_until);
-        Ok(true)
+    }
+}
+
+fn apply_lease_state(record: &mut MultisigPendingRecord, state: &MultisigLeaseState) {
+    record
+        .claimed_by_node_id
+        .clone_from(&state.claimed_by_node_id);
+    record.claimed_until = state.claimed_until;
+    record.claim_seq = state.claim_seq;
+}
+
+#[cfg(test)]
+mod tests {
+    use soland_storage::transition_contract_tests::assert_multisig_lease_contract;
+
+    use super::MemoryMultisigPendingStore;
+
+    #[tokio::test]
+    async fn memory_adapter_satisfies_shared_multisig_lease_contract() {
+        assert_multisig_lease_contract(
+            &MemoryMultisigPendingStore::new(),
+            "memory-multisig-contract",
+        )
+        .await;
     }
 }

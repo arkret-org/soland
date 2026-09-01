@@ -19,6 +19,16 @@ pub struct MembershipCompensationEvidenceRecord {
     pub evidence: arkret_wire::MembershipCompensationSubmissionEvidence,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RealmBootstrapCommitOutcome {
+    /// This transaction inserted the complete unit.
+    Committed,
+    /// Every Event identity already held the same canonical bytes. Storage
+    /// still verifies the Ack, governance-dependency and outbox inputs
+    /// idempotently before returning the original ordered identities.
+    ExactRetry { event_ids: Vec<String> },
+}
+
 /// Trait for message storage operations.
 #[async_trait]
 pub trait MessageStore: Send + Sync {
@@ -66,13 +76,16 @@ pub trait EventStore: Send + Sync {
     /// MUST insert every canonical Event **and every federation outbox row** in
     /// one transaction or insert none: an accepted Event whose delivery intent
     /// did not land is exactly the silent-loss window this unit exists to close.
+    /// A batch with all Events already present byte-identically returns
+    /// [`RealmBootstrapCommitOutcome::ExactRetry`]; a partial replay is a
+    /// conflict and MUST NOT fill in the missing suffix.
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<crate::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
-    ) -> PersistenceResult<()>;
+    ) -> PersistenceResult<RealmBootstrapCommitOutcome>;
     /// Commit the accepted Direct Conversation founding unit, its immutable slot, receipt bytes,
     /// Control Proposal Acks and peer delivery outbox in one transaction.
     async fn put_direct_conversation_founding_batch_atomic(

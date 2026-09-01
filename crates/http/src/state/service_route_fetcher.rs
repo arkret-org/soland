@@ -309,11 +309,8 @@ fn validate_service_describe(
 }
 
 fn canonical_document_digest(document: &DidDocument) -> ServiceResult<Hash> {
-    Hash::new(
-        arkret_canonical::canonical_sha256(document)
-            .map_err(|error| ServiceError::Internal(error.to_string()))?,
-    )
-    .map_err(|error| ServiceError::Internal(error.to_string()))
+    arkret_identity::document_canonical_digest(document)
+        .map_err(|error| ServiceError::Internal(error.to_string()))
 }
 
 fn validate_route_binding(

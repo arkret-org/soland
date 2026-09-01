@@ -148,6 +148,34 @@ fn application_frontier_exchange(
     }
 }
 
+fn application_frontier_reduction_checkpoint(
+    checkpoint: soland_storage::FederationFrontierReductionCheckpoint,
+) -> crate::federation::FederationFrontierReductionCheckpoint {
+    crate::federation::FederationFrontierReductionCheckpoint {
+        realm_id: checkpoint.realm_id,
+        peer_id: checkpoint.peer_id,
+        remote_snapshot_digest: checkpoint.remote_snapshot_digest,
+        actor_set_digest: checkpoint.actor_set_digest,
+        actor_id: checkpoint.actor_id,
+        cursor: checkpoint.cursor,
+        updated_at: checkpoint.updated_at,
+    }
+}
+
+fn persistence_frontier_reduction_checkpoint(
+    checkpoint: &crate::federation::FederationFrontierReductionCheckpoint,
+) -> soland_storage::FederationFrontierReductionCheckpoint {
+    soland_storage::FederationFrontierReductionCheckpoint {
+        realm_id: checkpoint.realm_id.clone(),
+        peer_id: checkpoint.peer_id.clone(),
+        remote_snapshot_digest: checkpoint.remote_snapshot_digest.clone(),
+        actor_set_digest: checkpoint.actor_set_digest.clone(),
+        actor_id: checkpoint.actor_id.clone(),
+        cursor: checkpoint.cursor.clone(),
+        updated_at: checkpoint.updated_at,
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
     async fn enqueue(
@@ -456,6 +484,40 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
                 .record_failure(realm_id, peer_id, reason, observed_at)
                 .await?,
         ))
+    }
+    async fn frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &arkret_identifiers::DidCoreId,
+    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierReductionCheckpoint>>
+    {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .reduction_checkpoint(realm_id, peer_id)
+            .await?
+            .map(application_frontier_reduction_checkpoint))
+    }
+    async fn put_frontier_reduction_checkpoint(
+        &self,
+        checkpoint: &crate::federation::FederationFrontierReductionCheckpoint,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .federation_frontier_exchange()
+            .put_reduction_checkpoint(&persistence_frontier_reduction_checkpoint(checkpoint))
+            .await?;
+        Ok(())
+    }
+    async fn clear_frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &arkret_identifiers::DidCoreId,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .federation_frontier_exchange()
+            .clear_reduction_checkpoint(realm_id, peer_id)
+            .await?;
+        Ok(())
     }
 }
 

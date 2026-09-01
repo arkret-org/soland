@@ -262,6 +262,8 @@ pub(super) async fn seed_agent_grant_session(
             "actions": [
                 "ak.self.events.stream.subscribe.v1",
                 "ak.self.events.read.scan.v1",
+                "ak.self.events.read.frontier.v1",
+                "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1"
             ],
             "resources": [
@@ -434,6 +436,8 @@ pub(super) async fn seed_agent_grant_session(
                 "actions": [
                     "ak.self.events.stream.subscribe.v1",
                     "ak.self.events.read.scan.v1",
+                    "ak.self.events.read.frontier.v1",
+                    "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1"
                 ],
                 "resources": [
@@ -1738,6 +1742,56 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
     assert_eq!(body["status"], "accepted");
     assert_eq!(body["accepted"][0], event["event_id"]);
     assert_eq!(body["accepted"][6], member_state["event_id"]);
+
+    let mut replay_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "events": initial_submissions([
+                event.clone(),
+                profile.clone(),
+                policy.clone(),
+                join_rule.clone(),
+                history_access.clone(),
+                discovery.clone(),
+                member_state.clone()
+            ])
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let replay_status = replay_response
+        .status_code
+        .expect("Realm bootstrap replay status");
+    let replay_body: Value = replay_response
+        .take_json()
+        .await
+        .expect("Realm bootstrap replay body");
+    assert!(
+        matches!(replay_status, StatusCode::OK | StatusCode::CREATED),
+        "byte-identical Realm bootstrap retry must not surface realm_already_exists/500: \
+         {replay_status} {replay_body}",
+    );
+    assert_eq!(replay_body["status"], "duplicate");
+    assert_eq!(
+        replay_body["duplicate"],
+        serde_json::json!(
+            bootstrap_unit
+                .iter()
+                .map(|event| event.event_id.to_string())
+                .collect::<Vec<_>>()
+        ),
+        "the duplicate receipt must identify the original accepted unit",
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .events()
+            .realm_events_newest_first(&realm_id)
+            .await
+            .unwrap()
+            .len(),
+        bootstrap_unit.len(),
+        "byte-identical retry must not append another bootstrap unit",
+    );
     assert!(
         state
             .test_projection()

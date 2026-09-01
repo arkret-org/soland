@@ -198,6 +198,15 @@ pub(super) async fn provision_agent(
     let session = aa.authenticated_session(state, req).await?;
     let controller_id = session.actor.clone();
     let body = body.into_inner();
+    let requested_scope = match &body {
+        AgentProvisionRequestBody::Prepare {
+            requested_scope, ..
+        }
+        | AgentProvisionRequestBody::Commit {
+            requested_scope, ..
+        } => requested_scope,
+    };
+    validate_agent_runtime_provision_scope(requested_scope)?;
     let request_hash = agent_provision_request_hash(&body)?;
     let now_utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),

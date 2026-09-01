@@ -841,13 +841,6 @@ fn device_message_envelope_from_record(
         .get("expires_at")
         .and_then(|value| serde_json::from_value(value.clone()).ok())
         .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
-    let device_proof = match message.content.get("device_proof") {
-        Some(Value::Object(object)) => {
-            Some(serde_json::from_value(Value::Object(object.clone())).ok()?)
-        }
-        Some(_) => return None,
-        None => None,
-    };
     let unsigned = match message.content.get("unsigned") {
         Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
         Some(_) => return None,
@@ -884,7 +877,6 @@ fn device_message_envelope_from_record(
         sent_at: message.created_at,
         expires_at,
         content,
-        device_proof,
         unsigned,
     })
 }

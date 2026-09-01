@@ -509,7 +509,7 @@ impl EventStore for MemoryEventStore {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
-    ) -> PersistenceResult<()> {
+    ) -> PersistenceResult<soland_storage::RealmBootstrapCommitOutcome> {
         let mut data = self.data.lock();
         let mut quarantined = self.quarantined.lock();
         let mut variants = self.collision_variants.lock();
@@ -531,6 +531,22 @@ impl EventStore for MemoryEventStore {
             .iter()
             .map(|record| record.event_id.clone())
             .collect::<Vec<_>>();
+        let replay_count = records
+            .iter()
+            .filter(|record| {
+                data.get(&record.event_id)
+                    .is_some_and(|existing| existing.canonical_bytes == record.canonical_bytes)
+            })
+            .count();
+        let outcome = if replay_count == 0 {
+            soland_storage::RealmBootstrapCommitOutcome::Committed
+        } else if replay_count == records.len() {
+            soland_storage::RealmBootstrapCommitOutcome::ExactRetry {
+                event_ids: event_ids.clone(),
+            }
+        } else {
+            return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+        };
         let mut staged = data.clone();
         let mut staged_control_proposal_acks = stored_control_proposal_acks.clone();
         let mut staged_outbox = federation_outbox.clone();
@@ -558,7 +574,7 @@ impl EventStore for MemoryEventStore {
                 .or_default()
                 .extend(outbox_ids.iter().cloned());
         }
-        Ok(())
+        Ok(outcome)
     }
 
     async fn put_direct_conversation_founding_batch_atomic(

@@ -563,6 +563,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    federation_frontier_reduction_checkpoint (realm_id, peer_id) {
+        realm_id -> Text,
+        peer_id -> Text,
+        remote_snapshot_digest -> Text,
+        actor_set_digest -> Text,
+        actor_id -> Text,
+        cursor -> Nullable<Text>,
+        updated_at -> Int8,
+    }
+}
+
+diesel::table! {
     federation_operations (id) {
         id -> Uuid,
         realm_id -> Text,
@@ -1867,6 +1879,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     event_collision_variants,
     event_federation_outbox,
     federation_frontier_exchange,
+    federation_frontier_reduction_checkpoint,
     federation_operations,
     federation_outbox,
     federation_outbox_dead_letter,

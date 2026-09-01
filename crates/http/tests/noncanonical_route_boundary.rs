@@ -73,10 +73,7 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
         .expect("inventory metadata is required");
     assert_eq!(metadata.0, "soland.noncanonical_route_inventory.v1");
     assert_eq!(metadata.1, "closed");
-    assert_eq!(
-        metadata.2,
-        "arkret-work/review/spec-done/2026-07-27-12-soland-noncanonical-route-boundary-audit.md"
-    );
+    assert_eq!(metadata.2, "arkret-work/review_code.md");
     assert_eq!(metadata.3, "soland-http live Salvo router/OpenAPI");
     assert_eq!(metadata.4, 127);
     let mut inventoried = BTreeMap::new();

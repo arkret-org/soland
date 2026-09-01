@@ -22,19 +22,18 @@
 //!   decided → closed, with `close` also reachable from submitted / under_review (appellant
 //!   withdrawal or an authorized close service). content-moderation.md §5.5.
 //!
-//! Reducer-enforced §5.5.2 constraints (surfaced at ingest by the
-//! `preflight_moderation_projection_reject` snapshot run, mirroring the MLS
-//! preflight):
+//! Reducer-enforced §5.5.2 constraints (surfaced at ingest by folding the
+//! ordered candidate aggregate over moderation facts rebuilt from the durable
+//! accepted Event log):
 //! - **separation of duties** — an appeal `review` / `decision` `reviewer` MUST NOT equal the
 //!   issuer of the appealed `decision_ref` decision (looked up from the moderation_state cell).
 //!   Violations reject with `appeal_self_review_forbidden`.
-//! - **overturn ↔ lift atomic** — a `verdict=overturn` decision requires the moderation_state cell
-//!   for `decision_ref` to already show the decision lifted. With ordered-submit-batch semantics
-//!   the paired `ak.moderation.decision.lift` is projected before the appeal decision, so the cell
-//!   already reflects it; otherwise `appeal_overturn_missing_lift`.
-//! - **modify ↔ new decision atomic** — a `verdict=modify` decision requires `modify_decision_ref`
-//!   to name a decision already present (and not lifted) in the moderation_state cell; otherwise
-//!   `appeal_modify_missing_decision`.
+//! - **overturn ↔ lift atomic** — the aggregate validator requires the exact appealed decision's
+//!   lift in the same ordered batch; the fold then requires that lift to precede the appeal
+//!   decision, otherwise `appeal_overturn_missing_lift`.
+//! - **modify ↔ lift ↔ new decision atomic** — the aggregate validator additionally binds
+//!   `modify_decision_ref` to a same-batch replacement for the original target; the fold requires
+//!   both lift and replacement to precede the appeal decision.
 //!
 //! `close` is a manual / authorized action — the reducer projects no auto-
 //! close timer, cool-off window, or timer-service check (content-moderation.md
@@ -679,6 +678,103 @@ impl ProjectionState {
         self.moderation_appeal_submissions
             .get(appeal_id)
             .map(|submit| submit.decision_ref.to_string())
+    }
+
+    fn moderation_decision_target_ref(&self, decision_id: &str) -> Option<String> {
+        self.moderation_items_for_decision(decision_id)
+            .iter()
+            .find_map(|item| {
+                item.get("value")
+                    .unwrap_or(item)
+                    .get("target_ref")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
+            .or_else(|| {
+                self.moderation_decisions
+                    .get(decision_id)
+                    .and_then(|decision| serde_json::to_value(decision).ok())
+                    .and_then(|decision| {
+                        decision
+                            .get("target_ref")
+                            .and_then(Value::as_str)
+                            .map(ToOwned::to_owned)
+                    })
+            })
+    }
+
+    /// Validate the closed sibling set required by moderation appeal verdicts.
+    ///
+    /// This check deliberately inspects the submitted aggregate rather than
+    /// inferring pairing from the process-local arrival order. `self` is the
+    /// projection rebuilt from durably accepted moderation facts immediately
+    /// before the aggregate; the caller still runs the ordinary ordered
+    /// reducer fold after this shape check.
+    pub fn validate_moderation_atomic_pairing(
+        &self,
+        operations: &[Operation],
+    ) -> Result<(), &'static str> {
+        for operation in operations {
+            if operation.event_kind != arkret_wire::EventKind::ModerationAppealDecision {
+                continue;
+            }
+            let verdict = appeal_verdict(operation)?;
+            if verdict == AppealDecision::Uphold {
+                continue;
+            }
+            let appeal_id =
+                payload_str(operation, "appeal_id").ok_or("moderation_appeal_id_missing")?;
+            let original_decision_ref =
+                self.moderation_appeal_decision_ref(&appeal_id)
+                    .ok_or(match verdict {
+                        AppealDecision::Overturn => "appeal_overturn_missing_lift",
+                        AppealDecision::Modify => "appeal_modify_missing_lift",
+                        AppealDecision::Uphold => unreachable!(),
+                    })?;
+            let original_target_ref = self
+                .moderation_decision_target_ref(&original_decision_ref)
+                .ok_or(match verdict {
+                    AppealDecision::Overturn => "appeal_overturn_missing_lift",
+                    AppealDecision::Modify => "appeal_modify_missing_lift",
+                    AppealDecision::Uphold => unreachable!(),
+                })?;
+
+            let matching_lifts = operations
+                .iter()
+                .filter(|candidate| {
+                    candidate.event_kind == arkret_wire::EventKind::ModerationDecisionLift
+                        && payload_str(candidate, "decision_ref").as_deref()
+                            == Some(original_decision_ref.as_str())
+                        && payload_str(candidate, "target_ref").as_deref()
+                            == Some(original_target_ref.as_str())
+                })
+                .count();
+            if matching_lifts != 1 {
+                return Err(match verdict {
+                    AppealDecision::Overturn => "appeal_overturn_missing_lift",
+                    AppealDecision::Modify => "appeal_modify_missing_lift",
+                    AppealDecision::Uphold => unreachable!(),
+                });
+            }
+
+            if verdict == AppealDecision::Modify {
+                let replacement_ref = payload_str(operation, "modify_decision_ref")
+                    .ok_or("appeal_modify_missing_decision")?;
+                let matching_replacements = operations
+                    .iter()
+                    .filter(|candidate| {
+                        candidate.event_kind == arkret_wire::EventKind::ModerationDecision
+                            && candidate.context.event_id.as_str() == replacement_ref
+                            && payload_str(candidate, "target_ref").as_deref()
+                                == Some(original_target_ref.as_str())
+                    })
+                    .count();
+                if matching_replacements != 1 {
+                    return Err("appeal_modify_missing_decision");
+                }
+            }
+        }
+        Ok(())
     }
 
     /// separation-of-duties: the review/decision `reviewer_id` MUST NOT equal the

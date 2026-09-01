@@ -1,16 +1,16 @@
-use arkret_wire::DidCoreId;
+use arkret_wire::{ActorId, DidCoreId};
 
 use super::{
     AsyncConnection, AsyncPgConnection, BigInt, ExistsRow, FederationFrontierExchangeRecord,
-    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxClaim,
-    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
-    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
-    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
-    JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, Text,
-    Timestamptz, async_trait, classify_federation_outbox_completion,
-    frontier_exchange_failure_record, frontier_exchange_success_record, ids, pg_conn, sql_query,
-    sql_types,
+    FederationFrontierExchangeStore, FederationFrontierReductionCheckpoint,
+    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
+    FederationOutboxStore, FederationOutboxTransition, Integer, JsonPayloadRow, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    ProjectedEventOperation, QueryableByName, RunQueryDsl, Text, Timestamptz, async_trait,
+    classify_federation_outbox_completion, frontier_exchange_failure_record,
+    frontier_exchange_success_record, ids, pg_conn, sql_query, sql_types,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
@@ -631,6 +631,77 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .map(FederationFrontierExchangeRecord::try_from)
             .collect()
     }
+
+    async fn reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<Option<FederationFrontierReductionCheckpoint>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT realm_id, peer_id, remote_snapshot_digest, actor_set_digest, actor_id, cursor, updated_at \
+             FROM federation_frontier_reduction_checkpoint WHERE realm_id = $1 AND peer_id = $2",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(peer_id.as_str())
+        .get_result::<FederationFrontierReductionCheckpointRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?
+        .map(FederationFrontierReductionCheckpoint::try_from)
+        .transpose()
+    }
+
+    async fn put_reduction_checkpoint(
+        &self,
+        checkpoint: &FederationFrontierReductionCheckpoint,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        crate::realm_identity::ensure_realm_pk(&mut conn, &checkpoint.realm_id).await?;
+        sql_query(
+            "INSERT INTO federation_frontier_reduction_checkpoint \
+             (realm_id, peer_id, remote_snapshot_digest, actor_set_digest, actor_id, cursor, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7) \
+             ON CONFLICT (realm_id, peer_id) DO UPDATE SET \
+             remote_snapshot_digest = EXCLUDED.remote_snapshot_digest, \
+             actor_set_digest = EXCLUDED.actor_set_digest, actor_id = EXCLUDED.actor_id, \
+             cursor = EXCLUDED.cursor, updated_at = EXCLUDED.updated_at",
+        )
+        .bind::<Text, _>(&checkpoint.realm_id)
+        .bind::<Text, _>(checkpoint.peer_id.as_str())
+        .bind::<Text, _>(&checkpoint.remote_snapshot_digest)
+        .bind::<Text, _>(&checkpoint.actor_set_digest)
+        .bind::<Text, _>(checkpoint.actor_id.to_string())
+        .bind::<Nullable<Text>, _>(checkpoint.cursor.as_deref())
+        .bind::<BigInt, _>(checkpoint.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn clear_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<()> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "DELETE FROM federation_frontier_reduction_checkpoint WHERE realm_id = $1 AND peer_id = $2",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(peer_id.as_str())
+        .execute(&mut *conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
 }
 impl PgFederationFrontierExchangeStore {
     async fn transition(
@@ -826,6 +897,42 @@ struct FederationFrontierExchangeRow {
     #[diesel(sql_type = BigInt)]
     updated_at: i64,
 }
+
+#[derive(QueryableByName)]
+struct FederationFrontierReductionCheckpointRow {
+    #[diesel(sql_type = Text)]
+    realm_id: String,
+    #[diesel(sql_type = Text)]
+    peer_id: DidCoreId,
+    #[diesel(sql_type = Text)]
+    remote_snapshot_digest: String,
+    #[diesel(sql_type = Text)]
+    actor_set_digest: String,
+    #[diesel(sql_type = Text)]
+    actor_id: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    cursor: Option<String>,
+    #[diesel(sql_type = BigInt)]
+    updated_at: i64,
+}
+
+impl TryFrom<FederationFrontierReductionCheckpointRow> for FederationFrontierReductionCheckpoint {
+    type Error = PersistenceError;
+
+    fn try_from(row: FederationFrontierReductionCheckpointRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            realm_id: row.realm_id,
+            peer_id: row.peer_id,
+            remote_snapshot_digest: row.remote_snapshot_digest,
+            actor_set_digest: row.actor_set_digest,
+            actor_id: serde_json::from_str::<ActorId>(&row.actor_id)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?,
+            cursor: row.cursor,
+            updated_at: row.updated_at,
+        })
+    }
+}
+
 impl TryFrom<FederationFrontierExchangeRow> for FederationFrontierExchangeRecord {
     type Error = PersistenceError;
 

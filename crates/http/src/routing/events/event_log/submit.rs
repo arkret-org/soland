@@ -25,6 +25,7 @@ const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
 const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
 const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 const AGENT_MEMBERSHIP_CASCADE_LOCK_SHARDS: usize = 256;
+const MODERATION_ATOMIC_LOCK_SHARDS: usize = 256;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 mod backfill;
@@ -129,6 +130,7 @@ static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = O
 static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 static AGENT_MEMBERSHIP_CASCADE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+static MODERATION_ATOMIC_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 
 mod identity_anchor;
 use identity_anchor::{
@@ -145,6 +147,8 @@ pub(in crate::routing) use agent_membership_cascade::submit_agent_membership_cas
 use agent_membership_cascade::submit_agent_membership_cascade_federation;
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
+mod moderation_atomic;
+use moderation_atomic::{batch_requires_moderation_atomicity, submit_moderation_atomic_batch};
 
 fn rejected_item(
     id: String,
@@ -172,6 +176,18 @@ fn actor_submit_lock(realm_id: &str, actor_id: &str) -> Arc<tokio::sync::Mutex<(
     std::hash::Hash::hash(realm_id, &mut hasher);
     std::hash::Hash::hash(actor_id, &mut hasher);
     let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
+    locks[shard].clone()
+}
+
+fn moderation_atomic_lock(realm_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = MODERATION_ATOMIC_LOCKS.get_or_init(|| {
+        (0..MODERATION_ATOMIC_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(realm_id, &mut hasher);
+    let shard = (hasher.finish() as usize) % MODERATION_ATOMIC_LOCK_SHARDS;
     locks[shard].clone()
 }
 
@@ -1615,6 +1631,17 @@ async fn submit_event_batch_outcome_with_leases(
     // than per envelope because the audit Event is authored after the write it records — the
     // two cannot name each other (encoding.md 6.0.1), so neither is decidable alone.
     validate_watch_set_others_audit_pairs(&envelopes).map_err(SubmitOneError::from)?;
+    if batch_requires_moderation_atomicity(&envelopes) {
+        return submit_moderation_atomic_batch(
+            state,
+            session,
+            envelopes,
+            authorization_leases,
+            control_proposal_acks,
+            membership_compensation_evidence,
+        )
+        .await;
+    }
     if batch_contains_identity_anchor(&envelopes) {
         return submit_identity_anchor_batch(
             state,

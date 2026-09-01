@@ -1032,20 +1032,34 @@ impl ProjectionService {
         ),
         SealReject,
     > {
-        let mut covered = self.predecessor_covered_events(&seal.predecessor_refs)?;
-        covered.extend(seal.delta.iter().cloned());
         let mut events = BTreeMap::new();
-        for digest in covered {
+        for digest in &seal.delta {
             let event = self
                 .control_event_store()
-                .get(&digest)
+                .get(digest)
                 .map_err(|error| SealReject::Store(error.to_string()))?
                 .ok_or_else(|| SealReject::MissingControlEvent {
                     event_digest: digest.as_str().to_owned(),
                 })?;
-            events.insert(digest, event);
+            events.insert(digest.clone(), event);
         }
-        self.seal_dependency_replay_context_with_events(seal, events)
+        let digest_suites = self.seal_digest_suites(seal)?;
+        let predecessor_state = self
+            .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .map_err(|error| SealReject::Store(error.to_string()))?;
+        let event_lookup = arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
+            self.control_event_store(),
+        );
+        let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
+            seal,
+            &predecessor_state,
+            &event_lookup,
+            self.seal_store(),
+            self.cell_store(),
+            digest_suites,
+        )
+        .map_err(|error| SealReject::Structural(error.to_string()))?;
+        Ok((context, events))
     }
 
     pub fn seal_dependency_replay_context_with_events(
@@ -1452,10 +1466,37 @@ impl ProjectionService {
         )
     }
 
+    /// Verify an incoming Seal completely while leaving every durable store
+    /// unchanged. Federation receivers use the returned immutable transition
+    /// as input to the atomic Seal/dependency/frontier commit.
+    pub fn prepare_seal_in_context<F>(
+        &self,
+        seal: &Seal,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<arkret_state::PreparedSealEffect, SealReject>
+    where
+        F: Fn(&Event) -> Result<(), String> + Copy,
+    {
+        let _authority_guard = self.history_authority_view_cas_guard();
+        let digest_suites = self.seal_digest_suites(seal)?;
+        arkret_state::prepare_seal_in_context(
+            seal,
+            self.control_event_store(),
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+            digest_suites,
+            |event, _digest_suite| verify_proofs(event),
+            |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
+            context,
+        )
+    }
+
     /// Apply a locally constructed Seal whose delta contains only Events from
-    /// the durable accepted-event lane. Incoming peer Seals must continue to
-    /// use `apply_seal_in_context` and independently satisfy frozen pre-state
-    /// admission.
+    /// the durable accepted-event lane. Incoming peer Seals use the prepared
+    /// producer-submission path above and commit their receiver-owned evidence
+    /// atomically.
     pub fn apply_accepted_seal_in_context<F>(
         &self,
         seal: &Seal,
@@ -1883,6 +1924,22 @@ impl ProjectionService {
     ) -> Result<(), RealmBootstrapProjectionError> {
         let _authority_guard = self.history_authority_view_cas_guard();
         let mut live = self.state.lock();
+        // A bootstrap becomes visible through two paths after its durable
+        // commit: this synchronous install and the genesis Seal coordinator.
+        // Realm ids are derived from the create Event id, so an already
+        // projected create for the staged Realm is the same immutable genesis,
+        // never a first-writer-wins alias. Treat that state as an idempotent
+        // install: replaying the staged unit would otherwise reject with
+        // `realm_already_exists` and, more importantly, could overwrite
+        // successor projections that were applied after genesis.
+        if staged.operations.first().is_some_and(|projected| {
+            projected.operation.event_kind == arkret_wire::EventKind::RealmCreate
+                && live
+                    .realm_create_log(projected.operation.realm_id.as_str())
+                    .is_some()
+        }) {
+            return Ok(());
+        }
         let mut merged = live.clone();
         Self::apply_realm_bootstrap_to_state(
             &mut merged,
@@ -3314,6 +3371,65 @@ mod control_governance_health_tests {
                 .realm_states
                 .contains_key("ak:realm:concurrent-update"),
             "installing a staged bootstrap discarded a concurrent Realm projection"
+        );
+    }
+
+    #[test]
+    fn accepted_bootstrap_replay_preserves_same_realm_successor_projection() {
+        let service = service();
+        let actor = project_did_to_core_id(&Did::new("did:web:alice.example").unwrap()).unwrap();
+        let station =
+            project_did_to_core_id(&Did::new("did:web:service.example").unwrap()).unwrap();
+        let genesis = arkret_wire::test_support::raw_event_at(
+            arkret_wire::EventKind::RealmCreate.as_str(),
+            ScopeRef::RealmGenesis,
+            actor,
+            station,
+            0,
+            Hlc::new("019f00000000-0000-00000001").unwrap(),
+            serde_json::json!({"object": {"purpose": "collaboration"}}),
+            Utc::now(),
+        )
+        .unwrap();
+        let realm_id = genesis.realm_id.to_string();
+        let operation = Operation::from_accepted_event(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:0196419b-0000-7000-8000-000000000001",
+            )
+            .unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            &genesis,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        {
+            let mut live = service.state.lock();
+            live.realm_create_cells.insert(
+                realm_id.clone(),
+                arkret_state::lattice::CellState::Value(serde_json::json!([realm_id])),
+            );
+            live.realm_join_rules
+                .insert(genesis.realm_id.to_string(), "public".to_owned());
+        }
+        let staged = StagedRealmBootstrap {
+            operations: vec![ProjectedOperation {
+                operation,
+                cell_writes: Vec::new(),
+            }],
+            direct_conversation_founding: false,
+        };
+
+        service.install_staged_realm_bootstrap(staged).unwrap();
+
+        assert_eq!(
+            service
+                .snapshot()
+                .realm_join_rules
+                .get(genesis.realm_id.as_str())
+                .map(String::as_str),
+            Some("public"),
+            "an exact bootstrap replay must not replace a concurrent successor projection",
         );
     }
 

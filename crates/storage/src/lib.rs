@@ -66,6 +66,9 @@ mod sessions;
 mod sidecars;
 mod signal;
 mod sync_cursor;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod transition_contract_tests;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;

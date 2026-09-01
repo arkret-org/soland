@@ -305,8 +305,9 @@ pub(crate) async fn seed_active_controller_device_generation(
     let normalized_controller_document: arkret_models_identity::DidDocument =
         serde_json::from_value(controller_document.clone()).unwrap();
     let document_digest =
-        arkret_canonical::canonical_sha256(&normalized_controller_document).unwrap();
+        arkret_identity::document_canonical_digest(&normalized_controller_document).unwrap();
     let document_digest_hex = document_digest
+        .as_str()
         .strip_prefix("sha256:")
         .expect("canonical document digest has SHA-256 suite");
     let document_version = format!("synthetic-jcs-sha256:{document_digest_hex}");
@@ -331,7 +332,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .put_document(soland_storage::WebvhDocumentRecord {
             did: controller.to_owned(),
             did_document: controller_document,
-            key_log_head: Some(document_digest.clone()),
+            key_log_head: Some(document_digest.as_str().to_owned()),
             seq: 1,
             method_evidence: serde_json::json!({"mode": "test"}),
             fetched_at: now,
@@ -349,7 +350,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
         did: actor.clone(),
-        method_history_head: document_digest,
+        method_history_head: document_digest.as_str().to_owned(),
         version_id: document_version,
     };
     let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
@@ -1445,6 +1446,8 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
                 "actions": [
                     "ak.self.events.stream.subscribe.v1",
                     "ak.self.events.read.scan.v1",
+                    "ak.self.events.read.frontier.v1",
+                    "ak.self.seals.read.frontier.v1",
                     "ak.self.events.command.submit.v1",
                     "ak.event.read",
                     "ak.message.create"
@@ -1581,6 +1584,8 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
             "actions": [
                 "ak.self.events.stream.subscribe.v1",
                 "ak.self.events.read.scan.v1",
+                "ak.self.events.read.frontier.v1",
+                "ak.self.seals.read.frontier.v1",
                 "ak.self.events.command.submit.v1",
                 "ak.event.read",
                 "ak.message.create"
@@ -1741,7 +1746,13 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
     let requested_scope = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(serde_json::json!({
-        "actions": ["ak.self.events.stream.subscribe.v1"],
+        "actions": [
+            "ak.self.events.stream.subscribe.v1",
+            "ak.self.events.read.scan.v1",
+            "ak.self.events.read.frontier.v1",
+            "ak.self.seals.read.frontier.v1",
+            "ak.self.events.command.submit.v1"
+        ],
         "resources": [{
             "kind": "operation",
             "operation": "ak.self.events.stream.subscribe.v1"
@@ -1838,6 +1849,8 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected_body() {
         "actions": [
             "ak.self.events.stream.subscribe.v1",
             "ak.self.events.read.scan.v1",
+            "ak.self.events.read.frontier.v1",
+            "ak.self.seals.read.frontier.v1",
             "ak.self.events.command.submit.v1"
         ],
         "resources": [
@@ -2016,7 +2029,13 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation_b
         &controller_authority,
         "generation-bound",
         serde_json::json!({
-                "actions": ["ak.self.events.stream.subscribe.v1"],
+                "actions": [
+                    "ak.self.events.stream.subscribe.v1",
+                    "ak.self.events.read.scan.v1",
+                    "ak.self.events.read.frontier.v1",
+                    "ak.self.seals.read.frontier.v1",
+                    "ak.self.events.command.submit.v1"
+                ],
                 "resources": [{
                     "kind": "operation",
                     "operation": "ak.self.events.stream.subscribe.v1"

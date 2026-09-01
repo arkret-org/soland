@@ -498,6 +498,152 @@ fn moderation_appeal_overturn_missing_lift_rejected() {
 }
 
 #[test]
+fn moderation_atomic_pairing_requires_lift_in_the_exact_batch() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
+    let review = make_operation(
+        arkret_wire::EventKind::ModerationAppealReview,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&review, &hlc),
+        ProjectionEffect::ModerationAppealProjected { .. }
+    ));
+    let lift = make_operation(
+        arkret_wire::EventKind::ModerationDecisionLift,
+        MOD_REALM,
+        serde_json::json!({
+            "decision_ref": MOD_DECISION_ID,
+            "observed_dot_ids": [MOD_DECISION_DOT],
+            "target_ref": MOD_TARGET_REF,
+            "realm_id": MOD_REALM,
+        }),
+    );
+    let decide = make_operation(
+        arkret_wire::EventKind::ModerationAppealDecision,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "decision": "overturn",
+            "reason_text_ref": "appeal upheld",
+            "decided_at": "2026-06-20T00:00:00.000Z",
+        }),
+    );
+
+    assert_eq!(
+        state.validate_moderation_atomic_pairing(std::slice::from_ref(&decide)),
+        Err("appeal_overturn_missing_lift")
+    );
+    assert!(
+        state
+            .validate_moderation_atomic_pairing(&[lift.clone(), decide.clone()])
+            .is_ok()
+    );
+
+    assert!(matches!(
+        state.apply(&lift, &hlc),
+        ProjectionEffect::ModerationDecisionLifted { .. }
+    ));
+    assert_eq!(
+        state.validate_moderation_atomic_pairing(&[decide]),
+        Err("appeal_overturn_missing_lift"),
+        "a lift accepted in an older transaction cannot pair a new overturn verdict"
+    );
+}
+
+#[test]
+fn moderation_modify_pairing_binds_lift_replacement_and_target() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("ak:did_core:web:test.soland");
+    seed_decision(&mut state, &hlc, "ak:did_core:web:mod.example");
+    submit_appeal(&mut state, &hlc, "ak:did_core:web:appellant.example");
+    let review = make_operation(
+        arkret_wire::EventKind::ModerationAppealReview,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "reviewed_at": "2026-06-20T00:00:00.000Z",
+        }),
+    );
+    assert!(matches!(
+        state.apply(&review, &hlc),
+        ProjectionEffect::ModerationAppealProjected { .. }
+    ));
+    let lift = make_operation(
+        arkret_wire::EventKind::ModerationDecisionLift,
+        MOD_REALM,
+        serde_json::json!({
+            "decision_ref": MOD_DECISION_ID,
+            "observed_dot_ids": [MOD_DECISION_DOT],
+            "target_ref": MOD_TARGET_REF,
+            "realm_id": MOD_REALM,
+        }),
+    );
+    let replacement_id = "ak:event:AWyYLpRXsBWSkX8WQYBDthicgzHPIGjRvgiikzcFe5se";
+    let mut replacement = moderation_decision_operation("ak:did_core:web:reviewer.example");
+    let replacement_event_id = arkret_identifiers::EventId::new(replacement_id).unwrap();
+    replacement.context.event_id = replacement_event_id.clone();
+    replacement.context.accepted_event_id = replacement_event_id;
+    let decide = make_operation(
+        arkret_wire::EventKind::ModerationAppealDecision,
+        MOD_REALM,
+        serde_json::json!({
+            "appeal_id": MOD_APPEAL_ID,
+            "realm_id": MOD_REALM,
+            "reviewer_id": "ak:did_core:web:reviewer.example",
+            "decision": "modify",
+            "modify_decision_ref": replacement_id,
+            "reason_text_ref": "replace decision",
+            "decided_at": "2026-06-20T00:00:00.000Z",
+        }),
+    );
+
+    assert_eq!(
+        state.validate_moderation_atomic_pairing(&[replacement.clone(), decide.clone()]),
+        Err("appeal_modify_missing_lift")
+    );
+    assert!(
+        state
+            .validate_moderation_atomic_pairing(&[
+                lift.clone(),
+                replacement.clone(),
+                decide.clone(),
+            ])
+            .is_ok()
+    );
+    let mut folded = state.clone();
+    for operation in [&lift, &replacement] {
+        assert!(!matches!(
+            folded.apply(operation, &hlc),
+            ProjectionEffect::Rejected { .. }
+        ));
+    }
+    assert!(matches!(
+        folded.apply(&decide, &hlc),
+        ProjectionEffect::ModerationAppealProjected { ref new_state, .. }
+            if new_state == "decided"
+    ));
+    replacement.payload["target_ref"] =
+        serde_json::json!("ak:message:AQmZI0IP3EX5b3hJDYEbx42wfnhdfCSgpViXGu_iOPp7");
+    assert_eq!(
+        state.validate_moderation_atomic_pairing(&[lift, replacement, decide]),
+        Err("appeal_modify_missing_decision")
+    );
+}
+
+#[test]
 fn moderation_appeal_duplicate_active_rejected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("ak:did_core:web:test.soland");

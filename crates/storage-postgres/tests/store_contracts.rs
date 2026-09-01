@@ -97,10 +97,44 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     );
     evidence.unwrap();
     success.unwrap();
+    let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_wire::DidCoreId::new("ak:did_core:web:checkpoint-user.example").unwrap(),
+        arkret_wire::DidCoreId::new("ak:did_core:web:checkpoint-station.example").unwrap(),
+    ));
+    store
+        .put_reduction_checkpoint(&soland_storage::FederationFrontierReductionCheckpoint {
+            realm_id: realm.to_string(),
+            peer_id: peer.clone(),
+            remote_snapshot_digest: "sha256:remote-snapshot".to_owned(),
+            actor_set_digest: "sha256:actor-set".to_owned(),
+            actor_id: actor.clone(),
+            cursor: Some("opaque-cursor".to_owned()),
+            updated_at: 7,
+        })
+        .await
+        .unwrap();
     let restarted = PgFederationFrontierExchangeStore { pool };
     let record = restarted.get(realm.as_str(), &peer).await.unwrap().unwrap();
     assert_eq!(record.status, "peer_stale");
     assert_eq!(record.last_error.as_deref(), Some("witness_disagreement"));
+    let checkpoint = restarted
+        .reduction_checkpoint(realm.as_str(), &peer)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(checkpoint.actor_id, actor);
+    assert_eq!(checkpoint.cursor.as_deref(), Some("opaque-cursor"));
+    restarted
+        .clear_reduction_checkpoint(realm.as_str(), &peer)
+        .await
+        .unwrap();
+    assert!(
+        restarted
+            .reduction_checkpoint(realm.as_str(), &peer)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]

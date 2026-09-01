@@ -347,6 +347,88 @@ pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceSt
     );
 }
 
+/// Recompute the two cumulative Seal roots for fixture signing.
+///
+/// Real Control Events are resolved from the test Control Event store. The
+/// development-only synthetic basis retains its exact listed descriptors in
+/// the fixture cache. Any digest unresolved by either source fails closed.
+pub fn test_seal_roots(
+    state: &AppState,
+    predecessor_refs: &[SealId],
+    delta_events: &[(arkret_wire::Event, arkret_canonical::DigestSuite)],
+    root_digest_suite: arkret_canonical::DigestSuite,
+) -> StoreResult<(Hash, Hash)> {
+    let (seal_store, control_event_store) = state_test_registry()
+        .lock()
+        .get(&app_state_key(state))
+        .map(|resources| {
+            (
+                resources
+                    .seal_store
+                    .clone()
+                    .expect("test Seal store is unavailable for this AppState"),
+                resources
+                    .control_event_store
+                    .clone()
+                    .expect("test Control Event store is unavailable for this AppState"),
+            )
+        })
+        .expect("AppState was not constructed by soland-test-support");
+    let mut covered =
+        arkret_state::union_predecessor_covered_events(predecessor_refs, seal_store.as_ref())
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+    let mut resolved = BTreeMap::new();
+    let predecessor_closure =
+        arkret_state::predecessor_seal_closure(predecessor_refs, seal_store.as_ref())
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+    for seal_id in predecessor_closure {
+        if let Some(listed) = crate::cba_basis::basis_listed_control_events_with_id(&seal_id) {
+            for event in listed {
+                resolved.insert(event.event_digest, (event.actor_id, event.actor_seq));
+            }
+        }
+    }
+    for (event, digest_suite) in delta_events {
+        let digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(*digest_suite)
+                .map_err(|error| StoreError::Backend(error.to_string()))?,
+        )
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+        covered.insert(digest.clone());
+        resolved.insert(digest, (event.actor_id.clone(), event.actor_seq));
+    }
+    for digest in &covered {
+        if resolved.contains_key(digest) {
+            continue;
+        }
+        if let Some(event) = control_event_store.get(digest)? {
+            resolved.insert(digest.clone(), (event.actor_id, event.actor_seq));
+        }
+    }
+    let listed = covered
+        .iter()
+        .map(|digest| {
+            let (actor_id, actor_seq) = resolved.get(digest).cloned().ok_or_else(|| {
+                StoreError::Backend(format!(
+                    "fixture Seal coverage contains unresolved Control Event digest {digest}"
+                ))
+            })?;
+            Ok(arkret_state::ListedControlEvent {
+                actor_id,
+                actor_seq,
+                event_digest: digest.clone(),
+            })
+        })
+        .collect::<StoreResult<Vec<_>>>()?;
+    let control_root = arkret_state::control_event_set_root(&covered, root_digest_suite)
+        .map_err(|error| StoreError::Backend(error.to_string()))?;
+    let completeness_root =
+        arkret_state::control_event_completeness_root_from_listed(&listed, root_digest_suite)
+            .map_err(|error| StoreError::Backend(error.to_string()))?;
+    Ok((control_root, completeness_root))
+}
+
 impl AppStateTestExt for AppState {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore> {
         state_test_registry()

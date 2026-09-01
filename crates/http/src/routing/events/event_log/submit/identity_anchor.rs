@@ -974,6 +974,21 @@ pub(super) async fn identical_historical_retry(
     state: &AppState,
     candidates: &[AcceptedEvent],
 ) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
+    identical_historical_retry_with_wake(state, candidates, true).await
+}
+
+pub(super) async fn identical_historical_retry_without_wake(
+    state: &AppState,
+    candidates: &[AcceptedEvent],
+) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
+    identical_historical_retry_with_wake(state, candidates, false).await
+}
+
+async fn identical_historical_retry_with_wake(
+    state: &AppState,
+    candidates: &[AcceptedEvent],
+    wake_control_seal_coordinator: bool,
+) -> Result<Option<EventsSubmitOutcome>, SubmitOneError> {
     let ids = candidates
         .iter()
         .map(|record| record.event_id.clone())
@@ -1099,7 +1114,9 @@ pub(super) async fn identical_historical_retry(
             }
             outcome.control_proposal_acks.push(ack);
         }
-        state.wake_control_seal_coordinator();
+        if wake_control_seal_coordinator {
+            state.wake_control_seal_coordinator();
+        }
         return Ok(Some(outcome));
     }
     if let Some(candidate) = existing

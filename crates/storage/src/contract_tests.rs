@@ -45,8 +45,9 @@ use super::{
     OrganizationRegistrationTerminalReason, PeerClaimTerminalTransition,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, ProjectionEventRecord,
-    ProjectionEventStore, RealmFanoutAuthorityWitness, RealmFanoutBinding, RealmFanoutOutboxInput,
-    RealmMetaRecord, RealmMetaStore, applet_effective_scope_key,
+    ProjectionEventStore, RealmBootstrapCommitOutcome, RealmFanoutAuthorityWitness,
+    RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord, RealmMetaStore,
+    applet_effective_scope_key,
 };
 
 pub fn minimal_history_signer_evidence(
@@ -3579,24 +3580,42 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
         now,
     );
     let committed_event_id = committed_record.event_id.clone();
-    events
+    let committed_outbox = FederationOutboxRecord::pending(
+        committed_outbox_id.clone(),
+        DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
+            .expect("peer service id"),
+        "https://peer.example".to_owned(),
+        "/_arkret/peer/events".to_owned(),
+        format!("ak:outbox:{namespace}:committed"),
+        "{}".to_owned(),
+        now.timestamp(),
+    );
+    let first_commit = events
         .put_realm_bootstrap_batch_atomic(
             vec![committed_record.clone()],
             vec![control_proposal_ack(&committed_record)],
             Vec::new(),
-            vec![FederationOutboxRecord::pending(
-                committed_outbox_id.clone(),
-                DidCoreId::new(format!("ak:did_core:web:peer-{namespace}.example"))
-                    .expect("peer service id"),
-                "https://peer.example".to_owned(),
-                "/_arkret/peer/events".to_owned(),
-                format!("ak:outbox:{namespace}:committed"),
-                "{}".to_owned(),
-                now.timestamp(),
-            )],
+            vec![committed_outbox.clone()],
         )
         .await
         .expect("Realm genesis unit commits with its delivery intent");
+    assert_eq!(first_commit, RealmBootstrapCommitOutcome::Committed);
+    let exact_retry = events
+        .put_realm_bootstrap_batch_atomic(
+            vec![committed_record.clone()],
+            vec![control_proposal_ack(&committed_record)],
+            Vec::new(),
+            vec![committed_outbox],
+        )
+        .await
+        .expect("byte-identical Realm genesis retry is durable idempotency");
+    assert_eq!(
+        exact_retry,
+        RealmBootstrapCommitOutcome::ExactRetry {
+            event_ids: vec![committed_event_id.clone()],
+        },
+        "the durable boundary must distinguish exact replay from a new commit",
+    );
     assert!(events.contains(&committed_event_id).await.expect("event"));
     assert!(
         outbox

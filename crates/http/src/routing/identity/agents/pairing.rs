@@ -703,6 +703,31 @@ pub(super) async fn agent_key_pair(
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
     let agent_record = reconcile_accepted_agent_authorization(state, agent_record).await?;
     validate_requested_scope_disclosure(&body, &agent_record, state).await?;
+    let provision_scope = serde_json::from_value::<AgentKeyScope>(
+        agent_record.requested_scope.clone().ok_or_else(|| {
+            agent_runtime_scope_error(
+                arkret_wire::ReasonCode::AgentProvisionScopeMigrationRequired,
+                "Agent record is missing its immutable requested_scope",
+            )
+        })?,
+    )
+    .map_err(|error| {
+        agent_runtime_scope_error(
+            arkret_wire::ReasonCode::AgentProvisionScopeMigrationRequired,
+            format!("stored Agent requested_scope is invalid: {error}"),
+        )
+    })?;
+    let proposed_authorization = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload,
+    >(
+        serde_json::to_value(&body.authorize_event.event.payload).map_err(|error| {
+            AppError::param_invalid(format!("authorize_event.payload invalid: {error}"))
+        })?,
+    )
+    .map_err(|error| {
+        AppError::param_invalid(format!("authorize_event.payload invalid: {error}"))
+    })?;
+    validate_agent_runtime_key_scopes(&provision_scope, &proposed_authorization.agent_key_scope)?;
     validate_agent_key_authorize_effects(&body.authorize_event.event)?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
     if agent_record.authorized_event_ref.as_deref() == Some(event_id) {

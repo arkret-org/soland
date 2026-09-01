@@ -592,7 +592,7 @@ async fn revoke_preview_endpoint(
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     validate_revoke_scope(&record, &preview.effective_scope)?;
     require_realm_admin(state, &session, &preview.effective_scope).await?;
-    json_ok(build_revoke_plan(state, &record, &preview)?)
+    json_ok(build_revoke_plan(state, &record, &preview).await?)
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.revoke", tags("extensions"))]
@@ -644,7 +644,7 @@ async fn revoke_install_endpoint(
             reason_code: revoke.reason_code.clone(),
             revoke_mode: revoke.revoke_mode,
         };
-        let recomputed = build_revoke_plan(state, &record, &preview)?;
+        let recomputed = build_revoke_plan(state, &record, &preview).await?;
         if recomputed.revoke_plan_digest != revoke.revoke_plan_digest {
             return Err(AppError::conflict("revoke plan changed; preview again")
                 .with_wire_code("failed_precondition"));
@@ -890,11 +890,12 @@ fn revoke_mode_fences_runtime(mode: AppletRevokeMode) -> bool {
     )
 }
 
-fn build_revoke_plan(
+async fn build_revoke_plan(
     state: &AppState,
     record: &AppletRecord,
     preview: &AppletRevokePreviewRequestBody,
 ) -> Result<AppletRevokePreviewOutcome, AppError> {
+    ensure_not_revoked(record)?;
     if matches!(
         preview.revoke_mode,
         AppletRevokeMode::RevokeAll | AppletRevokeMode::RevokeDelegatedSessions
@@ -917,7 +918,7 @@ fn build_revoke_plan(
     }
     let package = &record.package;
     let mut capability_revocations = Vec::new();
-    let mut membership_removals: Vec<AppletMembershipRemoveIntent> = Vec::new();
+    let mut membership_removals = Vec::new();
     if revoke_mode_fences_runtime(preview.revoke_mode) {
         let scope_realm_id = effective_scope_realm_id(&preview.effective_scope);
         let active_grant_ids = state
@@ -939,6 +940,8 @@ fn build_revoke_plan(
                 });
             }
         }
+        membership_removals =
+            exact_managed_membership_removals(state, record, &preview.reason_code).await?;
     }
     capability_revocations
         .sort_by(|left, right| left.grant_id.as_str().cmp(right.grant_id.as_str()));
@@ -965,6 +968,170 @@ fn build_revoke_plan(
         })?,
         revoke_plan: plan,
     })
+}
+
+fn incomplete_managed_membership_projection(detail: impl std::fmt::Display) -> AppError {
+    AppError::conflict(format!(
+        "Applet managed membership projection is incomplete: {detail}"
+    ))
+    .with_wire_code("applet_install_projection_incomplete")
+}
+
+async fn exact_managed_membership_removals(
+    state: &AppState,
+    record: &AppletRecord,
+    reason_code: &arkret_wire::ReasonCode,
+) -> Result<Vec<AppletMembershipRemoveIntent>, AppError> {
+    let realm_id = record.effective_scope.realm_id().as_str().to_owned();
+    let managed_actor_ids = std::collections::BTreeSet::from_iter(
+        std::iter::once(record.bot_actor_id.clone()).chain(
+            record
+                .ghosts
+                .iter()
+                .map(|ghost| ghost.ghost_actor_id.clone()),
+        ),
+    );
+    let current_members = {
+        let projection = state.projections().snapshot();
+        projection
+            .members_of_realm(&realm_id)
+            .into_iter()
+            .filter(|membership| {
+                serde_json::from_str::<arkret_wire::ActorId>(&membership.member)
+                    .is_ok_and(|member| managed_actor_ids.contains(&member))
+            })
+            .map(|membership| {
+                (
+                    membership.member.clone(),
+                    membership.membership_event_ref.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let capability_grant_refs = record
+        .install_response
+        .capability_grant_refs
+        .iter()
+        .map(ToString::to_string)
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut removals = Vec::new();
+    for (projected_member, membership_event_ref) in current_members {
+        let membership_event_ref = membership_event_ref.ok_or_else(|| {
+            incomplete_managed_membership_projection(format!(
+                "current joined member {projected_member} has no winning Event ref"
+            ))
+        })?;
+        let accepted = state
+            .event_queries()
+            .accepted_event(&membership_event_ref)
+            .await
+            .map_err(|error| {
+                incomplete_managed_membership_projection(format!(
+                    "cannot load winning membership Event {membership_event_ref}: {error}"
+                ))
+            })?
+            .ok_or_else(|| {
+                incomplete_managed_membership_projection(format!(
+                    "winning membership Event {membership_event_ref} is not durably accepted"
+                ))
+            })?;
+        if accepted.event_id != membership_event_ref {
+            return Err(incomplete_managed_membership_projection(format!(
+                "accepted membership lookup returned {} for winning Event {membership_event_ref}",
+                accepted.event_id
+            )));
+        }
+        let event =
+            serde_json::from_value::<arkret_wire::Event>(accepted.envelope).map_err(|error| {
+                incomplete_managed_membership_projection(format!(
+                    "winning membership Event {membership_event_ref} is invalid: {error}"
+                ))
+            })?;
+        if let Some(intent) = classify_current_managed_membership(
+            record.applet_id.as_str(),
+            &record.effective_scope,
+            &capability_grant_refs,
+            &managed_actor_ids,
+            &projected_member,
+            &membership_event_ref,
+            &event,
+            reason_code,
+        )? {
+            removals.push(intent);
+        }
+    }
+    removals.sort_by(|left, right| left.member_id.cmp(&right.member_id));
+    Ok(removals)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_current_managed_membership(
+    applet_id: &str,
+    effective_scope: &arkret_wire::ScopeRef,
+    capability_grant_refs: &std::collections::BTreeSet<String>,
+    managed_actor_ids: &std::collections::BTreeSet<arkret_wire::ActorId>,
+    projected_member: &str,
+    membership_event_ref: &str,
+    event: &arkret_wire::Event,
+    reason_code: &arkret_wire::ReasonCode,
+) -> Result<Option<AppletMembershipRemoveIntent>, AppError> {
+    let member_id = event
+        .payload
+        .get("member_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .ok_or_else(|| {
+            incomplete_managed_membership_projection(format!(
+                "winning membership Event {membership_event_ref} has no complete member_id"
+            ))
+        })?;
+    let current_generation_matches = event.event_id.as_str() == membership_event_ref
+        && event.kind == EventKind::MemberState
+        && event.realm_id == *effective_scope.realm_id()
+        && event.payload.get("membership").and_then(Value::as_str) == Some("join")
+        && member_id.to_string() == projected_member;
+    if !current_generation_matches {
+        return Err(incomplete_managed_membership_projection(format!(
+            "current membership cell and winning Event {membership_event_ref} disagree"
+        )));
+    }
+
+    let applet_matches =
+        event.applet_id.as_ref().map(ToString::to_string).as_deref() == Some(applet_id);
+    let grant_matches = event
+        .authorization_ref
+        .as_ref()
+        .is_some_and(|grant| capability_grant_refs.contains(grant.as_str()));
+    let scope_matches = event.scope_ref == *effective_scope;
+
+    if !scope_matches {
+        if grant_matches {
+            return Err(incomplete_managed_membership_projection(format!(
+                "membership Event {membership_event_ref} uses this install grant outside its exact scope"
+            )));
+        }
+        return Ok(None);
+    }
+    if !applet_matches && !grant_matches {
+        return Ok(None);
+    }
+    if !applet_matches || !grant_matches {
+        return Err(incomplete_managed_membership_projection(format!(
+            "membership Event {membership_event_ref} does not cross-bind applet_id and the exact install grant"
+        )));
+    }
+    if !managed_actor_ids.contains(&member_id) {
+        return Err(incomplete_managed_membership_projection(format!(
+            "membership Event {membership_event_ref} targets an actor absent from the durable Bot/Ghost projection"
+        )));
+    }
+
+    Ok(Some(AppletMembershipRemoveIntent {
+        event_kind: EventKind::MemberState.as_str().to_owned(),
+        member_id,
+        membership: AppletManagedMembershipRemoval::Leave,
+        reason_code: reason_code.clone(),
+    }))
 }
 
 fn validate_revoke_submissions(
@@ -1945,11 +2112,132 @@ async fn third_party_locations_endpoint(
 mod revoke_saga_tests {
     use super::*;
 
+    const APPLET_ID: &str = "ak:applet:01904100-0000-7000-8000-000000000001";
+    const REALM_ID: &str = "ak:realm:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL";
+    const TARGET_GRANT: &str = "ak:grant:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL";
+
     fn admin_actor(station: &str) -> arkret_wire::ActorId {
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:web:admin-a.example").unwrap(),
             arkret_wire::DidCoreId::new(station).unwrap(),
         ))
+    }
+
+    fn realm_scope() -> arkret_wire::ScopeRef {
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_wire::RealmId::new(REALM_ID).unwrap(),
+        }
+    }
+
+    fn current_join_event(
+        scope: arkret_wire::ScopeRef,
+        member: &arkret_wire::ActorId,
+        grant: &str,
+    ) -> arkret_wire::Event {
+        let actor = admin_actor("ak:did_core:web:service-a.example");
+        let mut event = arkret_wire::test_support::raw_event(
+            EventKind::MemberState.as_str(),
+            scope,
+            actor.signing_principal_id().clone(),
+            actor.route_service_id().clone(),
+            1,
+            arkret_wire::Hlc::new("01970e589d21-0000-a13f9c2e").unwrap(),
+            json!({"member_id": member, "membership": "join"}),
+        )
+        .unwrap();
+        event.applet_id = Some(arkret_wire::AppletId::new(APPLET_ID).unwrap());
+        event.authorization_ref = Some(arkret_wire::AuthorizationRef::new(grant).unwrap());
+        event
+    }
+
+    #[test]
+    fn exact_current_membership_generation_is_removed_but_another_scope_is_not() {
+        let target_scope = realm_scope();
+        let member = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:bot.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:service-a.example").unwrap(),
+        ));
+        let grants = std::collections::BTreeSet::from([TARGET_GRANT.to_owned()]);
+        let managed = std::collections::BTreeSet::from([member.clone()]);
+        let reason = arkret_wire::ReasonCode::from_wire("requested_by_admin");
+        let event = current_join_event(target_scope.clone(), &member, TARGET_GRANT);
+        let intent = classify_current_managed_membership(
+            APPLET_ID,
+            &target_scope,
+            &grants,
+            &managed,
+            &member.to_string(),
+            event.event_id.as_str(),
+            &event,
+            &reason,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(intent.member_id, member);
+        assert_eq!(intent.membership, AppletManagedMembershipRemoval::Leave);
+
+        let other_scope = arkret_wire::ScopeRef::Circle {
+            realm_id: arkret_wire::RealmId::new(REALM_ID).unwrap(),
+            circle_id: arkret_wire::CircleId::new(
+                "ak:circle:AXqIXbu56hFXteZXtkBsqJxy_puV4mhSv1U0ZkUldxAL",
+            )
+            .unwrap(),
+        };
+        let other = current_join_event(other_scope, &member, "ak:grant:other-scope");
+        assert!(
+            classify_current_managed_membership(
+                APPLET_ID,
+                &target_scope,
+                &grants,
+                &managed,
+                &member.to_string(),
+                other.event_id.as_str(),
+                &other,
+                &reason,
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn exact_install_membership_rejects_missing_ghost_projection_and_wrong_grant() {
+        let scope = realm_scope();
+        let ghost = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new("ak:did_core:web:ghost.example").unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:service-a.example").unwrap(),
+        ));
+        let grants = std::collections::BTreeSet::from([TARGET_GRANT.to_owned()]);
+        let reason = arkret_wire::ReasonCode::from_wire("requested_by_admin");
+        let event = current_join_event(scope.clone(), &ghost, TARGET_GRANT);
+        assert!(
+            classify_current_managed_membership(
+                APPLET_ID,
+                &scope,
+                &grants,
+                &std::collections::BTreeSet::new(),
+                &ghost.to_string(),
+                event.event_id.as_str(),
+                &event,
+                &reason,
+            )
+            .is_err()
+        );
+
+        let wrong_grant = current_join_event(scope.clone(), &ghost, "ak:grant:wrong-install");
+        assert!(
+            classify_current_managed_membership(
+                APPLET_ID,
+                &scope,
+                &grants,
+                &std::collections::BTreeSet::from([ghost.clone()]),
+                &ghost.to_string(),
+                wrong_grant.event_id.as_str(),
+                &wrong_grant,
+                &reason,
+            )
+            .is_err()
+        );
     }
 
     #[test]

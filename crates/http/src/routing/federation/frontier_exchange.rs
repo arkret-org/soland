@@ -11,6 +11,9 @@ use super::frontier_reduction::{self, ReductionPlan};
 use crate::state::AppState;
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+// Leave bounded headroom for resolve responses and dependency closure. A
+// completed chunk is admitted before its cursor becomes durable.
+const CHECKPOINT_SCAN_PAGES: usize = 4;
 
 pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
     if !state.config().federation_outbound_enabled {
@@ -132,21 +135,21 @@ impl FrontierExchangeWorker {
             let remote = self.probe_peer(peer_id, realm_id).await?;
             match frontier_reduction::plan(&before, &visible, &remote, &required)? {
                 ReductionPlan::Equal | ReductionPlan::Disjoint => {
+                    if let Err(error) = self
+                        .state
+                        .federation()
+                        .clear_frontier_reduction_checkpoint(realm_id, peer_id)
+                        .await
+                    {
+                        tracing::warn!(realm_id, peer_id = %peer_id, %error, "frontier checkpoint cleanup deferred");
+                        return Ok(None);
+                    }
                     return Ok(Some(remote.frontier_root.to_string()));
                 }
                 ReductionPlan::Challenge(actors) => {
                     let admitted = match self.challenge(peer_id, &remote, &actors).await {
                         Ok(admitted) => admitted,
-                        Err(error)
-                            if matches!(
-                                error.as_str(),
-                                "temporarily_unavailable:challenge_page_budget"
-                                    | "temporarily_unavailable:challenge_byte_budget"
-                                    | "temporarily_unavailable:dependency_budget"
-                                    | "temporarily_unavailable:admission_round_budget"
-                                    | "temporarily_unavailable:backfill_publication_evidence_unavailable"
-                            ) =>
-                        {
+                        Err(error) if frontier_reduction_deferred(&error) => {
                             // Local resource or evidence-acquisition limits
                             // do not establish a peer validation failure.
                             tracing::debug!(realm_id, peer_id = %peer_id, reason = %error, "frontier reduction deferred pending resources or publication evidence");
@@ -251,21 +254,82 @@ impl FrontierExchangeWorker {
         use arkret_models_collaboration::http_bodies::{
             EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
         };
+        let remote_snapshot_digest = arkret_canonical::canonical_sha256(remote)
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let actor_set_digest = arkret_canonical::canonical_sha256(&actors)
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let stored_checkpoint = self
+            .state
+            .federation()
+            .frontier_reduction_checkpoint(remote.realm_id.as_str(), peer_id)
+            .await
+            .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
+        let checkpoint_matches = stored_checkpoint.as_ref().is_some_and(|checkpoint| {
+            reduction_checkpoint_matches(
+                checkpoint,
+                &remote_snapshot_digest,
+                &actor_set_digest,
+                actors,
+            )
+        });
+        if stored_checkpoint.is_some() && !checkpoint_matches {
+            self.state
+                .federation()
+                .clear_frontier_reduction_checkpoint(remote.realm_id.as_str(), peer_id)
+                .await
+                .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
+        }
+        let checkpoint = stored_checkpoint.filter(|_| checkpoint_matches);
+        let mut start_actor = checkpoint
+            .as_ref()
+            .and_then(|checkpoint| {
+                actors
+                    .iter()
+                    .position(|actor| actor == &checkpoint.actor_id)
+            })
+            .unwrap_or(0);
+        let checkpoint_cursor = checkpoint.as_ref().and_then(|checkpoint| {
+            checkpoint
+                .cursor
+                .as_ref()
+                .map(|cursor| arkret_wire::Cursor::new(cursor.clone()))
+        });
+        let checkpoint_cursor = match checkpoint_cursor {
+            Some(Ok(cursor)) => Some(cursor),
+            Some(Err(_)) => {
+                self.state
+                    .federation()
+                    .clear_frontier_reduction_checkpoint(remote.realm_id.as_str(), peer_id)
+                    .await
+                    .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
+                start_actor = 0;
+                None
+            }
+            None => None,
+        };
         let actor_set = actors.iter().cloned().collect::<BTreeSet<_>>();
         let mut pending: Vec<arkret_wire::EventFederationSubmission> = Vec::new();
-        let mut selectors = remote.head_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let mut selectors = BTreeSet::new();
         let mut disclosed_positions = BTreeSet::new();
         let mut bytes = 0;
         let mut pages = 0;
         let mut trust_domain = String::new();
-        for actor in actors {
-            let mut cursor = None;
+        let mut completed_scan_actors = BTreeSet::new();
+        let mut next_checkpoint: Option<(arkret_wire::ActorId, Option<String>)> = None;
+        'actor_scan: for (actor_index, actor) in actors.iter().enumerate().skip(start_actor) {
+            let mut cursor = if actor_index == start_actor {
+                checkpoint_cursor.clone()
+            } else {
+                None
+            };
             let mut cursors = BTreeSet::new();
             loop {
-                pages += 1;
-                if pages > 64 {
-                    return Err("temporarily_unavailable:challenge_page_budget".to_owned());
+                if pages >= CHECKPOINT_SCAN_PAGES {
+                    next_checkpoint =
+                        Some((actor.clone(), cursor.as_ref().map(ToString::to_string)));
+                    break 'actor_scan;
                 }
+                pages += 1;
                 let request = EventsQueryPostRequestBody {
                     realm_ids: vec![remote.realm_id.clone()],
                     actor_ids: vec![actor.clone()],
@@ -298,6 +362,11 @@ impl FrontierExchangeWorker {
                     selectors.insert(event.event_id);
                 }
                 if !page.has_more {
+                    completed_scan_actors.insert(actor.clone());
+                    if pages >= CHECKPOINT_SCAN_PAGES && actor_index + 1 < actors.len() {
+                        next_checkpoint = Some((actors[actor_index + 1].clone(), None));
+                        break 'actor_scan;
+                    }
                     break;
                 }
                 let next = page
@@ -308,6 +377,13 @@ impl FrontierExchangeWorker {
                 }
                 cursor = Some(arkret_wire::Cursor::new(next).map_err(|error| error.to_string())?);
             }
+        }
+        // Advertised heads are resolved only after the bounded actor scan has
+        // reached its terminal chunk. Pulling a far-future head into every
+        // early chunk would recreate the entire predecessor chain and defeat
+        // monotonic checkpoint progress.
+        if next_checkpoint.is_none() {
+            selectors.extend(remote.head_ids.iter().cloned());
         }
         // Resolve advertised heads, then verified predecessor dependencies.
         // A finite selector and byte budget bounds even adversarial DAGs.
@@ -408,7 +484,7 @@ impl FrontierExchangeWorker {
         }
         // Dependencies can precede the actor intersection, but unrelated heads
         // never expand the replication obligation of this exchange.
-        for actor in actors {
+        for actor in &completed_scan_actors {
             let upper = remote.actor_seq_upper_bounds[actor];
             if !disclosed_positions.contains(&(actor.clone(), upper)) {
                 return Err("schema_violation:advertised_actor_bound_not_disclosed".to_owned());
@@ -421,9 +497,11 @@ impl FrontierExchangeWorker {
         pending.sort_by(|a, b| {
             (a.event.actor_seq, &a.event.event_id).cmp(&(b.event.actor_seq, &b.event.event_id))
         });
+        let mut admission_complete = false;
         for _ in 0..64 {
             if pending.is_empty() {
-                return Ok(admitted);
+                admission_complete = true;
+                break;
             }
             let mut retry = Vec::new();
             let mut progress = false;
@@ -454,7 +532,33 @@ impl FrontierExchangeWorker {
             }
             pending = retry;
         }
-        Err("temporarily_unavailable:admission_round_budget".to_owned())
+        if !admission_complete {
+            return Err("temporarily_unavailable:admission_round_budget".to_owned());
+        }
+        if let Some((actor_id, cursor)) = next_checkpoint {
+            self.state
+                .federation()
+                .put_frontier_reduction_checkpoint(
+                    &soland_services::federation::FederationFrontierReductionCheckpoint {
+                        realm_id: remote.realm_id.to_string(),
+                        peer_id: peer_id.clone(),
+                        remote_snapshot_digest,
+                        actor_set_digest,
+                        actor_id,
+                        cursor,
+                        updated_at: chrono::Utc::now().timestamp(),
+                    },
+                )
+                .await
+                .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
+            return Err("temporarily_unavailable:challenge_page_budget".to_owned());
+        }
+        self.state
+            .federation()
+            .clear_frontier_reduction_checkpoint(remote.realm_id.as_str(), peer_id)
+            .await
+            .map_err(|error| format!("temporarily_unavailable:checkpoint_store:{error}"))?;
+        Ok(admitted)
     }
 
     async fn probe_peer(
@@ -605,6 +709,28 @@ fn federation_visible_realms(records: &[AcceptedEvent]) -> BTreeSet<String> {
         .collect()
 }
 
+fn frontier_reduction_deferred(reason: &str) -> bool {
+    matches!(
+        reason,
+        "temporarily_unavailable:challenge_page_budget"
+            | "temporarily_unavailable:challenge_byte_budget"
+            | "temporarily_unavailable:dependency_budget"
+            | "temporarily_unavailable:admission_round_budget"
+            | "temporarily_unavailable:backfill_publication_evidence_unavailable"
+    ) || reason.starts_with("temporarily_unavailable:checkpoint_store:")
+}
+
+fn reduction_checkpoint_matches(
+    checkpoint: &soland_services::federation::FederationFrontierReductionCheckpoint,
+    remote_snapshot_digest: &str,
+    actor_set_digest: &str,
+    actors: &[arkret_wire::ActorId],
+) -> bool {
+    checkpoint.remote_snapshot_digest == remote_snapshot_digest
+        && checkpoint.actor_set_digest == actor_set_digest
+        && actors.contains(&checkpoint.actor_id)
+}
+
 pub(super) fn local_frontier_root(
     records: &[AcceptedEvent],
     realm_id: &str,
@@ -713,6 +839,56 @@ pub async fn inbound_peer_is_stale(
 mod tests {
     use super::*;
 
+    #[test]
+    fn reduction_checkpoint_is_bound_to_snapshot_actor_set_and_complete_actor() {
+        let principal = arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap();
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:station-a.example").unwrap(),
+        ));
+        let other_station_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal,
+            arkret_wire::DidCoreId::new("ak:did_core:web:station-b.example").unwrap(),
+        ));
+        let checkpoint = soland_services::federation::FederationFrontierReductionCheckpoint {
+            realm_id: "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
+            peer_id: arkret_wire::DidCoreId::new("ak:did_core:web:peer.example").unwrap(),
+            remote_snapshot_digest: "sha256:snapshot-a".to_owned(),
+            actor_set_digest: "sha256:actors-a".to_owned(),
+            actor_id: actor.clone(),
+            cursor: Some("cursor".to_owned()),
+            updated_at: 1,
+        };
+        assert!(reduction_checkpoint_matches(
+            &checkpoint,
+            "sha256:snapshot-a",
+            "sha256:actors-a",
+            std::slice::from_ref(&actor)
+        ));
+        assert!(!reduction_checkpoint_matches(
+            &checkpoint,
+            "sha256:snapshot-b",
+            "sha256:actors-a",
+            std::slice::from_ref(&actor)
+        ));
+        assert!(!reduction_checkpoint_matches(
+            &checkpoint,
+            "sha256:snapshot-a",
+            "sha256:actors-b",
+            std::slice::from_ref(&actor)
+        ));
+        assert!(!reduction_checkpoint_matches(
+            &checkpoint,
+            "sha256:snapshot-a",
+            "sha256:actors-a",
+            &[other_station_actor]
+        ));
+        assert!(frontier_reduction_deferred(
+            "temporarily_unavailable:checkpoint_store:database offline"
+        ));
+        assert!(!frontier_reduction_deferred("network_error:timeout"));
+    }
+
     #[tokio::test]
     async fn frontier_state_reaches_the_inbound_gate_and_recovers_only_from_ordinary_failure() {
         let state = AppState::new(
@@ -721,6 +897,36 @@ mod tests {
         );
         let peer = arkret_wire::DidCoreId::new("ak:did_core:web:peer.example").unwrap();
         let realm = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+        let checkpoint = soland_services::federation::FederationFrontierReductionCheckpoint {
+            realm_id: realm.to_owned(),
+            peer_id: peer.clone(),
+            remote_snapshot_digest: "sha256:remote-snapshot".to_owned(),
+            actor_set_digest: "sha256:actor-set".to_owned(),
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
+                arkret_wire::DidCoreId::new("ak:did_core:web:station-a.example").unwrap(),
+            )),
+            cursor: Some("opaque-cursor".to_owned()),
+            updated_at: 0,
+        };
+        state
+            .federation()
+            .put_frontier_reduction_checkpoint(&checkpoint)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .federation()
+                .frontier_reduction_checkpoint(realm, &peer)
+                .await
+                .unwrap(),
+            Some(checkpoint)
+        );
+        state
+            .federation()
+            .clear_frontier_reduction_checkpoint(realm, &peer)
+            .await
+            .unwrap();
         for attempt in 1..=3 {
             state
                 .federation()

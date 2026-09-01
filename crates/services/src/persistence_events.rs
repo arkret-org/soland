@@ -253,8 +253,9 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         deliveries: Vec<crate::federation::FederationDeliveryRecord>,
-    ) -> crate::ServiceResult<()> {
-        self.0
+    ) -> crate::ServiceResult<soland_storage::RealmBootstrapCommitOutcome> {
+        Ok(self
+            .0
             .events()
             .put_realm_bootstrap_batch_atomic(
                 records
@@ -265,8 +266,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                 governance_dependencies,
                 deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
-            .await?;
-        Ok(())
+            .await?)
     }
     async fn store_direct_conversation_founding_batch(
         &self,

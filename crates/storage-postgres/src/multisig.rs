@@ -1,8 +1,12 @@
+use soland_storage::{
+    MultisigLeaseCommand, MultisigLeaseDecision, MultisigLeaseState, decide_multisig_lease,
+};
+
 use super::{
-    Array, BTreeMap, BigInt, ClaimSeqRow, Integer, Jsonb, MultisigPendingRecord,
-    MultisigPendingStore, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RunQueryDsl, Text, Timestamptz, Value, async_trait, partials_to_jsonb,
-    pg_conn, sql_query,
+    Array, AsyncConnection, AsyncPgConnection, BTreeMap, BigInt, Integer, Jsonb,
+    MultisigPendingRecord, MultisigPendingStore, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Value, async_trait, partials_to_jsonb, pg_conn, sql_query,
 };
 pub struct PgMultisigPendingStore {
     pub pool: PgPool,
@@ -35,6 +39,59 @@ struct MultisigPendingRow {
     claimed_until: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = BigInt)]
     claim_seq: i64,
+}
+
+#[derive(QueryableByName)]
+struct MultisigLeaseStateRow {
+    #[diesel(sql_type = Nullable<Text>)]
+    claimed_by_node_id: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    claimed_until: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = BigInt)]
+    claim_seq: i64,
+}
+
+impl From<MultisigLeaseStateRow> for MultisigLeaseState {
+    fn from(row: MultisigLeaseStateRow) -> Self {
+        Self {
+            claimed_by_node_id: row.claimed_by_node_id,
+            claimed_until: row.claimed_until,
+            claim_seq: row.claim_seq,
+        }
+    }
+}
+
+async fn locked_lease_state(
+    conn: &mut AsyncPgConnection,
+    seal_id: &str,
+) -> Result<Option<MultisigLeaseState>, diesel::result::Error> {
+    sql_query(
+        "SELECT claimed_by_node_id, claimed_until, claim_seq FROM multisig_pending \
+         WHERE seal_id = $1 FOR UPDATE",
+    )
+    .bind::<Text, _>(seal_id)
+    .get_result::<MultisigLeaseStateRow>(conn)
+    .await
+    .optional()
+    .map(|row| row.map(MultisigLeaseState::from))
+}
+
+async fn write_lease_state(
+    conn: &mut AsyncPgConnection,
+    seal_id: &str,
+    state: &MultisigLeaseState,
+) -> Result<(), diesel::result::Error> {
+    sql_query(
+        "UPDATE multisig_pending SET claimed_by_node_id = $2, claimed_until = $3, claim_seq = $4 \
+         WHERE seal_id = $1",
+    )
+    .bind::<Text, _>(seal_id)
+    .bind::<Nullable<Text>, _>(&state.claimed_by_node_id)
+    .bind::<Nullable<Timestamptz>, _>(state.claimed_until)
+    .bind::<BigInt, _>(state.claim_seq)
+    .execute(conn)
+    .await
+    .map(|_| ())
 }
 fn multisig_pending_record(row: MultisigPendingRow) -> PersistenceResult<MultisigPendingRecord> {
     let partials = match row.partials {
@@ -196,62 +253,59 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        // Atomic claim: only succeed when the row is unclaimed or its
-        // existing lease has expired. Bumps `claim_seq` on every
-        // successful claim and `RETURNING` the new value so the watchdog
-        // can use it as a fencing token for the subsequent
-        // `delete_with_fence` / `renew_claim`.
-        let updated: Option<ClaimSeqRow> = sql_query(
-            "UPDATE multisig_pending \
-             SET claimed_by_node_id = $2, claimed_until = $4, \
-                 claim_seq = claim_seq + 1 \
-             WHERE seal_id = $1 \
-               AND (claimed_by_node_id IS NULL \
-                    OR claimed_until IS NULL \
-                    OR claimed_until <= $3) \
-             RETURNING claim_seq",
-        )
-        .bind::<Text, _>(seal_id)
-        .bind::<Text, _>(node_id)
-        .bind::<Timestamptz, _>(now)
-        .bind::<Timestamptz, _>(claimed_until)
-        .get_result::<ClaimSeqRow>(&mut *conn)
+        let seal_id = seal_id.to_owned();
+        let node_id = node_id.to_owned();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let state = locked_lease_state(conn, &seal_id).await?;
+            match decide_multisig_lease(
+                state.as_ref(),
+                &MultisigLeaseCommand::TryClaim {
+                    node_id,
+                    now,
+                    claimed_until,
+                },
+            )? {
+                MultisigLeaseDecision::Missing => Ok((false, 0)),
+                MultisigLeaseDecision::Rejected { current_claim_seq } => {
+                    Ok((false, current_claim_seq))
+                }
+                MultisigLeaseDecision::Update(next) => {
+                    write_lease_state(conn, &seal_id, &next).await?;
+                    Ok((true, next.claim_seq))
+                }
+                MultisigLeaseDecision::Delete => Err(PersistenceError::Internal(
+                    "multisig claim decision is inconsistent".to_owned(),
+                )
+                .into()),
+            }
+        })
         .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-
-        if let Some(row) = updated {
-            Ok((true, row.claim_seq))
-        } else {
-            // No row was updated; surface the current `claim_seq` so callers
-            // can log it for diagnostics. Lookup is best-effort — a missing
-            // row reports `0`.
-            let cur: Option<ClaimSeqRow> =
-                sql_query("SELECT claim_seq FROM multisig_pending WHERE seal_id = $1")
-                    .bind::<Text, _>(seal_id)
-                    .get_result::<ClaimSeqRow>(&mut *conn)
-                    .await
-                    .optional()
-                    .map_err(PersistenceError::database)?;
-            Ok((false, cur.map(|r| r.claim_seq).unwrap_or(0)))
-        }
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn release_claim(&self, seal_id: &str, node_id: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE multisig_pending \
-             SET claimed_by_node_id = NULL, claimed_until = NULL \
-             WHERE seal_id = $1 AND claimed_by_node_id = $2",
-        )
-        .bind::<Text, _>(seal_id)
-        .bind::<Text, _>(node_id)
-        .execute(&mut *conn)
+        let seal_id = seal_id.to_owned();
+        let node_id = node_id.to_owned();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let state = locked_lease_state(conn, &seal_id).await?;
+            match decide_multisig_lease(state.as_ref(), &MultisigLeaseCommand::Release { node_id })?
+            {
+                MultisigLeaseDecision::Missing | MultisigLeaseDecision::Rejected { .. } => Ok(()),
+                MultisigLeaseDecision::Update(next) => {
+                    write_lease_state(conn, &seal_id, &next).await?;
+                    Ok(())
+                }
+                MultisigLeaseDecision::Delete => Err(PersistenceError::Internal(
+                    "multisig release decision is inconsistent".to_owned(),
+                )
+                .into()),
+            }
+        })
         .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn delete_with_fence(
@@ -263,19 +317,32 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "DELETE FROM multisig_pending \
-             WHERE seal_id = $1 \
-               AND claimed_by_node_id = $2 \
-               AND claim_seq = $3",
-        )
-        .bind::<Text, _>(seal_id)
-        .bind::<Text, _>(node_id)
-        .bind::<BigInt, _>(claim_seq)
-        .execute(&mut *conn)
+        let seal_id = seal_id.to_owned();
+        let node_id = node_id.to_owned();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let state = locked_lease_state(conn, &seal_id).await?;
+            match decide_multisig_lease(
+                state.as_ref(),
+                &MultisigLeaseCommand::DeleteWithFence { node_id, claim_seq },
+            )? {
+                MultisigLeaseDecision::Missing | MultisigLeaseDecision::Rejected { .. } => {
+                    Ok(false)
+                }
+                MultisigLeaseDecision::Delete => {
+                    let deleted = sql_query("DELETE FROM multisig_pending WHERE seal_id = $1")
+                        .bind::<Text, _>(&seal_id)
+                        .execute(conn)
+                        .await?;
+                    Ok(deleted == 1)
+                }
+                MultisigLeaseDecision::Update(_) => Err(PersistenceError::Internal(
+                    "multisig delete decision is inconsistent".to_owned(),
+                )
+                .into()),
+            }
+        })
         .await
-        .map(|n| n > 0)
-        .map_err(PersistenceError::database)
+        .map_err(PgTransactionError::into_persistence)
     }
 
     async fn renew_claim(
@@ -288,20 +355,65 @@ impl MultisigPendingStore for PgMultisigPendingStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "UPDATE multisig_pending \
-             SET claimed_until = $4 \
-             WHERE seal_id = $1 \
-               AND claimed_by_node_id = $2 \
-               AND claim_seq = $3",
-        )
-        .bind::<Text, _>(seal_id)
-        .bind::<Text, _>(node_id)
-        .bind::<BigInt, _>(claim_seq)
-        .bind::<Timestamptz, _>(new_claimed_until)
-        .execute(&mut *conn)
+        let seal_id = seal_id.to_owned();
+        let node_id = node_id.to_owned();
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let state = locked_lease_state(conn, &seal_id).await?;
+            match decide_multisig_lease(
+                state.as_ref(),
+                &MultisigLeaseCommand::RenewWithFence {
+                    node_id,
+                    claim_seq,
+                    claimed_until: new_claimed_until,
+                },
+            )? {
+                MultisigLeaseDecision::Missing | MultisigLeaseDecision::Rejected { .. } => {
+                    Ok(false)
+                }
+                MultisigLeaseDecision::Update(next) => {
+                    write_lease_state(conn, &seal_id, &next).await?;
+                    Ok(true)
+                }
+                MultisigLeaseDecision::Delete => Err(PersistenceError::Internal(
+                    "multisig renew decision is inconsistent".to_owned(),
+                )
+                .into()),
+            }
+        })
         .await
-        .map(|n| n > 0)
-        .map_err(PersistenceError::database)
+        .map_err(PgTransactionError::into_persistence)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use soland_storage::transition_contract_tests::assert_multisig_lease_contract;
+
+    use super::{PgMultisigPendingStore, PgPool};
+
+    async fn test_pool() -> Option<PgPool> {
+        crate::Db::connect(
+            std::env::var("DATABASE_URL").ok().as_deref(),
+            Default::default(),
+        )
+        .await
+        .expect("initialize test database")
+        .pool
+    }
+
+    fn unique_namespace() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is after the unix epoch")
+            .as_nanos();
+        format!("postgres-multisig-{nanos}")
+    }
+
+    #[tokio::test]
+    async fn postgres_adapter_satisfies_shared_multisig_lease_contract_when_configured() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        assert_multisig_lease_contract(&PgMultisigPendingStore { pool }, &unique_namespace()).await;
     }
 }

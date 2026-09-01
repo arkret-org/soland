@@ -8,7 +8,7 @@ use arkret_models_crypto::{
     SessionState,
 };
 use arkret_wire::{
-    DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
+    ActorId, DeviceReanchorPreFenceSealFrontier, DidCoreId, EventId, FreshnessState, LeaseBasisRef,
     PlaintextDataClassKind, RealmId,
 };
 use serde::{Deserialize, Serialize};
@@ -922,6 +922,21 @@ pub struct FederationFrontierExchangeRecord {
     pub last_failure_at: Option<i64>,
     pub last_frontier_root: Option<String>,
     pub last_error: Option<String>,
+    pub updated_at: i64,
+}
+
+/// Durable progress through one immutable remote frontier observation.
+///
+/// The actor is the complete closed `ActorId`; a principal-only projection is
+/// insufficient because Account actors at different Stations are distinct.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationFrontierReductionCheckpoint {
+    pub realm_id: String,
+    pub peer_id: DidCoreId,
+    pub remote_snapshot_digest: String,
+    pub actor_set_digest: String,
+    pub actor_id: ActorId,
+    pub cursor: Option<String>,
     pub updated_at: i64,
 }
 

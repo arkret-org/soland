@@ -66,6 +66,7 @@ DROP TABLE IF EXISTS device_message_txns CASCADE;
 DROP TABLE IF EXISTS device_messages CASCADE;
 DROP TABLE IF EXISTS device_pairings CASCADE;
 DROP TABLE IF EXISTS devices CASCADE;
+DROP TABLE IF EXISTS federation_frontier_reduction_checkpoint CASCADE;
 DROP TABLE IF EXISTS federation_frontier_exchange CASCADE;
 DROP TABLE IF EXISTS federation_operations CASCADE;
 DROP TABLE IF EXISTS federation_outbox CASCADE;

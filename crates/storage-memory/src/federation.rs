@@ -2,12 +2,13 @@ use arkret_wire::DidCoreId;
 
 use super::{
     Arc, BTreeMap, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
-    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, Mutex, PersistenceError, PersistenceResult,
-    ProjectedEventOperation, async_trait, classify_federation_outbox_completion,
-    frontier_exchange_failure_record, frontier_exchange_success_record,
+    FederationFrontierReductionCheckpoint, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Mutex,
+    PersistenceError, PersistenceResult, ProjectedEventOperation, async_trait,
+    classify_federation_outbox_completion, frontier_exchange_failure_record,
+    frontier_exchange_success_record,
 };
 // G3.S0 — in-memory outbound federation HTTP delivery queue.
 // Keyed by `id` (the row PK) with a secondary `(peer_id,
@@ -341,11 +342,13 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
 
 pub(crate) struct MemoryFederationFrontierExchangeStore {
     data: Arc<Mutex<BTreeMap<(String, DidCoreId), FederationFrontierExchangeRecord>>>,
+    checkpoints: Arc<Mutex<BTreeMap<(String, DidCoreId), FederationFrontierReductionCheckpoint>>>,
 }
 impl MemoryFederationFrontierExchangeStore {
     pub(crate) fn new() -> Self {
         Self {
             data: Arc::new(Mutex::new(BTreeMap::new())),
+            checkpoints: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -403,6 +406,40 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>> {
         let data = self.data.lock();
         Ok(data.values().cloned().collect())
+    }
+
+    async fn reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<Option<FederationFrontierReductionCheckpoint>> {
+        Ok(self
+            .checkpoints
+            .lock()
+            .get(&(realm_id.to_owned(), peer_id.clone()))
+            .cloned())
+    }
+
+    async fn put_reduction_checkpoint(
+        &self,
+        checkpoint: &FederationFrontierReductionCheckpoint,
+    ) -> PersistenceResult<()> {
+        self.checkpoints.lock().insert(
+            (checkpoint.realm_id.clone(), checkpoint.peer_id.clone()),
+            checkpoint.clone(),
+        );
+        Ok(())
+    }
+
+    async fn clear_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<()> {
+        self.checkpoints
+            .lock()
+            .remove(&(realm_id.to_owned(), peer_id.clone()));
+        Ok(())
     }
 }
 #[derive(Default)]

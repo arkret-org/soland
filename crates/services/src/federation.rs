@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
+use arkret_wire::ActorId;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
@@ -21,6 +22,17 @@ pub struct FederationFrontierExchangeRecord {
     pub last_failure_at: Option<i64>,
     pub last_frontier_root: Option<String>,
     pub last_error: Option<String>,
+    pub updated_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationFrontierReductionCheckpoint {
+    pub realm_id: String,
+    pub peer_id: DidCoreId,
+    pub remote_snapshot_digest: String,
+    pub actor_set_digest: String,
+    pub actor_id: ActorId,
+    pub cursor: Option<String>,
     pub updated_at: i64,
 }
 
@@ -303,6 +315,20 @@ pub trait FederationStatePort: Send + Sync {
         reason: &str,
         observed_at: i64,
     ) -> ServiceResult<FederationFrontierExchangeRecord>;
+    async fn frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>>;
+    async fn put_frontier_reduction_checkpoint(
+        &self,
+        checkpoint: &FederationFrontierReductionCheckpoint,
+    ) -> ServiceResult<()>;
+    async fn clear_frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
@@ -478,6 +504,32 @@ impl FederationService {
             .record_frontier_failure(realm_id, peer_id, reason, observed_at)
             .await
     }
+    pub async fn frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>> {
+        self.state
+            .frontier_reduction_checkpoint(realm_id, peer_id)
+            .await
+    }
+    pub async fn put_frontier_reduction_checkpoint(
+        &self,
+        checkpoint: &FederationFrontierReductionCheckpoint,
+    ) -> ServiceResult<()> {
+        self.state
+            .put_frontier_reduction_checkpoint(checkpoint)
+            .await
+    }
+    pub async fn clear_frontier_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> ServiceResult<()> {
+        self.state
+            .clear_frontier_reduction_checkpoint(realm_id, peer_id)
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -531,6 +583,26 @@ mod tests {
             _observed_at: i64,
         ) -> ServiceResult<FederationFrontierExchangeRecord> {
             panic!("unused test port")
+        }
+        async fn frontier_reduction_checkpoint(
+            &self,
+            _realm_id: &str,
+            _peer_id: &DidCoreId,
+        ) -> ServiceResult<Option<FederationFrontierReductionCheckpoint>> {
+            Ok(None)
+        }
+        async fn put_frontier_reduction_checkpoint(
+            &self,
+            _checkpoint: &FederationFrontierReductionCheckpoint,
+        ) -> ServiceResult<()> {
+            Ok(())
+        }
+        async fn clear_frontier_reduction_checkpoint(
+            &self,
+            _realm_id: &str,
+            _peer_id: &DidCoreId,
+        ) -> ServiceResult<()> {
+            Ok(())
         }
     }
 

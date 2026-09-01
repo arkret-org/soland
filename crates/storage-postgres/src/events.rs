@@ -950,7 +950,7 @@ impl EventStore for PgEventStore {
         control_proposal_acks: Vec<arkret_wire::ControlProposalAck>,
         governance_dependencies: Vec<soland_storage::GovernanceDependencyWrite>,
         outbox: Vec<FederationOutboxRecord>,
-    ) -> PersistenceResult<()> {
+    ) -> PersistenceResult<soland_storage::RealmBootstrapCommitOutcome> {
         let mut acks = BTreeMap::new();
         for ack in control_proposal_acks {
             if acks
@@ -976,12 +976,25 @@ impl EventStore for PgEventStore {
                 if preflight_canonical_events(conn, &records).await? {
                     return Ok(StoreTransactionOutcome::Collision);
                 }
-                let mut event_pks = Vec::with_capacity(records.len());
+                let event_ids = records
+                    .iter()
+                    .map(|record| record.event_id.clone())
+                    .collect::<Vec<_>>();
+                let record_count = records.len();
+                let mut inserted_count = 0;
+                let mut replay_count = 0;
+                let mut event_pks = Vec::with_capacity(record_count);
                 let mut dependency_count = 0;
                 for record in records {
                     let event_pk = match insert_canonical_event(conn, &record).await? {
-                        CanonicalInsertOutcome::Inserted(pk)
-                        | CanonicalInsertOutcome::Replay(pk) => pk,
+                        CanonicalInsertOutcome::Inserted(pk) => {
+                            inserted_count += 1;
+                            pk
+                        }
+                        CanonicalInsertOutcome::Replay(pk) => {
+                            replay_count += 1;
+                            pk
+                        }
                         CanonicalInsertOutcome::Collision | CanonicalInsertOutcome::Quarantined => {
                             unreachable!("batch collision was handled by preflight")
                         }
@@ -1015,12 +1028,19 @@ impl EventStore for PgEventStore {
                     insert_federation_outbox_row(conn, &delivery).await?;
                     bind_event_outbox_rows(conn, &event_pks, &delivery).await?;
                 }
-                Ok(StoreTransactionOutcome::Committed(()))
+                let outcome = if inserted_count == record_count {
+                    soland_storage::RealmBootstrapCommitOutcome::Committed
+                } else if replay_count == record_count {
+                    soland_storage::RealmBootstrapCommitOutcome::ExactRetry { event_ids }
+                } else {
+                    return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()).into());
+                };
+                Ok(StoreTransactionOutcome::Committed(outcome))
             })
             .await
             .map_err(PgTransactionError::into_persistence)?;
         match transaction_outcome {
-            StoreTransactionOutcome::Committed(()) => Ok(()),
+            StoreTransactionOutcome::Committed(outcome) => Ok(outcome),
             StoreTransactionOutcome::Collision => Err(PersistenceError::Conflict(
                 "event_hash_collision".to_owned(),
             )),

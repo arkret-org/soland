@@ -897,10 +897,19 @@ pub(crate) async fn seed_test_realm(
         state.service_did(),
         state.service_verification_method("notary-key").unwrap(),
     );
-    let bootstrap_seal = arkret_wire::Seal::sign_single(
+    let (control_event_set_root, completeness_root) = soland_test_support::test_seal_roots(
+        state,
+        &[],
+        &[],
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let bootstrap_seal = arkret_wire::Seal::sign_single_with_roots(
         RealmId::new(realm_id.clone()).unwrap(),
         Vec::new(),
         Vec::new(),
+        control_event_set_root,
+        completeness_root,
         arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-aabbccdd",

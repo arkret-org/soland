@@ -1613,6 +1613,17 @@ CREATE TABLE public.federation_frontier_exchange (
 
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
 
+CREATE TABLE public.federation_frontier_reduction_checkpoint (
+    realm_id text NOT NULL,
+    peer_id text NOT NULL CHECK (peer_id LIKE 'ak:did_core:%'),
+    remote_snapshot_digest text NOT NULL,
+    actor_set_digest text NOT NULL,
+    actor_id text NOT NULL,
+    cursor text,
+    updated_at bigint NOT NULL,
+    CONSTRAINT federation_frontier_reduction_checkpoint_pkey PRIMARY KEY (realm_id, peer_id)
+);
+
 CREATE TABLE public.invite_receive_policies (
     account_pk bigint PRIMARY KEY REFERENCES public.accounts(pk) ON DELETE CASCADE,
     policy_payload jsonb NOT NULL,

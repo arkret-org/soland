@@ -1,9 +1,9 @@
 use arkret_wire::DidCoreId;
 
 use super::{
-    FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    FederationOutboxState, PersistenceError, PersistenceResult, ProjectedEventOperation,
-    async_trait,
+    FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
+    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxState,
+    PersistenceError, PersistenceResult, ProjectedEventOperation, async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.
@@ -299,6 +299,20 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
         observed_at: i64,
     ) -> PersistenceResult<FederationFrontierExchangeRecord>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationFrontierExchangeRecord>>;
+    async fn reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<Option<FederationFrontierReductionCheckpoint>>;
+    async fn put_reduction_checkpoint(
+        &self,
+        checkpoint: &FederationFrontierReductionCheckpoint,
+    ) -> PersistenceResult<()>;
+    async fn clear_reduction_checkpoint(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+    ) -> PersistenceResult<()>;
 }
 
 #[cfg(test)]
