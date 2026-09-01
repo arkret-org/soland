@@ -497,6 +497,77 @@ impl FrontierExchangeWorker {
         pending.sort_by(|a, b| {
             (a.event.actor_seq, &a.event.event_id).cmp(&(b.event.actor_seq, &b.event.event_id))
         });
+        let mut seal_selectors = BTreeSet::new();
+        for submission in &pending {
+            if let Some(seal_ref) = &submission.event.seal_ref {
+                seal_selectors.insert(seal_ref.clone());
+            }
+            if let Some(seal_basis) = &submission.event.seal_basis {
+                seal_selectors.extend(seal_basis.leaves.iter().cloned());
+            }
+        }
+        let mut missing_seal_selectors = BTreeSet::new();
+        for seal_ref in seal_selectors {
+            if self
+                .state
+                .projections()
+                .seal_by_id(&seal_ref)
+                .map_err(|error| error.to_string())?
+                .is_none()
+            {
+                missing_seal_selectors.insert(seal_ref);
+            }
+        }
+        let mut seal_selectors = missing_seal_selectors;
+        let mut resolved_seals = BTreeMap::new();
+        while !seal_selectors.is_empty() {
+            let batch = seal_selectors.iter().take(256).cloned().collect::<Vec<_>>();
+            let request = arkret_models_collaboration::http_bodies::PeerSealResolveRequestBody {
+                realm_id: remote.realm_id.clone(),
+                seal_refs: batch.clone(),
+                history_traversal_access: None,
+            };
+            let (outcome, domain, size): (
+                arkret_models_collaboration::http_bodies::SealResolveOutcome,
+                _,
+                _,
+            ) = self
+                .peer_query(peer_id, "/_arkret/peer/seals/resolve", &request)
+                .await?;
+            trust_domain = domain;
+            bytes += size;
+            pages += 1;
+            if pages > 128 || bytes > 64 * 1024 * 1024 {
+                return Err("temporarily_unavailable:dependency_budget".to_owned());
+            }
+            outcome
+                .validate_for_peer_request(&request)
+                .map_err(|error| format!("schema_violation:{error}"))?;
+            if !outcome.missing_seal_refs.is_empty() {
+                return Err("dependency_missing:seal_prerequisite".to_owned());
+            }
+            for seal_ref in batch {
+                seal_selectors.remove(&seal_ref);
+            }
+            for seal in outcome.seals {
+                if seal.realm_id != remote.realm_id {
+                    return Err("schema_violation:seal_dependency_realm_mismatch".to_owned());
+                }
+                for predecessor in &seal.predecessor_refs {
+                    let is_local = self
+                        .state
+                        .projections()
+                        .seal_by_id(predecessor)
+                        .map_err(|error| error.to_string())?
+                        .is_some();
+                    if !is_local && !resolved_seals.contains_key(predecessor) {
+                        seal_selectors.insert(predecessor.clone());
+                    }
+                }
+                resolved_seals.insert(seal.id.clone(), seal);
+            }
+        }
+        let resolved_seals = resolved_seals.into_values().collect::<Vec<_>>();
         let mut admission_complete = false;
         for _ in 0..64 {
             if pending.is_empty() {
@@ -511,6 +582,7 @@ impl FrontierExchangeWorker {
                     peer_id.as_str(),
                     &trust_domain,
                     &submission,
+                    &resolved_seals,
                 )
                 .await
                 {

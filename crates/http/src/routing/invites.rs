@@ -1637,7 +1637,7 @@ fn evaluate_invite_receive(
                 .handle_claim_behavior
                 .clone()
                 .unwrap_or(InviteReceiveAction::Quarantine),
-            "explicit_address" => policy.explicit_address_behavior.clone(),
+            "same_station" | "explicit_address" => policy.explicit_address_behavior.clone(),
             _ => InviteReceiveAction::Notify,
         }
     } else if effective_kind == "handle_claim" {
@@ -1810,7 +1810,7 @@ pub(crate) fn evaluate_contact_receive(
                 .handle_claim_behavior
                 .clone()
                 .unwrap_or(InviteReceiveAction::Quarantine),
-            "explicit_address" => policy.explicit_address_behavior.clone(),
+            "same_station" | "explicit_address" => policy.explicit_address_behavior.clone(),
             _ => InviteReceiveAction::Notify,
         }
     } else if effective_kind == "handle_claim" {

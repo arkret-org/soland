@@ -4,3 +4,4 @@ description: Production Helm chart for the soland Arkret Station
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
+icon: https://arkret.org/icon.png

@@ -21,6 +21,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
     source_id: &str,
     source_trust_domain: &str,
     submission: &arkret_wire::EventFederationSubmission,
+    seals: &[arkret_wire::Seal],
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let event = &submission.event;
     let digest_suite = trusted_federated_event_digest_suites(state, &[event])
@@ -118,7 +119,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
             )
         })?;
     }
-    accept_federated_seal_prerequisite(state, &event.realm_id, &envelope, &[], digest_suite)
+    accept_federated_seal_prerequisite(state, &event.realm_id, &envelope, seals, digest_suite)
         .await
         .map_err(|error| {
             SubmitOneError::new(

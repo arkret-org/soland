@@ -86,6 +86,12 @@ struct TextIdRow {
 }
 
 #[derive(QueryableByName)]
+struct ControlProposalAckRow {
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    control_proposal_ack: Option<Value>,
+}
+
+#[derive(QueryableByName)]
 struct MembershipCompensationEvidenceRow {
     #[diesel(sql_type = Binary)]
     event_id: Vec<u8>,
@@ -914,6 +920,44 @@ impl EventStore for PgEventStore {
             })
         })
         .transpose()
+    }
+
+    async fn control_proposal_ack_for_digest(
+        &self,
+        proposal_digest: &str,
+    ) -> PersistenceResult<Option<arkret_wire::ControlProposalAck>> {
+        arkret_wire::Hash::new(proposal_digest.to_owned()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("malformed Control Proposal digest: {error}"))
+        })?;
+        let mut conn = pg_conn(&self.pool).await?;
+        let row = sql_query(
+            "SELECT control_proposal_ack FROM state_control_events WHERE event_digest = $1",
+        )
+        .bind::<Text, _>(proposal_digest)
+        .get_result::<ControlProposalAckRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        let Some(value) = row.and_then(|row| row.control_proposal_ack) else {
+            return Ok(None);
+        };
+        let ack =
+            serde_json::from_value::<arkret_wire::ControlProposalAck>(value).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "stored Control Proposal Ack is invalid: {error}"
+                ))
+            })?;
+        ack.validate_protocol_bounds().map_err(|error| {
+            PersistenceError::Internal(format!(
+                "stored Control Proposal Ack violates protocol bounds: {error}"
+            ))
+        })?;
+        if ack.proposal_digest.as_str() != proposal_digest {
+            return Err(PersistenceError::Internal(
+                "stored Control Proposal Ack does not bind its lookup digest".to_owned(),
+            ));
+        }
+        Ok(Some(ack))
     }
 
     async fn put_realm_bootstrap_batch_atomic(

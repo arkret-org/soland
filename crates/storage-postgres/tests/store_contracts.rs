@@ -2164,7 +2164,9 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     use diesel::sql_types::Text;
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
-    use soland_storage::{CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork};
+    use soland_storage::{
+        CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, EventStore,
+    };
 
     #[derive(QueryableByName)]
     struct CountRow {
@@ -2176,7 +2178,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         return;
     };
     let _db_guard = DB_GUARD.lock().await;
-    let now = chrono::Utc::now();
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let actor_did = arkret_identifiers::Did::new(format!(
         "did:web:managed-anchor-{}.example",
         uuid::Uuid::now_v7()
@@ -2210,17 +2212,28 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
     .unwrap();
     let authority_set_ref =
         arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-    let ack = arkret_wire::ControlProposalAck {
-        kind: arkret_wire::ControlProposalAckKind::SignedAck,
+    let decision_policy = arkret_wire::ControlProposalDecisionPolicy::default();
+    let mut authority_ack = arkret_wire::ControlProposalAuthorityAck {
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),
         received_at: now,
-        decision_due_at: now + chrono::Duration::hours(1),
-        absolute_due_at: now + chrono::Duration::hours(2),
-        defer_count: 0,
+        decision_due_at: now + decision_policy.decision_window,
+        absolute_due_at: now + decision_policy.absolute_horizon,
         authority_set_ref: authority_set_ref.clone(),
-        authority_acks: Vec::new(),
+        signature: arkret_wire::PayloadSignature {
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:service.example#authority-1".to_owned(),
+            )
+            .unwrap(),
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+            created_at: now,
+            jws: "e30..c2ln".to_owned(),
+        },
     };
+    authority_ack.signature.payload_digest = authority_ack.authority_ack_digest().unwrap();
+    let ack =
+        arkret_wire::ControlProposalAck::from_authority_acks(vec![authority_ack], decision_policy)
+            .unwrap();
     let envelope = serde_json::to_value(&event).unwrap();
     let canonical_bytes =
         arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
@@ -2246,7 +2259,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
                 received_at: now,
             },
             control_proposal_ingress: Some(
-                arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
+                arkret_state::state::store::ControlProposalIngress::AckRequired(ack.clone()),
             ),
             device_revocation_transition: None,
             device_revocation_gate: None,
@@ -2256,6 +2269,15 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         })
         .await
         .expect("commit basis-free Control anchor with its Control Proposal Ack");
+
+    assert_eq!(
+        PgEventStore { pool: pool.clone() }
+            .control_proposal_ack_for_digest(proposal_digest.as_str())
+            .await
+            .expect("read the durable Control Proposal Ack by proposal digest"),
+        Some(ack),
+        "federation backfill must recover the exact durable Ack"
+    );
 
     let mut conn = pool.get().await.unwrap();
     let count =

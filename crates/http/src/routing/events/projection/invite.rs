@@ -187,16 +187,10 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     {
         let account: AccountId =
             serde_json::from_str(&invitee_id).map_err(|_| "reducer_projection_failed")?;
-        let member_cell = invite_member_cell(&account)?;
-        let member_value = projection
-            .cell_value(&member_cell)
-            .cloned()
-            .ok_or("reducer_projection_failed")?;
         lifecycle.insert(
             "invitee_account_id".to_owned(),
             serde_json::to_value(account).map_err(|_| "reducer_projection_failed")?,
         );
-        frozen.insert(member_cell, member_value);
     }
     frozen.insert(lifecycle_cell, Value::Object(lifecycle));
     Ok(frozen)
@@ -244,10 +238,6 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
         lifecycle.get("state").and_then(Value::as_str),
         Some("pending" | "claimed" | "send_failed")
     ) {
-        return Err("reducer_projection_failed");
-    }
-    let member_cell = invite_member_cell(&account)?;
-    if frozen_pre_state.get(&member_cell).and_then(Value::as_str) != Some("invite") {
         return Err("reducer_projection_failed");
     }
     let terminal_status = invite_terminal_transition_target(operation, &invite_id)

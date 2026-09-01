@@ -11,10 +11,12 @@
 
 use std::collections::BTreeMap;
 
-use arkret_models_collaboration::sync_frames::account_sync::ActorPrivateDeviceUpdate;
 #[cfg(test)]
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate,
+};
+use arkret_models_collaboration::sync_frames::account_sync::{
+    ActorPrivateDeviceUpdate, DeviceMessageContent,
 };
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
@@ -494,11 +496,15 @@ pub(crate) async fn fanout_actor_private_update(
             return 0;
         }
     };
-    let envelope = match serde_json::to_value(&update) {
-        Ok(envelope) => envelope,
-        Err(error) => {
-            tracing::error!(%error, actor, "failed to serialize actor-private update");
-            return 0;
+    let content = match &update {
+        ActorPrivateDeviceUpdate::AccountData { content, .. } => {
+            DeviceMessageContent::AccountDataUpdate(content.clone())
+        }
+        ActorPrivateDeviceUpdate::Blocklist { content, .. } => {
+            DeviceMessageContent::BlocklistUpdate(content.clone())
+        }
+        ActorPrivateDeviceUpdate::ReadCursor { content, .. } => {
+            DeviceMessageContent::ReadCursorUpdate(content.clone())
         }
     };
     let devices = state
@@ -514,6 +520,33 @@ pub(crate) async fn fanout_actor_private_update(
             continue;
         }
         let position = state.next_to_device_position();
+        let envelope = DeviceMessageEnvelope {
+            device_message_id: arkret_identifiers::DeviceMessageId::new(crate::ids::generate(
+                "device_message",
+            ))
+            .expect("the server device-message generator returns a typed UUIDv7 id"),
+            kind: arkret_wire::wire_strings::ProtocolKind::new(event_type)
+                .expect("actor-private update kinds are registered protocol kinds"),
+            sender: sender.clone(),
+            recipient_account_id: arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new(actor.to_owned())
+                    .expect("authenticated actor-private holder is a core DID"),
+                state.service_core_id().clone(),
+            ),
+            recipient_device_id: arkret_identifiers::DeviceId::new(device.device_id.clone())
+                .expect("persisted active device has a typed device id"),
+            sent_at: created_at,
+            expires_at: created_at + chrono::Duration::hours(1),
+            content: content.clone(),
+            unsigned: None,
+        };
+        let envelope = match serde_json::to_value(envelope) {
+            Ok(envelope) => envelope,
+            Err(error) => {
+                tracing::error!(%error, actor, "failed to serialize actor-private envelope");
+                continue;
+            }
+        };
         let idempotency_key = format!("{event_type}:{actor}:{sender_endpoint_id}:{position}");
         match state
             .deliveries()

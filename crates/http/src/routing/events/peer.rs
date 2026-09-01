@@ -1692,7 +1692,7 @@ impl PeerReadAuthz {
             return false;
         }
         let event_time = record_event_time(record);
-        let needs_plaintext = record_requires_private_plaintext_visibility(record, meta);
+        let needs_plaintext = record_requires_private_plaintext_visibility(record);
         if needs_plaintext && !self.source_can_receive_plaintext(&realm_id) {
             return false;
         }
@@ -1936,11 +1936,13 @@ fn history_access_allows(
     }
 }
 
-fn record_requires_private_plaintext_visibility(
-    record: &AcceptedEvent,
-    meta: &RealmMetaRecord,
-) -> bool {
-    let _ = meta;
+fn record_requires_private_plaintext_visibility(record: &AcceptedEvent) -> bool {
+    if arkret_wire::EventKind::from_wire(&record.kind).is_control_plane() {
+        // Control-plane payloads are the signed governance carriers needed
+        // for federation admission and frontier repair. They are not private
+        // content delegated to an auxiliary plaintext-processing service.
+        return false;
+    }
     let Some(payload) = record_payload(record) else {
         return true;
     };
@@ -2590,5 +2592,24 @@ mod membership_identity_tests {
                 .is_some()
         );
         assert_eq!(authz.realm_members[&realm].len(), 1);
+    }
+
+    #[test]
+    fn control_plane_visibility_is_not_treated_as_private_content_processing() {
+        let source = "ak:did_core:web:source.example";
+        let actor = arkret_wire::ActorId::account(account(source));
+        let control = record(
+            arkret_wire::EventKind::MemberState.as_str(),
+            &actor,
+            json!({"member_id": actor, "membership": "leave"}),
+        );
+        assert!(!record_requires_private_plaintext_visibility(&control));
+
+        let data = record(
+            arkret_wire::EventKind::MessageCreate.as_str(),
+            &actor,
+            json!({"body": "private plaintext"}),
+        );
+        assert!(record_requires_private_plaintext_visibility(&data));
     }
 }
