@@ -1278,10 +1278,6 @@ async fn validate_unit_relationships(
                     format!("PCR genesis authorize payload digest failed: {error}"),
                 )
             })?;
-        let device_key_digest = format!(
-            "sha256:{}",
-            sha256_hex(descriptor.device_public_key_did.as_bytes())
-        );
         let authorized_by_root = matches!(
             &authorize.authorized_by,
             arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
@@ -2141,17 +2137,9 @@ mod tests {
         arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
             descriptor_version: 1,
             device_id: payload.device_id.clone(),
-            device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-                payload.device_public_key_did.as_bytes(),
-            ))
-            .unwrap(),
             device_public_key_did: payload.device_public_key_did.clone(),
             device_key_algorithm: arkret_models_collaboration::events_payloads::FoundingDeviceKeyAlgorithm::Ed25519,
             device_key_purpose: arkret_models_collaboration::events_payloads::FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
-            hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-                payload.hpke_key.as_bytes(),
-            ))
-            .unwrap(),
             hpke_key: payload.hpke_key.clone(),
             hpke_key_algorithm: arkret_models_collaboration::events_payloads::FoundingDeviceHpkeKeyAlgorithm::X25519,
             algorithms: payload.algorithms.clone(),

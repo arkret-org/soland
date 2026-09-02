@@ -82,17 +82,9 @@ fn controller_founding_device_descriptor(
     arkret_models_collaboration::events_payloads::FoundingDeviceDescriptor {
         descriptor_version: 1,
         device_id: payload.device_id.clone(),
-        device_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-            payload.device_public_key_did.as_bytes(),
-        ))
-        .unwrap(),
         device_public_key_did: payload.device_public_key_did.clone(),
         device_key_algorithm: FoundingDeviceKeyAlgorithm::Ed25519,
         device_key_purpose: FoundingDeviceKeyPurpose::EventSigningAndMlsIdentity,
-        hpke_key_digest: arkret_wire::Hash::new(arkret_canonical::sha256_digest(
-            payload.hpke_key.as_bytes(),
-        ))
-        .unwrap(),
         hpke_key: payload.hpke_key.clone(),
         hpke_key_algorithm: FoundingDeviceHpkeKeyAlgorithm::X25519,
         algorithms: payload.algorithms.clone(),
