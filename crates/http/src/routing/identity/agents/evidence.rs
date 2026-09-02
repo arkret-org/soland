@@ -396,7 +396,7 @@ pub(crate) async fn fetch_service_signer_evidence(
         let base_url = match base_url.filter(|value| !value.trim().is_empty()) {
             Some(base_url) => base_url,
             None => {
-                resolved_base = crate::routing::federation::federation::resolved_peer_base_url(
+                resolved_base = crate::routing::federation::resolved_peer_base_url(
                     state,
                     service_id.as_str(),
                     arkret_wire::ServiceKind::Station.as_str(),

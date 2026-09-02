@@ -648,7 +648,7 @@ async fn enqueue_erasure_receipt_fanout(
         .map(|member_id| member_id.route_service_id().to_string())
         .filter(|service| service != state.service_id())
         .collect::<std::collections::BTreeSet<_>>();
-    let peers = crate::routing::federation::federation::configured_peer_targets(state)
+    let peers = crate::routing::federation::configured_peer_targets(state)
         .into_iter()
         .filter(|peer| recipient_services.contains(peer.service_id.as_str()))
         .collect::<Vec<_>>();

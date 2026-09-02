@@ -286,7 +286,7 @@ async fn run() -> anyhow::Result<()> {
     // when `SOLAND_FEDERATION_OUTBOUND=0` (used by integration tests
     // that don't want background HTTP traffic). The dispatcher drains
     // the `federation_outbox` table populated by
-    // `routing::federation::federation::broadcast_*_to_peers`.
+    // `routing::federation::broadcast_*_to_peers`.
     let _federation_dispatcher = soland_http::routing::federation::outbox::spawn(state.clone());
     tracing::info!(
         worker = "federation_outbox",

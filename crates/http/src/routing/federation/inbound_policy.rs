@@ -1,5 +1,3 @@
-use soland_http::error::AppError;
-
 use crate::state::AppState;
 
 /// Resolve an endpoint principal only through an unambiguous accepted member
@@ -24,18 +22,6 @@ pub(crate) fn joined_actor_for_principal_route(
         });
     let actor = actors.next()?;
     actors.next().is_none().then_some(actor)
-}
-
-pub(crate) fn ensure_private_inbound_read_rail_local(state: &AppState) -> Result<(), AppError> {
-    if state.config().development_mode {
-        return Ok(());
-    }
-    Err(AppError::unsupported_feature(
-        "the /_soland/peer/federation/* read rail is a deployment-local debug affordance and is \
-         disabled outside development mode. Use the protocol federation track \
-         (/_arkret/peer/*) for cross-deployment reads",
-    )
-    .with_wire_code("federation_private_read_rail_local_only"))
 }
 
 pub(crate) async fn federation_actor_origin_acceptable(

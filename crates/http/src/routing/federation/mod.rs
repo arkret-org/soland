@@ -1,22 +1,53 @@
+//! Federation surface helpers.
+//!
+//! The formal server-to-server HTTP surface is `/_arkret/peer/*`; this module
+//! holds the trust-header, signature and outbound-dispatch utilities that
+//! surface is built from, plus the operator seal-signing router.
+//!
+//! Production gaps: `validation_class` instead of bool and revocation fanout.
+
 use salvo::prelude::*;
 
-#[allow(clippy::module_inception)]
-pub(crate) mod federation;
+pub(crate) mod erasure_receipts;
 pub mod frontier_exchange;
 mod frontier_reduction;
+mod inbound_policy;
 pub(crate) mod move_seal;
+mod outbound;
 pub mod outbox;
 pub mod outbox_operator;
+mod profile_intersection;
 pub mod rrk_acquisition;
+mod signature;
 pub(crate) mod well_known;
+mod wire;
 
-// SPEC-CR-001 — reused by `identity::session_pop` so self-PoP and the
-// federation rail reconstruct the signed `@target-uri` / `@authority`
-// identically.
-pub(in crate::routing) use federation::{signature_authority, signature_target_uri};
+pub(crate) use inbound_policy::{
+    federation_actor_origin_acceptable, joined_actor_for_principal_route,
+};
+pub(crate) use outbound::{
+    configured_peer_targets, peer_url_for_service_id, resolved_peer_base_url, resolved_peer_route,
+    resolved_peer_target,
+};
+pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
+#[cfg(test)]
+use salvo::http::StatusCode;
+// SPEC-CR-001 — `signature_authority` / `signature_target_uri` are reused by
+// `identity::session_pop` so self-PoP and the federation rail reconstruct the
+// signed `@target-uri` / `@authority` identically.
+pub(in crate::routing) use signature::{
+    signature_authority, signature_target_uri, verify_inbound_peer_http_signature,
+};
+#[cfg(test)]
+use signature::{validate_federation_headers, validate_signature_input};
 pub use well_known::well_known_arkret_router;
+pub(crate) use wire::FederationTrustHeaders;
 
-use super::{AuthArgs, now, sync_token};
+use super::AuthArgs;
+
+#[cfg(test)]
+#[path = "federation_tests.rs"]
+mod tests;
 
 /// RFC 9530 `Content-Digest` structured-field value over `bytes`:
 /// `sha-256=:<base64(SHA256(bytes))>:`.
@@ -42,23 +73,4 @@ pub fn federation_service_signature_key_id(service_did: &str) -> String {
 /// (NOT under `/_arkret/...`), alongside the rest of the admin surface.
 pub fn admin_seal_sign_router() -> Router {
     move_seal::api_admin_router()
-}
-
-/// Deployment-local read-only federation diagnostics, mounted at
-/// `/_soland/peer/federation/*`.
-///
-/// This is NOT the protocol federation surface: the cross-vendor S2S entry
-/// point is the `peer_federation` surface group at `/_arkret/peer/*`
-/// (outbound dispatch in this repo only ever targets `/_arkret/peer/events`).
-/// The routes below expose deployment-local read/verification diagnostics only;
-/// every federation write is accepted exclusively through
-/// `POST /_arkret/peer/events`.
-pub fn router() -> Router {
-    Router::with_path("federation")
-        .push(Router::with_path("realm-members").get(federation::federation_realm_members))
-        .push(
-            Router::with_path("actors/{actor_id}/events").get(federation::federation_actor_events),
-        )
-        .push(Router::with_path("verify-actor").post(federation::federation_verify_actor))
-        .push(Router::with_path("seals").get(federation::federation_seals_pull))
 }

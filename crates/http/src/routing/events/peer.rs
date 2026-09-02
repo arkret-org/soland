@@ -430,7 +430,7 @@ async fn enqueue_account_status_fanout(
     if targets.is_empty() {
         return Ok((AccountStatusPropagationState::Complete, Some(0)));
     }
-    let configured = crate::routing::federation::federation::configured_peer_targets(state)
+    let configured = crate::routing::federation::configured_peer_targets(state)
         .into_iter()
         .map(|peer| (peer.service_id.clone(), peer))
         .collect::<BTreeMap<_, _>>();
@@ -2223,11 +2223,12 @@ pub(in crate::routing) async fn validate_peer_request(
 ) -> Result<(), AppError> {
     let expected_destination = state.config().trust_domain.clone();
     if has_body {
-        let trust_headers =
-            crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
-                .map_err(|violation| {
-                    schema_violation(violation.message()).with_wire_code(violation.error_code())
-                })?;
+        let trust_headers = crate::routing::federation::FederationTrustHeaders::from_salvo_request(
+            req,
+        )
+        .map_err(|violation| {
+            schema_violation(violation.message()).with_wire_code(violation.error_code())
+        })?;
         trust_headers
             .verify_destination(&expected_destination)
             .map_err(|_| {
@@ -2294,10 +2295,7 @@ pub(in crate::routing) async fn validate_peer_request(
     // The bare trust-header checks above are necessary but not sufficient; the
     // signature verification (which also re-binds POST body digests and runs
     // the deny policy) is the authoritative gate.
-    crate::routing::federation::federation::verify_inbound_peer_http_signature(
-        state, req, has_body,
-    )
-    .await?;
+    crate::routing::federation::verify_inbound_peer_http_signature(state, req, has_body).await?;
     Ok(())
 }
 

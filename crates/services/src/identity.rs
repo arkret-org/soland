@@ -914,11 +914,6 @@ pub trait AccountLookupPort: Send + Sync {
         localpart: &str,
         primary: bool,
     ) -> ServiceResult<AccountLocalpartState>;
-    async fn set_primary_localpart(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> ServiceResult<AccountLocalpartState>;
     async fn remove_localpart(&self, account_pk: AccountPk, localpart: &str) -> ServiceResult<()>;
     async fn clear_localparts(&self, account_pk: AccountPk) -> ServiceResult<()>;
     async fn record_handle_release(
@@ -2157,16 +2152,6 @@ impl IdentityService {
             .await
     }
 
-    pub async fn set_primary_localpart(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> ServiceResult<AccountLocalpartState> {
-        self.accounts
-            .set_primary_localpart(account_pk, localpart)
-            .await
-    }
-
     pub async fn remove_localpart(
         &self,
         account_pk: AccountPk,
@@ -3216,14 +3201,6 @@ mod tests {
             _account_pk: AccountPk,
             _localpart: &str,
             _primary: bool,
-        ) -> ServiceResult<AccountLocalpartState> {
-            unreachable!()
-        }
-
-        async fn set_primary_localpart(
-            &self,
-            _account_pk: AccountPk,
-            _localpart: &str,
         ) -> ServiceResult<AccountLocalpartState> {
             unreachable!()
         }

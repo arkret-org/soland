@@ -324,7 +324,7 @@ async fn proxy_peer_query(
     request: &CurrentSignerEvidenceQueryRequestBody,
     target_id: &DidCoreId,
 ) -> Result<CurrentSignerEvidenceQueryOutcome, AppError> {
-    let route = crate::routing::federation::federation::resolved_peer_target(
+    let route = crate::routing::federation::resolved_peer_target(
         state,
         target_id.as_str(),
         "station",

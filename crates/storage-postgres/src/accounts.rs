@@ -257,42 +257,6 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
         AccountLocalpartRecord::try_from(assigned)
     }
 
-    async fn set_primary(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> PersistenceResult<AccountLocalpartRecord> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let owner =
-            sql_query("SELECT account_pk AS pk FROM account_localparts WHERE localpart = $1")
-                .bind::<Text, _>(localpart)
-                .get_result::<AccountIdRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(PersistenceError::database)?
-                .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))?;
-        if owner.pk != account_pk.get() {
-            return Err(PersistenceError::Conflict(format!(
-                "localpart `{localpart}` is assigned to another account"
-            )));
-        }
-        sql_query(
-            "UPDATE account_localparts SET is_primary = (localpart = $2), updated_at = NOW() \
-             WHERE account_pk = $1",
-        )
-        .bind::<BigInt, _>(account_pk.get())
-        .bind::<Text, _>(localpart)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-        self.owner_of(localpart)
-            .await
-            .map_err(PersistenceError::database)?
-            .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))
-    }
-
     async fn remove(&self, account_pk: AccountPk, localpart: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await

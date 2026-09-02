@@ -36,20 +36,6 @@ pub struct AccountLocalpartAddRequestBody {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-#[serde(deny_unknown_fields)]
-pub struct AccountLocalpartUpdateRequestBody {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub is_primary: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AccountLocalpartMutationOutcome {
     pub localpart: AccountLocalpartView,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
-pub struct AccountLocalpartDeleteOutcome {
-    pub ok: bool,
 }

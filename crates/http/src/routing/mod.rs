@@ -104,10 +104,6 @@ pub use soland_http::openapi_routes::ArkretOpenApiDoc;
 pub(crate) use soland_http::openapi_routes::error_catcher;
 use soland_http::openapi_routes::{api_not_found, wait_for_sync_token};
 
-pub(crate) async fn sync_token(state: &AppState) -> String {
-    events::sync::sync_token_for_state(state).await
-}
-
 #[cfg(test)]
 mod outbound_operation_selector_tests {
     #[test]

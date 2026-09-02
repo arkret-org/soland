@@ -2634,9 +2634,7 @@ pub(crate) async fn submit_federation_events(
         }
     }
     let trust_headers =
-        match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
-            req,
-        ) {
+        match crate::routing::federation::FederationTrustHeaders::from_salvo_request(req) {
             Ok(headers) => headers,
             Err(violation) => {
                 render_error(
@@ -2772,56 +2770,55 @@ pub(crate) async fn submit_federation_events(
     let mut agent_event_admission_receipts = Vec::new();
     let created_at = now();
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
-    let profile_gate =
-        match crate::routing::federation::federation::federation_profile_intersection_for_peer(
-            state,
-            &source_id,
-            Some(&source_trust_domain),
-        )
-        .await
-        {
-            Ok(gate) => gate,
-            Err(rejection) => {
-                let rejected = events
-                    .iter()
-                    .map(|envelope| {
-                        rejected_item(
-                            event_string_field_from_value(envelope, "event_id")
-                                .unwrap_or_else(|| "unknown".to_owned()),
-                            ReasonCode::from_wire(rejection.code),
-                            Some(rejection.message.clone()),
-                        )
-                    })
-                    .collect::<Vec<_>>();
-                append_audit_log(
-                    state,
-                    None,
-                    "peer.events.submit",
-                    json!({
-                        "realm_id": binding_realm,
-                        "source_trust_domain": source_trust_domain,
-                        "source_id": source_id,
-                        "request_canonical_digest": request_hash,
-                        "accepted": Vec::<String>::new(),
-                        "duplicate": Vec::<String>::new(),
-                        "rejected_count": rejected.len(),
-                        "quarantine_count": 0,
-                        "reason": rejection.code,
-                    }),
-                    "partial",
-                )
-                .await;
-                res.render(Json(events_submit_outcome(
-                    EventsSubmitStatus::Partial,
-                    Vec::new(),
-                    Vec::new(),
-                    rejected,
-                    Vec::new(),
-                    Some(super::super::sync::sync_token_for_state(state).await),
-                )));
-                return;
-            }
-        };
+    let profile_gate = match crate::routing::federation::federation_profile_intersection_for_peer(
+        state,
+        &source_id,
+        Some(&source_trust_domain),
+    )
+    .await
+    {
+        Ok(gate) => gate,
+        Err(rejection) => {
+            let rejected = events
+                .iter()
+                .map(|envelope| {
+                    rejected_item(
+                        event_string_field_from_value(envelope, "event_id")
+                            .unwrap_or_else(|| "unknown".to_owned()),
+                        ReasonCode::from_wire(rejection.code),
+                        Some(rejection.message.clone()),
+                    )
+                })
+                .collect::<Vec<_>>();
+            append_audit_log(
+                state,
+                None,
+                "peer.events.submit",
+                json!({
+                    "realm_id": binding_realm,
+                    "source_trust_domain": source_trust_domain,
+                    "source_id": source_id,
+                    "request_canonical_digest": request_hash,
+                    "accepted": Vec::<String>::new(),
+                    "duplicate": Vec::<String>::new(),
+                    "rejected_count": rejected.len(),
+                    "quarantine_count": 0,
+                    "reason": rejection.code,
+                }),
+                "partial",
+            )
+            .await;
+            res.render(Json(events_submit_outcome(
+                EventsSubmitStatus::Partial,
+                Vec::new(),
+                Vec::new(),
+                rejected,
+                Vec::new(),
+                Some(super::super::sync::sync_token_for_state(state).await),
+            )));
+            return;
+        }
+    };
 
     if batch_begins_realm_create(&events) {
         let Some(actor) = events
@@ -2970,7 +2967,7 @@ pub(crate) async fn submit_federation_events(
         let actor = event_actor.signing_principal_id().to_string();
         let event_kind = event_string_field_from_value(&envelope, "kind");
         let event_station_id = event_actor.route_service_id().to_string();
-        if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+        if !crate::routing::federation::federation_actor_origin_acceptable(
             state,
             &event_actor,
             &source_id,

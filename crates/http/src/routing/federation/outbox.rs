@@ -353,8 +353,7 @@ pub(crate) async fn relay_signal_once(
     request.validate().map_err(|error| error.to_string())?;
     let body =
         arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
-    let peer_target =
-        super::federation::resolved_peer_target(state, peer_id, "station", false).await?;
+    let peer_target = super::resolved_peer_target(state, peer_id, "station", false).await?;
     let target = format!("{}/_arkret/peer/signal", peer_target.base_url);
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target,
@@ -861,7 +860,7 @@ impl FederationDispatcher {
             }
         };
         for row in rows {
-            let peer_target = super::federation::resolved_peer_target(
+            let peer_target = super::resolved_peer_target(
                 &self.state,
                 row.delivery.peer_id.as_str(),
                 "station",
@@ -964,7 +963,7 @@ impl FederationDispatcher {
             .await;
             return;
         }
-        let peer_target = super::federation::resolved_peer_target(
+        let peer_target = super::resolved_peer_target(
             &self.state,
             row.delivery.peer_id.as_str(),
             "station",

@@ -1375,9 +1375,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         }
     };
     let trust_headers =
-        match crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(
-            req,
-        ) {
+        match crate::routing::federation::FederationTrustHeaders::from_salvo_request(req) {
             Ok(headers) => headers,
             Err(violation) => {
                 render_error(
@@ -1460,25 +1458,24 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         }
     }
     let source_trust_domain = trust_headers.source_trust_domain.as_str().to_owned();
-    let profile_gate =
-        match crate::routing::federation::federation::federation_profile_intersection_for_peer(
-            state,
-            source_id.as_str(),
-            Some(&source_trust_domain),
-        )
-        .await
-        {
-            Ok(gate) => gate,
-            Err(rejection) => {
-                render_error(
-                    res,
-                    StatusCode::FORBIDDEN,
-                    rejection.code,
-                    &rejection.message,
-                );
-                return;
-            }
-        };
+    let profile_gate = match crate::routing::federation::federation_profile_intersection_for_peer(
+        state,
+        source_id.as_str(),
+        Some(&source_trust_domain),
+    )
+    .await
+    {
+        Ok(gate) => gate,
+        Err(rejection) => {
+            render_error(
+                res,
+                StatusCode::FORBIDDEN,
+                rejection.code,
+                &rejection.message,
+            );
+            return;
+        }
+    };
     let mut admitted_producers = BTreeMap::new();
     for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
         if event.realm_id.as_str() != realm_id || event.actor_id.route_service_id() != &source_id {
@@ -1490,7 +1487,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             );
             return;
         }
-        if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+        if !crate::routing::federation::federation_actor_origin_acceptable(
             state,
             &event.actor_id,
             source_id.as_str(),
@@ -1572,7 +1569,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
         .executed_by
         .as_ref()
         .unwrap_or(&submission.controller_transition.event.actor_id);
-    if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+    if !crate::routing::federation::federation_actor_origin_acceptable(
         state,
         initiator,
         source_id.as_str(),

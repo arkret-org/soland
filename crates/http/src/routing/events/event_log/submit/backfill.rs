@@ -75,7 +75,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .await?;
     }
     let envelope = typed_event_to_canonical_value(event.clone())?;
-    let profile = crate::routing::federation::federation::federation_profile_intersection_for_peer(
+    let profile = crate::routing::federation::federation_profile_intersection_for_peer(
         state,
         source_id,
         Some(source_trust_domain),
@@ -86,7 +86,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .enforce_event(&envelope)
         .map_err(|error| SubmitOneError::new(StatusCode::BAD_REQUEST, error.code, error.message))?;
     let realm_id = event.realm_id.as_str();
-    if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+    if !crate::routing::federation::federation_actor_origin_acceptable(
         state,
         &event.actor_id,
         source_id,

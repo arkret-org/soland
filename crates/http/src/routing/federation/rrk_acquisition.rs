@@ -460,14 +460,10 @@ impl RrkAcquisitionWorker {
         Request: Serialize,
         Outcome: DeserializeOwned,
     {
-        let route = super::federation::resolved_peer_target(
-            &self.state,
-            replica.source_id.as_str(),
-            "station",
-            false,
-        )
-        .await
-        .map_err(|error| format!("service_route:{error}"))?;
+        let route =
+            super::resolved_peer_target(&self.state, replica.source_id.as_str(), "station", false)
+                .await
+                .map_err(|error| format!("service_route:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
             replica.source_id.as_str(),
             Some(route.trust_domain.as_str()),
@@ -530,10 +526,9 @@ pub(crate) async fn fetch_peer_governance_dependencies(
     source_id: &arkret_wire::DidCoreId,
     request: &PeerGovernanceDependencyResolveRequest,
 ) -> Result<GovernanceDependencyResolveOutcome, String> {
-    let route =
-        super::federation::resolved_peer_target(state, source_id.as_str(), "station", false)
-            .await
-            .map_err(|error| format!("service_route:{error}"))?;
+    let route = super::resolved_peer_target(state, source_id.as_str(), "station", false)
+        .await
+        .map_err(|error| format!("service_route:{error}"))?;
     if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
         source_id.as_str(),
         Some(route.trust_domain.as_str()),

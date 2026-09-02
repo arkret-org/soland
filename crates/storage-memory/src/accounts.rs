@@ -275,33 +275,6 @@ impl AccountLocalpartStore for MemoryAccountLocalpartStore {
         Ok(record)
     }
 
-    async fn set_primary(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> PersistenceResult<AccountLocalpartRecord> {
-        let now = Utc::now();
-        let mut data = self.data.lock();
-        let owner = data
-            .get(localpart)
-            .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))?
-            .account_pk;
-        if owner != account_pk {
-            return Err(PersistenceError::Conflict(format!(
-                "localpart `{localpart}` is assigned to another account"
-            )));
-        }
-        for record in data.values_mut() {
-            if record.account_pk == account_pk {
-                record.is_primary = record.localpart == localpart;
-                record.updated_at = now;
-            }
-        }
-        data.get(localpart)
-            .cloned()
-            .ok_or_else(|| PersistenceError::NotFound("localpart not found".to_owned()))
-    }
-
     async fn remove(&self, account_pk: AccountPk, localpart: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         match data.get(localpart) {

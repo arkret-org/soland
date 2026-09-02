@@ -1,5 +1,5 @@
 use super::{
-    AsyncConnection, BigInt, Binary, Bool, CircleMemberProjectionRecord, CircleProjectionRecord,
+    AsyncConnection, Binary, Bool, CircleMemberProjectionRecord, CircleProjectionRecord,
     CircleProjectionStore, Jsonb, MorphProjectionRecord, MorphProjectionStore, Nullable,
     OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, QueryableByName,
@@ -860,20 +860,6 @@ impl ProjectionEventStore for PgProjectionEventStore {
              ORDER BY projected.pk"
         ))
         .bind::<Text, _>(actor_id)
-        .load::<ProjectionEventRow>(&mut *conn)
-        .await
-        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query(format!(
-            "{PROJECTION_EVENT_SELECT} ORDER BY projected.pk LIMIT $1"
-        ))
-        .bind::<BigInt, _>(limit as i64)
         .load::<ProjectionEventRow>(&mut *conn)
         .await
         .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())

@@ -63,8 +63,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use soland_contracts::AccountProjectionRequestBody;
 use soland_contracts::admin::{
-    AccountLocalpartAddRequestBody, AccountLocalpartDeleteOutcome, AccountLocalpartListOutcome,
-    AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
+    AccountLocalpartAddRequestBody, AccountLocalpartListOutcome, AccountLocalpartMutationOutcome,
+    AccountLocalpartView,
 };
 use soland_http::error::AppError;
 use soland_services::identity::{
@@ -229,11 +229,6 @@ pub(in crate::routing) fn local_service_router() -> Router {
     Router::with_path(soland_contracts::ACCOUNT_LOCALPARTS_ROUTE)
         .get(list_account_localparts)
         .post(add_account_localpart)
-        .push(
-            Router::with_path("{localpart}")
-                .patch(update_account_localpart)
-                .delete(delete_account_localpart),
-        )
 }
 
 fn contact_routes() -> Router {
@@ -923,111 +918,6 @@ async fn add_account_localpart(
     json_ok(AccountLocalpartMutationOutcome {
         localpart: account_localpart_view(record),
     })
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.update",
-    tags("identity")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.update"))]
-async fn update_account_localpart(
-    account_principal_id: PathParam<String>,
-    localpart: PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<AccountLocalpartUpdateRequestBody>,
-) -> JsonResult<AccountLocalpartMutationOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    require_account_localparts_bearer(state, req)?;
-    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    let account_pk = local_account_pk(state, &account_principal_id).await?;
-    let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
-    let body = body.into_inner();
-    if body.is_primary != Some(true) {
-        return Err(AppError::param_invalid(
-            "only setting is_primary=true is supported",
-        ));
-    }
-    let record = state
-        .identities()
-        .set_primary_localpart(account_pk, &localpart)
-        .await
-        .map_err(localpart_persistence_error)?;
-    append_audit_log(
-        state,
-        Some(account_principal_id.as_str()),
-        "account.localpart.primary",
-        json!({
-            "account_principal_id": account_principal_id,
-            "localpart": localpart,
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(AccountLocalpartMutationOutcome {
-        localpart: account_localpart_view(record),
-    })
-}
-
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.delete",
-    tags("identity")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.delete"))]
-async fn delete_account_localpart(
-    account_principal_id: PathParam<String>,
-    localpart: PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AccountLocalpartDeleteOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    require_account_localparts_bearer(state, req)?;
-    let account_principal_id = account_core_id_from_path(account_principal_id.into_inner())?;
-    let account_pk = local_account_pk(state, &account_principal_id).await?;
-    let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
-    let before = state
-        .identities()
-        .account_localparts(account_pk)
-        .await
-        .map_err(localpart_persistence_error)?;
-    let removed_primary = before
-        .iter()
-        .any(|record| record.localpart == localpart && record.is_primary);
-    state
-        .identities()
-        .remove_localpart(account_pk, &localpart)
-        .await
-        .map_err(localpart_persistence_error)?;
-    if removed_primary
-        && let Some(replacement) = state
-            .identities()
-            .account_localparts(account_pk)
-            .await
-            .map_err(localpart_persistence_error)?
-            .into_iter()
-            .next()
-    {
-        state
-            .identities()
-            .set_primary_localpart(account_pk, &replacement.localpart)
-            .await
-            .map_err(localpart_persistence_error)?;
-    }
-    record_handle_release(state, &localpart)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    append_audit_log(
-        state,
-        Some(account_principal_id.as_str()),
-        "account.localpart.delete",
-        json!({
-            "account_principal_id": account_principal_id,
-            "localpart": localpart,
-        }),
-        "accepted",
-    )
-    .await;
-    json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.account.read.viewer", tags("identity"))]

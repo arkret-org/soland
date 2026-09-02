@@ -342,20 +342,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         Ok(self.0.events().snapshot_all().await?)
     }
 
-    async fn projected_events_capped(
-        &self,
-        limit: usize,
-    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
-        Ok(self
-            .0
-            .projection_events()
-            .snapshot_capped(limit)
-            .await?
-            .into_iter()
-            .map(application_projected_event)
-            .collect())
-    }
-
     async fn projected_event(
         &self,
         event_id: &str,

@@ -117,7 +117,7 @@ pub(super) async fn enqueue_remote_history_response(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let payload_json = arkret_canonical::canonical_json_string(&relay)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let route = super::super::federation::federation::resolved_peer_target(
+    let route = super::super::federation::resolved_peer_target(
         state,
         destination.as_str(),
         "station",

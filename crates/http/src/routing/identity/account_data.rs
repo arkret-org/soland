@@ -830,14 +830,6 @@ mod tests {
             unreachable!("NoAccounts mock: add_localpart is not exercised by these tests")
         }
 
-        async fn set_primary_localpart(
-            &self,
-            _account_pk: AccountPk,
-            _localpart: &str,
-        ) -> ServiceResult<AccountLocalpartState> {
-            unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
-        }
-
         async fn remove_localpart(
             &self,
             _account_pk: AccountPk,

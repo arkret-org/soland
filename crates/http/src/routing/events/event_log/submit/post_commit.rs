@@ -603,7 +603,7 @@ pub(super) async fn peer_event_batch_fanout_records(
         {
             continue;
         }
-        let url = crate::routing::federation::federation::resolved_peer_base_url(
+        let url = crate::routing::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
             "station",
@@ -734,7 +734,7 @@ pub(super) async fn direct_conversation_founding_fanout_records(
         {
             continue;
         }
-        let url = crate::routing::federation::federation::resolved_peer_base_url(
+        let url = crate::routing::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
             "station",
@@ -865,7 +865,7 @@ pub(super) async fn peer_event_fanout_records(
             .iter()
             .any(|peer| peer.service_id == service_id.as_str())
     {
-        let url = crate::routing::federation::federation::resolved_peer_base_url(
+        let url = crate::routing::federation::resolved_peer_base_url(
             state,
             service_id.as_str(),
             "station",
@@ -1333,7 +1333,7 @@ async fn dynamic_peer_event_targets(
 
     let mut targets = Vec::new();
     for (service_id, (membership_frontier, authority_witnesses)) in service_frontiers {
-        let url = crate::routing::federation::federation::resolved_peer_base_url(
+        let url = crate::routing::federation::resolved_peer_base_url(
             state,
             &service_id,
             "station",

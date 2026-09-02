@@ -145,18 +145,6 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
             .await?)
     }
 
-    async fn set_primary_localpart(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
-        Ok(self
-            .0
-            .account_localparts()
-            .set_primary(account_pk, localpart)
-            .await?)
-    }
-
     async fn remove_localpart(
         &self,
         account_pk: AccountPk,

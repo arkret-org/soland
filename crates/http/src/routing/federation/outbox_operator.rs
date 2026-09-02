@@ -263,13 +263,9 @@ pub async fn requeue_dead_letter(
     // (1) The stable service core must still resolve through the verified
     // record→describe chain. The historical peer_url is diagnostic only and
     // intentionally does not pin a handover-era route.
-    let peer_target = super::federation::resolved_peer_target(
-        state,
-        original.delivery.peer_id.as_str(),
-        "station",
-        true,
-    )
-    .await?;
+    let peer_target =
+        super::resolved_peer_target(state, original.delivery.peer_id.as_str(), "station", true)
+            .await?;
     if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
         original.delivery.peer_id.as_str(),
         Some(&peer_target.trust_domain),

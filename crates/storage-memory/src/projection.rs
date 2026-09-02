@@ -296,10 +296,6 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
             .cloned()
             .collect())
     }
-
-    async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
-        Ok(self.data.lock().iter().take(limit).cloned().collect())
-    }
 }
 
 pub(crate) struct MemoryCircleProjectionStore {

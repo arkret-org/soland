@@ -900,7 +900,7 @@ async fn enqueue_member_history_request_replicas(
             .map_err(|error| AppError::internal(error.to_string()))?;
         let payload_json = arkret_canonical::canonical_json_string(&replica)
             .map_err(|error| AppError::internal(error.to_string()))?;
-        let route = super::federation::federation::resolved_peer_target(
+        let route = super::federation::resolved_peer_target(
             state,
             destination_id.as_str(),
             "station",

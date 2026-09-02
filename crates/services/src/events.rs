@@ -925,7 +925,6 @@ pub trait EventReadPort: Send + Sync {
     async fn realm_events_newest_first(&self, realm_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn projected_events_capped(&self, limit: usize) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn projected_event(&self, event_id: &str) -> ServiceResult<Option<ProjectedEvent>>;
     async fn projected_event_by_operation_id(
         &self,
@@ -1381,13 +1380,6 @@ impl EventQueryService {
 
     pub async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.accepted_events().await
-    }
-
-    pub async fn projected_events_capped(
-        &self,
-        limit: usize,
-    ) -> ServiceResult<Vec<ProjectedEvent>> {
-        self.events.projected_events_capped(limit).await
     }
 
     pub async fn projected_event(&self, event_id: &str) -> ServiceResult<Option<ProjectedEvent>> {

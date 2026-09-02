@@ -267,12 +267,11 @@ async fn peer_invites_submit(
     // exists only so the delivered envelope can be verified against a
     // trust-domain-bound identity. It is never a principal session and MUST NOT
     // be reused by the authenticated self dispatch surface.
-    let trust_headers =
-        crate::routing::federation::federation::FederationTrustHeaders::from_salvo_request(req)
-            .map_err(|violation| {
-                super::events::peer::schema_violation(violation.message())
-                    .with_wire_code(violation.error_code())
-            })?;
+    let trust_headers = crate::routing::federation::FederationTrustHeaders::from_salvo_request(req)
+        .map_err(|violation| {
+            super::events::peer::schema_violation(violation.message())
+                .with_wire_code(violation.error_code())
+        })?;
     let request_hash = crate::util::canonical_digest(&body)?;
     let session = SessionRecord {
         token_hash: format!(

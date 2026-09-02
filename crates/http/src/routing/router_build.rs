@@ -344,7 +344,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
                 .push(invites::peer_router())
                 .push(identity::contact_federation::peer_router())
                 .push(identity::current_signer_evidence::peer_router())
-                .push(federation::federation::erasure_receipts::router())
+                .push(federation::erasure_receipts::router())
                 .push(governance_history::peer_router())
                 .push(mls::peer_router()),
         )
@@ -424,7 +424,11 @@ fn soland_local_router() -> Router {
         // `/_soland/find/directory/*` mirror retired — directory
         // discovery is served only from the canonical `/_arkret/find/...`
         // protocol tree (see `arkret_protocol_router`).
-        .push(Router::with_path("peer").push(federation::router()))
+        //
+        // `/_soland/peer/federation/*` read diagnostics retired — peer reads
+        // are served only from the protocol federation track
+        // (`ak.peer.events.read.scan.v1`, `ak.peer.seals.read.frontier.v1` /
+        // `.resolve.v1`, `ak.peer.current_signer_evidence.read.resolve.v1`).
         .push(interop::local_router())
         // Catch-all for the `/_soland/...` tree, mirroring the `/_arkret/`
         // one: unmatched paths/methods get the canonical Arkret JSON error

@@ -55,7 +55,7 @@ impl FrontierExchangeWorker {
     }
 
     pub async fn run_one_pass(&self) -> Result<(), String> {
-        let peers = super::federation::configured_peer_targets(&self.state);
+        let peers = super::configured_peer_targets(&self.state);
         if peers.is_empty() {
             return Ok(());
         }
@@ -187,10 +187,9 @@ impl FrontierExchangeWorker {
         path: &str,
         request: &T,
     ) -> Result<(R, String, usize), String> {
-        let route =
-            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
-                .await
-                .map_err(|error| format!("service_route_unavailable:{error}"))?;
+        let route = super::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
+            .await
+            .map_err(|error| format!("service_route_unavailable:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
             peer_id.as_str(),
             Some(route.trust_domain.as_str()),
@@ -733,10 +732,9 @@ impl FrontierExchangeWorker {
         peer_id: &arkret_wire::DidCoreId,
         realm_id: &str,
     ) -> Result<EventsFrontierFederationPeerState, String> {
-        let route =
-            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
-                .await
-                .map_err(|error| format!("service_route_unavailable:{error}"))?;
+        let route = super::resolved_peer_route(&self.state, peer_id.as_str(), "station", false)
+            .await
+            .map_err(|error| format!("service_route_unavailable:{error}"))?;
         if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
             peer_id.as_str(),
             Some(route.trust_domain.as_str()),
@@ -773,8 +771,7 @@ impl FrontierExchangeWorker {
         // A key miss or rotation must refresh the verified route and authority
         // document, never retry against a service-id-only cached public key.
         let refreshed =
-            super::federation::resolved_peer_route(&self.state, peer_id.as_str(), "station", true)
-                .await?;
+            super::resolved_peer_route(&self.state, peer_id.as_str(), "station", true).await?;
         let document =
             crate::jws_verify::resolve_did_document_async(&self.state, &refreshed.cache_entry.did)
                 .await?;

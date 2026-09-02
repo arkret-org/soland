@@ -1413,7 +1413,7 @@ async fn peer_claim_policy_authorized(
             let source = arkret_wire::DidCoreId::new(source_id.to_owned())
                 .map_err(|_| AppError::param_invalid("invalid source_id"))?;
             let Some(requester_actor) =
-                crate::routing::federation::federation::joined_actor_for_principal_route(
+                crate::routing::federation::joined_actor_for_principal_route(
                     state,
                     body.intended_realm_id.as_str(),
                     &requester_id,
@@ -1422,7 +1422,7 @@ async fn peer_claim_policy_authorized(
             else {
                 return Ok(false);
             };
-            if !crate::routing::federation::federation::federation_actor_origin_acceptable(
+            if !crate::routing::federation::federation_actor_origin_acceptable(
                 state,
                 &requester_actor,
                 source_id,
@@ -1444,14 +1444,12 @@ async fn peer_claim_policy_authorized(
             {
                 return Ok(false);
             }
-            let Some(target_actor) =
-                crate::routing::federation::federation::joined_actor_for_principal_route(
-                    state,
-                    body.intended_realm_id.as_str(),
-                    &target_principal_id,
-                    &state.service_core_id(),
-                )
-            else {
+            let Some(target_actor) = crate::routing::federation::joined_actor_for_principal_route(
+                state,
+                body.intended_realm_id.as_str(),
+                &target_principal_id,
+                &state.service_core_id(),
+            ) else {
                 return Ok(false);
             };
             let is_participant = |actor_id: &arkret_wire::ActorId| {
@@ -2193,7 +2191,7 @@ async fn claim_keypackage(
             .clone()
             .map(arkret_wire::ActorId::account)
             .or_else(|| {
-                crate::routing::federation::federation::joined_actor_for_principal_route(
+                crate::routing::federation::joined_actor_for_principal_route(
                     state,
                     body.intended_realm_id.as_str(),
                     &target_principal_id,
@@ -2224,20 +2222,16 @@ async fn claim_keypackage(
             return replay_peer_claim(existing, &request_digest)
                 .map(|Json(outcome)| Json(outcome.into()));
         }
-        let target = crate::routing::federation::federation::resolved_peer_target(
-            state,
-            destination,
-            "station",
-            false,
-        )
-        .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                format!("remote KeyPackage authority route unavailable: {error}"),
-            )
-            .with_wire_code("dependency_unavailable")
-        })?;
+        let target =
+            crate::routing::federation::resolved_peer_target(state, destination, "station", false)
+                .await
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::FailedPrecondition,
+                        format!("remote KeyPackage authority route unavailable: {error}"),
+                    )
+                    .with_wire_code("dependency_unavailable")
+                })?;
         let payload = String::from_utf8(arkret_canonical::canonical_json_bytes(&body).map_err(
             |error| AppError::internal(format!("remote claim canonical body: {error}")),
         )?)

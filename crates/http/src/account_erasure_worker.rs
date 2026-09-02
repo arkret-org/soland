@@ -226,7 +226,7 @@ async fn run_execution(
             .package
             .as_ref()
             .ok_or_else(|| AppError::internal("completed erasure execution has no receipt"))?;
-        crate::routing::federation::federation::erasure_receipts::persist_issued_package(
+        crate::routing::federation::erasure_receipts::persist_issued_package(
             state,
             package,
             &execution.account_authority_id,

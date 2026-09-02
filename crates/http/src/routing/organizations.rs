@@ -36,11 +36,6 @@ struct UpsertOrganizationRequestBody {
     member_count: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
-struct LinkOrganizationRealmRequestBody {
-    realm_id: String,
-}
-
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct OrganizationView {
     organization_id: String,
@@ -83,13 +78,6 @@ pub(crate) struct OrganizationPolicyView {
 }
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct OrganizationRealmLinkOutcome {
-    organization_id: String,
-    realm_id: String,
-    linked: bool,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct OrganizationPolicyLayer {
     source: String,
     organization_id: String,
@@ -128,11 +116,11 @@ pub(crate) fn router() -> Router {
         .get(list_organizations)
         .post(upsert_organization)
         .push(
+            // Single-organization reads are served by the collection route;
+            // Realm links are projected from `ak.realm.organization` Events.
             Router::with_path("{organization_id}")
-                .get(get_organization)
                 .push(Router::with_path("policy").get(get_organization_policy))
-                .push(Router::with_path("policy").post(upsert_organization_policy))
-                .push(Router::with_path("realms").post(link_organization_realm)),
+                .push(Router::with_path("policy").post(upsert_organization_policy)),
         )
 }
 
@@ -240,32 +228,6 @@ async fn upsert_organization(
         .store_organization(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(organization_record_view(state, &record))
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.resource.get",
-    summary = "Get an organization",
-    tags("organizations")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.resource.get"))]
-async fn get_organization(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    organization_id: PathParam<DidCoreId>,
-) -> JsonResult<OrganizationView> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let _session = aa.authenticated_session(state, req).await?;
-    refresh_organization_projection(state)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_did = organization_id.into_inner();
-    let organization_id = normalized_organization_id(organization_did.as_str())?;
-    let record = state
-        .governance()
-        .cached_organization(&organization_id)
-        .ok_or_else(|| AppError::not_found("organization not found"))?;
     json_ok(organization_record_view(state, &record))
 }
 
@@ -380,43 +342,6 @@ async fn upsert_organization_policy(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(organization_policy_record_view(state, &record))
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.realm.command.link",
-    summary = "Link a realm to an organization",
-    tags("organizations")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.organization.realm.command.link")
-)]
-async fn link_organization_realm(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    organization_id: PathParam<DidCoreId>,
-    body: JsonBody<LinkOrganizationRealmRequestBody>,
-) -> JsonResult<OrganizationRealmLinkOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_did = organization_id.into_inner();
-    let organization_id = normalized_organization_id(organization_did.as_str())?;
-    let body = body.into_inner();
-    let actor_id = DidCoreId::new(session.actor.clone())
-        .map_err(|error| AppError::param_invalid(format!("authenticated principal_id: {error}")))?;
-    ensure_organization_placeholder(state, &organization_id, &actor_id)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    link_realm_to_organization(state, &body.realm_id, &organization_did)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    json_ok(OrganizationRealmLinkOutcome {
-        organization_id,
-        realm_id: body.realm_id,
-        linked: true,
-    })
 }
 
 pub(crate) async fn record_realm_organizations_from_event(

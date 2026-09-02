@@ -234,7 +234,7 @@ async fn resolve_handle_from_configured_peer(
     if lookup.authority == service_domain {
         return Ok(None);
     }
-    for peer in crate::routing::federation::federation::configured_peer_targets(state) {
+    for peer in crate::routing::federation::configured_peer_targets(state) {
         if !peer_matches_handle_authority(peer.url.as_str(), &lookup.authority) {
             continue;
         }

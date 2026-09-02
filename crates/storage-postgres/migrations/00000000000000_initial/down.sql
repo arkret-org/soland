@@ -16,6 +16,7 @@ DROP TABLE IF EXISTS agent_sidecars CASCADE;
 DROP TABLE IF EXISTS agent_runtime_messages CASCADE;
 DROP TABLE IF EXISTS agent_principals CASCADE;
 DROP TABLE IF EXISTS agent_membership_cleanup_intents CASCADE;
+DROP TABLE IF EXISTS agent_approval_nonces CASCADE;
 DROP TABLE IF EXISTS managed_authority_claims CASCADE;
 DROP TABLE IF EXISTS applet_namespace_claims CASCADE;
 DROP TABLE IF EXISTS applet_installations CASCADE;

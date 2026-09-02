@@ -30,11 +30,6 @@ pub trait AccountLocalpartStore: Send + Sync {
         localpart: &str,
         primary: bool,
     ) -> PersistenceResult<AccountLocalpartRecord>;
-    async fn set_primary(
-        &self,
-        account_pk: AccountPk,
-        localpart: &str,
-    ) -> PersistenceResult<AccountLocalpartRecord>;
     /// Removes the exact `(account_pk, localpart)` association. Absence is
     /// idempotent, while a localpart assigned to another Account is a conflict.
     async fn remove(&self, account_pk: AccountPk, localpart: &str) -> PersistenceResult<()>;

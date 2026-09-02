@@ -10,9 +10,7 @@
 | `admin::account_localparts` | `AccountLocalpartView` | local contract | Soland、Sodmin | `/_soland/admin` 本地账号映射投影；未命中 spec wire 类型 |
 | `admin::account_localparts` | `AccountLocalpartListOutcome` | local contract | Soland、Sodmin | 部署本地列表 envelope；未命中 spec wire 类型 |
 | `admin::account_localparts` | `AccountLocalpartAddRequestBody` | local contract | Soland、Sodmin | 部署本地管理命令；未命中 spec wire 类型 |
-| `admin::account_localparts` | `AccountLocalpartUpdateRequestBody` | local contract | Soland、Sodmin | 部署本地管理命令；未命中 spec wire 类型 |
 | `admin::account_localparts` | `AccountLocalpartMutationOutcome` | local contract | Soland、Sodmin | 部署本地变更结果；未命中 spec wire 类型 |
-| `admin::account_localparts` | `AccountLocalpartDeleteOutcome` | local contract | Soland、Sodmin | 部署本地删除结果；未命中 spec wire 类型 |
 | `admin::handles` | `AdminHandleRecord` | local contract | Soland、Sodmin | 部署本地 handle 管理投影；未命中 spec wire 类型 |
 | `admin::handles` | `AdminHandleAuditEvent` | local contract | Soland、Sodmin | 部署本地 handle 审计投影；未命中 spec wire 类型 |
 | `admin::handles` | `AdminHandleListOutcome` | local contract | Soland、Sodmin | 部署本地 handle 列表 envelope；未命中 spec wire 类型 |
