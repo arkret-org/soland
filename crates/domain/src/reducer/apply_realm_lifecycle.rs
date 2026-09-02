@@ -1086,28 +1086,37 @@ impl ProjectionState {
             .get("title")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        // Security class is create-locked genesis state. Federation policy is
-        // independently validated by the policy-bundle reducer.
-        // Round 4 (B1.2) — capture (and validate against any existing
-        // locked value) the Realm trust_domain.
-        let payload_trust_domain = operation
-            .payload
-            .get("trust_domain")
-            .or_else(|| payload_object.and_then(|object| object.get("trust_domain")))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let payload_digest_algorithm = operation
-            .payload
-            .get("digest_algorithm")
-            .or_else(|| payload_object.and_then(|object| object.get("digest_algorithm")))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "sha256".to_owned());
-        if arkret_canonical::digest_suite(&payload_digest_algorithm).is_err() {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+        // Security class, trust domain and digest suite are create-locked
+        // genesis state. `realm_create_payload` is the closed `{object}`
+        // envelope, and `realm-genesis.schema.json` requires both fields in
+        // that object. No other Realm lifecycle kind may populate or validate
+        // them.
+        let payload_trust_domain = if kind == arkret_wire::EventKind::RealmCreate {
+            let Some(trust_domain) = payload_object
+                .and_then(|object| object.get("trust_domain"))
+                .and_then(Value::as_str)
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
             };
-        }
+            let Some(digest_algorithm) = payload_object
+                .and_then(|object| object.get("digest_algorithm"))
+                .and_then(Value::as_str)
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            };
+            if arkret_canonical::digest_suite(digest_algorithm).is_err() {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
+                };
+            }
+            Some(trust_domain.to_owned())
+        } else {
+            None
+        };
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ak:trust_domain:<scope>` — delegate to SDK
             // typed id validator.

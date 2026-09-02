@@ -1,7 +1,8 @@
 use soland_storage::contract_tests::{
     AppletFormalCommitContractStores, ConsentCommitContractStores,
     DeviceRevocationSealSettlementStores, EventCommitContractStores,
-    assert_applet_formal_commit_transaction_contract, assert_atomic_batch_outbox_rollback_contract,
+    assert_account_localpart_remove_contract, assert_applet_formal_commit_transaction_contract,
+    assert_atomic_batch_outbox_rollback_contract,
     assert_atomic_control_event_governance_dependency_contract,
     assert_consent_projection_commit_contract,
     assert_control_proposal_authority_ack_store_contract,
@@ -20,13 +21,29 @@ use soland_storage::{
     PeerKeyPackageClaimLedgerWriteResult,
 };
 use soland_storage_postgres::{
-    Db, PgAccountDataStore, PgAgentStore, PgAppletStore, PgContactStore,
-    PgControlProposalAuthorityAckStore, PgDeviceInventoryStore, PgDeviceMessageStore,
-    PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgGovernanceDependencyStore,
-    PgIdempotencyStore, PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore,
-    PgMlsKeyPackageStore, PgNotificationStore, PgOrganizationRegistrationStore, PgPool,
-    PgProjectionEventStore,
+    Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
+    PgContactStore, PgControlProposalAuthorityAckStore, PgDeviceInventoryStore,
+    PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
+    PgGovernanceDependencyStore, PgIdempotencyStore, PgInviteReceivePolicyStore,
+    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgNotificationStore,
+    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
+
+#[tokio::test]
+async fn postgres_audit_regression_satisfies_account_localpart_remove_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let accounts = PgAccountStore { pool: pool.clone() };
+    let localparts = PgAccountLocalpartStore { pool };
+    assert_account_localpart_remove_contract(
+        &accounts,
+        &localparts,
+        &format!("postgres-{}", uuid::Uuid::now_v7().simple()),
+    )
+    .await;
+}
 
 #[tokio::test]
 async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configured() {

@@ -1,6 +1,7 @@
 use soland_storage::contract_tests::{
     AppletFormalCommitContractStores, ConsentCommitContractStores,
     DeviceRevocationSealSettlementStores, EventCommitContractStores,
+    assert_account_localpart_remove_contract,
     assert_account_status_replica_decision_table_contract,
     assert_applet_formal_commit_transaction_contract, assert_atomic_batch_outbox_rollback_contract,
     assert_atomic_control_event_governance_dependency_contract,
@@ -20,6 +21,17 @@ use soland_storage::{
     SyncStoreRegistry,
 };
 use soland_storage_memory::SolandMemoryPersistenceStore;
+
+#[tokio::test]
+async fn memory_audit_regression_satisfies_account_localpart_remove_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_account_localpart_remove_contract(
+        store.accounts(),
+        store.account_localparts(),
+        &format!("memory-{}", uuid::Uuid::now_v7().simple()),
+    )
+    .await;
+}
 
 #[tokio::test]
 async fn memory_adapter_satisfies_formal_applet_commit_transaction_contract() {

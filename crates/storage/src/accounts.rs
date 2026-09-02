@@ -35,6 +35,8 @@ pub trait AccountLocalpartStore: Send + Sync {
         account_pk: AccountPk,
         localpart: &str,
     ) -> PersistenceResult<AccountLocalpartRecord>;
+    /// Removes the exact `(account_pk, localpart)` association. Absence is
+    /// idempotent, while a localpart assigned to another Account is a conflict.
     async fn remove(&self, account_pk: AccountPk, localpart: &str) -> PersistenceResult<()>;
     async fn clear_for_account(&self, account_pk: AccountPk) -> PersistenceResult<()>;
 }

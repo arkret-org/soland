@@ -297,13 +297,33 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM account_localparts WHERE account_pk = $1 AND localpart = $2")
-            .bind::<BigInt, _>(account_pk.get())
-            .bind::<Text, _>(localpart)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ())
-            .map_err(PersistenceError::database)
+        let row = sql_query(
+            "WITH inspected AS MATERIALIZED ( \
+                 SELECT account_pk FROM account_localparts WHERE localpart = $2 \
+             ), deleted AS ( \
+                 DELETE FROM account_localparts WHERE account_pk = $1 AND localpart = $2 \
+                 RETURNING account_pk \
+             ) \
+             SELECT CASE \
+                 WHEN EXISTS (SELECT 1 FROM deleted) THEN 'removed' \
+                 WHEN EXISTS (SELECT 1 FROM inspected WHERE account_pk <> $1) THEN 'conflict' \
+                 ELSE 'absent' \
+             END AS outcome",
+        )
+        .bind::<BigInt, _>(account_pk.get())
+        .bind::<Text, _>(localpart)
+        .get_result::<LocalpartRemovalOutcomeRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        match row.outcome.as_str() {
+            "removed" | "absent" => Ok(()),
+            "conflict" => Err(PersistenceError::Conflict(format!(
+                "localpart `{localpart}` is assigned to another account"
+            ))),
+            outcome => Err(PersistenceError::Internal(format!(
+                "unexpected localpart removal outcome `{outcome}`"
+            ))),
+        }
     }
 
     async fn clear_for_account(&self, account_pk: AccountPk) -> PersistenceResult<()> {
@@ -551,6 +571,11 @@ struct AccountLocalpartRow {
 struct LocalpartOnlyRow {
     #[diesel(sql_type = Text)]
     localpart: String,
+}
+#[derive(QueryableByName)]
+struct LocalpartRemovalOutcomeRow {
+    #[diesel(sql_type = Text)]
+    outcome: String,
 }
 #[derive(QueryableByName)]
 struct AccountLifecycleRow {

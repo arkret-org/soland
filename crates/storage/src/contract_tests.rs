@@ -19,8 +19,9 @@ use arkret_wire::{
 use chrono::{Duration, Utc};
 
 use super::{
-    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountPk,
-    AccountStatusReplicaAppend, AccountStatusReplicaConflictKind, AccountStatusReplicaStore,
+    AccountDataCasCommit, AccountDataCasResult, AccountDataRecord, AccountDataStore,
+    AccountLocalpartStore, AccountPk, AccountRecord, AccountStatusReplicaAppend,
+    AccountStatusReplicaConflictKind, AccountStatusReplicaStore, AccountStore,
     AgentApprovalNonceCommit, AppletIdentityCommit, AppletRecordCommit, AppletStore,
     CanonicalEventRecord, ConsentCellRecord, ConsentCellStore, ConsentGrantDot,
     ConsentProjectionCommit, ContactProjectionCommit, ContactRecord, ContactStore,
@@ -49,6 +50,86 @@ use super::{
     RealmFanoutBinding, RealmFanoutOutboxInput, RealmMetaRecord, RealmMetaStore,
     applet_effective_scope_key,
 };
+
+/// Shared account-localpart removal semantics for every persistence adapter.
+///
+/// A mismatched Account cannot delete the owner's row and receives a conflict;
+/// deleting an absent exact association remains idempotent.
+pub async fn assert_account_localpart_remove_contract(
+    accounts: &dyn AccountStore,
+    localparts: &dyn AccountLocalpartStore,
+    namespace: &str,
+) {
+    let station_id = DidCoreId::new("ak:did_core:web:soland.example").unwrap();
+    let owner_pk = accounts
+        .put(&AccountRecord {
+            pk: AccountPk(0),
+            principal_id: DidCoreId::new(format!(
+                "ak:did_core:web:{namespace}-localpart-owner.example"
+            ))
+            .unwrap(),
+            station_id: station_id.clone(),
+            localpart: String::new(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: database_timestamp_now(),
+        })
+        .await
+        .expect("create localpart owner Account");
+    let other_pk = accounts
+        .put(&AccountRecord {
+            pk: AccountPk(0),
+            principal_id: DidCoreId::new(format!(
+                "ak:did_core:web:{namespace}-localpart-other.example"
+            ))
+            .unwrap(),
+            station_id,
+            localpart: String::new(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: database_timestamp_now(),
+        })
+        .await
+        .expect("create other localpart Account");
+    let localpart = format!("audit-{namespace}");
+    localparts
+        .add(owner_pk, &localpart, true)
+        .await
+        .expect("assign localpart to owner");
+
+    let error = localparts
+        .remove(other_pk, &localpart)
+        .await
+        .expect_err("wrong-owner removal must conflict");
+    assert!(matches!(error, PersistenceError::Conflict(_)));
+    assert_eq!(
+        localparts
+            .owner_of(&localpart)
+            .await
+            .expect("read localpart after wrong-owner removal")
+            .map(|record| record.account_pk),
+        Some(owner_pk),
+        "wrong-owner removal must preserve the exact owner association"
+    );
+
+    localparts
+        .remove(owner_pk, &localpart)
+        .await
+        .expect("owner removes exact association");
+    assert!(
+        localparts
+            .owner_of(&localpart)
+            .await
+            .expect("read removed localpart")
+            .is_none()
+    );
+    localparts
+        .remove(owner_pk, &localpart)
+        .await
+        .expect("absent removal is idempotent");
+}
 
 pub fn minimal_history_signer_evidence(
     namespace: &str,

@@ -393,6 +393,96 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
 }
 
 #[test]
+fn audit_regression_realm_non_create_ignores_closed_create_identity_fields() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    apply_projected_create(
+        &mut state,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "schema": "ak.schema.realm_genesis.v1",
+                "purpose": "collaboration",
+                "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                "trust_domain": "ak:trust_domain:example.net",
+                "schema_refs": ["ak.schema.realm.v1"],
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+                "digest_algorithm": "sha256",
+                "security_class": "standard",
+                "encryption_profile": "mls_rfc9420",
+                "notary": serde_json::to_value(test_single_signer_notary("did:web:alice"))
+                    .unwrap(),
+            }
+        }),
+        &hlc,
+    );
+
+    // These fields are not members of the closed RealmProfile schema. A raw
+    // reducer caller must not let them relabel create-locked Realm identity or
+    // trigger create-only digest-suite validation.
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmProfile,
+            realm_id,
+            serde_json::json!({
+                "schema": "ak.schema.realm_profile.v1",
+                "title": "Renamed Realm",
+                "trust_domain": "ak:trust_domain:other.example",
+                "digest_algorithm": "not-a-digest-suite"
+            }),
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmLifecycle { ref action, .. } if action == "profile"
+    ));
+    let realm = state.realm_states.get(realm_id).unwrap();
+    assert_eq!(realm.title.as_deref(), Some("Renamed Realm"));
+    assert_eq!(
+        realm.trust_domain.as_deref(),
+        Some("ak:trust_domain:example.net")
+    );
+}
+
+#[test]
+fn audit_regression_realm_create_requires_nested_identity_fields() {
+    let mut state = ProjectionState::new();
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::RealmCreate,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "schema": "ak.schema.realm_genesis.v1",
+                    "purpose": "collaboration",
+                    "genesis_salt": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+                    "schema_refs": ["ak.schema.realm.v1"],
+                    "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
+                    "security_class": "standard",
+                    "encryption_profile": "mls_rfc9420",
+                    "notary": serde_json::to_value(test_single_signer_notary("did:web:alice"))
+                        .unwrap(),
+                },
+                "trust_domain": "ak:trust_domain:example.net",
+                "digest_algorithm": "sha256"
+            }),
+        ),
+        &ServerHlc::new("test"),
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
+    ));
+    assert!(!state.realm_states.contains_key(realm_id));
+}
+
+#[test]
 fn realm_upgrade_requires_a_registered_direct_edge() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
