@@ -736,7 +736,41 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
                 ))
                 .execute(conn)
                 .await?;
-            let retained = sql_query(
+            // An already-resolved scope is not re-opened by observing the same
+            // evidence again; that is what the second phase settled.
+            if sql_query(
+                "SELECT EXISTS (SELECT 1 FROM federation_frontier_confirmed_evidence                  WHERE realm_id = $1 AND peer_id = $2 AND evidence_scope_key = $3                    AND resolution_digest IS NOT NULL) AS present",
+            )
+            .bind::<Text, _>(&evidence.realm_id)
+            .bind::<Text, _>(evidence.peer_id.as_str())
+            .bind::<Text, _>(&evidence.evidence_scope_key)
+            .get_result::<ExistsRow>(conn)
+            .await?
+            .present
+            {
+                return Ok(());
+            }
+            // The exchange row is written first because the evidence row
+            // references it. First confirmed evidence can arrive for a peer this
+            // Realm has never exchanged with, and losing it to a foreign-key
+            // failure would drop the one signal that must fail the peer closed.
+            let existing = sql_query("SELECT realm_id, peer_id, status, consecutive_failures, last_success_at, last_failure_at, last_frontier_root, last_error, updated_at FROM federation_frontier_exchange WHERE realm_id = $1 AND peer_id = $2")
+                .bind::<Text, _>(&evidence.realm_id)
+                .bind::<Text, _>(evidence.peer_id.as_str())
+                .get_result::<FederationFrontierExchangeRow>(conn)
+                .await
+                .optional()?
+                .map(FederationFrontierExchangeRecord::try_from)
+                .transpose()?;
+            let record = frontier_exchange_failure_record(
+                existing,
+                &evidence.realm_id,
+                &evidence.peer_id,
+                &evidence.reason,
+                evidence.observed_at,
+            );
+            Self::put_record(conn, &record).await?;
+            sql_query(
                 "INSERT INTO federation_frontier_confirmed_evidence \
                  (realm_id, peer_id, evidence_scope_key, reason, evidence_scope, observed_at, \
                   resolution_kind, resolution_digest, resolved_at) \
@@ -754,25 +788,6 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .bind::<BigInt, _>(evidence.observed_at)
             .execute(conn)
             .await?;
-            if retained == 0 {
-                return Ok(());
-            }
-            let existing = sql_query("SELECT realm_id, peer_id, status, consecutive_failures, last_success_at, last_failure_at, last_frontier_root, last_error, updated_at FROM federation_frontier_exchange WHERE realm_id = $1 AND peer_id = $2")
-                .bind::<Text, _>(&evidence.realm_id)
-                .bind::<Text, _>(evidence.peer_id.as_str())
-                .get_result::<FederationFrontierExchangeRow>(conn)
-                .await
-                .optional()?
-                .map(FederationFrontierExchangeRecord::try_from)
-                .transpose()?;
-            let record = frontier_exchange_failure_record(
-                existing,
-                &evidence.realm_id,
-                &evidence.peer_id,
-                &evidence.reason,
-                evidence.observed_at,
-            );
-            Self::put_record(conn, &record).await?;
             Ok(())
         })
         .await
