@@ -924,16 +924,6 @@ fn consent_grant_dot(operation: &Operation) -> String {
     format!("{}:0", operation.context.event_id)
 }
 
-fn authorize_reader(session_actor: &str, holder: &str) -> Result<(), AppError> {
-    if session_actor == holder {
-        Ok(())
-    } else {
-        Err(AppError::capability_denied(
-            "consent cell is visible only to its holder or an explicitly authorized controller",
-        ))
-    }
-}
-
 // ────────────────────────────────────────────────────────────────────────
 // Effective consent (spec section 5).
 // ────────────────────────────────────────────────────────────────────────
@@ -1366,12 +1356,6 @@ mod tests {
             revoked_dots: BTreeSet::new(),
             updated_at: Utc::now(),
         }
-    }
-
-    #[test]
-    fn a_consent_cell_is_holder_private() {
-        assert!(authorize_reader(HOLDER, HOLDER).is_ok());
-        assert!(authorize_reader(PEER, HOLDER).is_err());
     }
 
     #[test]

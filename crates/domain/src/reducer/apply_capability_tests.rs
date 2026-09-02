@@ -227,6 +227,16 @@ mod agent_key_tests {
                 "subject": actor(subject),
                 "actions": actions,
                 "resources": resources,
+                "issued_at": "2026-01-01T00:00:00.000Z",
+                // Every subject here is a service principal, and
+                // `capabilities.md` §8 requires a finite effective expiry for
+                // its high-risk actions. Expiry is a temporal constraint; the
+                // grant has no top-level `expires_at`.
+                "constraints": [{
+                    "constraint_kind": "temporal",
+                    "effect": "allow",
+                    "expires_at": "2027-01-01T00:00:00.000Z"
+                }],
             }
         })
     }
@@ -1473,6 +1483,13 @@ mod realm_owner_authority_tests {
                         "constraint_kind": "authority_control",
                         "max_authority_depth": 1,
                         "authority_regrant_allowed": true
+                    }, {
+                        // Service subject: `capabilities.md` §8 requires a
+                        // finite effective expiry for its high-risk actions,
+                        // carried as a temporal constraint.
+                        "constraint_kind": "temporal",
+                        "effect": "allow",
+                        "expires_at": "2027-01-01T00:00:00.000Z"
                     }]
                 }
             }),

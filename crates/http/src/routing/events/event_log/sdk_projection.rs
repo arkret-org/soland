@@ -540,7 +540,6 @@ fn event_visibility_metadata(
 /// the registry payload schema.
 pub(in crate::routing) fn validate_device_revoke_submission(
     session: &SessionRecord,
-    parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Result<String, SubmitOneError> {
     let payload = envelope.get("payload").cloned().unwrap_or(Value::Null);

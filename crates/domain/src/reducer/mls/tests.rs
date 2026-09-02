@@ -137,8 +137,14 @@ fn welcome_payload() -> Value {
             "destination_id": "ak:did_core:web:server.example",
             "request": {
                 "claim_request_id": b64(b"welcome-claim-nonce-01-128-bit"),
-                "target_principal_id": "ak:did_core:web:bob.example",
-                "requester_id": "ak:did_core:web:alice.example",
+                "target_account_id": {
+                    "principal_id": "ak:did_core:web:bob.example",
+                    "station_id": "ak:did_core:web:server.example"
+                },
+                "requester_account_id": {
+                    "principal_id": "ak:did_core:web:alice.example",
+                    "station_id": "ak:did_core:web:server.example"
+                },
                 "intended_realm_id": "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1",
                 "mls_group_id": "mls-group-abc",
                 "claim_purpose": "realm_membership",

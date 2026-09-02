@@ -1073,7 +1073,6 @@ async fn device_authorize_projects_public_key_into_devices_table_body() {
             // §5.2 possession-proof input). project_device_authorize parses the
             // typed DeviceAuthorizePayload, so the fixture must be a
             // spec-complete device.authorize, not a three-field stub.
-            "principal_id": alice_core,
             "device_id": alice_device,
             "device_public_key_did": multibase,
             "hpke_key": "z6LSTestPhase1HpkeKey",
@@ -1147,7 +1146,6 @@ async fn device_authorize_projection_preserves_atomic_generation_binding_body() 
         RealmId::new(soland_test_support::fixture_principal_control_realm(alice)).unwrap(),
         alice_core.clone(),
         serde_json::json!({
-            "principal_id": alice_core,
             "device_id": alice_device,
             "device_public_key": test_ed25519_multibase_public(&device_key),
             "hpke_key": "z6LSTestPhase1HpkeKey",

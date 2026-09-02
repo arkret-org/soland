@@ -110,7 +110,7 @@ async fn directory_requester_proof_verified(
 mod tests {
     use arkret_identifiers::{Did, project_did_to_core_id};
     use arkret_models_discovery::DirectoryResolveHandleRequestBody;
-    use arkret_wire::{Hash, ProofContextId};
+    use arkret_wire::{DomainSeparationId, Hash};
 
     use super::*;
 
@@ -201,11 +201,11 @@ mod tests {
 
         assert_eq!(
             binding_context(&target_bytes),
-            ProofContextId::DIRECTORY_RESOLVE_TARGET_REQUEST_PROOF_V1
+            DomainSeparationId::DIRECTORY_RESOLVE_TARGET_REQUEST_PROOF_V1
         );
         assert_eq!(
             binding_context(&handle_bytes),
-            ProofContextId::DIRECTORY_RESOLVE_HANDLE_REQUEST_PROOF_V1
+            DomainSeparationId::DIRECTORY_RESOLVE_HANDLE_REQUEST_PROOF_V1
         );
         assert_ne!(target_bytes, handle_bytes);
     }

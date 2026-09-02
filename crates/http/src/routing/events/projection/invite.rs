@@ -820,6 +820,9 @@ fn invitee_for_operation(operation: &Operation) -> Option<AccountId> {
         .and_then(|value| serde_json::from_value(value).ok())
 }
 
+/// Only the tests below name this cell: the invite lifecycle deliberately never
+/// writes it, and asserting that requires addressing it.
+#[cfg(test)]
 fn invite_member_cell(account: &AccountId) -> Result<arkret_identifiers::CellRef, &'static str> {
     let actor = ActorId::account(account.clone());
     let subject = arkret_wire::composite_subject(&[actor.to_string()])

@@ -897,7 +897,6 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             json!({
                 "key": "ak.account.blocklist",
                 "expected_revision": 0,
-                "holder_id": alice_actor_core.as_str(),
                 "body": plaintext_blocklist,
                 "updated_at": "2026-05-21T00:00:00.000Z",
             }),
@@ -935,7 +934,6 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             json!({
                 "key": "ak.account.blocklist",
                 "expected_revision": 0,
-                "holder_id": alice_actor_core.as_str(),
                 "body": encrypted_blocklist.clone(),
                 "updated_at": "2026-05-21T00:00:00.000Z",
             }),
@@ -967,7 +965,6 @@ fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque() {
             json!({
                 "key": "ak.account.blocklist",
                 "expected_revision": 0,
-                "holder_id": alice_actor_core.as_str(),
                 "body": encrypted_account_data_value(
                     &alice_actor_core,
                     "ak.account.blocklist",

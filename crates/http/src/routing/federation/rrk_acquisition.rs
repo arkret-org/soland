@@ -624,7 +624,7 @@ fn validate_container_event<'a>(
     match event.kind {
         EventKind::MlsCommit => {
             let commit = serde_json::from_value::<arkret_models_crypto::MlsCommitPayload>(
-                event.payload.clone(),
+                serde_json::Value::Object(event.payload.clone().into_iter().collect()),
             )
             .map_err(|error| format!("container_commit_payload:{error}"))?;
             if event

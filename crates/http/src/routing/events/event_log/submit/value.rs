@@ -1513,6 +1513,96 @@ async fn replay_ackless_self_principal_ingress_for_station(
     Ok(None)
 }
 
+/// Append this Station's admission proof to a producer-signed fixture Event and
+/// retain the signer evidence that proof references.
+///
+/// A fixture that seeds an accepted Event straight into the store still has to
+/// produce the closed proof set a real submit produces — exactly one producer
+/// proof followed by exactly one origin Station admission proof. Anything less
+/// is an Event that could never have been accepted, and every later check that
+/// re-validates an accepted Event (Seal admission, the MLS governance frontier)
+/// rejects it. This reuses the same evidence retention and signing the submit
+/// path uses so the two cannot drift.
+#[cfg(feature = "test-support")]
+pub async fn attach_fixture_station_admission_proof(
+    state: &AppState,
+    mut event: Event,
+    producer_signing_key_did: arkret_wire::DidKey,
+    accepted_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Event, String> {
+    let digest_suite = arkret_canonical::DigestSuite::Sha256;
+    let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
+        return Err("fixture Event must carry exactly one producer proof".to_owned());
+    };
+    let producer = producer.clone();
+    let event_digest = arkret_wire::Hash::new(
+        event
+            .event_digest_with_digest_suite(digest_suite)
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let service_id = state.service_core_id();
+    let authenticated_resolution =
+        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
+            .await
+            .map_err(|error| error.to_string())?;
+    let (_, verification_method) = state
+        .current_service_receipt_binding()
+        .await
+        .map_err(|error| error.to_string())?;
+    let signer_evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
+        authenticated_resolution,
+        &service_id,
+        accepted_at,
+    )
+    .map_err(|error| error.to_string())?;
+    let content_digest = signer_evidence
+        .canonical_sha256_digest()
+        .map_err(|error| error.to_string())?;
+    let signer_resolution_evidence_ref = signer_evidence
+        .evidence_ref()
+        .map_err(|error| error.to_string())?;
+    state
+        .persistence()
+        .governance_dependency_store()
+        .put_unscoped_signer_evidence_exact(
+            arkret_models_collaboration::governance_dependencies::GovernanceDependency::AuthenticatedSignerResolutionEvidence {
+                selector: arkret_models_collaboration::governance_dependencies::GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
+                    content_digest,
+                },
+                authenticated_signer_resolution_evidence: Box::new(signer_evidence),
+            },
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut admission = arkret_wire::StationAdmissionProof {
+        kind: arkret_wire::StationAdmissionProofKind::StationAdmission,
+        verification_method,
+        event_digest,
+        producer_proof_digest: arkret_wire::StationAdmissionProof::producer_proof_digest(&producer)
+            .map_err(|error| error.to_string())?,
+        producer_verification_method: producer.verification_method.clone(),
+        producer_signing_key_did,
+        producer_signer_resolution_evidence_ref: None,
+        signer_resolution_evidence_ref,
+        accepted_at,
+        jws: String::new(),
+    };
+    let signing_input = admission
+        .canonical_binding_bytes()
+        .map_err(|error| error.to_string())?;
+    admission.jws = arkret_signatures::sign_ed25519_detached_jws(
+        state.notary_signing_key().as_ref(),
+        &signing_input,
+    )
+    .map_err(|error| error.to_string())?;
+    event.proofs.push(admission.into());
+    event
+        .validate_station_admission_binding(digest_suite)
+        .map_err(|error| error.to_string())?;
+    Ok(event)
+}
+
 pub(super) async fn accepted_event_envelope(
     state: &AppState,
     session: &SessionRecord,
@@ -1720,11 +1810,7 @@ pub(super) async fn accepted_event_envelope(
         producer_signer_resolution_evidence_ref: producer_signer_evidence
             .as_ref()
             .map(|(reference, _)| reference.clone()),
-        producer_signer_resolution_evidence_digest: producer_signer_evidence
-            .as_ref()
-            .map(|(_, digest)| digest.clone()),
         signer_resolution_evidence_ref,
-        signer_resolution_evidence_digest,
         accepted_at,
         jws: String::new(),
     };
@@ -2461,7 +2547,7 @@ pub(super) async fn submit_event_value_with_context(
     // never mutate device state before the canonical Event and Ack commit.
     let device_revoke_target_device_id = (parsed.kind
         == arkret_wire::event_kind_str::DEVICE_REVOKE)
-        .then(|| validate_device_revoke_submission(session, &parsed, &envelope))
+        .then(|| validate_device_revoke_submission(session, &envelope))
         .transpose()?;
 
     if let Some(operation) = projection_operation.as_mut() {
@@ -3221,7 +3307,6 @@ mod local_device_authorization_tests {
             event_digest: arkret_wire::Hash::new(format!("sha256:{}", "11".repeat(32)))
                 .unwrap(),
             signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
             created_at: chrono::DateTime::parse_from_rfc3339("2026-08-18T00:00:00Z")
                 .unwrap()
                 .to_utc(),
@@ -3250,20 +3335,55 @@ mod local_device_authorization_tests {
             )
             .unwrap(),
             producer_signer_resolution_evidence_ref: None,
-            producer_signer_resolution_evidence_digest: None,
             signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                 "ak:signer_evidence:sha256:{}",
-                "11".repeat(32)
-            ))
-            .unwrap(),
-            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
-                "sha256:{}",
                 "11".repeat(32)
             ))
             .unwrap(),
             accepted_at: producer.created_at,
             jws: "admission-signature".to_owned(),
         }
+    }
+
+    /// A wire proof that mirrors the evidence digest beside its
+    /// content-addressed ref is rejected at decode, not tolerated and ignored.
+    ///
+    /// `conformance/encoding.md` §4.0.1 deleted `signer_resolution_evidence_digest`
+    /// and `producer_signer_resolution_evidence_digest`: the ref already carries
+    /// the suite and all 32 digest octets, and two independently forgeable
+    /// fields would leave a verifier picking which one to trust. Both proof
+    /// carriers are closed, so a peer that still sends the sibling gets a
+    /// `schema_violation` rather than a silently dropped field.
+    #[test]
+    fn proof_carrying_a_sibling_evidence_digest_is_a_schema_violation() {
+        let producer = producer_proof();
+        let admission = admission_proof(&producer);
+
+        let mut producer_wire = serde_json::to_value(&producer).unwrap();
+        producer_wire["signer_resolution_evidence_ref"] =
+            serde_json::json!(format!("ak:signer_evidence:sha256:{}", "11".repeat(32)));
+        producer_wire["signer_resolution_evidence_digest"] =
+            serde_json::json!(format!("sha256:{}", "11".repeat(32)));
+        let error = serde_json::from_value::<arkret_wire::ProducerEventProof>(producer_wire)
+            .expect_err("producer proof must reject the deleted sibling digest");
+        assert!(
+            error
+                .to_string()
+                .contains("signer_resolution_evidence_digest"),
+            "unexpected producer proof error: {error}"
+        );
+
+        let mut admission_wire = serde_json::to_value(&admission).unwrap();
+        admission_wire["signer_resolution_evidence_digest"] =
+            serde_json::json!(format!("sha256:{}", "11".repeat(32)));
+        let error = serde_json::from_value::<arkret_wire::StationAdmissionProof>(admission_wire)
+            .expect_err("admission proof must reject the deleted sibling digest");
+        assert!(
+            error
+                .to_string()
+                .contains("signer_resolution_evidence_digest"),
+            "unexpected admission proof error: {error}"
+        );
     }
 
     #[test]

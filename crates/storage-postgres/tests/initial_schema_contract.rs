@@ -74,10 +74,21 @@ fn seal_effective_state_checkpoint_is_created_and_dropped_symmetrically() {
 #[test]
 fn frontier_confirmed_evidence_has_closed_resolution_authority() {
     assert!(INITIAL_UP.contains("CREATE TABLE public.federation_frontier_confirmed_evidence"));
+    // `federation.md` §4.5.3 leaves current-v1 with exactly one clearing
+    // authority: an accepted ak.fork.resolution. There is no historical-range
+    // attestation branch and no same-scope witness re-agreement branch, so the
+    // column enum is a single value rather than an open list.
     assert!(INITIAL_UP.contains(
-        "resolution_kind text CHECK (resolution_kind IN ('fork_resolution_event', 'witness_reagreement'))"
+        "local_resolution_kind text CHECK (local_resolution_kind IN ('fork_resolution_event'))"
     ));
-    assert!(INITIAL_UP.contains("CHECK ((resolution_kind IS NULL) = (resolution_digest IS NULL))"));
+    assert!(
+        INITIAL_UP.contains(
+            "CHECK ((local_resolution_kind IS NULL) = (local_resolution_digest IS NULL))"
+        )
+    );
+    assert!(
+        INITIAL_UP.contains("CHECK ((peer_alignment_digest IS NULL) = (peer_aligned_at IS NULL))")
+    );
     assert!(
         INITIAL_DOWN
             .contains("DROP TABLE IF EXISTS federation_frontier_confirmed_evidence CASCADE")

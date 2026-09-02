@@ -495,7 +495,6 @@ async fn push_profile_and_moderation_contracts_work_body() {
         serde_json::json!({
             "key": "ak.push_rules",
             "expected_revision": 0,
-            "holder_id": fixture_actor_core_id("did:web:alice.example"),
             "body": {
                 "rules": [{
                     "rule_id": "mute-device",
@@ -1091,7 +1090,6 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
         serde_json::json!({
             "key": "ak.account.blocklist",
             "expected_revision": 0,
-            "holder_id": fixture_actor_core_id(bob),
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],

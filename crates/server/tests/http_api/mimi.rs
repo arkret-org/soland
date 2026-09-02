@@ -783,17 +783,14 @@ fn mimi_report_accepts_current_agent_proxy_and_freezes_signer_evidence() {
             let stored: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
             let producer = stored.proofs[0].as_producer().unwrap();
             assert!(producer.signer_resolution_evidence_ref.is_none());
-            assert!(producer.signer_resolution_evidence_digest.is_none());
             let admission = stored.proofs[1].as_station_admission().unwrap();
             let evidence_ref = admission
                 .producer_signer_resolution_evidence_ref
                 .as_ref()
                 .expect("Agent admission retains the frozen producer evidence ref");
-            let evidence_digest = admission
-                .producer_signer_resolution_evidence_digest
-                .as_ref()
-                .expect("Agent admission retains the frozen producer evidence digest");
-            assert_eq!(evidence_ref.content_digest().unwrap(), *evidence_digest);
+            evidence_ref
+                .content_digest()
+                .expect("the frozen producer evidence ref carries the only digest on the wire");
         },
     );
 }

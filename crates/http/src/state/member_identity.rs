@@ -324,13 +324,19 @@ pub(crate) fn handle_claim_record_from_envelope(
         .ok()?
         .as_str()?
         .to_owned();
+    // The status view carries no digest mirrors; both are recomputed from the
+    // carried `claim` / `revocation` (`conformance/encoding.md` §4.0.1).
     Some(HandleClaimEvidenceRecord {
-        digest: claim.claim_digest.to_string(),
+        digest: claim.claim_digest().ok()?.to_string(),
         subject_id: claim.claim.subject_account_id.principal_id.clone(),
         issuer_id: claim.claim.issuer_id.clone(),
         audience: claim.claim.audience.clone(),
         status,
-        revocation_digest: claim.revocation_digest.as_ref().map(ToString::to_string),
+        revocation_digest: claim
+            .revocation
+            .as_ref()
+            .and_then(|revocation| revocation.digest().ok())
+            .map(|digest| digest.to_string()),
         fresh_until: claim.fresh_until,
         visibility: Some(visibility),
         expires_at: claim.claim.expires_at,
@@ -506,19 +512,14 @@ pub(crate) fn test_handle_claim(
     if let Some(revocation) = revocation.as_mut() {
         revocation.proof.payload_digest = revocation.digest().unwrap();
     }
-    let revocation_digest = revocation
-        .as_ref()
-        .map(|revocation| revocation.digest().unwrap());
     let mut claim = HandleClaim {
         schema: HandleClaim::SCHEMA.to_owned(),
         claim: core,
-        claim_digest,
         status,
         as_of: issued_at,
         verifier_id: issuer_id,
         verified_at: (status == HandleClaimStatus::Verified).then_some(issued_at),
         revocation,
-        revocation_digest,
         fresh_until: expires_at.min(issued_at + chrono::Duration::seconds(300)),
         status_proof: proof(
             PayloadProofPurpose::StatusAttestation,

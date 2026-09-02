@@ -410,5 +410,4 @@ impl ProjectionState {
             realm_id,
         }
     }
-
 }

@@ -139,9 +139,9 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
     let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let binding = stream_cursor_handle_binding(
-        "did:web:alice",
+        "ak:did_core:web:alice.example",
         "ak:device:1",
-        "did:web:host",
+        "ak:did_core:web:host.example",
         "fd0",
         &realms,
         &account_realms,
@@ -248,9 +248,9 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
     let account_realms = BTreeMap::from([("ak:realm:a".to_owned(), 11i64)]);
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let a = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -258,9 +258,9 @@ fn derive_cursor_handle_excludes_devices_timestamp() {
         3,
     );
     let b = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -278,9 +278,9 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
     let device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 13i64)]);
     let advanced_device_lists = BTreeMap::from([("did:web:alice.example".to_owned(), 14i64)]);
     let base = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -288,9 +288,9 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         3,
     );
     let other_device = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d2",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -298,9 +298,9 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         3,
     );
     let advanced = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -308,9 +308,9 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         4,
     );
     let advanced_account = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &advanced_account_realms,
@@ -318,9 +318,9 @@ fn derive_cursor_handle_separates_bindings_and_keys() {
         3,
     );
     let advanced_devices = stream_cursor_handle_binding(
-        "p",
+        "ak:did_core:web:principal.example",
         "d",
-        "s",
+        "ak:did_core:web:station.example",
         "f",
         &realms,
         &account_realms,
@@ -1183,10 +1183,6 @@ fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a
     rows.iter()
         .find(|row| row["actor_id"] == json!(roster_actor(actor)))
         .and_then(|row| row["membership"].as_str())
-}
-
-fn canonical_value_digest(value: &Value) -> String {
-    arkret_canonical::sha256_digest(arkret_canonical::canonical_json_bytes(value).unwrap())
 }
 
 // SPEC-CR-010 / SOL-05-008 — `project_member_identity_update` MUST store the
@@ -2351,7 +2347,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
 #[tokio::test]
 async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
     let state = test_state();
-    let session = roster_session(&state, "did:web:alice.example");
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
     let filter_a = sync_filter_digest(Some(&json!({
         "operation_id": "ak.self.events.read.scan.v1",
         "realms": [ROSTER_REALM],
@@ -2483,7 +2479,7 @@ fn sync_filter_digest_normalizes_events_query_scope_collections() {
 #[tokio::test]
 async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_valid() {
     let state = test_state();
-    let session = roster_session(&state, "did:web:alice.example");
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
     let positions = BTreeMap::from([("ak:realm:dedup-test".to_owned(), 7i64)]);
     let now_ms = chrono::Utc::now().timestamp_millis();
 
@@ -2546,7 +2542,7 @@ async fn unchanged_frontier_remints_same_handle_and_advance_keeps_old_token_vali
 #[tokio::test]
 async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
     let state = test_state();
-    let session = roster_session(&state, "did:web:alice.example");
+    let session = roster_session(&state, "ak:did_core:web:alice.example");
     let positions = BTreeMap::from([("ak:realm:prune-test".to_owned(), 1i64)]);
     let now_ms = chrono::Utc::now().timestamp_millis();
 

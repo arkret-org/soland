@@ -82,7 +82,6 @@ impl ModerationStore for MemoryModerationStore {
             })
             .cloned())
     }
-
 }
 
 #[cfg(test)]

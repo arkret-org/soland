@@ -704,7 +704,13 @@ impl FrontierExchangeWorker {
                 serde_json::from_value(normalization.verdict.clone())
                     .map_err(|error| format!("schema_violation:{error}"))?;
             if !self
-                .peer_scope_matches_verdict(peer_id, realm_id, &subject, &verdict)
+                .peer_scope_matches_verdict(
+                    peer_id,
+                    realm_id,
+                    &subject,
+                    &verdict,
+                    &normalization.resolution_event_digest,
+                )
                 .await?
             {
                 continue;
@@ -733,6 +739,7 @@ impl FrontierExchangeWorker {
         realm_id: &str,
         subject: &ForkResolutionSubject,
         verdict: &arkret_models_collaboration::events_payloads::ForkResolutionVerdict,
+        resolution_event_digest: &str,
     ) -> Result<bool, String> {
         use arkret_models_collaboration::events_payloads::ForkResolutionVerdict;
         match subject {
@@ -740,9 +747,20 @@ impl FrontierExchangeWorker {
                 actor_id,
                 actor_seq,
             } => {
-                let siblings = self
-                    .peer_sibling_events(peer_id, realm_id, actor_id, *actor_seq)
-                    .await?;
+                let Some(siblings) = self
+                    .peer_sibling_events(
+                        peer_id,
+                        realm_id,
+                        actor_id,
+                        *actor_seq,
+                        resolution_event_digest,
+                    )
+                    .await?
+                else {
+                    // The peer disclosed nothing at this position. That is a
+                    // fail-closed answer, not a peer failure and not evidence.
+                    return Ok(false);
+                };
                 let observed = siblings
                     .iter()
                     .map(|event| event.event_id.clone())
@@ -762,17 +780,19 @@ impl FrontierExchangeWorker {
                 let held = self.peer_variant_bytes(peer_id, realm_id, event_id).await?;
                 Ok(match verdict {
                     ForkResolutionVerdict::VoidAll { .. } => held.is_none(),
-                    ForkResolutionVerdict::CollisionWinner {
-                        winner_preimage, ..
-                    } => {
+                    ForkResolutionVerdict::CollisionWinner { winner_index, .. } => {
                         // Two variants share one identity, so alignment is only
-                        // provable on the complete canonical bytes.
+                        // provable on the complete canonical bytes. The verdict
+                        // names the winner by index into its own Move's
+                        // evidence, so the locator comes from the accepted
+                        // resolution Event rather than from a second copy.
                         let Some(held) = held else {
                             return Ok(false);
                         };
-                        held == self
-                            .local_winner_canonical_bytes(realm_id, winner_preimage)
-                            .await?
+                        let winner = self
+                            .local_winner_locator(resolution_event_digest, *winner_index)
+                            .await?;
+                        held == self.local_winner_canonical_bytes(realm_id, &winner).await?
                     }
                     ForkResolutionVerdict::SiblingWinner { .. } => false,
                 })
@@ -780,68 +800,72 @@ impl FrontierExchangeWorker {
         }
     }
 
-    /// Every Event this peer discloses at one exact `(actor_id, actor_seq)`.
+    /// Every Event this peer discloses at one exact `(actor_id, actor_seq)`,
+    /// or `None` when it discloses that position at all.
     ///
-    /// Discovery only, and every row is fully re-verified: a peer claiming to
-    /// have aligned must show Events that stand on their own.
+    /// The disclosure is bounded by the request rather than by the actor's
+    /// history length: one position, at most the cross-bucket sibling ceiling
+    /// of rows, no cursor and no paging
+    /// (`ak.peer.events.read.sibling_positions.v1`, `sync/federation.md`
+    /// §4.5.1). Every row is fully re-verified — a peer claiming to have
+    /// aligned must show Events that stand on their own — and the peer's
+    /// exhaustiveness claim is worth exactly what `missing_event_ids` on the
+    /// resolve face is worth, so a set that contradicts the verdict only keeps
+    /// the peer stale.
     async fn peer_sibling_events(
         &self,
         peer_id: &arkret_wire::DidCoreId,
         realm_id: &str,
         actor_id: &arkret_wire::ActorId,
         actor_seq: u64,
-    ) -> Result<Vec<arkret_wire::Event>, String> {
-        use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
-        use arkret_models_collaboration::http_bodies::PeerEventsQueryOutcome;
+        resolution_event_digest: &str,
+    ) -> Result<Option<Vec<arkret_wire::Event>>, String> {
+        use arkret_models_collaboration::http_bodies::{
+            PeerEventsSiblingPositionChallenge, PeerEventsSiblingPositionsOutcome,
+            PeerEventsSiblingPositionsRequestBody,
+        };
         let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
             .map_err(|error| format!("invalid_realm_id:{error}"))?;
-        let mut cursor: Option<arkret_wire::Cursor> = None;
-        let mut cursors = BTreeSet::new();
-        let mut siblings = Vec::new();
-        for _ in 0..CHECKPOINT_SCAN_PAGES {
-            let request = EventsQueryPostRequestBody {
-                realm_ids: vec![realm.clone()],
-                actor_ids: vec![actor_id.clone()],
-                after: cursor.clone(),
-                order: Some("ascending".to_owned()),
-                limit: Some(256),
-                ..Default::default()
-            };
-            let (page, ..): (PeerEventsQueryOutcome, _, _) = self
-                .peer_query(peer_id, "/_arkret/peer/events", &request)
+        let digest = arkret_wire::Hash::new(resolution_event_digest.to_owned())
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let resolution = self
+            .state
+            .projections()
+            .control_event_by_digest(&digest)
+            .map_err(|error| format!("temporarily_unavailable:control_event_store:{error}"))?
+            .ok_or_else(|| "dependency_missing:fork_resolution_event".to_owned())?;
+        let request = PeerEventsSiblingPositionsRequestBody {
+            realm_id: realm.clone(),
+            positions: vec![PeerEventsSiblingPositionChallenge {
+                actor_id: actor_id.clone(),
+                actor_seq,
+                fork_resolution_event_id: resolution.event_id.clone(),
+            }],
+            max_response_bytes: None,
+        };
+        let (outcome, ..): (PeerEventsSiblingPositionsOutcome, _, _) = self
+            .peer_query(peer_id, "/_arkret/peer/events/sibling-positions", &request)
+            .await?;
+        outcome
+            .validate_for_request(&request)
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let Some(disclosure) = outcome.disclosed_positions.into_iter().next() else {
+            return Ok(None);
+        };
+        let mut siblings = Vec::with_capacity(disclosure.siblings.len());
+        for submission in disclosure.siblings {
+            let event = submission.event;
+            if event.realm_id != realm
+                || &event.actor_id != actor_id
+                || event.actor_seq != actor_seq
+            {
+                return Err("schema_violation:alignment_selector_mismatch".to_owned());
+            }
+            crate::routing::events::event_log::verify_frontier_backfill_event(&self.state, &event)
                 .await?;
-            let has_more = page.has_more;
-            let next_cursor = page.next_cursor.clone();
-            for row in page.events {
-                let event = row
-                    .into_event()
-                    .ok_or_else(|| "schema_violation:alignment_requires_full_event".to_owned())?;
-                if event.realm_id != realm || &event.actor_id != actor_id {
-                    return Err("schema_violation:alignment_selector_mismatch".to_owned());
-                }
-                if event.actor_seq != actor_seq {
-                    continue;
-                }
-                crate::routing::events::event_log::verify_frontier_backfill_event(
-                    &self.state,
-                    &event,
-                )
-                .await?;
-                siblings.push(event);
-            }
-            if !has_more {
-                return Ok(siblings);
-            }
-            let next =
-                next_cursor.ok_or_else(|| "schema_violation:missing_scan_cursor".to_owned())?;
-            if !cursors.insert(next.clone()) {
-                return Err("schema_violation:repeated_scan_cursor".to_owned());
-            }
-            cursor = Some(arkret_wire::Cursor::new(next).map_err(|error| error.to_string())?);
+            siblings.push(event);
         }
-        // The peer did not finish disclosing this position inside the pass
-        // budget. That is not alignment, and it is not a peer failure either.
-        Err("temporarily_unavailable:alignment_page_budget".to_owned())
+        Ok(Some(siblings))
     }
 
     /// The canonical preimage bytes this peer holds for one colliding identity,
@@ -893,6 +917,44 @@ impl FrontierExchangeWorker {
         ))
     }
 
+    /// The evidence locator `verdict.winner_index` selects.
+    ///
+    /// `winner_index` indexes the resolution Move's own
+    /// `conflict_evidence.variants`, so the accepted Move is the only place the
+    /// locator can be read from; the normalization row deliberately keeps a
+    /// digest of that evidence rather than a second copy of it.
+    async fn local_winner_locator(
+        &self,
+        resolution_event_digest: &str,
+        winner_index: u8,
+    ) -> Result<arkret_models_collaboration::events_payloads::ForkResolutionVariantLocator, String>
+    {
+        use arkret_models_collaboration::events_payloads::{
+            ForkResolutionConflictEvidence, ForkResolutionPayload,
+        };
+        let digest = arkret_wire::Hash::new(resolution_event_digest.to_owned())
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let resolution = self
+            .state
+            .projections()
+            .control_event_by_digest(&digest)
+            .map_err(|error| format!("temporarily_unavailable:control_event_store:{error}"))?
+            .ok_or_else(|| "dependency_missing:fork_resolution_event".to_owned())?;
+        let payload: ForkResolutionPayload = serde_json::from_value(serde_json::Value::Object(
+            resolution.payload.clone().into_iter().collect(),
+        ))
+        .map_err(|error| format!("schema_violation:{error}"))?;
+        let ForkResolutionConflictEvidence::FullHashCollision { variants } =
+            payload.conflict_evidence
+        else {
+            return Err("schema_violation:collision_verdict_without_collision_evidence".to_owned());
+        };
+        variants
+            .into_iter()
+            .nth(usize::from(winner_index))
+            .ok_or_else(|| "schema_violation:winner_index_out_of_range".to_owned())
+    }
+
     /// Canonical bytes of the winner the local verdict names.
     ///
     /// The resolution Move is already accepted here, so its inline bytes and
@@ -912,13 +974,13 @@ impl FrontierExchangeWorker {
             } => arkret_canonical::base64url_decode(canonical_event_bytes_b64u.as_str())
                 .map_err(|error| format!("schema_violation:{error}")),
             ForkResolutionVariantLocator::CollisionVariantRecord {
-                collision_variant_record_digest,
+                collision_variant_record_id,
                 ..
             } => {
                 let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
                     .map_err(|error| format!("invalid_realm_id:{error}"))?;
                 let selector = GovernanceDependencySelector::CollisionVariantRecord {
-                    content_digest: collision_variant_record_digest.clone(),
+                    collision_variant_record_id: collision_variant_record_id.clone(),
                 };
                 let dependency = self
                     .state
@@ -1485,16 +1547,15 @@ mod tests {
             )
             .await
             .unwrap();
-        let normalization =
-            soland_services::federation::FederationFrontierResolutionRecord {
-                realm_id: realm.to_owned(),
-                cell_subject_key: scope_key.to_string(),
-                subject: serde_json::to_value(&subject).unwrap(),
-                verdict: serde_json::json!({"kind": "void_all"}),
-                conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
-                resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
-                normalized_at: 8,
-            };
+        let normalization = soland_services::federation::FederationFrontierResolutionRecord {
+            realm_id: realm.to_owned(),
+            cell_subject_key: scope_key.to_string(),
+            subject: serde_json::to_value(&subject).unwrap(),
+            verdict: serde_json::json!({"kind": "void_all"}),
+            conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
+            resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
+            normalized_at: 8,
+        };
         state
             .federation()
             .record_frontier_local_normalization(&normalization)

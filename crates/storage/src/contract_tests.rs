@@ -2377,7 +2377,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let approval_nonce = format!("approval-nonce:{event_uuid}");
     let approval_payload = serde_json::json!({
         "authorization_ref": approval_ref,
-        "approval_request_id": approval_request_id,
+        "request_id": approval_request_id,
         "approval_nonce": approval_nonce,
         "agent_context": { "agent_id": approval_agent },
     });

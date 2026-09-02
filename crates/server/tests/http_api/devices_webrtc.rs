@@ -172,12 +172,12 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
         )
         .unwrap();
     let actor = "did:web:alice.example";
-    let actor_core = fixture_actor_core_id(actor);
     let authorizing_device =
         arkret_wire::DeviceId::new("ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned())
             .unwrap();
+    // The Event envelope `actor_id` carries the principal; the payload does not
+    // mirror it.
     let authorize_payload = serde_json::json!({
-        "principal_id": actor_core,
         "device_id": new_device_id,
         "device_public_key_did": target_attestation.device_public_key_did,
         "hpke_key": hpke_key,

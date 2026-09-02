@@ -32,5 +32,4 @@ pub trait ModerationStore: Send + Sync {
     ) -> PersistenceResult<Option<Value>> {
         Ok(None)
     }
-
 }

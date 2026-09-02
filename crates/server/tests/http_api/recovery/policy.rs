@@ -29,7 +29,8 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays_
     let restarted = shared_recovery_state(persistence.clone()).await;
     let token = recovery_token_for_principal(restarted.clone(), &principal_id).await;
 
-    let duplicate_version = signed_recovery_policy(&signing, &principal_id, &vm, 1, None);
+    let duplicate_version =
+        signed_recovery_policy(&restarted, &signing, &principal_id, &vm, 1, None);
     post_recovery_policy(
         restarted,
         &token,
@@ -53,7 +54,14 @@ async fn recovery_policy_rejects_tampered_signature_body_body() {
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    let mut policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
+    let mut policy = signed_recovery_policy(
+        &state,
+        &signing,
+        &principal_id,
+        &verification_method,
+        1,
+        None,
+    );
     policy["trust_domain"] = serde_json::json!("ak:trust_domain:tampered.example");
 
     let body =
@@ -80,7 +88,14 @@ async fn recovery_policy_production_accepts_verified_payload_body() {
     let signing = SigningKey::from_bytes(&[77u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     seed_bearer_session(&state, token, &principal_id).await;
-    let policy = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
+    let policy = signed_recovery_policy(
+        &state,
+        &signing,
+        &principal_id,
+        &verification_method,
+        1,
+        None,
+    );
     let expected_account_id = fixture_account_id(&state, &principal_id);
 
     let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
@@ -138,6 +153,7 @@ async fn recovery_policy_accepts_genesis_session_device_signature_body() {
         .expect("principal verification method has a DID controller");
     let verification_method = format!("{principal_did}#{RECOVERY_TEST_DEVICE}");
     let policy = signed_recovery_policy(
+        &state,
         &device_signing,
         &principal_id,
         &verification_method,
@@ -166,11 +182,19 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart_body() {
     let signing = SigningKey::from_bytes(&[76u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    let v1 = signed_recovery_policy(&signing, &principal_id, &verification_method, 1, None);
+    let v1 = signed_recovery_policy(
+        &state,
+        &signing,
+        &principal_id,
+        &verification_method,
+        1,
+        None,
+    );
     post_recovery_policy(state.clone(), &token, &v1, &signing, StatusCode::CREATED).await;
 
     let restarted = shared_recovery_state(persistence).await;
     let v2_wrong_supersedes = signed_recovery_policy(
+        &restarted,
         &signing,
         &principal_id,
         &verification_method,

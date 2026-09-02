@@ -1636,7 +1636,6 @@ mod tests {
             delegation: arkret_wire::MembershipCompensationExecutorDelegation {
                 delegation_id: delegation_id.clone(),
                 core,
-                delegation_digest: delegation_digest.clone(),
                 signature: signature(),
             },
             join_accepted_proof: arkret_wire::MembershipJoinAcceptedProof {
@@ -1718,7 +1717,7 @@ mod tests {
             event_id: request.event.event_id.clone(),
             event_digest: request.event.canonical_digest.clone(),
             admission_id: evidence.delegation.core.admission_id.to_string(),
-            delegation_id: evidence.delegation.delegation_id.to_string(),
+            delegation_id: evidence.delegation.delegation_id.as_str().to_owned(),
             canonical_bytes,
             evidence,
         });

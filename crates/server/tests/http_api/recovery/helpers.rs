@@ -497,7 +497,10 @@ pub(crate) async fn seed_recovery_policy(
     let raw_payload = serde_json::json!({
         "schema": "ak.schema.recovery_policy.v1",
         "policy_id": policy_id,
-        "principal_id": principal_core,
+        "account_id": {
+            "principal_id": principal_core,
+            "station_id": state.service_id()
+        },
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["did_root"],
@@ -719,6 +722,7 @@ pub(crate) async fn ingest_pinned_recovery_did_document(
 }
 
 pub(crate) fn signed_recovery_policy(
+    state: &AppState,
     signing: &SigningKey,
     principal_id: &str,
     verification_method: &str,
@@ -726,10 +730,15 @@ pub(crate) fn signed_recovery_policy(
     supersedes: Option<&str>,
 ) -> Value {
     let principal_core = fixture_actor_core_id(principal_id);
+    // A recovery policy is scoped by the exact cross-Station AccountId, not by a
+    // bare principal: the same principal at another Station is another account.
     let mut policy = serde_json::json!({
         "schema": "ak.schema.recovery_policy.v1",
         "policy_id": new_prefixed_uuid7("ak:policy:"),
-        "principal_id": principal_core,
+        "account_id": {
+            "principal_id": principal_core,
+            "station_id": state.service_id()
+        },
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["did_root"],

@@ -158,8 +158,8 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         vec![evidence_record.clone()]
     );
     assert!(
-        restarted
-            .record_local_normalization(
+        !restarted
+            .resolve_confirmed_evidence_for_peer(
                 realm.as_str(),
                 &peer,
                 "sha256:wrong-scope",
@@ -192,7 +192,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         .unwrap();
     assert!(
         restarted
-            .record_local_normalization(
+            .resolve_confirmed_evidence_for_peer(
                 realm.as_str(),
                 &peer,
                 evidence_scope_key.as_str(),

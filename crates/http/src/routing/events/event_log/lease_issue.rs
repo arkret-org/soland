@@ -245,22 +245,7 @@ async fn issue_event_leases(
     // but against an isolated projection clone. This catches current-state
     // preconditions (for example a same-state membership transition) without
     // storing Events or advancing the accepted frontier.
-    if super::submit::moderation_atomic::batch_requires_moderation_atomicity(&envelopes) {
-        super::submit::moderation_atomic::preflight_moderation_atomic_batch(
-            state,
-            &envelopes,
-            &projected_operations,
-        )
-        .await
-        .map_err(|error| {
-            super::submit::submit_one_error_to_app_error(
-                "authorization lease moderation batch preflight",
-                error.status,
-                error.code,
-                &error.message,
-            )
-        })?;
-    } else if context
+    if context
         .as_ref()
         .is_some_and(|anchor| anchor.bootstrap_context.authority_root.is_some())
     {

@@ -469,12 +469,14 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         return;
     }
     if is_principal_control_realm {
-        let event = crate::signed_event::sign_fixture_event(
+        let event = crate::signed_event::sign_accepted_fixture_event(
+            state,
             principal_control_create.into_event(),
             subject,
             "ak:device:01904100-0000-7000-8000-000000000001",
             [21_u8; 32],
-        );
+        )
+        .await;
         project_fixture_genesis_event(state, &realm, event).await;
         return;
     }

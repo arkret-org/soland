@@ -370,6 +370,41 @@ pub fn fixture_verification_method(actor_id: &str, device_id: &str) -> DidUrl {
 /// Attach the same complete producer proof used by caller-authored fixtures to
 /// an Event whose content and content-derived identity are already frozen.
 #[must_use]
+/// Sign a fixture Event and append this Station's admission proof.
+///
+/// An Event seeded straight into the store is an *accepted* Event, and an
+/// accepted Event carries exactly one producer proof followed by exactly one
+/// origin Station admission proof. A fixture that stops after the producer
+/// proof produces something no submit path could have produced, and every later
+/// re-validation of an accepted Event rejects it.
+pub async fn sign_accepted_fixture_event(
+    state: &soland_http::state::AppState,
+    event: Event,
+    actor_id: &str,
+    device_id: &str,
+    signing_seed: [u8; 32],
+) -> Event {
+    let accepted_at = event.created_at;
+    let producer_signing_key_did = arkret_wire::DidKey::new(format!(
+        "did:key:{}",
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+            ed25519_dalek::SigningKey::from_bytes(&signing_seed)
+                .verifying_key()
+                .as_bytes(),
+        )
+    ))
+    .expect("fixture producer signing key is a did:key");
+    let signed = sign_fixture_event(event, actor_id, device_id, signing_seed);
+    soland_http::attach_fixture_station_admission_proof(
+        state,
+        signed,
+        producer_signing_key_did,
+        accepted_at,
+    )
+    .await
+    .expect("fixture Station admission proof")
+}
+
 pub fn sign_fixture_event(
     event: Event,
     actor_id: &str,

@@ -155,5 +155,4 @@ impl ModerationStore for PgModerationStore {
         .map(|row| row.map(|row| row.payload))
         .map_err(PersistenceError::database)
     }
-
 }

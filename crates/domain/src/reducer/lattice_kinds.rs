@@ -16,7 +16,10 @@ use arkret_state::lattice::LatticeKind;
 use arkret_state::state::{BottomMode, CellRegistry, MemoryCellRegistry};
 
 /// Closed shared-FSM family count in the canonical v1 contract.
-pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 19;
+///
+/// v1 has no protocol-native moderation-appeal FSM, so the appeal family is not
+/// one of these.
+pub const CANONICAL_SHARED_FSM_FAMILY_COUNT: usize = 18;
 
 /// Resolve and validate the one shared SDK registry used by every Soland
 /// state-resolution path.

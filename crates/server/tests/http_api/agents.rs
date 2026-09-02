@@ -409,7 +409,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
-    let bootstrap = bootstrap.into_event();
+    let mut bootstrap = bootstrap.into_event();
     let mut authorize = arkret_wire::test_support::raw_event_at(
         arkret_wire::EventKind::DeviceAuthorize.as_str(),
         arkret_wire::ScopeRef::Realm {
@@ -436,7 +436,18 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
-    let authorize = authorize.into_event();
+    let mut authorize = authorize.into_event();
+    // The Station admission proof has to be attached before these Events are
+    // retained, not after: the control-event store keeps whatever envelope it
+    // is sealed with, and every later re-validation of an accepted Control
+    // Event (`validate_station_admission_binding`) reads that envelope. Proofs
+    // are outside the digest payload, so attaching first leaves the Seal and
+    // every digest identical.
+    let controller_public_key_multibase = test_ed25519_multibase_public(&signing_key);
+    attach_fixture_service_admission(state, &mut bootstrap, &controller_public_key_multibase);
+    attach_fixture_service_admission(state, &mut authorize, &controller_public_key_multibase);
+    let bootstrap = bootstrap;
+    let authorize = authorize;
     let bootstrap_seal = arkret_bootstrap::build_self_principal_bootstrap_seal(
         &bootstrap,
         &authorize,
@@ -488,20 +499,7 @@ pub(crate) async fn seed_active_controller_device_generation(
             .expect("bootstrap sealed Control Event");
     }
     let authorize_event_id = authorize.event_id.clone();
-    let controller_public_key_multibase = test_ed25519_multibase_public(&signing_key);
-    let mut accepted_bootstrap = bootstrap.clone();
-    attach_fixture_service_admission(
-        state,
-        &mut accepted_bootstrap,
-        &controller_public_key_multibase,
-    );
-    let mut accepted_authorize = authorize;
-    attach_fixture_service_admission(
-        state,
-        &mut accepted_authorize,
-        &controller_public_key_multibase,
-    );
-    for event in [accepted_bootstrap, accepted_authorize] {
+    for event in [bootstrap.clone(), authorize] {
         state
             .test_persistence()
             .events()

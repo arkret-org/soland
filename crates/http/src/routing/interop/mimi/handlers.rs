@@ -1,6 +1,4 @@
-use arkret_models_collaboration::events_payloads::moderation::{
-    ModerationReportPayload, ModerationReportProvenance,
-};
+use arkret_models_collaboration::events_payloads::moderation::ModerationReportPayload;
 use salvo::oapi::endpoint;
 
 use super::*;
@@ -1557,7 +1555,6 @@ mod reporter_event_binding_tests {
             verification_method: verification_method.clone(),
             event_digest,
             signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
             created_at,
             domain: None,
             audience: None,
@@ -1804,7 +1801,6 @@ mod consent_proof_tests {
             1,
             Hlc::new("019641370000-0001-00000001".to_owned()).unwrap(),
             json!({
-                "principal_id": request.actor_id.signing_principal_id(),
                 "device_id": device_id,
                 "device_public_key_did": device_public_key,
                 "hpke_key": "z6LSTestMimiConsentDeviceHpkeKey",

@@ -553,7 +553,6 @@ mod tests {
             .unwrap()
             .to_utc();
         let mut authorization: DeviceAuthorizePayload = serde_json::from_value(json!({
-            "principal_id": "ak:did_core:web:alice.example",
             "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
             "device_public_key_did": "did:key:z6MkFixture",
             "hpke_key": "z6LSFixture",
@@ -606,8 +605,14 @@ mod tests {
             "destination_id": "ak:did_core:web:destination.example",
             "request": {
                 "claim_request_id": "Y2xhaW0",
-                "target_principal_id": "ak:did_core:web:bob.example",
-                "requester_id": actor.signing_principal_id(),
+                "target_account_id": {
+                    "principal_id": "ak:did_core:web:bob.example",
+                    "station_id": "ak:did_core:web:destination.example"
+                },
+                "requester_account_id": {
+                    "principal_id": actor.signing_principal_id(),
+                    "station_id": actor.route_service_id()
+                },
                 "intended_realm_id": realm,
                 "mls_group_id": "fixture-group",
                 "claim_purpose": "realm_membership",

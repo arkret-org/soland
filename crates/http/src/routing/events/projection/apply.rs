@@ -2,7 +2,6 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_models_collaboration::sync_frames::account_sync::{
     MlsWelcomeProjectedDeviceMessage, MlsWelcomeProjectionBinding,
 };
-use serde::Serialize;
 use serde_json::{Value, json};
 use soland_services::delivery::DeviceMessageState;
 use soland_services::events::MlsWelcomeState;
@@ -1094,7 +1093,6 @@ mod tests {
             0,
             arkret_wire::EventKind::DeviceAuthorize,
             json!({
-                "principal_id": principal, "device_id": device, "device_public_key_did": key,
                 "hpke_key": "z6LSDeviceHpkeKey", "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
                 "device_key_algorithm": "Ed25519", "authorized_by": principal,
                 "not_before": "2026-08-31T00:00:00.000Z", "authorization_binding_kind": "registration_anchor",

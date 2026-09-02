@@ -1663,7 +1663,7 @@ CREATE TABLE public.federation_frontier_confirmed_evidence (
     reason text NOT NULL CHECK (reason IN ('witness_disagreement', 'fork_quarantine')),
     evidence_scope jsonb NOT NULL,
     observed_at bigint NOT NULL,
-    local_resolution_kind text CHECK (local_resolution_kind IN ('fork_resolution_event', 'witness_reagreement')),
+    local_resolution_kind text CHECK (local_resolution_kind IN ('fork_resolution_event')),
     local_resolution_digest text,
     local_normalized_at bigint,
     peer_alignment_digest text,

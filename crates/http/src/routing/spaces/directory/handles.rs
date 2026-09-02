@@ -695,13 +695,11 @@ pub(super) async fn signed_handle_claim(
     let mut claim = SdkHandleClaim {
         schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
         claim: core,
-        claim_digest,
         status: HandleClaimStatus::Verified,
         as_of: issued_at,
         verifier_id: signer_id,
         verified_at: Some(issued_at),
         revocation: None,
-        revocation_digest: None,
         fresh_until,
         status_proof: placeholder,
     };

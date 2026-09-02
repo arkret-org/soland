@@ -51,6 +51,9 @@ pub use routing::{
 
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
+pub use crate::routing::events::event_log::attach_fixture_station_admission_proof;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
 pub use crate::routing::events::projection::project_accepted_operations;
 
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {

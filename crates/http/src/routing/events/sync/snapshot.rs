@@ -410,9 +410,11 @@ async fn agent_signer_evidence_bundle_for_sync(
             let Some(evidence_ref) = producer.signer_resolution_evidence_ref.as_ref() else {
                 continue;
             };
-            let evidence_digest = evidence_ref
-                .content_digest()
-                .map_err(|error| AppError::param_invalid(error.to_string()))?;
+            // The ref is the sole carrier of the evidence digest; a ref this
+            // snapshot cannot parse simply has no bundle to attach.
+            let Ok(evidence_digest) = evidence_ref.content_digest() else {
+                continue;
+            };
             let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                 content_digest: evidence_digest.clone(),
             };
@@ -455,7 +457,7 @@ async fn agent_signer_evidence_bundle_for_sync(
                     .canonical_sha256_digest()
                     .ok()
                     .as_ref()
-                    != Some(evidence_digest)
+                    != Some(&evidence_digest)
                 || authenticated_signer_resolution_evidence
                     .evidence_ref()
                     .ok()

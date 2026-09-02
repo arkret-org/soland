@@ -437,16 +437,6 @@ fn validate_account_data_holder(
         )
         .with_status(StatusCode::FORBIDDEN));
     }
-    // The optional wire field is a redundant principal projection, never the
-    // account-data storage key or an authority to select another Account.
-    if let Some(holder_id) = event.payload.get("holder_id")
-        && holder_id.as_str() != Some(authenticated_actor.signing_principal_id().as_str())
-    {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
-            "set_event payload.holder_id must equal the Event signing principal",
-        ));
-    }
     Ok(())
 }
 
@@ -736,8 +726,8 @@ mod tests {
         )
         .unwrap();
         validate_account_data_holder(&event, &actor).unwrap();
-        event.payload.insert("holder_id".into(), json!(principal));
-        validate_account_data_holder(&event, &actor).unwrap();
+        // Same principal at another Station is a different Account, and
+        // account-data is per-Account.
         event.actor_id = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             principal,
             arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
@@ -747,17 +737,6 @@ mod tests {
                 .unwrap_err()
                 .wire_code(),
             "policy_violation"
-        );
-        event.actor_id = actor.clone();
-        event.payload.insert(
-            "holder_id".into(),
-            json!("ak:did_core:web:other-holder.example"),
-        );
-        assert_eq!(
-            validate_account_data_holder(&event, &actor)
-                .unwrap_err()
-                .wire_code(),
-            "schema_violation"
         );
     }
 

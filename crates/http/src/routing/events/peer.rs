@@ -16,6 +16,8 @@ use arkret_models_collaboration::event_sync::{
 use arkret_models_collaboration::history_key::DirectorySourceRefAccess;
 use arkret_models_collaboration::http_bodies::{
     PeerEventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
+    PeerEventsSiblingPosition, PeerEventsSiblingPositionDisclosure,
+    PeerEventsSiblingPositionsOutcome, PeerEventsSiblingPositionsRequestBody,
 };
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
@@ -138,6 +140,7 @@ pub(super) fn router() -> Router {
                 .query(peer_events_read_body),
         )
         .push(Router::with_path("events/resolve").query(peer_events_resolve))
+        .push(Router::with_path("events/sibling-positions").query(peer_events_sibling_positions))
         .push(Router::with_path("events/frontier").query(peer_events_frontier))
         .push(Router::with_path("seals/frontier").query(peer_seals_frontier))
         .push(Router::with_path("principal-genesis").post(peer_principal_genesis))
@@ -147,6 +150,160 @@ pub(super) fn router() -> Router {
                 .post(super::peer_device_revocations::check_device_revocation_gate),
         )
         .push(Router::with_path("signal").post(peer_signal_relay))
+}
+
+/// Disclose this Station's complete canonical sibling set at exact adjudicated
+/// positions.
+///
+/// This is the only sibling-position face the second phase of clearing
+/// confirmed fork evidence may use (`sync/federation.md` §4.5.3). A position is
+/// disclosed only when this Station's own joined control view already holds a
+/// settled non-`⊥` fork-resolution cell over exactly that position, produced by
+/// exactly the resolution Move the challenger names. Everything else — an
+/// unadjudicated position, a Realm this peer cannot see, a resolution Move this
+/// Station does not hold — collapses into the one indistinguishable undisclosed
+/// bucket, so the face never becomes an actor-history enumeration channel.
+///
+/// A disclosed set is exhaustive, never a page: an empty vector positively says
+/// this Station holds nothing at that position, which is exactly what alignment
+/// with a `void_all` verdict looks like.
+#[salvo::oapi::endpoint(operation_id = "ak.peer.events.read.sibling_positions", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.events.read.sibling_positions.v1"))]
+async fn peer_events_sibling_positions(
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<PeerEventsSiblingPositionsOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    validate_peer_request(state, req, true).await?;
+    let request = parse_json_body::<PeerEventsSiblingPositionsRequestBody>(
+        req,
+        "invalid ak.peer.events.read.sibling_positions.v1 request body",
+    )
+    .await?;
+    request
+        .validate()
+        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+
+    let realm_visible = !is_realm_deleted(state, request.realm_id.as_str()).await;
+    let mut disclosed_positions = Vec::new();
+    let mut undisclosed_positions = Vec::new();
+    for challenge in &request.positions {
+        let position = PeerEventsSiblingPosition {
+            actor_id: challenge.actor_id.clone(),
+            actor_seq: challenge.actor_seq,
+        };
+        let siblings = if realm_visible {
+            adjudicated_position_siblings(state, &request.realm_id, challenge).await?
+        } else {
+            None
+        };
+        match siblings {
+            Some(siblings) => disclosed_positions.push(PeerEventsSiblingPositionDisclosure {
+                actor_id: position.actor_id,
+                actor_seq: position.actor_seq,
+                siblings,
+            }),
+            None => undisclosed_positions.push(position),
+        }
+    }
+    let outcome = PeerEventsSiblingPositionsOutcome {
+        disclosed_positions,
+        undisclosed_positions,
+    };
+    outcome
+        .validate_for_request(&request)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
+        .map_err(|error| AppError::internal(format!("peer sibling-position response: {error}")))?;
+    let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
+    if response_bytes.len() > budget {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::LimitExceeded,
+            "peer sibling-position response exceeds max_response_bytes",
+        ));
+    }
+    json_ok(outcome)
+}
+
+/// The complete local sibling set at one position, or `None` when this Station
+/// will not disclose that position at all.
+///
+/// `None` is deliberately one bucket. Splitting it would let a caller probe
+/// which positions exist, which resolutions this Station holds, and which
+/// Realms it serves, and the challenge is supposed to reach only positions an
+/// authorized recovery Move already adjudicated.
+async fn adjudicated_position_siblings(
+    state: &AppState,
+    realm_id: &RealmId,
+    challenge: &arkret_models_collaboration::http_bodies::PeerEventsSiblingPositionChallenge,
+) -> Result<Option<Vec<arkret_wire::EventFederationSubmission>>, AppError> {
+    use arkret_models_collaboration::events_payloads::ForkResolutionSubject;
+
+    let subject = ForkResolutionSubject::EventSiblingPosition {
+        actor_id: challenge.actor_id.clone(),
+        actor_seq: challenge.actor_seq,
+    };
+    let cell_subject_key = subject
+        .cell_subject_key()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(normalization) = state
+        .federation()
+        .frontier_local_normalization(realm_id.as_str(), cell_subject_key.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("fork resolution lookup: {error}")))?
+    else {
+        return Ok(None);
+    };
+    // The challenger names the resolution Move by Event ID; the local
+    // normalization row is keyed by the Move's canonical digest, so the Move
+    // itself is the only place the two can be compared.
+    let resolution_digest = arkret_wire::Hash::new(normalization.resolution_event_digest.clone())
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let Some(resolution) = state
+        .projections()
+        .control_event_by_digest(&resolution_digest)
+        .map_err(|error| AppError::internal(format!("fork resolution Move lookup: {error}")))?
+    else {
+        return Ok(None);
+    };
+    if resolution.event_id != challenge.fork_resolution_event_id {
+        return Ok(None);
+    }
+
+    let records = state
+        .event_queries()
+        .canonical_events_for_realm_actor(realm_id.as_str(), &challenge.actor_id.to_string())
+        .await
+        .map_err(|error| AppError::internal(format!("sibling position lookup: {error}")))?;
+    let mut siblings = Vec::new();
+    for record in records {
+        if record.actor_seq != challenge.actor_seq {
+            continue;
+        }
+        let event: arkret_wire::Event = serde_json::from_value(record.envelope.clone())
+            .map_err(|error| AppError::internal(format!("stored Event decode: {error}")))?;
+        let event_digest = arkret_wire::Hash::new(record.canonical_digest.clone())
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let submission = retained_federation_submission(state, event, &event_digest).await?;
+        submission
+            .validate_structural(record.digest_suite)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        siblings.push(submission);
+    }
+    siblings.sort_by(|left, right| {
+        left.event
+            .event_id
+            .as_str()
+            .cmp(right.event.event_id.as_str())
+    });
+    if siblings.len()
+        > arkret_models_collaboration::http_bodies::MAX_PEER_SIBLING_POSITION_DISCLOSED_SIBLINGS
+    {
+        // An over-fork past the cross-bucket ceiling has no in-bounds
+        // disclosure, and a truncated set would read as a smaller complete one.
+        return Ok(None);
+    }
+    Ok(Some(siblings))
 }
 
 #[salvo::oapi::endpoint(

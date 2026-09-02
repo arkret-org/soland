@@ -359,9 +359,6 @@ async fn current_controller_signer_evidence(
         attester_signer_evidence_ref: attester
             .evidence_ref()
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
-        attester_signer_evidence_digest: attester
-            .canonical_sha256_digest()
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
     };
     evidence
         .validate_attester_binding()
@@ -473,7 +470,10 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         return replayed_historical_agent_signer_evidence(materialized, &receipt);
     }
     let original_selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-        content_digest: receipt.producer_signer_resolution_evidence_digest.clone(),
+        content_digest: receipt
+            .producer_signer_resolution_evidence_ref
+            .content_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?,
     };
     let original_item = store
         .get_unscoped_signer_evidence(&original_selector)
@@ -495,16 +495,16 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         != receipt.producer_signer_resolution_evidence_ref
     {
         return Err(AppError::internal(
-            "receipt producer evidence ref/digest does not resolve byte-exactly",
+            "receipt producer evidence ref does not resolve byte-exactly",
         ));
     }
     let AuthenticatedSignerResolutionEvidence::Agent {
         signer_id,
         verification_method,
         agent_signer_evidence,
-        attester_signer_evidence_digest,
-        controller_signer_evidence_digest,
-        account_authority_signer_evidence_digest,
+        attester_signer_evidence_ref,
+        controller_signer_evidence_ref,
+        account_authority_signer_evidence_ref,
         ..
     } = *original_root
     else {
@@ -528,14 +528,17 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
             "receipt Agent identity does not match the frozen producer evidence",
         ));
     }
-    async fn dependency_by_digest(
+    async fn dependency_by_ref(
         store: &dyn soland_storage::GovernanceDependencyStore,
-        digest: &Hash,
+        evidence_ref: &arkret_wire::SignerEvidenceRef,
     ) -> Result<AuthenticatedSignerResolutionEvidence, AppError> {
+        let content_digest = evidence_ref
+            .content_digest()
+            .map_err(|error| AppError::internal(error.to_string()))?;
         let item = store
             .get_unscoped_signer_evidence(
                 &GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                    content_digest: digest.clone(),
+                    content_digest,
                 },
             )
             .await
@@ -552,11 +555,10 @@ pub(crate) async fn materialize_historical_agent_signer_evidence(
         };
         Ok(*authenticated_signer_resolution_evidence)
     }
-    let authority_evidence = dependency_by_digest(store, &attester_signer_evidence_digest).await?;
-    let controller_evidence =
-        dependency_by_digest(store, &controller_signer_evidence_digest).await?;
+    let authority_evidence = dependency_by_ref(store, &attester_signer_evidence_ref).await?;
+    let controller_evidence = dependency_by_ref(store, &controller_signer_evidence_ref).await?;
     let account_authority_evidence =
-        dependency_by_digest(store, &account_authority_signer_evidence_digest).await?;
+        dependency_by_ref(store, &account_authority_signer_evidence_ref).await?;
     let receipt_method =
         arkret_signatures::agent_evidence::historical_receipt_verification_method(&receipt)
             .map_err(|reason| AppError::internal(reason.as_str()))?;

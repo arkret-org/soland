@@ -46,7 +46,7 @@ pub(super) async fn admit_event_sequence(
     {
         return Err(realm_already_exists_error());
     }
-    let mut scoped_actor_records = service
+    let scoped_actor_records = service
         .canonical_events_for_realm_actor(parsed.realm_id.as_str(), actor_key)
         .await
         .map_err(|error| {

@@ -151,9 +151,12 @@ async fn persist_snapshot_chunk_blobs(
 ) -> Result<(), soland_http::error::AppError> {
     for chunk in chunks {
         let blob_ref = chunk.descriptor.chunk_ref.as_str();
-        let Some(sha256) = chunk.descriptor.digest.as_str().strip_prefix("sha256:") else {
+        // The content-addressed chunk ref is the sole carrier of the chunk
+        // digest; there is no sibling digest field to read it from
+        // (`conformance/encoding.md` §4.0.1).
+        let Some(sha256) = blob_ref.strip_prefix("ak:blob:sha256:") else {
             return Err(soland_http::error::AppError::internal(
-                "snapshot chunk digest is not sha256",
+                "snapshot chunk ref is not a sha256 content address",
             ));
         };
         let storage_key = state.deliveries().object_key_for_sha256(sha256);

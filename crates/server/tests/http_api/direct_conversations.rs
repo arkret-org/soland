@@ -320,7 +320,6 @@ async fn seed_remote_claim_prerequisites(
         1,
         arkret_wire::Hlc::new("019041000000-0000-00000001").unwrap(),
         serde_json::json!({
-            "principal_id": core_id(alice), "device_id": ALICE_SIGNING_DEVICE,
             "device_public_key_did": test_ed25519_multibase_public(&signing_key),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",
             "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],

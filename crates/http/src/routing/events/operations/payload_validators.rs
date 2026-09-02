@@ -549,7 +549,7 @@ mod tests {
     use super::validate_encrypted_payload_envelope;
 
     #[test]
-    fn account_data_optional_holder_is_checked_even_for_tombstones() {
+    fn account_data_rejects_the_deleted_holder_mirror_even_for_tombstones() {
         let mut operation = arkret_event_draft::test_support::raw_projected_operation(
             arkret_wire::OperationId::new("ak:operation:01904100-0000-7000-8000-000000000002")
                 .unwrap(),

@@ -397,7 +397,6 @@ async fn project_authorized_principal_device(
         1,
         arkret_identifiers::Hlc::new("019041000000-0000-00000001".to_owned()).unwrap(),
         json!({
-            "principal_id": principal_id,
             "device_id": device_id,
             "device_public_key_did": ed25519_public_multibase(signing_key),
             "hpke_key": "z6LSTestAuthorizedDeviceHpkeKey",

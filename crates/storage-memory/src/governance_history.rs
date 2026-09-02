@@ -254,6 +254,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
 
 #[cfg(test)]
 mod collision_variant_record_tests {
+    use arkret_models_collaboration::events_payloads::state::CollisionVariantRecord;
     use arkret_models_collaboration::governance_dependencies::{
         GovernanceDependency, GovernanceDependencySelector,
     };
@@ -263,29 +264,35 @@ mod collision_variant_record_tests {
     use super::MemoryGovernanceDependencyStore;
 
     fn collision_dependency(id: &str) -> GovernanceDependency {
-        serde_json::from_value(serde_json::json!({
-            "selector": {
-                "kind": "collision_variant_record",
-                "collision_variant_record_id": id
-            },
-            "collision_variant_record": {
-                "schema": "ak.schema.collision_variant_record.v1",
-                "collision_variant_record_id": id,
-                "realm_id": "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
-                "collision_event_id": "ak:event:AR8bu-n-kOOB3nRUvYuIEglCX5B-JpFaNTex9gxs_cWY",
-                "canonical_event_bytes_b64u": "e30",
-                "canonical_event_size_bytes": 2,
-                "recorded_at": "2026-05-01T00:00:00.000Z",
-                "proof": {
-                    "kind": "detached_jws",
-                    "verification_method": "did:web:alice.example#key-1",
-                    "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "created_at": "2026-05-02T00:00:00.000Z",
-                    "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                }
+        let mut record: CollisionVariantRecord = serde_json::from_value(serde_json::json!({
+            "schema": "ak.schema.collision_variant_record.v1",
+            "collision_variant_record_id": id,
+            "realm_id": "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
+            "collision_event_id": "ak:event:AR8bu-n-kOOB3nRUvYuIEglCX5B-JpFaNTex9gxs_cWY",
+            "canonical_event_bytes_b64u": "e30",
+            "canonical_event_size_bytes": 2,
+            "recorded_at": "2026-05-01T00:00:00.000Z",
+            "proof": {
+                "kind": "detached_jws",
+                "verification_method": "did:web:alice.example#key-1",
+                "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "created_at": "2026-05-02T00:00:00.000Z",
+                "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             }
         }))
-        .expect("collision dependency fixture")
+        .expect("collision variant record fixture");
+        // The store re-derives this binding on write, so the fixture cannot
+        // carry a placeholder: the digest covers the record id, which varies
+        // per case.
+        record.proof.payload_digest = record
+            .unsigned_payload_digest()
+            .expect("fixture record digests");
+        GovernanceDependency::CollisionVariantRecord {
+            selector: GovernanceDependencySelector::CollisionVariantRecord {
+                collision_variant_record_id: CollisionVariantRecordId::new(id.to_owned()).unwrap(),
+            },
+            collision_variant_record: Box::new(record),
+        }
     }
 
     #[tokio::test]

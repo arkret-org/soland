@@ -3657,6 +3657,8 @@ use outcome::*;
 use post_commit::*;
 use preflight::*;
 use projection_preflight::*;
+#[cfg(feature = "test-support")]
+pub use value::attach_fixture_station_admission_proof;
 use value::*;
 pub(in crate::routing) use value::{
     DevicePairingAdmission, prepare_service_franking_proof_event_value,
