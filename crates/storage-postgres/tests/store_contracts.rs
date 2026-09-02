@@ -124,9 +124,11 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         reason: "fork_quarantine".to_owned(),
         evidence_scope: serde_json::to_value(&subject).unwrap(),
         observed_at: 5,
-        resolution_kind: None,
-        resolution_digest: None,
-        resolved_at: None,
+        local_resolution_kind: None,
+        local_resolution_digest: None,
+        local_normalized_at: None,
+        peer_alignment_digest: None,
+        peer_aligned_at: None,
     };
     let (evidence, success) = tokio::join!(
         store.record_confirmed_evidence(&evidence_record),
@@ -162,8 +164,8 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         vec![evidence_record.clone()]
     );
     assert!(
-        !restarted
-            .resolve_confirmed_evidence_for_peer(
+        restarted
+            .record_local_normalization(
                 realm.as_str(),
                 &peer,
                 "sha256:wrong-scope",
@@ -196,7 +198,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
         .unwrap();
     assert!(
         restarted
-            .resolve_confirmed_evidence_for_peer(
+            .record_local_normalization(
                 realm.as_str(),
                 &peer,
                 evidence_scope_key.as_str(),
@@ -226,6 +228,39 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
                 "fork_resolution_event",
                 &format!("sha256:{}", "3".repeat(64)),
                 10,
+            )
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        restarted
+            .get(realm.as_str(), &peer)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "peer_stale"
+    );
+    assert!(
+        !restarted
+            .record_peer_alignment(
+                realm.as_str(),
+                &peer,
+                "sha256:wrong-scope",
+                &format!("sha256:{}", "4".repeat(64)),
+                10,
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        restarted
+            .record_peer_alignment(
+                realm.as_str(),
+                &peer,
+                evidence_scope_key.as_str(),
+                &format!("sha256:{}", "4".repeat(64)),
+                11,
             )
             .await
             .unwrap()
@@ -1315,7 +1350,6 @@ fn seal_dependency_contract_availability(
             evidence_digest.as_str()
         ))
         .unwrap(),
-        holder_signer_evidence_digest: evidence_digest,
         signature: arkret_wire::PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(

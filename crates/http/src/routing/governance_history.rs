@@ -35,14 +35,14 @@ use arkret_models_collaboration::http_bodies::{
 };
 use arkret_models_collaboration::mls_group_state_material::{
     MLS_GROUP_STATE_MATERIAL_MAX_RESPONSE_BYTES, MlsGroupStateMaterialOutcome,
-    MlsGroupStateMaterialRequestBody,
+    MlsGroupStateMaterialRequestBody, material_digest_from_ref,
 };
 use arkret_models_crypto::{MlsGovernanceProofBundle, MlsGovernanceProofRequestBody};
 use arkret_models_identity::agent_signer_evidence::{
     AgentSignerEvidence, AgentSignerEvidenceQuerySelector,
 };
 use arkret_state::mls_governance_proof::MlsGovernanceVerificationCheckpoint;
-use arkret_wire::{Base64UrlString, EventKind, HistoryEffectiveScope};
+use arkret_wire::{Base64UrlString, BlobRef, EventKind, Hash, HistoryEffectiveScope};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
@@ -280,7 +280,7 @@ async fn resolve_peer_mls_governance_proof(
         .map_err(|_| AppError::json_invalid("invalid peer MLS governance proof request"))?;
     request
         .validate()
-        .map_err(|error| AppError::param_invalid(error.to_string()))?;
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
     if !peer_mls_scope_visibility(state, &source_id, &request.effective_scope).await? {
         return Err(AppError::not_found("MLS governance scope not found"));
     }
@@ -306,7 +306,7 @@ async fn resolve_peer_mls_group_state_material(
     let request = req
         .parse_json::<MlsGroupStateMaterialRequestBody>()
         .await
-        .map_err(|_| AppError::json_invalid("invalid peer MLS group-state material request"))?;
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
     request
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -324,6 +324,19 @@ async fn resolve_peer_mls_group_state_material(
     {
         return Err(AppError::not_found("MLS group-state material not found"));
     }
+    let realm_digest_suite = state
+        .projections()
+        .realm_digest_suite(request.realm_id.as_str());
+    let group_info_digest = validate_mls_material_ref_suite(
+        "group_info_ref",
+        &request.group_info_ref,
+        realm_digest_suite,
+    )?;
+    let ratchet_tree_digest = validate_mls_material_ref_suite(
+        "ratchet_tree_ref",
+        &request.ratchet_tree_ref,
+        realm_digest_suite,
+    )?;
     let payload = event
         .envelope
         .get("payload")
@@ -335,9 +348,7 @@ async fn resolve_peer_mls_group_state_material(
         || payload.mls_group_id != request.mls_group_id
         || payload.epoch != request.epoch
         || payload.group_info_ref != request.group_info_ref
-        || payload.group_info_digest != request.group_info_digest
         || payload.ratchet_tree_ref != request.ratchet_tree_ref
-        || payload.ratchet_tree_digest != request.ratchet_tree_digest
     {
         return Err(AppError::not_found("MLS group-state material not found"));
     }
@@ -355,6 +366,12 @@ async fn resolve_peer_mls_group_state_material(
     })?;
     let ratchet_tree_bytes =
         load_mls_public_blob(state, request.ratchet_tree_ref.as_str(), remaining).await?;
+    validate_mls_material_bytes("group_info_ref", &group_info_bytes, &group_info_digest)?;
+    validate_mls_material_bytes(
+        "ratchet_tree_ref",
+        &ratchet_tree_bytes,
+        &ratchet_tree_digest,
+    )?;
     arkret_mls::validate_public_group_state_with_governance_binding(
         &group_info_bytes,
         &ratchet_tree_bytes,
@@ -371,13 +388,11 @@ async fn resolve_peer_mls_group_state_material(
         epoch: request.epoch,
         group_state_event_id: request.group_state_event_id.clone(),
         group_info_ref: request.group_info_ref.clone(),
-        group_info_digest: request.group_info_digest.clone(),
         group_info_bytes_b64: Base64UrlString::new(arkret_canonical::base64url_encode(
             &group_info_bytes,
         ))
         .map_err(|error| AppError::internal(error.to_string()))?,
         ratchet_tree_ref: request.ratchet_tree_ref.clone(),
-        ratchet_tree_digest: request.ratchet_tree_digest.clone(),
         ratchet_tree_bytes_b64: Base64UrlString::new(arkret_canonical::base64url_encode(
             &ratchet_tree_bytes,
         ))
@@ -387,6 +402,45 @@ async fn resolve_peer_mls_group_state_material(
         .validate_for_request(&request)
         .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
     json_ok(outcome)
+}
+
+fn mls_group_state_material_schema_violation(message: impl Into<String>) -> AppError {
+    super::events::peer::schema_violation(format!(
+        "invalid peer MLS group-state material request: {}",
+        message.into()
+    ))
+}
+
+fn validate_mls_material_ref_suite(
+    field: &str,
+    blob_ref: &BlobRef,
+    realm_digest_suite: arkret_canonical::DigestSuite,
+) -> Result<Hash, AppError> {
+    let digest = material_digest_from_ref(blob_ref)
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+    let ref_digest_suite = digest
+        .digest_suite()
+        .map_err(|error| mls_group_state_material_schema_violation(error.to_string()))?;
+    if ref_digest_suite != realm_digest_suite {
+        return Err(mls_group_state_material_schema_violation(format!(
+            "{field} digest suite {} does not match Realm digest_algorithm {}",
+            ref_digest_suite.as_str(),
+            realm_digest_suite.as_str()
+        )));
+    }
+    Ok(digest)
+}
+
+fn validate_mls_material_bytes(
+    field: &str,
+    bytes: &[u8],
+    expected_digest: &Hash,
+) -> Result<(), AppError> {
+    arkret_canonical::canonical::verify_digest(bytes, expected_digest.as_str()).map_err(|_| {
+        mls_group_state_material_schema_violation(format!(
+            "{field} does not content-address the returned raw bytes"
+        ))
+    })
 }
 
 async fn load_mls_public_blob(
@@ -1162,7 +1216,7 @@ async fn relay_history_key_response(
     match relay.source_relay_attestation.source_kind {
         SourceKind::Member => {
             let expected = history_source_author_profile(
-                &relay.response.source_signer_evidence_digest,
+                &history_source_signer_content_digest(&relay.response)?,
                 &source_signer_dependencies,
             )?;
             if relay.source_relay_attestation.source_author_profile != Some(expected) {
@@ -1234,10 +1288,10 @@ async fn resolve_history_source_signer_dependencies(
     let mut resolved = std::collections::BTreeMap::new();
     let mut frontier = vec![
         GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-            content_digest: response.source_signer_evidence_digest.clone(),
+            content_digest: history_source_signer_content_digest(response)?,
         },
         GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
-            content_digest: response.source_signer_evidence_digest.clone(),
+            content_digest: history_source_signer_content_digest(response)?,
         },
     ];
     let mut primary_resolved = false;
@@ -1351,7 +1405,8 @@ async fn resolve_history_source_signer_dependencies(
                     }
                     | GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
                         content_digest,
-                    } => content_digest == &response.source_signer_evidence_digest,
+                    } => history_source_signer_content_digest(response)
+                        .is_ok_and(|expected| content_digest == &expected),
                     _ => false,
                 })
                 .collect::<Vec<_>>();
@@ -1456,6 +1511,15 @@ fn history_source_author_profile(
             "history source signer evidence root is unavailable",
         )
     })
+}
+
+fn history_source_signer_content_digest(
+    response: &HistoryKeyResponseSendRequest,
+) -> Result<arkret_wire::Hash, AppError> {
+    response
+        .source_signer_evidence_ref
+        .content_digest()
+        .map_err(|error| AppError::param_invalid(error.to_string()))
 }
 
 fn verify_history_source_proof(
@@ -1597,7 +1661,7 @@ async fn build_local_history_source_relay(
         ));
     }
     let source_author_profile = history_source_author_profile(
-        &response.source_signer_evidence_digest,
+        &history_source_signer_content_digest(response)?,
         source_signer_dependencies,
     )?;
     let relayed_at = response.source_proof.created_at;
@@ -2362,8 +2426,9 @@ async fn collect_history_dependencies(
     for dependency in dependencies {
         let item = dependency;
         let selector = item.selector().clone();
-        let (_, object_digest) = soland_storage::governance_dependency_selector_parts(&selector)
-            .map_err(|error| AppError::internal(error.to_string()))?;
+        let object_digest = soland_storage::governance_dependency_canonical(&item)
+            .map_err(|error| AppError::internal(error.to_string()))?
+            .object_digest;
         if let (
             Some(event),
             GovernanceDependency::AvailabilityReceipt {
@@ -4319,8 +4384,14 @@ fn map_service_error(error: soland_services::ServiceError) -> AppError {
 #[cfg(test)]
 mod canonical_response_digest_tests {
     use arkret_models_collaboration::history_key::HistoryKeyResponseSendRequest;
+    use arkret_models_collaboration::mls_group_state_material::MlsGroupStateMaterialRequestBody;
+    use arkret_wire::BlobRef;
+    use serde_json::json;
 
-    use super::history_response_source_record_digest;
+    use super::{
+        history_response_source_record_digest, mls_group_state_material_schema_violation,
+        validate_mls_material_bytes, validate_mls_material_ref_suite,
+    };
 
     #[test]
     fn cached_response_digest_is_the_authoritative_wire_digest() {
@@ -4336,6 +4407,58 @@ mod canonical_response_digest_tests {
         assert_eq!(
             history_response_source_record_digest(&response).unwrap(),
             response.source_record_digest().unwrap()
+        );
+    }
+
+    #[test]
+    fn mls_material_ref_suite_and_bytes_fail_closed_as_schema_violation() {
+        let blob_ref = BlobRef::new(format!("ak:blob:sha256:{}", "00".repeat(32))).unwrap();
+        let suite_error = validate_mls_material_ref_suite(
+            "group_info_ref",
+            &blob_ref,
+            arkret_canonical::DigestSuite::Blake3,
+        )
+        .unwrap_err();
+        assert_eq!(
+            suite_error.wire_code_override.as_deref(),
+            Some("schema_violation")
+        );
+
+        let digest = validate_mls_material_ref_suite(
+            "group_info_ref",
+            &blob_ref,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        let bytes_error =
+            validate_mls_material_bytes("group_info_ref", b"wrong bytes", &digest).unwrap_err();
+        assert_eq!(
+            bytes_error.wire_code_override.as_deref(),
+            Some("schema_violation")
+        );
+    }
+
+    #[test]
+    fn mls_material_request_rejects_sibling_digest_as_schema_violation() {
+        let request = json!({
+            "realm_id": "ak:realm:AZCGyNJicm4u8jUY2OGd52Dj8JvlbxtGx3rDYQWAMPGe",
+            "effective_scope": {
+                "kind": "realm",
+                "realm_id": "ak:realm:AZCGyNJicm4u8jUY2OGd52Dj8JvlbxtGx3rDYQWAMPGe"
+            },
+            "mls_group_id": "Z3JvdXAtMA",
+            "epoch": 0,
+            "group_state_event_id": "ak:event:AU4U_cVyICYyIsqKFr9sNp6_FozG2hx-1gpvo4HZae6x",
+            "group_info_ref": format!("ak:blob:sha256:{}", "aa".repeat(32)),
+            "ratchet_tree_ref": format!("ak:blob:sha256:{}", "bb".repeat(32)),
+            "group_info_digest": format!("sha256:{}", "aa".repeat(32))
+        });
+        let parse_error =
+            serde_json::from_value::<MlsGroupStateMaterialRequestBody>(request).unwrap_err();
+        let error = mls_group_state_material_schema_violation(parse_error.to_string());
+        assert_eq!(
+            error.wire_code_override.as_deref(),
+            Some("schema_violation")
         );
     }
 }

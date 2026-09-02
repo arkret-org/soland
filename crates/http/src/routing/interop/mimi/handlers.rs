@@ -996,17 +996,25 @@ pub(super) async fn mimi_report_abuse(
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::param_invalid(message).with_wire_code("mimi_draft_unsupported"));
     }
-    if source_provider != typed.source_provider_id.as_str() {
-        return Err(mimi_reporter_resolution_required());
-    }
-    let realm_id = typed.realm_id.to_string();
-    let reporter_id = typed.reporter_id.as_str();
-    let target_ref = typed.target_ref.as_str();
-    let evidence_package = body.get("evidence_package").unwrap_or(&Value::Null);
-    let franking_proof = body.get("franking_proof").unwrap_or(&Value::Null);
-    let (event_payload, canonical_reason, description) =
-        validate_mimi_report_event_cross_binding(&typed, &body, &source_provider)?;
-    let reporter_admission = verify_mimi_reporter_authority(state, &typed).await?;
+    let payload = validate_mimi_report_event_cross_binding(&typed, &source_provider)?;
+    let realm_id = payload.realm_id.to_string();
+    let reporter_id = payload.reporter_id.as_str();
+    let target_ref = payload.target_ref.as_str();
+    let evidence_package = payload
+        .evidence_package
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("MIMI report evidence encode: {error}")))?
+        .unwrap_or(Value::Null);
+    let franking_proof = payload
+        .franking_proof
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("MIMI report franking encode: {error}")))?
+        .unwrap_or(Value::Null);
+    let reporter_admission = verify_mimi_reporter_authority(state, &typed, &payload).await?;
     let event = &typed.report_event.event;
     let source_service = moderation_request_source_service(req);
     let source_ip_hash = moderation_request_source_ip_hash(req);
@@ -1016,59 +1024,42 @@ pub(super) async fn mimi_report_abuse(
         reporter_id,
         Some(&typed.reporter_authority.actor_id),
         target_ref,
-        None,
-        evidence_package,
-        franking_proof,
+        payload.effective_scope.as_ref(),
+        &evidence_package,
+        &franking_proof,
         source_service.as_deref(),
         &source_ip_hash,
     )
     .await?;
-    let effective_scope = serde_json::from_value(safety.effective_scope).map_err(|error| {
-        AppError::param_invalid(format!("mimi report effective_scope invalid: {error}"))
-    })?;
-    let evidence_package = safety
-        .evidence_package
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| {
-            AppError::param_invalid(format!("mimi report evidence_package invalid: {error}"))
-        })?;
-    let franking_proof = safety
-        .franking_proof
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| {
-            AppError::param_invalid(format!("mimi report franking_proof invalid: {error}"))
-        })?;
-    let payload = ModerationReportPayload {
-        realm_id: arkret_wire::RealmId::new(realm_id.clone()).map_err(|error| {
-            AppError::param_invalid(format!("mimi report realm_id invalid: {error}"))
-        })?,
-        effective_scope,
-        target_ref: target_ref.to_owned(),
-        report_reason_code: canonical_reason,
-        description,
-        reporter_id: arkret_wire::DidCoreId::new(reporter_id.to_owned()).map_err(|error| {
-            AppError::param_invalid(format!("mimi report reporter_id invalid: {error}"))
-        })?,
-        provenance: Some(ModerationReportProvenance::MimiFacade),
-        source_provider_id: Some(arkret_wire::DidCoreId::new(source_provider).map_err(
-            |error| AppError::internal(format!("MIMI source provider id invalid: {error}")),
-        )?),
-        evidence_refs: None,
-        evidence_package,
-        franking_proof,
-    };
-    let expected_payload = serde_json::to_value(&payload)
-        .map_err(|error| AppError::internal(format!("MIMI report payload encode: {error}")))?;
-    if &event_payload != &expected_payload {
+    if safety.effective_scope
+        != serde_json::to_value(payload.effective_scope.as_ref().unwrap_or(&event.scope_ref))
+            .map_err(|error| AppError::internal(format!("MIMI report scope encode: {error}")))?
+        || safety.evidence_package
+            != payload
+                .evidence_package
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    AppError::internal(format!("MIMI report evidence encode: {error}"))
+                })?
+        || safety.franking_proof
+            != payload
+                .franking_proof
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    AppError::internal(format!("MIMI report franking encode: {error}"))
+                })?
+    {
         return Err(mimi_reporter_resolution_required());
     }
     payload
-        .validate_provenance(&typed.reporter_id)
+        .validate_provenance(event.actor_id.signing_principal_id())
         .map_err(|_| mimi_reporter_resolution_required())?;
     let admission = crate::routing::events::event_log::InternalEventAdmission::mimi_reporter(
-        typed.realm_id.as_str(),
+        payload.realm_id.as_str(),
         reporter_admission.actor_id.clone(),
         reporter_admission.signer_actor_id.clone(),
         reporter_admission.device_id.clone(),
@@ -1099,11 +1090,12 @@ pub(super) async fn mimi_report_abuse(
         revoked_at: None,
     };
     let report_event_id = event.event_id.to_string();
+    let mut submission = typed.report_event.clone();
+    submission
+        .cba_proof_bundles
+        .extend(typed.cba_proof_bundles.iter().cloned());
     crate::routing::events::event_log::submit_mimi_reporter_initial_event_submission(
-        state,
-        &session,
-        typed.report_event.clone(),
-        &admission,
+        state, &session, submission, &admission,
     )
     .await
     .map_err(|error| {
@@ -1147,59 +1139,24 @@ pub(super) async fn mimi_report_abuse(
 
 fn validate_mimi_report_event_cross_binding(
     body: &MimiReportAbuseRequestBody,
-    body_value: &Value,
     source_provider: &str,
-) -> Result<(Value, String, Option<String>), AppError> {
-    let canonical_reason = body_value
-        .get("abuse_reason_code")
-        .and_then(Value::as_str)
-        .filter(|reason| {
-            matches!(
-                *reason,
-                "spam"
-                    | "harassment"
-                    | "hate_speech"
-                    | "nsfw"
-                    | "illegal"
-                    | "misinformation"
-                    | "other"
-            )
-        })
-        .unwrap_or("other")
-        .to_owned();
-    let description = body_value
-        .get("description")
-        .map(|value| {
-            value
-                .as_str()
-                .map(str::to_owned)
-                .ok_or_else(|| AppError::param_invalid("mimi report description must be a string"))
-        })
-        .transpose()?;
+) -> Result<ModerationReportPayload, AppError> {
     let event = &body.report_event.event;
-    let event_payload = serde_json::to_value(&event.payload)
-        .map_err(|error| AppError::internal(format!("MIMI report payload encode: {error}")))?;
-    let expected_scope = json!({"kind": "realm", "realm_id": body.realm_id.as_str()});
-    if event.kind != arkret_wire::EventKind::SelfModerationReport
-        || event.realm_id != body.realm_id
-        || event.scope_ref
-            != (arkret_wire::ScopeRef::Realm {
-                realm_id: body.realm_id.clone(),
-            })
-        || event.actor_id != body.reporter_authority.actor_id
-        || event_payload.get("realm_id") != Some(&Value::String(body.realm_id.to_string()))
-        || event_payload.get("effective_scope") != Some(&expected_scope)
-        || event_payload.get("target_ref")
-            != Some(&Value::String(body.target_ref.as_str().to_owned()))
-        || event_payload.get("report_reason_code") != Some(&Value::String(canonical_reason.clone()))
-        || event_payload.get("description") != body_value.get("description")
-        || event_payload.get("reporter_id") != Some(&Value::String(body.reporter_id.to_string()))
-        || event_payload.get("provenance").and_then(Value::as_str) != Some("mimi_facade")
-        || event_payload.get("source_provider_id")
-            != Some(&Value::String(source_provider.to_owned()))
-        || event_payload.get("evidence_package") != body_value.get("evidence_package")
-        || event_payload.get("franking_proof") != body_value.get("franking_proof")
-        || event_payload.get("evidence_refs").is_some()
+    let payload = body
+        .report_payload()
+        .map_err(|_| mimi_reporter_resolution_required())?;
+    let effective_scope = payload.effective_scope.as_ref().unwrap_or(&event.scope_ref);
+    if &event.scope_ref != effective_scope
+        || payload.source_provider_id.as_ref().map(|id| id.as_str()) != Some(source_provider)
+        || !matches!(
+            payload.report_reason_code.as_str(),
+            "spam" | "harassment" | "hate_speech" | "nsfw" | "illegal" | "misinformation" | "other"
+        )
+        || payload.report_reason_code == "other"
+            && payload
+                .description
+                .as_deref()
+                .is_none_or(|description| description.trim().is_empty())
     {
         return Err(mimi_reporter_resolution_required());
     }
@@ -1212,7 +1169,7 @@ fn validate_mimi_report_event_cross_binding(
     if producer_method != &body.reporter_authority.proof.verification_method {
         return Err(mimi_reporter_resolution_required());
     }
-    Ok((event_payload, canonical_reason, description))
+    Ok(payload)
 }
 
 fn mimi_reporter_resolution_required() -> AppError {
@@ -1223,6 +1180,7 @@ fn mimi_reporter_resolution_required() -> AppError {
 async fn verify_mimi_reporter_authority(
     state: &AppState,
     body: &MimiReportAbuseRequestBody,
+    report: &ModerationReportPayload,
 ) -> Result<VerifiedMimiReporterAdmission, AppError> {
     let authority = &body.reporter_authority;
     if authority.expires_at <= now()
@@ -1230,7 +1188,7 @@ async fn verify_mimi_reporter_authority(
             .expires_at
             .signed_duration_since(authority.proof.created_at)
             > Duration::seconds(MIMI_OPERATION_PROOF_WINDOW_SECONDS)
-        || authority.actor_id.signing_principal_id() != &body.reporter_id
+        || authority.actor_id.signing_principal_id() != &report.reporter_id
     {
         return Err(mimi_reporter_resolution_required());
     }
@@ -1381,7 +1339,7 @@ async fn verify_mimi_reporter_authority(
     let actor_key = authority.actor_id.to_string();
     let projection = state.projections().snapshot();
     let member_matches = projection
-        .member(body.realm_id.as_str(), &actor_key)
+        .member(report.realm_id.as_str(), &actor_key)
         .is_some_and(|member| {
             member.state == "join"
                 && member.membership_event_ref.as_deref()
@@ -1392,28 +1350,33 @@ async fn verify_mimi_reporter_authority(
         return Err(mimi_reporter_resolution_required());
     }
 
-    let room_binding = current_mimi_room_binding_for_uri(state, body.mimi_room_uri.as_str())
-        .await?
-        .ok_or_else(mimi_reporter_resolution_required)?;
+    let room_binding =
+        current_mimi_room_binding_for_event_id(state, &authority.room_binding_event_id)
+            .await?
+            .ok_or_else(mimi_reporter_resolution_required)?;
     let payload = mimi_room_binding_security_payload(&room_binding.binding);
     let scope = payload.get("binding_scope").and_then(Value::as_object);
+    let source_provider_id = report
+        .source_provider_id
+        .as_ref()
+        .ok_or_else(mimi_reporter_resolution_required)?;
     let provider_matches = payload
         .get("hub_provider_id")
         .and_then(Value::as_str)
-        .is_some_and(|provider| provider == body.source_provider_id.as_str())
+        .is_some_and(|provider| provider == source_provider_id.as_str())
         || payload
             .get("follower_provider_ids")
             .and_then(Value::as_array)
             .is_some_and(|providers| {
                 providers
                     .iter()
-                    .any(|provider| provider.as_str() == Some(body.source_provider_id.as_str()))
+                    .any(|provider| provider.as_str() == Some(source_provider_id.as_str()))
             });
     if room_binding.event_id != authority.room_binding_event_id.as_str()
         || payload.get("status").and_then(Value::as_str) != Some("accepted")
-        || room_binding.realm_id != body.realm_id.as_str()
-        || scope.and_then(|value| value.get("strand_id"))
-            != Some(&Value::String(body.strand_id.to_string()))
+        || room_binding.realm_id != report.realm_id.as_str()
+        || scope.and_then(|value| value.get("realm_id"))
+            != Some(&Value::String(report.realm_id.to_string()))
         || !provider_matches
     {
         return Err(mimi_reporter_resolution_required());
@@ -1535,8 +1498,7 @@ mod reporter_event_binding_tests {
     use arkret_models_collaboration::http_bodies::MimiReporterAuthority;
     use arkret_wire::{
         AccountId, ActorId, Audience, DidCoreId, DidUrl, EventInitialSubmission, EventProof, Hash,
-        MimiRoomUri, NonEmptyString, PayloadProof, ProducerEventProof, ScopeRef, StrandId,
-        proof_kind,
+        PayloadProof, ProducerEventProof, ScopeRef, proof_kind,
     };
 
     use super::*;
@@ -1603,18 +1565,6 @@ mod reporter_event_binding_tests {
             jws: "e30..c2ln".to_owned(),
         })];
         let mut request = MimiReportAbuseRequestBody {
-            strand_id: StrandId::new(
-                "ak:strand:AaCQjogT126mXVYM2VaV0guWrFdS4nCOsDP-Ft0iWyKp".to_owned(),
-            )
-            .unwrap(),
-            mimi_room_uri: MimiRoomUri::new("mimi://provider.example/rooms/room-1").unwrap(),
-            realm_id,
-            target_ref: NonEmptyString::new(
-                "ak:realm:AY789mrKRCQEVlbVgiTgLdjVO5oCMJiUCrF-D-JlRNxI".to_owned(),
-            )
-            .unwrap(),
-            reporter_id,
-            source_provider_id,
             reporter_authority: MimiReporterAuthority {
                 actor_id,
                 membership_event_id: event_id(b"membership"),
@@ -1640,23 +1590,16 @@ mod reporter_event_binding_tests {
                 control_proposal_ack: None,
                 membership_compensation_evidence: None,
             },
-            abuse_reason_code: NonEmptyString::new("spam").unwrap(),
-            evidence_package: None,
-            franking_proof: None,
-            description: None,
+            cba_proof_bundles: Vec::new(),
         };
         request.reporter_authority.proof.payload_digest = request.payload_digest().unwrap();
         request
     }
 
     fn assert_cross_binding_rejected(request: &MimiReportAbuseRequestBody) {
-        let value = serde_json::to_value(request).unwrap();
-        let error = validate_mimi_report_event_cross_binding(
-            request,
-            &value,
-            request.source_provider_id.as_str(),
-        )
-        .expect_err("cross-bound report must fail before state and rate-limit access");
+        let error =
+            validate_mimi_report_event_cross_binding(request, "ak:did_core:web:provider.example")
+                .expect_err("cross-bound report must fail before state and rate-limit access");
         assert_eq!(
             error.wire_code_override.as_deref(),
             Some("mimi_reporter_resolution_required")
@@ -1666,22 +1609,17 @@ mod reporter_event_binding_tests {
     #[test]
     fn exact_caller_authored_report_event_cross_binding_is_accepted() {
         let request = request();
-        let value = serde_json::to_value(&request).unwrap();
-        validate_mimi_report_event_cross_binding(
-            &request,
-            &value,
-            request.source_provider_id.as_str(),
-        )
-        .expect("exact caller-authored report Event binding");
+        validate_mimi_report_event_cross_binding(&request, "ak:did_core:web:provider.example")
+            .expect("exact caller-authored report Event binding");
     }
 
     #[test]
-    fn actor_provider_target_and_event_proof_method_swaps_fail_pre_state() {
+    fn actor_provider_and_event_proof_method_swaps_fail_pre_state() {
         let original = request();
 
         let mut other_station = original.clone();
         other_station.report_event.event.actor_id = ActorId::account(AccountId::new(
-            other_station.reporter_id.clone(),
+            DidCoreId::new("ak:did_core:web:alice.example").unwrap(),
             DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         ));
         assert_cross_binding_rejected(&other_station);
@@ -1693,13 +1631,6 @@ mod reporter_event_binding_tests {
         );
         assert_cross_binding_rejected(&provider_swap);
 
-        let mut target_swap = original.clone();
-        target_swap.report_event.event.payload.insert(
-            "target_ref".to_owned(),
-            json!("ak:realm:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
-        );
-        assert_cross_binding_rejected(&target_swap);
-
         let mut method_swap = original;
         method_swap.report_event.event.proofs[0]
             .as_producer_mut()
@@ -1709,23 +1640,19 @@ mod reporter_event_binding_tests {
     }
 
     #[test]
-    fn room_and_opaque_mutations_are_covered_by_holder_transcript() {
+    fn signed_event_and_authority_ref_mutations_are_covered_by_authority_transcript() {
         let original = request();
 
-        let mut room_swap = original.clone();
-        room_swap.mimi_room_uri = MimiRoomUri::new("mimi://provider.example/rooms/other").unwrap();
-        assert!(room_swap.reporter_authority_binding_bytes().is_err());
-
-        let mut opaque_swap = original;
-        opaque_swap.evidence_package = Some(
-            serde_json::from_value(json!({
-                "content_type": "application/json",
-                "payload_digest": format!("sha256:{}", "1".repeat(64)),
-                "payload": "e30"
-            }))
-            .unwrap(),
+        let mut event_swap = original.clone();
+        event_swap.report_event.event.payload.insert(
+            "target_ref".to_owned(),
+            json!("ak:realm:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
         );
-        assert!(opaque_swap.reporter_authority_binding_bytes().is_err());
+        assert!(event_swap.reporter_authority_binding_bytes().is_err());
+
+        let mut binding_swap = original;
+        binding_swap.reporter_authority.room_binding_event_id = event_id(b"other-room-binding");
+        assert!(binding_swap.reporter_authority_binding_bytes().is_err());
     }
 }
 
@@ -2438,7 +2365,7 @@ mod consent_proof_tests {
             &state,
             "ak:blob:01964137-0000-7000-8000-000000000777",
         )
-        .expect("a typed blob metadata id stays in-protocol");
+        .expect_err("a Blob metadata id does not address downloadable bytes");
         enforce_mimi_proxy_download_egress_policy(&state, "ak:blob:abc")
             .expect_err("a non-canonical blob payload is not a blob reference");
         enforce_mimi_proxy_download_egress_policy(&state, &format!("sha256:{}", "a".repeat(64)))

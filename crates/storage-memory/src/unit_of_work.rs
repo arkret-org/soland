@@ -588,7 +588,7 @@ fn stage_membership_compensation_evidence(
     if record.event_id != request.event.event_id
         || record.event_digest != request.event.canonical_digest
         || record.admission_id != record.evidence.delegation.core.admission_id.as_str()
-        || record.delegation_digest != record.evidence.delegation.delegation_digest.as_str()
+        || record.delegation_id != record.evidence.delegation.delegation_id.as_str()
         || record.canonical_bytes != expected_bytes
     {
         return Err(PersistenceError::Conflict(
@@ -613,7 +613,7 @@ fn stage_membership_compensation_evidence(
     }
     if staged.values().any(|existing| {
         existing.admission_id == record.admission_id
-            && existing.delegation_digest == record.delegation_digest
+            && existing.delegation_id == record.delegation_id
     }) {
         return Err(PersistenceError::Conflict(
             "membership_compensation_conflict: compensation delegation was already consumed"
@@ -1649,7 +1649,7 @@ mod tests {
             terminal_certificate: arkret_wire::MembershipCompensationTerminalCertificate {
                 domain: arkret_wire::MembershipCompensationTerminalDomain::V1,
                 admission_id: admission_id.clone(),
-                delegation_digest: delegation_digest.clone(),
+                delegation_id: delegation_id.clone(),
                 operation_id: arkret_wire::ProtocolOperationId::new(
                     "ak:operation:019a6aa0-1000-7000-8000-000000000000",
                 )
@@ -1663,7 +1663,7 @@ mod tests {
             single_use_cas_token: arkret_wire::MembershipCompensationCasToken {
                 domain: arkret_wire::MembershipCompensationCasDomain::V1,
                 admission_id,
-                delegation_digest,
+                delegation_id: delegation_id.clone(),
                 expected_state: arkret_wire::MembershipCompensationExpectedState::Unused,
                 destination_id: executor_id.route_service_id().clone(),
                 issued_at: now,
@@ -1718,7 +1718,7 @@ mod tests {
             event_id: request.event.event_id.clone(),
             event_digest: request.event.canonical_digest.clone(),
             admission_id: evidence.delegation.core.admission_id.to_string(),
-            delegation_digest: evidence.delegation.delegation_digest.to_string(),
+            delegation_id: evidence.delegation.delegation_id.to_string(),
             canonical_bytes,
             evidence,
         });
@@ -1954,7 +1954,6 @@ mod tests {
             .unwrap(),
             event_digest: event_digest.clone(),
             signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
             created_at,
             domain: None,
             audience: None,
@@ -1974,14 +1973,8 @@ mod tests {
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
-            producer_signer_resolution_evidence_digest: None,
             signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                 "ak:signer_evidence:sha256:{}",
-                "11".repeat(32)
-            ))
-            .unwrap(),
-            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
-                "sha256:{}",
                 "11".repeat(32)
             ))
             .unwrap(),
@@ -2249,6 +2242,17 @@ mod tests {
             .await
             .unwrap()
             .expect("accepted compensation evidence is durable");
+        assert_eq!(
+            stored.delegation_id,
+            request
+                .membership_compensation_evidence
+                .as_ref()
+                .unwrap()
+                .evidence
+                .delegation
+                .delegation_id
+                .as_str()
+        );
         assert_eq!(
             stored.canonical_bytes,
             request

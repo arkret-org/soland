@@ -42,9 +42,6 @@ pub trait ModerationPort: Send + Sync {
         &self,
         report_event_id: &str,
     ) -> ServiceResult<Option<Value>>;
-    async fn append_appeal(&self, appeal: Value) -> ServiceResult<()>;
-    async fn appeals(&self) -> ServiceResult<Vec<Value>>;
-    async fn appeal_history(&self, appeal_id: &str) -> ServiceResult<Vec<Value>>;
 }
 
 #[async_trait]
@@ -377,16 +374,6 @@ impl GovernanceService {
             .submitted_queue_item_for_report_event(report_event_id)
             .await
     }
-    pub async fn append_moderation_appeal(&self, appeal: Value) -> ServiceResult<()> {
-        self.moderation.append_appeal(appeal).await
-    }
-    pub async fn moderation_appeals(&self) -> ServiceResult<Vec<Value>> {
-        self.moderation.appeals().await
-    }
-    pub async fn moderation_appeal_history(&self, appeal_id: &str) -> ServiceResult<Vec<Value>> {
-        self.moderation.appeal_history(appeal_id).await
-    }
-
     pub async fn retention_policy(
         &self,
         realm_id: &str,
@@ -703,15 +690,6 @@ mod tests {
             _report_event_id: &str,
         ) -> ServiceResult<Option<Value>> {
             Ok(None)
-        }
-        async fn append_appeal(&self, _appeal: Value) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn appeals(&self) -> ServiceResult<Vec<Value>> {
-            Ok(Vec::new())
-        }
-        async fn appeal_history(&self, _appeal_id: &str) -> ServiceResult<Vec<Value>> {
-            Ok(Vec::new())
         }
     }
 

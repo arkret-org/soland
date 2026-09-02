@@ -933,9 +933,13 @@ pub struct FederationFrontierConfirmedEvidenceRecord {
     pub reason: String,
     pub evidence_scope: Value,
     pub observed_at: i64,
-    pub resolution_kind: Option<String>,
-    pub resolution_digest: Option<String>,
-    pub resolved_at: Option<i64>,
+    /// Accepted resolution used only to normalize this node's local state.
+    pub local_resolution_kind: Option<String>,
+    pub local_resolution_digest: Option<String>,
+    pub local_normalized_at: Option<i64>,
+    /// Independent evidence that this exact peer aligned on this exact scope.
+    pub peer_alignment_digest: Option<String>,
+    pub peer_aligned_at: Option<i64>,
 }
 
 /// Local normalization of one disputed scope — the first of the two phases

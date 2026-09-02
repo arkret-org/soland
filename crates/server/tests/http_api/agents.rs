@@ -137,12 +137,10 @@ fn attach_fixture_service_admission(
         ))
         .unwrap(),
         producer_signer_resolution_evidence_ref: None,
-        producer_signer_resolution_evidence_digest: None,
         signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
             "ak:signer_evidence:{evidence_digest}"
         ))
         .unwrap(),
-        signer_resolution_evidence_digest: evidence_digest,
         accepted_at: event.created_at,
         jws: String::new(),
     };

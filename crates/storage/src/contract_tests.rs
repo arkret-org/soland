@@ -211,10 +211,10 @@ pub fn minimal_history_signer_evidence(
         .expect("valid fixture IdentityLink");
     let identity_link = arkret_canonical::canonical_json_bytes(&identity_link)
         .expect("fixture IdentityLink canonical bytes");
-    let identity_link_signer_evidence_digest = digest(b"fixture IdentityLink signer evidence");
+    let signer_evidence_content_digest = digest(b"fixture IdentityLink signer evidence");
     let identity_link_signer_evidence_ref = arkret_wire::SignerEvidenceRef::new(format!(
         "ak:signer_evidence:{}",
-        identity_link_signer_evidence_digest.as_ref()
+        signer_evidence_content_digest.as_ref()
     ))
     .expect("fixture IdentityLink signer evidence ref");
     let evidence = MinimalMetadataMlsLeafSignerEvidence {
@@ -232,7 +232,6 @@ pub fn minimal_history_signer_evidence(
         identity_link_canonical_bytes_b64u: b64(&identity_link),
         identity_link_digest: digest(&identity_link),
         identity_link_signer_evidence_ref,
-        identity_link_signer_evidence_digest,
         leaf_node_canonical_bytes_b64u: b64(&leaf_node),
         leaf_node_digest: digest(&leaf_node),
         winning_group_state_transition_ref: arkret_wire::EventId::new(

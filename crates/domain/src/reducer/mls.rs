@@ -568,7 +568,7 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
 ///   "proposal_refs":    ["ak:event:<token>"],
 ///   "next_epoch":       <u64>,
 ///   "commit_bytes_b64": "<base64url(opaque MLS Commit)>",
-///   "commit_digest":    "sha256:<hex>",
+///   "commit_message_ref":"ak:blob:<suite>:<hex>" // optional
 ///   "governance_binding": { … }
 /// }
 /// ```
@@ -596,12 +596,10 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     // The committing member is the signed Event author; the registered commit
     // payload is closed and carries no committer field.
     let committer_actor_id = op.context.sender.to_string();
-    // Body bytes are not validated at the reducer level beyond a
-    // presence check; the routing layer logs the digest for audit.
+    // Body bytes are not semantically parsed at reducer level; the routing
+    // layer has already validated the typed payload and content-addressed ref.
     if !payload
         .get("commit_bytes_b64")
-        .or_else(|| payload.get("commit_message_ref"))
-        .or_else(|| payload.get("commit_digest"))
         .and_then(Value::as_str)
         .map(|s| !s.is_empty())
         .unwrap_or(false)
@@ -1423,19 +1421,16 @@ fn metadata_object_contains_forbidden_key(object: &Map<String, Value>) -> bool {
         .any(|key| WELCOME_FORBIDDEN_METADATA_KEYS.contains(&key.as_str()))
 }
 
-/// Read the opaque commit material identity used to detect concurrent commits
-/// at the same base epoch. Accepts the canonical `commit_digest`, or falls back
-/// to the opaque `commit_bytes_b64` / `commit_message_ref` the presence check
-/// above already required.
+/// Derive the private commit-material identity used to detect concurrent
+/// commits. The wire payload carries the bytes and may carry a content-addressed
+/// Blob ref, but never a sibling `commit_digest`.
 fn commit_digest_value(payload: &Value) -> Option<String> {
-    payload
-        .get("commit_digest")
-        .or_else(|| payload.get("commit_bytes_b64"))
-        .or_else(|| payload.get("commit_message_ref"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
+    let encoded = payload.get("commit_bytes_b64")?.as_str()?.trim();
+    if encoded.is_empty() {
+        return None;
+    }
+    let bytes = arkret_canonical::base64url_decode(encoded).ok()?;
+    Some(arkret_canonical::sha256_digest(bytes))
 }
 
 // ──────────────────────────── tests ───────────────────────────────────

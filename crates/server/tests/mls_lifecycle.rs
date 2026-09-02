@@ -972,9 +972,7 @@ async fn mls_lifecycle_end_to_end_body() {
             "epoch": 0,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "group_info_ref": "ak:blob:sha256:3333333333333333333333333333333333333333333333333333333333333333",
-            "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
             "ratchet_tree_ref": "ak:blob:sha256:4444444444444444444444444444444444444444444444444444444444444444",
-            "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
             "governance_binding": governance_binding,
             "created_at": "2026-05-25T00:00:01.000Z"
         }),
@@ -1133,7 +1131,6 @@ async fn mls_lifecycle_end_to_end_body() {
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_bytes_b64": b64(commit_bytes),
-            "commit_digest": arkret_canonical::sha256_digest(commit_bytes),
             "governance_binding": commit_binding
         }),
         Some(realm_seal_basis),

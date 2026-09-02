@@ -1,14 +1,13 @@
 //! P2 — moderation control-plane projection.
 //!
 //! Migrates moderation from an `/_soland/admin` write path onto protocol
-//! events. Projects the six active moderation kinds into the canonical cells
+//! events. Projects the active moderation kinds into the canonical cells
 //! declared by `event-kind-registry.json`:
 //!
 //! - `ak.moderation.decision` -> `ak.component.moderation_state.v1` (or_set add, one cell per
 //!   `payload.target_ref`). The add tag is the registered dot `ak:event:<event_id>:<write_index>`
 //!   (`event-and-patch.md` §2.4.2); the add value is the decision snapshot (`decision_id` /
-//!   `issuer` / `target_ref` / `decision` / `realm_id`), so the appeal separation-of-duties check
-//!   can reverse-resolve the original decision issuer from the cell.
+//!   `issuer` / `target_ref` / `decision` / `realm_id`).
 //! - `ak.moderation.decision.lift` -> `or_set_remove_dots` on the same target cell, removing
 //!   exactly the dots enumerated in `payload.observed_dot_ids[]` (content-moderation.md §2.6). It
 //!   is deliberately NOT a bulk remove keyed by `decision_id`: §2.6 forbids
@@ -16,31 +15,6 @@
 //!   another issuer's decision. A replacement decision issued in the same batch is a new dot on the
 //!   same cell and coexists with what survived (§2.6 last paragraph), so an add is never
 //!   pre-tombstoned.
-//! - `ak.moderation.appeal.{submit,review,decision,close}` → `ak.component.moderation.appeal.v1`
-//!   (fsm, one cell per appeal id). Submit derives that id by retyping its Event id; later events
-//!   carry `payload.appeal_id`. Deterministic state machine (none) → submitted → under_review →
-//!   decided → closed, with `close` also reachable from submitted / under_review (appellant
-//!   withdrawal or an authorized close service). content-moderation.md §5.5.
-//!
-//! Reducer-enforced §5.5.2 constraints (surfaced at ingest by folding the
-//! ordered candidate aggregate over moderation facts rebuilt from the durable
-//! accepted Event log):
-//! - **separation of duties** — an appeal `review` / `decision` `reviewer` MUST NOT equal the
-//!   issuer of the appealed `decision_ref` decision (looked up from the moderation_state cell).
-//!   Violations reject with `appeal_self_review_forbidden`.
-//! - **overturn ↔ lift atomic** — the aggregate validator requires the exact appealed decision's
-//!   lift in the same ordered batch; the fold then requires that lift to precede the appeal
-//!   decision, otherwise `appeal_overturn_missing_lift`.
-//! - **modify ↔ lift ↔ new decision atomic** — the aggregate validator additionally binds
-//!   `modify_decision_ref` to a same-batch replacement for the original target; the fold requires
-//!   both lift and replacement to precede the appeal decision.
-//!
-//! `close` is a manual / authorized action — the reducer projects no auto-
-//! close timer, cool-off window, or timer-service check (content-moderation.md
-//! §5.5.2; spec §5.5 deleted the cool-off path).
-
-use arkret_models_collaboration::governance::moderation_appeal::AppealDecision;
-
 use super::*;
 
 fn payload_str(operation: &Operation, field: &str) -> Option<String> {
@@ -50,13 +24,6 @@ fn payload_str(operation: &Operation, field: &str) -> Option<String> {
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn appeal_verdict(operation: &Operation) -> Result<AppealDecision, &'static str> {
-    operation
-        .typed_payload::<arkret_wire::event_spec::ModerationAppealDecision>()
-        .map(|payload| payload.decision)
-        .map_err(|_| "schema_violation")
 }
 
 /// The canonical issuer named by the accepted moderation decision payload.
@@ -131,13 +98,6 @@ impl ProjectionState {
         .ok()
     }
 
-    fn moderation_appeal_cell_ref(appeal_id: &str) -> Option<CellRef> {
-        CellRef::new(format!(
-            "ak:cell:ak.component.moderation.appeal.v1:{appeal_id}"
-        ))
-        .ok()
-    }
-
     /// Read the current or_set item array for a moderation_state cell (empty
     /// when the cell is absent / Bottom / not an array).
     fn moderation_cell_items(&self, cell_ref: &CellRef) -> Vec<Value> {
@@ -196,6 +156,7 @@ impl ProjectionState {
         }
     }
 
+    #[cfg(test)]
     fn moderation_items_for_decision(&self, decision_id: &str) -> Vec<Value> {
         self.cells
             .iter()
@@ -221,6 +182,7 @@ impl ProjectionState {
     /// True when any surviving or_set item on this moderation_state cell is
     /// observed-removed (lifted). Drives the §2.6 terminal rule: once a
     /// decision_id is lifted, re-adds stay lifted.
+    #[cfg(test)]
     fn moderation_cell_has_lifted_item(items: &[Value]) -> bool {
         items.iter().any(|item| {
             let value = item.get("value").unwrap_or(item);
@@ -234,6 +196,7 @@ impl ProjectionState {
     /// True when the moderation_state cell for `decision_id` exists and is
     /// NOT lifted — i.e. there is a live decision under this id. Used by the
     /// `modify` atomicity check (the new decision MUST already be present).
+    #[cfg(test)]
     pub(crate) fn moderation_decision_is_live(&self, decision_id: &str) -> bool {
         let items = self.moderation_items_for_decision(decision_id);
         !items.is_empty() && !Self::moderation_cell_has_lifted_item(&items)
@@ -241,6 +204,7 @@ impl ProjectionState {
 
     /// True when the moderation_state cell for `decision_id` exists and is
     /// lifted. Used by the `overturn` atomicity check.
+    #[cfg(test)]
     pub(crate) fn moderation_decision_is_lifted(&self, decision_id: &str) -> bool {
         let items = self.moderation_items_for_decision(decision_id);
         !items.is_empty() && Self::moderation_cell_has_lifted_item(&items)
@@ -250,6 +214,7 @@ impl ProjectionState {
     /// the moderation_state cell. Returns `None` when the decision was never
     /// projected here (causal / backfill tolerance — separation-of-duties is
     /// only enforced when we can observe the original decision's issuer).
+    #[cfg(test)]
     pub(crate) fn moderation_decision_issuer(&self, decision_id: &str) -> Option<String> {
         if let Some(decision) = self.moderation_decisions.get(decision_id) {
             return Some(decision.issuer_id.to_string());
@@ -263,23 +228,6 @@ impl ProjectionState {
                 .filter(|s| !s.trim().is_empty())
                 .map(ToOwned::to_owned)
         })
-    }
-
-    /// The current FSM state value for an appeal cell (`None` when the cell
-    /// is absent / Bottom / not a canonical state string).
-    pub(crate) fn moderation_appeal_state(&self, appeal_id: &str) -> Option<String> {
-        let cell_ref = Self::moderation_appeal_cell_ref(appeal_id)?;
-        match self.cells.get(&cell_ref) {
-            Some(CellState::Value(Value::String(state))) => Some(state.clone()),
-            _ => None,
-        }
-    }
-
-    /// The appellant in the accepted submit Event, retained across Seal reloads.
-    pub fn moderation_appeal_appellant(&self, appeal_id: &str) -> Option<String> {
-        self.moderation_appeal_submissions
-            .get(appeal_id)
-            .map(|submit| submit.appellant_id.to_string())
     }
 
     /// P2 — project `ak.moderation.decision` as an or_set add on the
@@ -304,9 +252,7 @@ impl ProjectionState {
                 reason: "moderation_decision_kind_invalid".to_owned(),
             };
         }
-        // Structural acceptance: a sealed decision MUST name its issuer so the
-        // appeal separation-of-duties reverse lookup is well-defined. Missing
-        // issuer ⇒ fail closed.
+        // Structural acceptance: a sealed decision MUST name its issuer.
         let Some(issuer) = decision_issuer(operation) else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_issuer_missing".to_owned(),
@@ -465,354 +411,4 @@ impl ProjectionState {
         }
     }
 
-    /// P2 — project the four `ak.moderation.appeal.*` kinds onto the appeal
-    /// fsm cell. `target_state` is the post-transition state; the reducer
-    /// validates the transition is legal from the current cell state and the
-    /// §5.5.2 reducer constraints.
-    pub(crate) fn apply_moderation_appeal(
-        &mut self,
-        operation: &Operation,
-        target_state: &str,
-    ) -> ProjectionEffect {
-        let appeal_id = if target_state == "submitted" {
-            if operation.payload.get("appeal_id").is_some() {
-                return ProjectionEffect::Rejected {
-                    reason: "moderation_appeal_submit_id_must_be_event_derived".to_owned(),
-                };
-            }
-            let Some(appeal_id) =
-                arkret_identifiers::EventId::new(operation.context.event_id.to_string())
-                    .ok()
-                    .map(|event_id| {
-                        arkret_identifiers::TypedAppealId::from_event_id(&event_id).to_string()
-                    })
-            else {
-                return ProjectionEffect::Rejected {
-                    reason: "moderation_appeal_submit_event_id_required".to_owned(),
-                };
-            };
-            appeal_id
-        } else {
-            let Some(appeal_id) = payload_str(operation, "appeal_id") else {
-                return ProjectionEffect::Rejected {
-                    reason: "moderation_appeal_id_missing".to_owned(),
-                };
-            };
-            appeal_id
-        };
-        let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::moderation_appeal_cell_ref(&appeal_id) else {
-            return ProjectionEffect::Rejected {
-                reason: "moderation_appeal_cell_ref_invalid".to_owned(),
-            };
-        };
-
-        // Realm binding: appeal payload realm_id MUST equal the enclosing
-        // Event realm_id (content-moderation.md §5.5.2). The wire validator
-        // also checks this; the reducer fails closed defensively.
-        if let Some(payload_realm) = payload_str(operation, "realm_id")
-            && payload_realm != realm_id
-        {
-            return ProjectionEffect::Rejected {
-                reason: "moderation_appeal_realm_mismatch".to_owned(),
-            };
-        }
-
-        let current = self.moderation_appeal_state(&appeal_id);
-
-        // FSM transition guard. (none)→submitted, submitted→under_review,
-        // under_review→decided, decided→closed. The only early close is
-        // appellant withdrawal from submitted/under_review.
-        let transition_ok = match (current.as_deref(), target_state) {
-            (None, "submitted") => true,
-            (Some("submitted"), "under_review") => true,
-            (Some("under_review"), "decided") => true,
-            (Some("submitted"), "closed") | (Some("under_review"), "closed") => {
-                self.is_appellant_withdrawal_close(&appeal_id, operation)
-            }
-            (Some("decided"), "closed") => true,
-            _ => false,
-        };
-        if !transition_ok {
-            return ProjectionEffect::Rejected {
-                reason: format!(
-                    "moderation_appeal_invalid_transition:{}->{}",
-                    current.as_deref().unwrap_or("none"),
-                    target_state
-                ),
-            };
-        }
-
-        // Per-kind §5.5.2 constraints.
-        if let Err(reason) =
-            self.check_moderation_appeal_constraints(&appeal_id, operation, target_state)
-        {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-
-        if target_state == "submitted" {
-            let Ok(submit) =
-                operation.typed_payload::<arkret_wire::event_spec::ModerationAppealSubmit>()
-            else {
-                return ProjectionEffect::Rejected {
-                    reason: "moderation_appeal_submit_payload_invalid".to_owned(),
-                };
-            };
-            self.moderation_appeal_submissions
-                .insert(appeal_id.clone(), submit);
-        }
-        // event-kind-registry defines a string FSM, not an object containing
-        // authorization metadata. The accepted submit index holds that metadata.
-        self.cells.insert(
-            cell_ref,
-            CellState::Value(Value::String(target_state.to_owned())),
-        );
-
-        ProjectionEffect::ModerationAppealProjected {
-            appeal_id,
-            realm_id,
-            new_state: target_state.to_owned(),
-        }
-    }
-
-    /// §5.5.2 reducer constraints for an appeal transition. Returns the
-    /// canonical reason_code on violation.
-    fn check_moderation_appeal_constraints(
-        &self,
-        appeal_id: &str,
-        operation: &Operation,
-        target_state: &str,
-    ) -> Result<(), &'static str> {
-        match target_state {
-            "submitted" => {
-                self.enforce_no_active_duplicate_appeal(appeal_id, operation)?;
-                Ok(())
-            }
-            // review: reviewer ≠ original decision issuer (separation of duties).
-            "under_review" => {
-                self.enforce_appeal_separation_of_duties(appeal_id, operation)?;
-                Ok(())
-            }
-            // decision: SoD + verdict-specific atomicity (overturn↔lift,
-            // modify↔new decision).
-            "decided" => {
-                self.enforce_appeal_separation_of_duties(appeal_id, operation)?;
-                let verdict = appeal_verdict(operation)?;
-                // Resolve the appealed decision_ref from the submit-time cell.
-                let decision_ref = self.moderation_appeal_decision_ref(appeal_id);
-                match verdict {
-                    AppealDecision::Overturn => {
-                        let Some(decision_ref) = decision_ref else {
-                            return Err("appeal_overturn_missing_lift");
-                        };
-                        // The paired lift MUST already be projected (ordered
-                        // batch: lift before this decision), so the
-                        // moderation_state cell shows decision_ref lifted.
-                        if !self.moderation_decision_is_lifted(&decision_ref) {
-                            return Err("appeal_overturn_missing_lift");
-                        }
-                        Ok(())
-                    }
-                    AppealDecision::Modify => {
-                        let modify_ref = payload_str(operation, "modify_decision_ref")
-                            .ok_or("appeal_modify_missing_decision")?;
-                        // The new decision MUST already be present (ordered
-                        // batch: new decision before this appeal decision).
-                        if !self.moderation_decision_is_live(&modify_ref) {
-                            return Err("appeal_modify_missing_decision");
-                        }
-                        Ok(())
-                    }
-                    // uphold: original decision stands, no pairing required.
-                    AppealDecision::Uphold => Ok(()),
-                }
-            }
-            // close: reviewer close OR appellant withdrawal. Withdrawal is
-            // authorized by closer == appellant and close_reason, otherwise
-            // the capability gate (policy.rs) covers reviewer authority after
-            // decided. No SoD restriction on close per §5.5.2.
-            "closed" => Ok(()),
-            _ => Ok(()),
-        }
-    }
-
-    fn is_appellant_withdrawal_close(&self, appeal_id: &str, operation: &Operation) -> bool {
-        if payload_str(operation, "close_reason").as_deref() != Some("appellant_withdrawn") {
-            return false;
-        }
-        let Some(closer_id) = payload_str(operation, "closer_id") else {
-            return false;
-        };
-        self.moderation_appeal_appellant(appeal_id).as_deref() == Some(closer_id.as_str())
-    }
-
-    fn enforce_no_active_duplicate_appeal(
-        &self,
-        appeal_id: &str,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        let Some(decision_ref) = payload_str(operation, "decision_ref") else {
-            return Ok(());
-        };
-        let Some(appellant_id) = payload_str(operation, "appellant_id") else {
-            return Ok(());
-        };
-        for (existing_id, submit) in &self.moderation_appeal_submissions {
-            if existing_id == appeal_id
-                || submit.decision_ref.as_str() != decision_ref
-                || submit.appellant_id.as_str() != appellant_id
-            {
-                continue;
-            }
-            if self.moderation_appeal_state(existing_id).as_deref() != Some("closed") {
-                return Err("moderation_appeal_duplicate_active");
-            }
-        }
-        Ok(())
-    }
-
-    /// Read the decision reference in the accepted submit Event.
-    fn moderation_appeal_decision_ref(&self, appeal_id: &str) -> Option<String> {
-        self.moderation_appeal_submissions
-            .get(appeal_id)
-            .map(|submit| submit.decision_ref.to_string())
-    }
-
-    fn moderation_decision_target_ref(&self, decision_id: &str) -> Option<String> {
-        self.moderation_items_for_decision(decision_id)
-            .iter()
-            .find_map(|item| {
-                item.get("value")
-                    .unwrap_or(item)
-                    .get("target_ref")
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
-            .or_else(|| {
-                self.moderation_decisions
-                    .get(decision_id)
-                    .and_then(|decision| serde_json::to_value(decision).ok())
-                    .and_then(|decision| {
-                        decision
-                            .get("target_ref")
-                            .and_then(Value::as_str)
-                            .map(ToOwned::to_owned)
-                    })
-            })
-    }
-
-    /// Validate the closed sibling set required by moderation appeal verdicts.
-    ///
-    /// This check deliberately inspects the submitted aggregate rather than
-    /// inferring pairing from the process-local arrival order. `self` is the
-    /// projection rebuilt from durably accepted moderation facts immediately
-    /// before the aggregate; the caller still runs the ordinary ordered
-    /// reducer fold after this shape check.
-    pub fn validate_moderation_atomic_pairing(
-        &self,
-        operations: &[Operation],
-    ) -> Result<(), &'static str> {
-        for operation in operations {
-            if operation.event_kind != arkret_wire::EventKind::ModerationAppealDecision {
-                continue;
-            }
-            let verdict = appeal_verdict(operation)?;
-            if verdict == AppealDecision::Uphold {
-                continue;
-            }
-            let appeal_id =
-                payload_str(operation, "appeal_id").ok_or("moderation_appeal_id_missing")?;
-            let original_decision_ref =
-                self.moderation_appeal_decision_ref(&appeal_id)
-                    .ok_or(match verdict {
-                        AppealDecision::Overturn => "appeal_overturn_missing_lift",
-                        AppealDecision::Modify => "appeal_modify_missing_lift",
-                        AppealDecision::Uphold => unreachable!(),
-                    })?;
-            let original_target_ref = self
-                .moderation_decision_target_ref(&original_decision_ref)
-                .ok_or(match verdict {
-                    AppealDecision::Overturn => "appeal_overturn_missing_lift",
-                    AppealDecision::Modify => "appeal_modify_missing_lift",
-                    AppealDecision::Uphold => unreachable!(),
-                })?;
-
-            let matching_lifts = operations
-                .iter()
-                .filter(|candidate| {
-                    candidate.event_kind == arkret_wire::EventKind::ModerationDecisionLift
-                        && payload_str(candidate, "decision_ref").as_deref()
-                            == Some(original_decision_ref.as_str())
-                        && payload_str(candidate, "target_ref").as_deref()
-                            == Some(original_target_ref.as_str())
-                })
-                .count();
-            if matching_lifts != 1 {
-                return Err(match verdict {
-                    AppealDecision::Overturn => "appeal_overturn_missing_lift",
-                    AppealDecision::Modify => "appeal_modify_missing_lift",
-                    AppealDecision::Uphold => unreachable!(),
-                });
-            }
-
-            if verdict == AppealDecision::Modify {
-                let replacement_ref = payload_str(operation, "modify_decision_ref")
-                    .ok_or("appeal_modify_missing_decision")?;
-                let matching_replacements = operations
-                    .iter()
-                    .filter(|candidate| {
-                        candidate.event_kind == arkret_wire::EventKind::ModerationDecision
-                            && candidate.context.event_id.as_str() == replacement_ref
-                            && payload_str(candidate, "target_ref").as_deref()
-                                == Some(original_target_ref.as_str())
-                    })
-                    .count();
-                if matching_replacements != 1 {
-                    return Err("appeal_modify_missing_decision");
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// separation-of-duties: the review/decision `reviewer_id` MUST NOT equal the
-    /// issuer of the appealed decision. The appealed decision is resolved via
-    /// the appeal cell's `decision_ref` → moderation_state cell issuer. When
-    /// the original decision was never projected here we cannot enforce (causal
-    /// tolerance) and accept.
-    fn enforce_appeal_separation_of_duties(
-        &self,
-        appeal_id: &str,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        let Some(reviewer_id) = payload_str(operation, "reviewer_id") else {
-            // No reviewer named — schema validator catches this; reducer
-            // tolerates absence (constraint is reviewer-relative).
-            return Ok(());
-        };
-        let Some(decision_ref) = self.moderation_appeal_decision_ref(appeal_id) else {
-            return Ok(());
-        };
-        let Some(issuer) = self.moderation_decision_issuer(&decision_ref) else {
-            return Ok(());
-        };
-        if reviewer_id == issuer {
-            return Err("appeal_self_review_forbidden");
-        }
-        Ok(())
-    }
-}
-
-/// Map an appeal event kind to its target FSM state. Used by the dispatch
-/// adapter and the ingest preflight.
-pub(crate) fn appeal_target_state(kind: &arkret_wire::EventKind) -> Option<&'static str> {
-    match kind {
-        arkret_wire::EventKind::ModerationAppealSubmit => Some("submitted"),
-        arkret_wire::EventKind::ModerationAppealReview => Some("under_review"),
-        arkret_wire::EventKind::ModerationAppealDecision => Some("decided"),
-        arkret_wire::EventKind::ModerationAppealClose => Some("closed"),
-        _ => None,
-    }
 }

@@ -623,16 +623,16 @@ fn validate_container_event<'a>(
     }
     match event.kind {
         EventKind::MlsCommit => {
+            let commit = serde_json::from_value::<arkret_models_crypto::MlsCommitPayload>(
+                event.payload.clone(),
+            )
+            .map_err(|error| format!("container_commit_payload:{error}"))?;
             if event
                 .payload
                 .get("next_epoch")
                 .and_then(serde_json::Value::as_u64)
                 != Some(replica.archive.epoch)
-                || event
-                    .payload
-                    .get("commit_digest")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(replica.archive.transition_digest.as_str())
+                || commit.commit_digest() != &replica.archive.transition_digest
             {
                 return Err("container_commit_binding_mismatch".to_owned());
             }

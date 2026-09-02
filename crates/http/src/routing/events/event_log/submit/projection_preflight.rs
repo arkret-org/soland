@@ -12,7 +12,6 @@ pub(super) struct ProjectionPreflightContext<'a> {
     pub(super) batch_operations: &'a [arkret_event_draft::ProjectedEventOperation],
     pub(super) preparing_agent_membership: bool,
     pub(super) has_internal_plaintext_service_binding: bool,
-    pub(super) moderation_atomic_batch_verified: bool,
 }
 
 pub(super) struct ProjectionPreflightOutcome {
@@ -48,7 +47,6 @@ pub(super) async fn apply_projection_preflight(
         batch_operations,
         preparing_agent_membership,
         has_internal_plaintext_service_binding,
-        moderation_atomic_batch_verified,
     } = context;
     let mut strand_status_audit_payload = None;
     let mut consent_admission = None;
@@ -453,40 +451,15 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
-            // Single moderation Events are checked against the live accepted
-            // projection. Atomic verdict aggregates skip this point check
-            // because their complete ordered sibling set was already folded
-            // over a projection rebuilt from durable accepted facts.
-            if !moderation_atomic_batch_verified {
-                if operation.event_kind == arkret_wire::EventKind::ModerationAppealDecision {
-                    match operation.payload.get("decision").and_then(Value::as_str) {
-                        Some("overturn") => {
-                            return Err(SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "appeal_overturn_missing_lift",
-                                "appeal_overturn_missing_lift",
-                            ));
-                        }
-                        Some("modify") => {
-                            return Err(SubmitOneError::new(
-                                StatusCode::PRECONDITION_FAILED,
-                                "appeal_modify_missing_lift",
-                                "appeal_modify_missing_lift",
-                            ));
-                        }
-                        _ => {}
-                    }
-                }
-                if let Some(reason) = state
-                    .projections()
-                    .preflight_moderation_rejection(operation, &projected_cell_writes)
-                {
-                    return Err(SubmitOneError::new(
-                        StatusCode::PRECONDITION_FAILED,
-                        reason.clone(),
-                        reason,
-                    ));
-                }
+            if let Some(reason) = state
+                .projections()
+                .preflight_moderation_rejection(operation, &projected_cell_writes)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
             }
             let invite_preflight_reject = state
                 .projections()

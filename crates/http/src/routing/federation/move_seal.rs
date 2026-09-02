@@ -75,7 +75,10 @@ pub(crate) async fn verified_availability_dependency_writes(
             GovernanceDependency::AvailabilityReceipt {
                 availability_receipt,
                 ..
-            } => availability_receipt.holder_signer_evidence_digest.clone(),
+            } => availability_receipt
+                .holder_signer_evidence_ref
+                .content_digest()
+                .map_err(|error| seal_admission_error(error.to_string()))?,
             _ => {
                 return Err(seal_admission_error(
                     "availability receipt selector resolved to another dependency kind",
@@ -2353,7 +2356,6 @@ mod seal_delta_tests {
                 .expect("fixture verification method is a DID URL"),
             event_digest: event_digest.clone(),
             signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
             created_at: issued_at,
             domain: None,
             audience: None,

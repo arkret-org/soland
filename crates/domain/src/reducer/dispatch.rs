@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::{
     CircleLifecycleState, ObjectLifecycleTransition, ProjectionEffect, ProjectionState,
-    RealmLinkState, SpaceContainerLifecycleTransition, apply_moderation, mls,
+    RealmLinkState, SpaceContainerLifecycleTransition, mls,
 };
 use crate::hlc::ServerHlc;
 
@@ -798,25 +798,6 @@ fn apply_moderation_decision_lift_dispatch(
     s.apply_moderation_decision_lift(op, op.created_at)
 }
 
-/// P2 — dispatch for `ak.moderation.appeal.{submit,review,decision,close}`.
-/// Resolves the target FSM state from the canonical kind and projects the
-/// transition (with §5.5.2 reducer constraints) onto the appeal cell.
-fn apply_moderation_appeal_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    let Some(kind) = crate::kinds::canonical_kind_for_operation(op) else {
-        return ProjectionEffect::Ignored;
-    };
-    let Some(target_state) = apply_moderation::appeal_target_state(&kind) else {
-        return ProjectionEffect::Rejected {
-            reason: "moderation_appeal_kind_unknown".to_owned(),
-        };
-    };
-    s.apply_moderation_appeal(op, target_state)
-}
-
 // ── G3.S1: MLS lifecycle dispatch adapters ────────────────────────────
 //
 // Each adapter forwards to the free function in `reducer::mls`. The
@@ -1247,11 +1228,9 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::AgentKeyRevoke,
         apply_agent_key_revoke_dispatch,
     );
-    // P2 — moderation control-plane projection (decision / lift / appeal.*).
-    // decision + lift share the `ak.component.moderation_state.v1` or_set
-    // cell; the four appeal kinds drive the `ak.component.moderation.appeal.v1`
-    // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
-    // `apply_moderation.rs`.
+    // P2 — moderation control-plane projection. Decision + lift share the
+    // `ak.component.moderation_state.v1` or_set cell; acceptance fail-closed
+    // rules live in `apply_moderation.rs`.
     m.insert(
         arkret_wire::EventKind::ModerationDecision,
         apply_moderation_decision_dispatch,
@@ -1259,22 +1238,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::ModerationDecisionLift,
         apply_moderation_decision_lift_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ModerationAppealSubmit,
-        apply_moderation_appeal_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ModerationAppealReview,
-        apply_moderation_appeal_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ModerationAppealDecision,
-        apply_moderation_appeal_dispatch,
-    );
-    m.insert(
-        arkret_wire::EventKind::ModerationAppealClose,
-        apply_moderation_appeal_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and

@@ -61,6 +61,13 @@ pub struct GovernanceDependencyEdgeRecord {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GovernanceDependencyCanonical {
     pub dependency_kind: &'static str,
+    /// Exact selector value used by self/peer resolve. This is a digest for
+    /// content-addressed families and the producer ID for collision records.
+    pub selector_value: String,
+    /// Internal CAS/retention integrity digest. For collision records this is
+    /// deliberately *not* the Realm-suite locator digest; only the SDK can
+    /// compute that digest with the Realm's active suite and compare it with
+    /// the signed locator.
     pub object_digest: Hash,
     pub canonical_bytes: Vec<u8>,
     pub object_json: serde_json::Value,
@@ -76,7 +83,7 @@ pub fn governance_dependency_canonical(
     .validate()
     .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
 
-    let (dependency_kind, object_digest, object_json) = match item {
+    let (dependency_kind, selector_value, object_digest, object_json) = match item {
         GovernanceDependency::AvailabilityReceipt {
             selector: GovernanceDependencySelector::AvailabilityReceipt { content_digest },
             availability_receipt,
@@ -102,6 +109,7 @@ pub fn governance_dependency_canonical(
             }
             (
                 "availability_receipt",
+                content_digest.as_str().to_owned(),
                 content_digest.clone(),
                 serde_json::to_value(availability_receipt),
             )
@@ -125,6 +133,7 @@ pub fn governance_dependency_canonical(
             }
             (
                 "authenticated_signer_resolution_evidence",
+                content_digest.as_str().to_owned(),
                 content_digest.clone(),
                 serde_json::to_value(authenticated_signer_resolution_evidence),
             )
@@ -148,36 +157,38 @@ pub fn governance_dependency_canonical(
             }
             (
                 "minimal_metadata_mls_leaf_signer_evidence",
+                content_digest.as_str().to_owned(),
                 content_digest.clone(),
                 serde_json::to_value(minimal_metadata_mls_leaf_signer_evidence),
             )
         }
         GovernanceDependency::CollisionVariantRecord {
-            selector: GovernanceDependencySelector::CollisionVariantRecord { content_digest },
+            selector:
+                GovernanceDependencySelector::CollisionVariantRecord {
+                    collision_variant_record_id,
+                },
             collision_variant_record,
         } => {
-            // The record is addressed under the Realm's active suite, so the
-            // suite that named it is the suite that recomputes the colliding
-            // Event identity it claims.
-            let digest_suite = content_digest
-                .digest_suite()
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
             collision_variant_record
-                .validate(digest_suite)
+                .validate_structural()
                 .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-            if collision_variant_record
-                .content_digest(digest_suite)
-                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
-                != *content_digest
+            if collision_variant_record_id != &collision_variant_record.collision_variant_record_id
             {
                 return Err(PersistenceError::SchemaViolation(
-                    "collision variant record selector digest mismatch".to_owned(),
+                    "collision variant record selector id mismatch".to_owned(),
                 ));
             }
+            let object_json = serde_json::to_value(collision_variant_record)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            let canonical_bytes = arkret_canonical::canonical_json_bytes(&object_json)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            let object_digest = Hash::new(arkret_canonical::sha256_digest(&canonical_bytes))
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
             (
                 "collision_variant_record",
-                content_digest.clone(),
-                serde_json::to_value(collision_variant_record),
+                collision_variant_record_id.as_str().to_owned(),
+                object_digest,
+                Ok(object_json),
             )
         }
         _ => {
@@ -189,13 +200,14 @@ pub fn governance_dependency_canonical(
     let object_json = object_json.map_err(|error| PersistenceError::Internal(error.to_string()))?;
     let canonical_bytes = arkret_canonical::canonical_json_bytes(&object_json)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-    if canonical_bytes.len() > 1024 * 1024 {
+    if canonical_bytes.len() > 8 * 1024 * 1024 {
         return Err(PersistenceError::SchemaViolation(
-            "governance dependency object exceeds 1 MiB".to_owned(),
+            "governance dependency object exceeds 8 MiB".to_owned(),
         ));
     }
     Ok(GovernanceDependencyCanonical {
         dependency_kind,
+        selector_value,
         object_digest,
         canonical_bytes,
         object_json,
@@ -239,9 +251,46 @@ pub fn governance_dependency_selector_parts(
             "minimal_metadata_mls_leaf_signer_evidence",
             content_digest.clone(),
         ),
-        GovernanceDependencySelector::CollisionVariantRecord { content_digest } => {
-            ("collision_variant_record", content_digest.clone())
+        GovernanceDependencySelector::CollisionVariantRecord { .. } => {
+            return Err(PersistenceError::SchemaViolation(
+                "collision variant record selector is producer-ID-addressed, not digest-addressed"
+                    .to_owned(),
+            ));
         }
+    })
+}
+
+/// Storage lookup key for every governance dependency family. Collision
+/// records are intentionally keyed by their producer-allocated ID; their
+/// locator digest is independently verified by the SDK against the full JCS
+/// record (including `proof`).
+pub fn governance_dependency_selector_storage_parts(
+    selector: &GovernanceDependencySelector,
+) -> PersistenceResult<(&'static str, String)> {
+    GovernanceDependencyResolveOutcome {
+        items: Vec::new(),
+        missing_selectors: vec![selector.clone()],
+    }
+    .validate()
+    .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    Ok(match selector {
+        GovernanceDependencySelector::AvailabilityReceipt { content_digest } => {
+            ("availability_receipt", content_digest.as_str().to_owned())
+        }
+        GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest } => (
+            "authenticated_signer_resolution_evidence",
+            content_digest.as_str().to_owned(),
+        ),
+        GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence { content_digest } => (
+            "minimal_metadata_mls_leaf_signer_evidence",
+            content_digest.as_str().to_owned(),
+        ),
+        GovernanceDependencySelector::CollisionVariantRecord {
+            collision_variant_record_id,
+        } => (
+            "collision_variant_record",
+            collision_variant_record_id.as_str().to_owned(),
+        ),
     })
 }
 

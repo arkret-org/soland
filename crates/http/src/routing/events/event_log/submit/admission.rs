@@ -8,8 +8,6 @@ pub(super) struct EventSequenceAdmissionContext<'a> {
     pub(super) actor_key: &'a str,
     pub(super) membership_compensation_evidence:
         Option<&'a arkret_wire::MembershipCompensationSubmissionEvidence>,
-    pub(super) moderation_atomic_preceding_events:
-        Option<&'a BTreeMap<String, soland_services::events::AcceptedEvent>>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
 }
 
@@ -26,7 +24,6 @@ pub(super) async fn admit_event_sequence(
         submitted_event,
         actor_key,
         membership_compensation_evidence,
-        moderation_atomic_preceding_events,
         internal_admission,
     } = context;
     let service = state.event_queries();
@@ -59,16 +56,6 @@ pub(super) async fn admit_event_sequence(
                 format!("events store unavailable: {error}"),
             )
         })?;
-    scoped_actor_records.extend(
-        moderation_atomic_preceding_events
-            .into_iter()
-            .flat_map(|events| events.values())
-            .filter(|record| {
-                record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
-                    && record.actor_id == actor_key
-            })
-            .cloned(),
-    );
     if let Some(max_seq) = scoped_actor_records
         .iter()
         .map(|record| record.actor_seq)
@@ -135,12 +122,7 @@ pub(super) async fn admit_event_sequence(
                     "internal_error",
                     format!("events store unavailable: {error}"),
                 )
-            })?
-            .or_else(|| {
-                moderation_atomic_preceding_events
-                    .and_then(|events| events.get(prev_ref.as_str()))
-                    .cloned()
-            });
+            })?;
         if predecessor.is_none() {
             return Err(SubmitOneError::new(
                 StatusCode::CONFLICT,

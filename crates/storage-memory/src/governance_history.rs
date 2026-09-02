@@ -9,10 +9,10 @@ use soland_storage::{
     HistoryTraversalRetentionRecord, HistoryTraversalRetentionStore,
     HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput, PendingRrkAcquisitionRecord,
     PendingRrkAcquisitionState, PendingRrkAcquisitionStore, PersistenceError, PersistenceResult,
-    StorageCasOutcome, governance_dependency_canonical, governance_dependency_selector_parts,
-    governance_signer_evidence_canonical, historical_agent_signer_evidence_key,
-    history_traversal_canonical, history_traversal_retained_object_from_json,
-    rrk_semantically_same, validate_rrk_acceptance,
+    StorageCasOutcome, governance_dependency_canonical,
+    governance_dependency_selector_storage_parts, governance_signer_evidence_canonical,
+    historical_agent_signer_evidence_key, history_traversal_canonical,
+    history_traversal_retained_object_from_json, rrk_semantically_same, validate_rrk_acceptance,
 };
 
 use super::{Arc, BTreeMap, Mutex};
@@ -43,7 +43,7 @@ pub(crate) fn stage_governance_dependency_exact(
     let object_key = (
         write.realm_id.as_str().to_owned(),
         canonical.dependency_kind.to_owned(),
-        canonical.object_digest.as_str().to_owned(),
+        canonical.selector_value.clone(),
     );
     let source_key = (
         write.realm_id.as_str().to_owned(),
@@ -52,7 +52,7 @@ pub(crate) fn stage_governance_dependency_exact(
     );
     let edge_value = (
         canonical.dependency_kind.to_owned(),
-        canonical.object_digest.as_str().to_owned(),
+        canonical.selector_value.clone(),
     );
     if let Some((stored, stored_item)) = data.objects.get(&object_key)
         && (stored.canonical_bytes != canonical.canonical_bytes
@@ -97,7 +97,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
         let canonical = governance_signer_evidence_canonical(&item)?;
         let key = (
             canonical.dependency_kind.to_owned(),
-            canonical.object_digest.as_str().to_owned(),
+            canonical.selector_value.clone(),
         );
         let historical_key = historical_agent_signer_evidence_key(&item)?;
         let mut data = self.data.lock();
@@ -131,7 +131,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
         &self,
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>> {
-        let (kind, digest) = governance_dependency_selector_parts(selector)?;
+        let (kind, selector_value) = governance_dependency_selector_storage_parts(selector)?;
         if !matches!(
             selector,
             GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { .. }
@@ -145,7 +145,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
             .data
             .lock()
             .unscoped_signer_evidence
-            .get(&(kind.to_owned(), digest.as_str().to_owned()))
+            .get(&(kind.to_owned(), selector_value))
             .map(|(_, item)| item.clone()))
     }
 
@@ -177,7 +177,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
         let key = (
             realm_id.as_str().to_owned(),
             canonical.dependency_kind.to_owned(),
-            canonical.object_digest.as_str().to_owned(),
+            canonical.selector_value.clone(),
         );
         let mut data = self.data.lock();
         if let Some((stored, stored_item)) = data.objects.get(&key) {
@@ -206,7 +206,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
         realm_id: &arkret_wire::RealmId,
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>> {
-        let (kind, digest) = governance_dependency_selector_parts(selector)?;
+        let (kind, selector_value) = governance_dependency_selector_storage_parts(selector)?;
         Ok(self
             .data
             .lock()
@@ -214,7 +214,7 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
             .get(&(
                 realm_id.as_str().to_owned(),
                 kind.to_owned(),
-                digest.as_str().to_owned(),
+                selector_value,
             ))
             .map(|(_, item)| item.clone()))
     }
@@ -249,6 +249,67 @@ impl GovernanceDependencyStore for MemoryGovernanceDependencyStore {
                     })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod collision_variant_record_tests {
+    use arkret_models_collaboration::governance_dependencies::{
+        GovernanceDependency, GovernanceDependencySelector,
+    };
+    use arkret_wire::{CollisionVariantRecordId, RealmId};
+    use soland_storage::GovernanceDependencyStore;
+
+    use super::MemoryGovernanceDependencyStore;
+
+    fn collision_dependency(id: &str) -> GovernanceDependency {
+        serde_json::from_value(serde_json::json!({
+            "selector": {
+                "kind": "collision_variant_record",
+                "collision_variant_record_id": id
+            },
+            "collision_variant_record": {
+                "schema": "ak.schema.collision_variant_record.v1",
+                "collision_variant_record_id": id,
+                "realm_id": "ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5",
+                "collision_event_id": "ak:event:AR8bu-n-kOOB3nRUvYuIEglCX5B-JpFaNTex9gxs_cWY",
+                "canonical_event_bytes_b64u": "e30",
+                "canonical_event_size_bytes": 2,
+                "recorded_at": "2026-05-01T00:00:00.000Z",
+                "proof": {
+                    "kind": "detached_jws",
+                    "verification_method": "did:web:alice.example#key-1",
+                    "payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                    "created_at": "2026-05-02T00:00:00.000Z",
+                    "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                }
+            }
+        }))
+        .expect("collision dependency fixture")
+    }
+
+    #[tokio::test]
+    async fn collision_record_is_persisted_and_resolved_by_producer_id() {
+        let realm =
+            RealmId::new("ak:realm:Ac1aCK8aQdnkYImvdH3DFjq4jDCP198pXYWCGzGuVyj5".to_owned())
+                .unwrap();
+        let id = "ak:collision_variant_record:01964140-0000-7000-8000-000000000000";
+        let other_id = "ak:collision_variant_record:01964140-0000-7000-8000-000000000001";
+        let item = collision_dependency(id);
+        let store = MemoryGovernanceDependencyStore::default();
+        store
+            .put_realm_object_exact(&realm, item.clone())
+            .await
+            .unwrap();
+        let selector = GovernanceDependencySelector::CollisionVariantRecord {
+            collision_variant_record_id: CollisionVariantRecordId::new(id.to_owned()).unwrap(),
+        };
+        assert_eq!(store.get(&realm, &selector).await.unwrap(), Some(item));
+        let other_selector = GovernanceDependencySelector::CollisionVariantRecord {
+            collision_variant_record_id: CollisionVariantRecordId::new(other_id.to_owned())
+                .unwrap(),
+        };
+        assert_eq!(store.get(&realm, &other_selector).await.unwrap(), None);
     }
 }
 

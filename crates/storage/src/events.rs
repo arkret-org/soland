@@ -14,7 +14,7 @@ pub struct MembershipCompensationEvidenceRecord {
     pub event_id: String,
     pub event_digest: String,
     pub admission_id: String,
-    pub delegation_digest: String,
+    pub delegation_id: String,
     pub canonical_bytes: Vec<u8>,
     pub evidence: arkret_wire::MembershipCompensationSubmissionEvidence,
 }

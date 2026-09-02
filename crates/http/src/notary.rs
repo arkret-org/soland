@@ -1626,7 +1626,6 @@ impl NotaryWorker {
                 holder_id: holder_id.clone(),
                 retention_expires_at,
                 holder_signer_evidence_ref: evidence_ref.clone(),
-                holder_signer_evidence_digest: evidence_digest.clone(),
                 signature: PayloadProof {
                     kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
                     verification_method: verification_method.clone(),

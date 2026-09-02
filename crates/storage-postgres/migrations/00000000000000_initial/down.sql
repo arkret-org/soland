@@ -90,7 +90,6 @@ DROP TABLE IF EXISTS peer_keypackage_claims CASCADE;
 DROP TABLE IF EXISTS mls_welcomes CASCADE;
 DROP TABLE IF EXISTS moderation_reports CASCADE;
 DROP TABLE IF EXISTS moderation_queue_items CASCADE;
-DROP TABLE IF EXISTS moderation_appeal_events CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
 DROP TABLE IF EXISTS organization_registration_states CASCADE;
 DROP TABLE IF EXISTS organization_registration_challenges CASCADE;

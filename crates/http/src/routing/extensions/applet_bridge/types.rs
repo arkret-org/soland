@@ -799,7 +799,6 @@ mod tests {
                 .unwrap(),
                 event_digest: Hash::new(digest).unwrap(),
                 signer_resolution_evidence_ref: None,
-                signer_resolution_evidence_digest: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,

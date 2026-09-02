@@ -2666,62 +2666,6 @@ async fn moderation_decision_checks_issuer_capability_not_sender_spoof() {
     );
 }
 
-#[test]
-fn moderation_appeal_actor_uses_schema_id_fields() {
-    const ACTOR: &str = "ak:did_core:web:moderator.example";
-    let realm_id = arkret_identifiers::RealmId::new(
-        "ak:realm:ARkNLd10PLFU6nWXwpfON7eQhZGezakXw3pvJ5cRGc0Q".to_owned(),
-    )
-    .unwrap();
-
-    for (index, (kind, field)) in [
-        (
-            arkret_wire::EventKind::ModerationAppealSubmit,
-            "appellant_id",
-        ),
-        (
-            arkret_wire::EventKind::ModerationAppealReview,
-            "reviewer_id",
-        ),
-        (
-            arkret_wire::EventKind::ModerationAppealDecision,
-            "reviewer_id",
-        ),
-        (arkret_wire::EventKind::ModerationAppealClose, "closer_id"),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut payload = json!({"sender": ACTOR});
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert(field.to_owned(), json!(ACTOR));
-        let operation = op(
-            realm_id.clone(),
-            &format!("00000000091{index}"),
-            kind.clone(),
-            payload,
-        );
-        assert_eq!(
-            policy::moderation_actor_for_test(&operation, &kind).unwrap(),
-            Some(&operation.context.sender)
-        );
-    }
-
-    let legacy = op(
-        realm_id,
-        "000000000919",
-        arkret_wire::EventKind::ModerationAppealSubmit,
-        json!({"sender": ACTOR, "appellant": ACTOR}),
-    );
-    assert_eq!(
-        policy::moderation_actor_for_test(&legacy, &arkret_wire::EventKind::ModerationAppealSubmit)
-            .unwrap_err(),
-        "moderation_appeal_actor_missing"
-    );
-}
-
 #[tokio::test]
 async fn moderation_decision_allows_authorized_issuer() {
     const MODERATOR: &str = "ak:did_core:web:moderator.example";

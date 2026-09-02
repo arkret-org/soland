@@ -296,8 +296,7 @@ pub enum ProjectionEffect {
     /// P2 — `ak.moderation.decision` projected as an or_set add into the
     /// `ak.component.moderation_state.v1` cell keyed by `payload.target_ref`
     /// (content-moderation.md §2.6). Carries an issuer/target_ref/decision
-    /// snapshot so the appeal separation-of-duties check can reverse-resolve
-    /// the original decision issuer from the cell.
+    /// snapshot for deterministic projection reads.
     ModerationDecisionProjected {
         decision_id: String,
         realm_id: String,
@@ -309,16 +308,6 @@ pub enum ProjectionEffect {
     ModerationDecisionLifted {
         decision_id: String,
         realm_id: String,
-    },
-    /// P2 — `ak.moderation.appeal.{submit,review,decision,close}` projected
-    /// onto the `ak.component.moderation.appeal.v1` fsm cell keyed by
-    /// `payload.appeal_id`. `new_state` is the post-transition FSM value
-    /// (submitted / under_review / decided / closed); content-moderation.md
-    /// §5.5.
-    ModerationAppealProjected {
-        appeal_id: String,
-        realm_id: String,
-        new_state: String,
     },
     /// State-machine rejected the operation per
     /// `common-fields.md §5.1`. Routing layer maps this to HTTP 412

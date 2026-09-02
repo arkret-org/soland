@@ -2299,9 +2299,7 @@ pub(crate) fn signal_mls_genesis(scope: &arkret_wire::ScopeRef) -> arkret_wire::
             "epoch": 0,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "group_info_ref": format!("ak:blob:sha256:{}", "3".repeat(64)),
-            "group_info_digest": format!("sha256:{}", "3".repeat(64)),
             "ratchet_tree_ref": format!("ak:blob:sha256:{}", "4".repeat(64)),
-            "ratchet_tree_digest": format!("sha256:{}", "4".repeat(64)),
             "governance_binding": binding,
             "created_at": "2026-08-31T00:00:00.000Z"
         }),

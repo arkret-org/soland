@@ -559,11 +559,11 @@ CREATE TABLE public.canonical_events (
 CREATE TABLE public.membership_compensation_evidence (
     event_pk bigint PRIMARY KEY REFERENCES public.canonical_events(pk) ON DELETE RESTRICT,
     admission_id text NOT NULL,
-    delegation_digest text NOT NULL,
+    delegation_id text NOT NULL,
     canonical_bytes bytea NOT NULL,
     evidence jsonb NOT NULL,
     accepted_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT membership_compensation_evidence_single_use_key UNIQUE (admission_id, delegation_digest)
+    CONSTRAINT membership_compensation_evidence_single_use_key UNIQUE (admission_id, delegation_id)
 );
 
 CREATE INDEX canonical_events_realm_pk_idx
@@ -831,10 +831,14 @@ CREATE TABLE public.governance_dependency_objects (
     CONSTRAINT governance_dependency_objects_kind_check CHECK (dependency_kind IN (
         'availability_receipt',
         'authenticated_signer_resolution_evidence',
-        'minimal_metadata_mls_leaf_signer_evidence'
+        'minimal_metadata_mls_leaf_signer_evidence',
+        'collision_variant_record'
     )),
-    CONSTRAINT governance_dependency_objects_size_check CHECK (octet_length(canonical_bytes) <= 1048576)
+    CONSTRAINT governance_dependency_objects_size_check CHECK (octet_length(canonical_bytes) <= 8388608)
 );
+
+COMMENT ON COLUMN public.governance_dependency_objects.object_digest IS
+    'Legacy column name: exact selector value; collision_variant_record stores collision_variant_record_id, not a digest';
 
 CREATE TABLE public.governance_unscoped_signer_evidence (
     dependency_kind text NOT NULL,
@@ -1659,11 +1663,14 @@ CREATE TABLE public.federation_frontier_confirmed_evidence (
     reason text NOT NULL CHECK (reason IN ('witness_disagreement', 'fork_quarantine')),
     evidence_scope jsonb NOT NULL,
     observed_at bigint NOT NULL,
-    resolution_kind text CHECK (resolution_kind IN ('fork_resolution_event')),
-    resolution_digest text,
-    resolved_at bigint,
-    CHECK ((resolution_kind IS NULL) = (resolution_digest IS NULL)),
-    CHECK ((resolution_digest IS NULL) = (resolved_at IS NULL)),
+    local_resolution_kind text CHECK (local_resolution_kind IN ('fork_resolution_event', 'witness_reagreement')),
+    local_resolution_digest text,
+    local_normalized_at bigint,
+    peer_alignment_digest text,
+    peer_aligned_at bigint,
+    CHECK ((local_resolution_kind IS NULL) = (local_resolution_digest IS NULL)),
+    CHECK ((local_resolution_digest IS NULL) = (local_normalized_at IS NULL)),
+    CHECK ((peer_alignment_digest IS NULL) = (peer_aligned_at IS NULL)),
     CONSTRAINT federation_frontier_confirmed_evidence_pkey
         PRIMARY KEY (realm_id, peer_id, evidence_scope_key),
     CONSTRAINT federation_frontier_confirmed_evidence_exchange_fkey
@@ -1674,7 +1681,7 @@ CREATE TABLE public.federation_frontier_confirmed_evidence (
 CREATE INDEX federation_frontier_confirmed_evidence_unresolved_idx
     ON public.federation_frontier_confirmed_evidence
     (realm_id, peer_id, evidence_scope_key)
-    WHERE resolution_digest IS NULL;
+    WHERE peer_alignment_digest IS NULL;
 
 -- First phase of clearing confirmed fork evidence. One accepted
 -- ak.fork.resolution normalizes the local disputed scope; it does not clear any
@@ -1979,20 +1986,6 @@ CREATE INDEX moderation_queue_items_realm_idx ON public.moderation_queue_items U
 
 CREATE INDEX moderation_queue_items_report_event_idx
     ON public.moderation_queue_items USING btree (report_event_id);
-
--- Append-only projection of the four moderation appeal Event variants. The
--- source Event token makes reducer replay idempotent while the local identity
--- column preserves canonical append order for audit reads.
-CREATE TABLE public.moderation_appeal_events (
-    pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    appeal_id bytea NOT NULL CHECK (octet_length(appeal_id) = 33),
-    source_event_id bytea NOT NULL CHECK (octet_length(source_event_id) = 33),
-    payload jsonb NOT NULL,
-    projected_at timestamp with time zone NOT NULL,
-    CONSTRAINT moderation_appeal_events_source_event_id_key UNIQUE (source_event_id)
-);
-
-CREATE INDEX moderation_appeal_events_appeal_idx ON public.moderation_appeal_events USING btree (appeal_id, pk);
 
 CREATE TABLE public.organizations (
     organization_id text PRIMARY KEY CHECK (organization_id LIKE 'ak:did_core:%'),

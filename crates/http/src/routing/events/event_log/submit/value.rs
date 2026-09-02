@@ -13,11 +13,6 @@ pub(super) struct PreparedAgentMembershipEvent {
     pub(super) ingress_receipts: Vec<arkret_wire::IngressReceipt>,
 }
 
-pub(super) struct PreparedModerationAtomicEvent {
-    pub(super) command: soland_services::events::CommitAcceptedEventCommand,
-    pub(super) operation: Option<arkret_event_draft::ProjectedEventOperation>,
-}
-
 /// The named admission context of one Event submit.
 ///
 /// Everything here participates in admission judgement. Commit-only data
@@ -32,16 +27,6 @@ pub(super) struct SubmitEventContext<'a> {
     /// Event's own Operation. Batch-aware policy validators scan this slice
     /// for sibling writes (`operations::policy_extra`).
     pub(super) batch_operations: &'a [arkret_event_draft::ProjectedEventOperation],
-    /// The enclosing moderation aggregate already holds the per-Realm lock and
-    /// validated its complete sibling set against a projection rebuilt from
-    /// accepted facts. Individual preparation must neither relock nor repeat a
-    /// live-process preflight that cannot see still-uncommitted siblings.
-    pub(super) moderation_atomic_batch_verified: bool,
-    /// Earlier fully admitted members of the same still-uncommitted moderation
-    /// transaction. They are accepted predecessors for actor-chain validation
-    /// only inside that transaction; the storage batch remains the first write.
-    pub(super) moderation_atomic_preceding_events:
-        Option<&'a BTreeMap<String, soland_services::events::AcceptedEvent>>,
     pub(super) internal_admission: Option<&'a InternalEventAdmission>,
     pub(super) authorization_lease: Option<&'a arkret_wire::AuthorizationLease>,
     pub(super) control_proposal_ack: Option<&'a arkret_wire::ControlProposalAck>,
@@ -59,8 +44,6 @@ impl SubmitEventContext<'_> {
         Self {
             realm_bootstrap_contexts: &[],
             batch_operations: &[],
-            moderation_atomic_batch_verified: false,
-            moderation_atomic_preceding_events: None,
             internal_admission: None,
             authorization_lease: None,
             control_proposal_ack: None,
@@ -125,10 +108,6 @@ pub(super) enum SubmitMode<'a> {
     /// Admit an internally-authored Event through the ordinary canonical
     /// lane, but return its commit command to a larger atomic aggregate.
     PrepareInternal(&'a mut Option<soland_services::events::CommitAcceptedEventCommand>),
-    /// Admit one member of a caller-authored moderation aggregate without
-    /// committing it. The aggregate commits every command in one storage
-    /// transaction after all members pass admission.
-    PrepareModerationAtomic(&'a mut Option<PreparedModerationAtomicEvent>),
 }
 
 /// Classify a failed origin-selector derivation on the origin Station's own `/_arkret/self/*` write
@@ -2086,13 +2065,11 @@ pub(super) async fn submit_event_value_with_context(
     context: SubmitEventContext<'_>,
     mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    let (commit_options, deferred_agent_membership, deferred_internal, deferred_moderation_atomic) =
-        match mode {
-            SubmitMode::Commit(options) => (Some(options), None, None, None),
-            SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot), None, None),
-            SubmitMode::PrepareInternal(slot) => (None, None, Some(slot), None),
-            SubmitMode::PrepareModerationAtomic(slot) => (None, None, None, Some(slot)),
-        };
+    let (commit_options, deferred_agent_membership, deferred_internal) = match mode {
+        SubmitMode::Commit(options) => (Some(options), None, None),
+        SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot), None),
+        SubmitMode::PrepareInternal(slot) => (None, None, Some(slot)),
+    };
     let preparing_agent_membership = deferred_agent_membership.is_some();
     if event_string_field_from_value(&envelope, "kind").as_deref()
         == Some(arkret_wire::EventKind::DeviceAuthorize.as_str())
@@ -2265,21 +2242,6 @@ pub(super) async fn submit_event_value_with_context(
         None
     };
     let actor_key = parsed.actor.to_string();
-    let moderation_lock = (!context.moderation_atomic_batch_verified
-        && matches!(
-            parsed.kind.as_str(),
-            arkret_wire::event_kind_str::MODERATION_DECISION
-                | arkret_wire::event_kind_str::MODERATION_DECISION_LIFT
-                | arkret_wire::event_kind_str::MODERATION_APPEAL_SUBMIT
-                | arkret_wire::event_kind_str::MODERATION_APPEAL_REVIEW
-                | arkret_wire::event_kind_str::MODERATION_APPEAL_DECISION
-                | arkret_wire::event_kind_str::MODERATION_APPEAL_CLOSE
-        ))
-    .then(|| moderation_atomic_lock(parsed.realm_id.as_str()));
-    let _moderation_atomic_guard = match moderation_lock {
-        Some(lock) => Some(lock.lock_owned().await),
-        None => None,
-    };
     let actor_lock = actor_submit_lock(parsed.realm_id.as_str(), &actor_key);
     let _actor_submit_guard = actor_lock.lock().await;
     let _account_data_submit_guard =
@@ -2421,7 +2383,6 @@ pub(super) async fn submit_event_value_with_context(
         submitted_event: &submitted_event,
         actor_key: &actor_key,
         membership_compensation_evidence: context.membership_compensation_evidence,
-        moderation_atomic_preceding_events: context.moderation_atomic_preceding_events,
         internal_admission: context.internal_admission,
     })
     .await?;
@@ -2490,7 +2451,6 @@ pub(super) async fn submit_event_value_with_context(
             batch_operations: context.batch_operations,
             preparing_agent_membership,
             has_internal_plaintext_service_binding,
-            moderation_atomic_batch_verified: context.moderation_atomic_batch_verified,
         },
     )
     .await?;
@@ -2730,13 +2690,6 @@ pub(super) async fn submit_event_value_with_context(
     }
     if let Some(slot) = deferred_internal {
         *slot = Some(command);
-        return Ok(accepted_response);
-    }
-    if let Some(slot) = deferred_moderation_atomic {
-        *slot = Some(PreparedModerationAtomicEvent {
-            command,
-            operation: projection_operation,
-        });
         return Ok(accepted_response);
     }
     if let Some(response) = commit_accepted_event_stage(

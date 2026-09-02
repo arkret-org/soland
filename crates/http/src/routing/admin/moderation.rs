@@ -1,7 +1,7 @@
 //! Admin-facing moderation endpoints — **operations-only** after the P2
 //! governance migration.
 //!
-//! Moderation *truth* (decisions / lifts / appeals) is now carried by
+//! Moderation truth (decisions and lifts) is carried by
 //! protocol events submitted to `POST /_arkret/self/events` as self-authored
 //! Moves and converged by the data/control-plane reducer
 //! (`reducer/apply_moderation.rs`). The control plane holds no moderation
@@ -10,25 +10,17 @@
 //! entirely in the data/control-plane reducer, and the operator admin
 //! surface holds no moderation truth of its own).
 //!
-//! The former `/decision`, `/decision/{id}/lift`,
-//! `/appeals/{id}/{review,decision,close}` **write** endpoints have therefore
-//! been taken offline. What remains here is operations-tooling convenience:
+//! The former `/decision` and `/decision/{id}/lift` write endpoints have
+//! therefore been taken offline. What remains is operations tooling:
 //!
 //! ### Queue (operational triage only)
 //! - `GET /queue` — local queue read served by [`super::spec`]; this suite does NOT re-bind it.
 //! - `POST /queue/{id}/assign` — assign reviewer DIDs (queue routing only; not a moderation fact).
 //! - `POST /queue/{id}/priority` — set priority (queue routing only).
 //!
-//! ### Appeals (read-only)
-//! - `GET /appeals` — list (one record per appeal_id, latest event).
-//! - `GET /appeals/{appeal_id}` — full history.
-//!
-//! The separation-of-duties / overturn↔lift / modify↔new-decision rules now
-//! live in the reducer (`reducer/apply_moderation.rs`) + the ingest
-//! capability gate (`routing/events/operations/policy.rs
-//! ::validate_moderation_event_policy`); the helper checks below
-//! ([`appeal_decision_overturn_paired_check`] / [`appeal_self_review_check`])
-//! are retained for the reducer-level state-machine unit tests.
+//! Moderation decision and lift invariants live in the reducer
+//! (`reducer/apply_moderation.rs`) and the ingest capability gate
+//! (`routing/events/operations/policy.rs::validate_moderation_event_policy`).
 
 use std::collections::BTreeMap;
 
@@ -97,18 +89,6 @@ impl ModerationQueueItemOutcome {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct ModerationAppealsOutcome {
-    items: Vec<Value>,
-    total: usize,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct ModerationAppealHistoryOutcome {
-    appeal_id: String,
-    history: Vec<Value>,
-}
-
 fn remove_string_field(fields: &mut serde_json::Map<String, Value>, field: &str) -> Option<String> {
     match fields.remove(field) {
         Some(Value::String(value)) => Some(value),
@@ -152,13 +132,10 @@ pub(super) fn router() -> Router {
         // `/_soland/admin/moderation/queue` URL
         // bound to exactly one handler; only the sub-paths live here.
         //
-        // Decision / lift / appeal WRITE endpoints are intentionally absent:
-        // those facts are now protocol events on /_arkret/self/events. Only
-        // operational queue routing + read-only appeal views remain.
+        // Decision / lift writes are protocol events on /_arkret/self/events;
+        // this implementation-private surface only routes the operational queue.
         .push(Router::with_path("queue/{id}/assign").post(assign_queue_item))
         .push(Router::with_path("queue/{id}/priority").post(prioritise_queue_item))
-        .push(Router::with_path("appeals").get(list_appeals))
-        .push(Router::with_path("appeals/{appeal_id}").get(get_appeal))
 }
 
 // ── Queue ────────────────────────────────────────────────────────────
@@ -282,63 +259,4 @@ async fn prioritise_queue_item(
     )
     .await;
     json_ok(ModerationQueueItemOutcome::from_value(item))
-}
-
-// ── Appeals ──────────────────────────────────────────────────────────
-
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.moderation.appeals.list",
-    tags("soland_admin")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.admin.moderation.appeals.list")
-)]
-async fn list_appeals(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<ModerationAppealsOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let _ = require_admin_principal(state, session)?;
-    let items = state
-        .governance()
-        .moderation_appeals()
-        .await
-        .unwrap_or_default();
-    json_ok(ModerationAppealsOutcome {
-        total: items.len(),
-        items,
-    })
-}
-
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.moderation.appeals.get",
-    tags("soland_admin")
-)]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.admin.moderation.appeals.get")
-)]
-async fn get_appeal(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<ModerationAppealHistoryOutcome> {
-    let appeal_id = req
-        .param::<String>("appeal_id")
-        .ok_or_else(|| AppError::param_invalid("appeal_id required"))?;
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let _ = require_admin_principal(state, session)?;
-    let history = state
-        .governance()
-        .moderation_appeal_history(&appeal_id)
-        .await
-        .map_err(|err| AppError::internal(err.to_string()))?;
-    if history.is_empty() {
-        return Err(AppError::not_found("appeal"));
-    }
-    json_ok(ModerationAppealHistoryOutcome { appeal_id, history })
 }

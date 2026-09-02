@@ -125,7 +125,7 @@ pub(super) async fn prepare_accepted_event_command(
                 event_id: parsed.event_id.to_string(),
                 event_digest: parsed.canonical_digest.clone(),
                 admission_id: evidence.delegation.core.admission_id.to_string(),
-                delegation_digest: evidence.delegation.delegation_digest.to_string(),
+                delegation_id: evidence.delegation.delegation_id.to_string(),
                 canonical_bytes,
                 evidence: evidence.clone(),
             })

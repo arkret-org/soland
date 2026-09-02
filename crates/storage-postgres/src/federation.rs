@@ -1,4 +1,4 @@
-use arkret_wire::{ActorId, DidCoreId};
+use arkret_wire::{ActorId, DidCoreId, Hash};
 use serde_json::Value;
 
 use super::{
@@ -713,9 +713,11 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
         if !matches!(
             evidence.reason.as_str(),
             "witness_disagreement" | "fork_quarantine"
-        ) || evidence.resolution_kind.is_some()
-            || evidence.resolution_digest.is_some()
-            || evidence.resolved_at.is_some()
+        ) || evidence.local_resolution_kind.is_some()
+            || evidence.local_resolution_digest.is_some()
+            || evidence.local_normalized_at.is_some()
+            || evidence.peer_alignment_digest.is_some()
+            || evidence.peer_aligned_at.is_some()
         {
             return Err(PersistenceError::SchemaViolation(
                 "confirmed frontier evidence must be unresolved and use a registered reason"
@@ -739,7 +741,7 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             // An already-resolved scope is not re-opened by observing the same
             // evidence again; that is what the second phase settled.
             if sql_query(
-                "SELECT EXISTS (SELECT 1 FROM federation_frontier_confirmed_evidence                  WHERE realm_id = $1 AND peer_id = $2 AND evidence_scope_key = $3                    AND resolution_digest IS NOT NULL) AS present",
+                "SELECT EXISTS (SELECT 1 FROM federation_frontier_confirmed_evidence                  WHERE realm_id = $1 AND peer_id = $2 AND evidence_scope_key = $3                    AND peer_alignment_digest IS NOT NULL) AS present",
             )
             .bind::<Text, _>(&evidence.realm_id)
             .bind::<Text, _>(evidence.peer_id.as_str())
@@ -773,12 +775,13 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             sql_query(
                 "INSERT INTO federation_frontier_confirmed_evidence \
                  (realm_id, peer_id, evidence_scope_key, reason, evidence_scope, observed_at, \
-                  resolution_kind, resolution_digest, resolved_at) \
-                 VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL) \
+                  local_resolution_kind, local_resolution_digest, local_normalized_at, \
+                  peer_alignment_digest, peer_aligned_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, NULL, NULL, NULL, NULL, NULL) \
                  ON CONFLICT (realm_id, peer_id, evidence_scope_key) DO UPDATE SET \
                  reason = EXCLUDED.reason, evidence_scope = EXCLUDED.evidence_scope, \
                  observed_at = LEAST(federation_frontier_confirmed_evidence.observed_at, EXCLUDED.observed_at) \
-                 WHERE federation_frontier_confirmed_evidence.resolution_digest IS NULL",
+                 WHERE federation_frontier_confirmed_evidence.peer_alignment_digest IS NULL",
             )
             .bind::<Text, _>(&evidence.realm_id)
             .bind::<Text, _>(evidence.peer_id.as_str())
@@ -804,9 +807,10 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "SELECT realm_id, peer_id, evidence_scope_key, reason, evidence_scope, observed_at, \
-             resolution_kind, resolution_digest, resolved_at \
+             local_resolution_kind, local_resolution_digest, local_normalized_at, \
+             peer_alignment_digest, peer_aligned_at \
              FROM federation_frontier_confirmed_evidence \
-             WHERE realm_id = $1 AND peer_id = $2 AND resolution_digest IS NULL \
+             WHERE realm_id = $1 AND peer_id = $2 AND peer_alignment_digest IS NULL \
              ORDER BY evidence_scope_key ASC",
         )
         .bind::<Text, _>(realm_id)
@@ -841,23 +845,34 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
             .bind::<BigInt, _>(resolution.normalized_at)
             .execute(conn)
             .await?;
-            if written == 1 {
-                return Ok(());
+            if written != 1 {
+                let existing = sql_query(
+                    "SELECT realm_id, cell_subject_key, subject, verdict, conflict_evidence_digest,                  resolution_event_digest, normalized_at FROM federation_frontier_resolution                  WHERE realm_id = $1 AND cell_subject_key = $2",
+                )
+                .bind::<Text, _>(&resolution.realm_id)
+                .bind::<Text, _>(&resolution.cell_subject_key)
+                .get_result::<FederationFrontierResolutionRow>(conn)
+                .await?;
+                if FederationFrontierResolutionRecord::from(existing) != resolution {
+                    return Err(PgTransactionError::Storage(PersistenceError::Conflict(
+                        "failed_precondition: fork resolution subject is already settled".to_owned(),
+                    )));
+                }
             }
-            let existing = sql_query(
-                "SELECT realm_id, cell_subject_key, subject, verdict, conflict_evidence_digest,                  resolution_event_digest, normalized_at FROM federation_frontier_resolution                  WHERE realm_id = $1 AND cell_subject_key = $2",
+            sql_query(
+                "UPDATE federation_frontier_confirmed_evidence \
+                 SET local_resolution_kind = 'fork_resolution_event', \
+                     local_resolution_digest = $3, local_normalized_at = $4 \
+                 WHERE realm_id = $1 AND evidence_scope_key = $2 \
+                   AND local_resolution_digest IS NULL",
             )
             .bind::<Text, _>(&resolution.realm_id)
             .bind::<Text, _>(&resolution.cell_subject_key)
-            .get_result::<FederationFrontierResolutionRow>(conn)
+            .bind::<Text, _>(&resolution.resolution_event_digest)
+            .bind::<BigInt, _>(resolution.normalized_at)
+            .execute(conn)
             .await?;
-            if FederationFrontierResolutionRecord::from(existing) == resolution {
-                Ok(())
-            } else {
-                Err(PgTransactionError::Storage(PersistenceError::Conflict(
-                    "failed_precondition: fork resolution subject is already settled".to_owned(),
-                )))
-            }
+            Ok(())
         })
         .await
         .map_err(PgTransactionError::into_persistence)
@@ -897,49 +912,74 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
                 "frontier evidence resolution kind is not registered".to_owned(),
             ));
         }
+        Hash::new(resolution_digest.to_owned()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "local resolution digest is invalid: {error}"
+            ))
+        })?;
+        self.record_peer_alignment(
+            realm_id,
+            peer_id,
+            evidence_scope_key,
+            resolution_digest,
+            resolved_at,
+        )
+        .await
+    }
+
+    async fn record_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> PersistenceResult<bool> {
+        Hash::new(alignment_digest.to_owned()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "peer alignment evidence digest is invalid: {error}"
+            ))
+        })?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let realm_id = realm_id.to_owned();
-        let peer_id = peer_id.clone();
-        let evidence_scope_key = evidence_scope_key.to_owned();
-        let resolution_kind = resolution_kind.to_owned();
-        let resolution_digest = resolution_digest.to_owned();
-        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                .bind::<Text, _>(format!("frontier:{}:{}", realm_id, peer_id.as_str()))
-                .execute(conn)
-                .await?;
-            let cleared = sql_query(
-                "UPDATE federation_frontier_confirmed_evidence                  SET resolution_kind = $4, resolution_digest = $5, resolved_at = $6                  WHERE realm_id = $1 AND peer_id = $2 AND evidence_scope_key = $3                    AND resolution_digest IS NULL",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(peer_id.as_str())
-            .bind::<Text, _>(&evidence_scope_key)
-            .bind::<Text, _>(&resolution_kind)
-            .bind::<Text, _>(&resolution_digest)
-            .bind::<BigInt, _>(resolved_at)
-            .execute(conn)
-            .await?;
-            if cleared == 0 {
-                return Ok(false);
-            }
-            // Only this peer leaves the evidence-driven fail-closed state, and
-            // only once it holds no other unresolved confirmed evidence. The
-            // ordinary consecutive-failure window is untouched.
-            sql_query(
-                "UPDATE federation_frontier_exchange exchange                  SET status = CASE WHEN consecutive_failures >= $3 THEN 'peer_stale' ELSE 'healthy' END,                      last_error = NULL, updated_at = $4                  WHERE realm_id = $1 AND peer_id = $2                    AND last_error IN ('witness_disagreement', 'fork_quarantine')                    AND NOT EXISTS (SELECT 1 FROM federation_frontier_confirmed_evidence evidence                        WHERE evidence.realm_id = exchange.realm_id                          AND evidence.peer_id = exchange.peer_id                          AND evidence.resolution_digest IS NULL)",
-            )
-            .bind::<Text, _>(&realm_id)
-            .bind::<Text, _>(peer_id.as_str())
-            .bind::<Integer, _>(soland_storage::FEDERATION_FRONTIER_STALE_FAILURES)
-            .bind::<BigInt, _>(resolved_at)
-            .execute(conn)
-            .await?;
-            Ok(true)
-        })
+        let updated = sql_query(
+            "UPDATE federation_frontier_confirmed_evidence \
+             SET peer_alignment_digest = $4, peer_aligned_at = $5 \
+             WHERE realm_id = $1 AND peer_id = $2 AND evidence_scope_key = $3 \
+               AND local_resolution_digest IS NOT NULL \
+               AND peer_alignment_digest IS NULL",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(peer_id.as_str())
+        .bind::<Text, _>(evidence_scope_key)
+        .bind::<Text, _>(alignment_digest)
+        .bind::<BigInt, _>(aligned_at)
+        .execute(&mut conn)
         .await
-        .map_err(PgTransactionError::into_persistence)
+        .map_err(PersistenceError::database)?;
+        if updated == 0 {
+            return Ok(false);
+        }
+        sql_query(
+            "UPDATE federation_frontier_exchange exchange \
+             SET status = CASE WHEN consecutive_failures >= $3 THEN 'peer_stale' ELSE 'healthy' END, \
+                 last_error = NULL, updated_at = $4 \
+             WHERE realm_id = $1 AND peer_id = $2 \
+               AND last_error IN ('witness_disagreement', 'fork_quarantine') \
+               AND NOT EXISTS (SELECT 1 FROM federation_frontier_confirmed_evidence evidence \
+                   WHERE evidence.realm_id = exchange.realm_id \
+                     AND evidence.peer_id = exchange.peer_id \
+                     AND evidence.peer_alignment_digest IS NULL)",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(peer_id.as_str())
+        .bind::<Integer, _>(soland_storage::FEDERATION_FRONTIER_STALE_FAILURES)
+        .bind::<BigInt, _>(aligned_at)
+        .execute(&mut conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        Ok(true)
     }
 }
 impl PgFederationFrontierExchangeStore {
@@ -1152,11 +1192,15 @@ struct FederationFrontierConfirmedEvidenceRow {
     #[diesel(sql_type = BigInt)]
     observed_at: i64,
     #[diesel(sql_type = Nullable<Text>)]
-    resolution_kind: Option<String>,
+    local_resolution_kind: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
-    resolution_digest: Option<String>,
+    local_resolution_digest: Option<String>,
     #[diesel(sql_type = Nullable<BigInt>)]
-    resolved_at: Option<i64>,
+    local_normalized_at: Option<i64>,
+    #[diesel(sql_type = Nullable<Text>)]
+    peer_alignment_digest: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    peer_aligned_at: Option<i64>,
 }
 
 #[derive(QueryableByName)]
@@ -1200,9 +1244,11 @@ impl From<FederationFrontierConfirmedEvidenceRow> for FederationFrontierConfirme
             reason: row.reason,
             evidence_scope: row.evidence_scope,
             observed_at: row.observed_at,
-            resolution_kind: row.resolution_kind,
-            resolution_digest: row.resolution_digest,
-            resolved_at: row.resolved_at,
+            local_resolution_kind: row.local_resolution_kind,
+            local_resolution_digest: row.local_resolution_digest,
+            local_normalized_at: row.local_normalized_at,
+            peer_alignment_digest: row.peer_alignment_digest,
+            peer_aligned_at: row.peer_aligned_at,
         }
     }
 }

@@ -2091,7 +2091,6 @@ mod tests {
                     .expect("fixture verification method is a DID URL"),
                 event_digest: digest,
                 signer_resolution_evidence_ref: None,
-                signer_resolution_evidence_digest: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,
@@ -2323,7 +2322,6 @@ mod tests {
                     ))
                     .unwrap(),
                     signer_resolution_evidence_ref: None,
-                    signer_resolution_evidence_digest: None,
                     created_at: event.created_at,
                     domain: None,
                     audience: None,

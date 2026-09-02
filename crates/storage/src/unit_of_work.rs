@@ -293,7 +293,6 @@ mod tests {
             .unwrap(),
             event_digest: event_digest.clone(),
             signer_resolution_evidence_ref: None,
-            signer_resolution_evidence_digest: None,
             created_at: event.created_at,
             domain: None,
             audience: None,
@@ -312,14 +311,8 @@ mod tests {
             producer_verification_method: producer.verification_method.clone(),
             producer_signing_key_did: arkret_wire::DidKey::new("did:key:z6Mkhfixture").unwrap(),
             producer_signer_resolution_evidence_ref: None,
-            producer_signer_resolution_evidence_digest: None,
             signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                 "ak:signer_evidence:sha256:{}",
-                "11".repeat(32)
-            ))
-            .unwrap(),
-            signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
-                "sha256:{}",
                 "11".repeat(32)
             ))
             .unwrap(),

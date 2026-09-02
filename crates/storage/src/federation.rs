@@ -352,6 +352,16 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
         resolution_digest: &str,
         resolved_at: i64,
     ) -> PersistenceResult<bool>;
+    /// Clear one peer's exact-scope quarantine only after independently
+    /// verified alignment evidence for that peer and sibling scope.
+    async fn record_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> PersistenceResult<bool>;
 }
 
 #[cfg(test)]

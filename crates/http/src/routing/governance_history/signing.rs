@@ -12,7 +12,7 @@ pub(super) fn sign_history_response_record(
     release_service_signer_evidence: &GovernanceDependency,
 ) -> Result<HistoryKeyResponseRecord, AppError> {
     let verification_method = history_service_verification_method(state)?;
-    let (release_service_signer_evidence_ref, release_service_signer_evidence_digest) =
+    let release_service_signer_evidence_ref =
         history_release_service_signer_evidence_coordinates(release_service_signer_evidence)?;
     let temporary = HistoryKeyResponseRecord {
         sequence,
@@ -22,7 +22,6 @@ pub(super) fn sign_history_response_record(
         release_attestation: None,
         manifest_admission: Some(manifest_admission.clone()),
         release_service_signer_evidence_ref: release_service_signer_evidence_ref.clone(),
-        release_service_signer_evidence_digest: release_service_signer_evidence_digest.clone(),
         service_proof: placeholder_history_proof(verification_method.clone(), sent_at)?,
         source_record: source_record.clone(),
     };
@@ -40,7 +39,6 @@ pub(super) fn sign_history_response_record(
             release_attestation: None,
             manifest_admission: Some(manifest_admission.clone()),
             release_service_signer_evidence_ref: release_service_signer_evidence_ref.clone(),
-            release_service_signer_evidence_digest: release_service_signer_evidence_digest.clone(),
             service_proof,
             source_record: source_record.clone(),
         },
@@ -63,7 +61,7 @@ pub(super) fn sign_history_chunk_response_record(
     release_service_signer_evidence: &GovernanceDependency,
 ) -> Result<HistoryKeyResponseRecord, AppError> {
     let verification_method = history_service_verification_method(state)?;
-    let (release_service_signer_evidence_ref, release_service_signer_evidence_digest) =
+    let release_service_signer_evidence_ref =
         history_release_service_signer_evidence_coordinates(release_service_signer_evidence)?;
     let temporary = HistoryKeyResponseRecord {
         sequence,
@@ -73,7 +71,6 @@ pub(super) fn sign_history_chunk_response_record(
         release_attestation: Some(release_attestation.clone()),
         manifest_admission: None,
         release_service_signer_evidence_ref: release_service_signer_evidence_ref.clone(),
-        release_service_signer_evidence_digest: release_service_signer_evidence_digest.clone(),
         service_proof: placeholder_history_proof(verification_method.clone(), sent_at)?,
         source_record: source_record.clone(),
     };
@@ -91,7 +88,6 @@ pub(super) fn sign_history_chunk_response_record(
             release_attestation: Some(release_attestation.clone()),
             manifest_admission: None,
             release_service_signer_evidence_ref: release_service_signer_evidence_ref.clone(),
-            release_service_signer_evidence_digest: release_service_signer_evidence_digest.clone(),
             service_proof,
             source_record: source_record.clone(),
         },
@@ -142,7 +138,7 @@ pub(super) async fn current_history_release_service_signer_evidence(
 
 pub(super) fn history_release_service_signer_evidence_coordinates(
     dependency: &GovernanceDependency,
-) -> Result<(arkret_wire::SignerEvidenceRef, arkret_wire::Hash), AppError> {
+) -> Result<arkret_wire::SignerEvidenceRef, AppError> {
     let GovernanceDependency::AuthenticatedSignerResolutionEvidence {
         selector:
             GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence { content_digest },
@@ -174,7 +170,16 @@ pub(super) fn history_release_service_signer_evidence_coordinates(
     let evidence_ref = evidence
         .evidence_ref()
         .map_err(|error| AppError::internal(error.to_string()))?;
-    Ok((evidence_ref, content_digest.clone()))
+    if evidence_ref
+        .content_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != *content_digest
+    {
+        return Err(AppError::internal(
+            "history release signer evidence ref drifted after reservation",
+        ));
+    }
+    Ok(evidence_ref)
 }
 
 pub(super) fn history_response_signer_dependencies(

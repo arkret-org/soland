@@ -962,25 +962,19 @@ async fn complete_resumable_upload(
     // collects leftovers).
     remove_staged(dir, id).await;
     release_upload_lock(id);
-    let outcome = match blob_upload_outcome(
-        state,
-        blob_ref,
-        size_bytes as u64,
-        media_type,
-        content_digest,
-        received_at,
-    ) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                &error.to_string(),
-            );
-            return;
-        }
-    };
+    let outcome =
+        match blob_upload_outcome(state, blob_ref, size_bytes as u64, media_type, received_at) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                render_error(
+                    res,
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    &error.to_string(),
+                );
+                return;
+            }
+        };
     res.render(Json(outcome));
 }
 

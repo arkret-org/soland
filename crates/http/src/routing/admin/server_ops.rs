@@ -78,7 +78,7 @@ pub(super) fn router() -> Router {
         // `GET /_soland/admin/moderation/queue` is the local queue read.
         // The operator moderation suite in
         // `moderation.rs` owns the remaining `/_soland/admin/moderation/*`
-        // sub-paths (queue/{id}/assign, decision, appeals) and
+        // sub-paths (queue/{id}/assign and decision) and
         // deliberately does NOT re-bind the bare `queue` GET to avoid
         // double-binding the single URL.
         .push(Router::with_path("moderation/queue").get(get_moderation_queue))

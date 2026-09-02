@@ -102,7 +102,7 @@ struct MembershipCompensationEvidenceRow {
     #[diesel(sql_type = Text)]
     admission_id: String,
     #[diesel(sql_type = Text)]
-    delegation_digest: String,
+    delegation_id: String,
     #[diesel(sql_type = Binary)]
     canonical_bytes: Vec<u8>,
     #[diesel(sql_type = Jsonb)]
@@ -878,7 +878,7 @@ impl EventStore for PgEventStore {
         })?;
         let row = sql_query(
             "SELECT event.id AS event_id, event.digest_suite, event.digest AS event_digest, \
-                    evidence.admission_id, evidence.delegation_digest, evidence.canonical_bytes, \
+                    evidence.admission_id, evidence.delegation_id, evidence.canonical_bytes, \
                     evidence.evidence \
              FROM membership_compensation_evidence evidence \
              JOIN canonical_events event ON event.pk = evidence.event_pk \
@@ -914,7 +914,7 @@ impl EventStore for PgEventStore {
                         )
                     })?,
                 admission_id: row.admission_id,
-                delegation_digest: row.delegation_digest,
+                delegation_id: row.delegation_id,
                 canonical_bytes: row.canonical_bytes,
                 evidence,
             })

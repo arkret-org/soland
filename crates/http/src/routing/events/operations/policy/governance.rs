@@ -519,7 +519,7 @@ pub(super) async fn validate_realm_organization_policy(
 }
 
 /// P2 — capability gate for the moderation control-plane events ingested at
-/// `/_arkret/self/events` (content-moderation.md §2.6 / §5.5; capability-
+/// `/_arkret/self/events` (content-moderation.md §2.6; capability-
 /// action-registry.json). Mirrors [`validate_member_state_policy`]'s ban
 /// gate: the actor MUST hold the matching moderation capability action on the
 /// Realm. Realm ownership alone is not a capability; fail closed with
@@ -528,13 +528,6 @@ pub(super) async fn validate_realm_organization_policy(
 /// Action mapping (capability-action-registry.json):
 /// - `ak.moderation.decision`            → governance policy action or narrow decision action
 /// - `ak.moderation.decision.lift`       → governance policy action or narrow lift action
-/// - `ak.moderation.appeal.submit`       → action `ak.moderation.appeal.submit`
-/// - `ak.moderation.appeal.{review,decision,close}` → action `ak.moderation.appeal.review`
-///   (aggregate_admin: one review capability covers review / decision / close — §5.5.1 table note).
-///
-/// `ak.moderation.appeal.close` additionally admits the appellant-withdrawal
-/// path: an appellant closing their own appeal (closer == cell appellant)
-/// needs no review capability (§5.5.2).
 pub(super) async fn validate_moderation_event_policy(
     state: &AppState,
     operation: &Operation,
@@ -551,14 +544,6 @@ pub(super) async fn validate_moderation_event_policy(
             arkret_wire::CapabilityActionId::POLICY_MANAGE,
             arkret_wire::CapabilityActionId::MODERATION_DECISION_LIFT,
         ][..],
-        arkret_wire::EventKind::ModerationAppealSubmit => {
-            &[arkret_wire::CapabilityActionId::MODERATION_APPEAL_SUBMIT][..]
-        }
-        arkret_wire::EventKind::ModerationAppealReview
-        | arkret_wire::EventKind::ModerationAppealDecision
-        | arkret_wire::EventKind::ModerationAppealClose => {
-            &[arkret_wire::CapabilityActionId::MODERATION_APPEAL_REVIEW][..]
-        }
         _ => return Ok(()),
     };
 
@@ -569,14 +554,6 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     };
 
-    // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
-    // without the review capability (closer == cell appellant).
-    if kind == arkret_wire::EventKind::ModerationAppealClose
-        && moderation_close_is_appellant_withdrawal(state, operation, actor)
-    {
-        return Ok(());
-    }
-
     let realm_id = operation.realm_id.as_str();
     if state
         .projections()
@@ -586,11 +563,6 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if kind == arkret_wire::EventKind::ModerationAppealSubmit
-        && members.iter().any(|member| member == &actor.to_string())
-    {
-        return Ok(());
-    }
     if actions.iter().any(|action| {
         state
             .authorization()
@@ -693,57 +665,12 @@ pub(super) fn moderation_actor<'a>(
         arkret_wire::EventKind::ModerationDecisionLift => {
             return Ok(Some(&operation.context.sender));
         }
-        arkret_wire::EventKind::ModerationAppealSubmit => operation
-            .payload
-            .get("appellant_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::EventKind::ModerationAppealReview
-        | arkret_wire::EventKind::ModerationAppealDecision => operation
-            .payload
-            .get("reviewer_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::EventKind::ModerationAppealClose => operation
-            .payload
-            .get("closer_id")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .ok_or("moderation_appeal_actor_missing")?,
         _ => return Ok(None),
     };
     if operation.context.sender.signing_principal_id().as_str() != actor_principal {
         return Err("moderation_actor_mismatch");
     }
     Ok(Some(&operation.context.sender))
-}
-
-/// True when an `appeal.close` is an appellant self-withdrawal: the closer
-/// equals the appellant anchored on the projected appeal cell at submit time
-/// and the close reason is the canonical withdrawal reason.
-pub(super) fn moderation_close_is_appellant_withdrawal(
-    state: &AppState,
-    operation: &Operation,
-    actor: &arkret_wire::ActorId,
-) -> bool {
-    if operation
-        .payload
-        .get("close_reason")
-        .and_then(Value::as_str)
-        != Some("appellant_withdrawn")
-    {
-        return false;
-    }
-    let Some(appeal_id) = operation.payload.get("appeal_id").and_then(Value::as_str) else {
-        return false;
-    };
-    let appellant = {
-        let proj = state.projections().snapshot();
-        proj.moderation_appeal_appellant(appeal_id)
-    };
-    matches!(appellant, Some(appellant) if appellant == actor.signing_principal_id().as_str())
 }
 
 pub(super) fn direct_conversation_member_state_guard(

@@ -12,7 +12,7 @@
 //! is enforced at write time but not at GC.
 
 use arkret_canonical as canonical;
-use arkret_identifiers::{BlobRef, DidCoreId, Hash, RealmId};
+use arkret_identifiers::{BlobRef, DidCoreId, RealmId};
 use arkret_models_collaboration::objects::blob::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
     BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
@@ -61,19 +61,14 @@ pub(super) fn blob_upload_outcome(
     blob_ref: String,
     size_bytes: u64,
     media_type: String,
-    content_digest: String,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<BlobUploadOutcome, AppError> {
     let blob_ref = BlobRef::new(blob_ref)
         .map_err(|error| AppError::internal(format!("blob_ref construction failed: {error}")))?;
-    let content_digest = Hash::new(content_digest).map_err(|error| {
-        AppError::internal(format!("content_digest construction failed: {error}"))
-    })?;
     let issuer_id = arkret_identifiers::DidCoreId::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
     let signing_payload = json!({
         "blob_ref": blob_ref.as_str(),
-        "content_digest": content_digest.as_str(),
         "size_bytes": size_bytes,
         "received_at": received_at,
         "issuer_id": issuer_id.as_str(),
@@ -84,7 +79,6 @@ pub(super) fn blob_upload_outcome(
     let signature = state.notary_signing_key().sign(&canonical_bytes);
     let upload_receipt = UploadReceipt {
         blob_ref: blob_ref.clone(),
-        content_digest: content_digest.clone(),
         size_bytes,
         received_at,
         issuer_id: issuer_id.clone(),
@@ -98,7 +92,6 @@ pub(super) fn blob_upload_outcome(
         blob_ref,
         size_bytes,
         media_type: Some(media_type),
-        content_digest,
         upload_receipt: Some(upload_receipt),
     })
 }
@@ -354,14 +347,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         );
         return;
     }
-    let outcome = match blob_upload_outcome(
-        state,
-        blob_ref,
-        size as u64,
-        media_type,
-        content_digest,
-        received_at,
-    ) {
+    let outcome = match blob_upload_outcome(state, blob_ref, size as u64, media_type, received_at) {
         Ok(outcome) => outcome,
         Err(error) => {
             render_error(

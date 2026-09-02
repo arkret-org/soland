@@ -582,7 +582,6 @@ async fn project_accepted_operations_inner(
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
             mirror_mls_effect_to_persistence(state, origin, source_device_id, operation, &effect)
                 .await;
-            mirror_moderation_effect_to_persistence(state, operation, &effect).await;
             // SOL-ORG-04 — persist an accepted `ak.realm.organization`
             // relationship statement projection durably.
             mirror_realm_organization_effect_to_persistence(state, &effect).await;
@@ -700,83 +699,6 @@ pub(crate) async fn materialize_moderation_report_record(
         .await
         .map_err(|error| format!("store moderation queue item: {error}"))?;
     Ok(())
-}
-
-pub(crate) async fn mirror_moderation_effect_to_persistence(
-    state: &AppState,
-    operation: &Operation,
-    effect: &ProjectionEffectView,
-) {
-    let ProjectionEffectView::ModerationAppealProjected {
-        appeal_id,
-        new_state,
-        ..
-    } = effect
-    else {
-        return;
-    };
-
-    #[derive(Serialize)]
-    struct ProjectedAppealRecord<T> {
-        #[serde(flatten)]
-        payload: T,
-        #[serde(rename = "appeal_id", skip_serializing_if = "Option::is_none")]
-        derived_appeal_id: Option<String>,
-        event_kind: arkret_wire::EventKind,
-        source_event_id: arkret_wire::EventId,
-        appeal_state: String,
-        #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
-        projected_at: chrono::DateTime<chrono::Utc>,
-    }
-
-    fn record<T: Serialize>(
-        payload: T,
-        derived_appeal_id: Option<String>,
-        operation: &Operation,
-        appeal_state: &str,
-    ) -> Value {
-        serde_json::to_value(ProjectedAppealRecord {
-            payload,
-            derived_appeal_id,
-            event_kind: operation.event_kind.clone(),
-            source_event_id: operation.context.event_id.clone(),
-            appeal_state: appeal_state.to_owned(),
-            projected_at: operation.created_at.to_owned(),
-        })
-        .expect("typed moderation appeal projection record serializes")
-    }
-
-    let record = match &operation.event_kind {
-        arkret_wire::EventKind::ModerationAppealSubmit => operation
-            .typed_payload::<arkret_wire::event_spec::ModerationAppealSubmit>()
-            .map(|payload| record(payload, Some(appeal_id.clone()), operation, new_state)),
-        arkret_wire::EventKind::ModerationAppealReview => operation
-            .typed_payload::<arkret_wire::event_spec::ModerationAppealReview>()
-            .map(|payload| record(payload, None, operation, new_state)),
-        arkret_wire::EventKind::ModerationAppealDecision => operation
-            .typed_payload::<arkret_wire::event_spec::ModerationAppealDecision>()
-            .map(|payload| record(payload, None, operation, new_state)),
-        arkret_wire::EventKind::ModerationAppealClose => operation
-            .typed_payload::<arkret_wire::event_spec::ModerationAppealClose>()
-            .map(|payload| record(payload, None, operation, new_state)),
-        _ => return,
-    };
-    let Ok(record) = record else {
-        tracing::warn!(
-            operation_id = %operation.operation_id,
-            event_kind = %operation.event_kind,
-            "typed moderation appeal payload rejected before persistence"
-        );
-        return;
-    };
-    if let Err(error) = state.governance().append_moderation_appeal(record).await {
-        tracing::warn!(
-            %error,
-            appeal_id = %appeal_id,
-            operation_id = %operation.operation_id,
-            "failed to mirror moderation appeal event"
-        );
-    }
 }
 
 /// SOL-ORG-04 — persist an accepted `ak.realm.organization` relationship

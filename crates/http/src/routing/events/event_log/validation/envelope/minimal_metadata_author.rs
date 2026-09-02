@@ -316,7 +316,6 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         ))
         .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
         signer_resolution_evidence_ref: None,
-        signer_resolution_evidence_digest: None,
         created_at: chrono::Utc::now(),
         domain: None,
         audience: None,

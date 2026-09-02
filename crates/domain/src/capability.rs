@@ -127,13 +127,10 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         .is_some_and(|prefix| resource.starts_with(prefix))
 }
 
-/// A blob reference in one of its two typed wire forms: the content-addressed
-/// `ak:blob:<suite>:<digest>` or the `ak:blob:<uuidv7>` metadata id.
-///
-/// `BlobRef` additionally accepts a bare `<suite>:<digest>` digest. That form
-/// carries no kind segment, and `id-kind-registry.json` storage rules make the
-/// `<kind>` segment part of the canonical wire value, so a bare digest never
-/// names a blob resource here.
+/// A content-addressed Blob reference in canonical
+/// `ak:blob:<suite>:<digest>` wire form. A producer-allocated Blob metadata id
+/// is a `BlobId`, not a reference to content bytes, and cannot satisfy this
+/// selector.
 pub fn is_typed_blob_ref(value: &str) -> bool {
     value.starts_with("ak:blob:") && BlobRef::new(value).is_ok()
 }
@@ -445,7 +442,7 @@ mod tests {
             "blob",
             &format!("ak:blob:sha256:{}", "a".repeat(64))
         ));
-        assert!(resource_matches(
+        assert!(!resource_matches(
             "blob",
             "ak:blob:01964137-0000-7000-8000-000000000777"
         ));

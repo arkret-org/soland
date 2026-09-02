@@ -674,17 +674,11 @@ fn resign_federation_event_as(event: Value, actor_did: &str) -> Value {
         ))
         .expect("fixture producer signing key is a did:key"),
         producer_signer_resolution_evidence_ref: None,
-        producer_signer_resolution_evidence_digest: None,
         signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
             "ak:signer_evidence:sha256:{}",
             "11".repeat(32)
         ))
         .expect("fixture signer evidence ref"),
-        signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
-            "sha256:{}",
-            "11".repeat(32)
-        ))
-        .expect("fixture signer evidence digest"),
         accepted_at: event.created_at,
         jws: String::new(),
     };

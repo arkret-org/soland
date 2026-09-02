@@ -189,8 +189,8 @@ fn genesis_payload(group_id: &str, effective_scope: Value) -> Value {
         "effective_scope": effective_scope.clone(),
         "epoch": 0,
         "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
-        "group_info_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-        "ratchet_tree_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        "group_info_ref": "ak:blob:sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        "ratchet_tree_ref": "ak:blob:sha256:4444444444444444444444444444444444444444444444444444444444444444",
         "governance_binding": genesis_binding(group_id, effective_scope),
         "created_at": "2026-05-25T00:00:00.000Z"
     })
@@ -906,7 +906,7 @@ fn commit_epoch_in_order_succeeds() {
             genesis_event_ref,
             committed_at: 501,
             governance_binding: governance_binding(1),
-            accepted_commit_digest: Some(b64(b"opaque-commit-2")),
+            accepted_commit_digest: Some(arkret_canonical::sha256_digest(b"opaque-commit-2")),
             accepted_commit_ref: Some(c2.context.event_id.to_string()),
             accepted_from_epoch: Some(1),
             frontier_contested: false,
@@ -1002,7 +1002,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "base_epoch": 0,
                 "next_epoch": 1,
                 "sender": "ak:did_core:web:alice.example",
-                "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "commit_bytes_b64": b64(b"remove-commit"),
                 "proposal_refs": [proposal_ref],
                 "governance_binding": governance_binding(0),
             }),
@@ -1075,7 +1075,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                 "base_epoch": 0,
                 "next_epoch": 1,
                 "sender": "ak:did_core:web:alice.example",
-                "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                "commit_bytes_b64": b64(b"remove-all-commit"),
                 "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
                 "governance_binding": governance_binding(0),
             }),
@@ -1108,8 +1108,6 @@ fn schema_exact_commit_without_a_payload_committer_is_accepted() {
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_bytes_b64": b64(b"schema-exact-commit"),
-            "commit_digest":
-                "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "governance_binding": governance_binding(0),
         }),
     );

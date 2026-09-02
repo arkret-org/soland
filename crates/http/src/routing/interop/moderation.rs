@@ -2,10 +2,6 @@
 //!
 //! - `POST /_arkret/self/moderation/report` (`ak.self.moderation.command.report.v1`) — submit the
 //!   caller-authored signed report DataEvent through ordinary Event admission.
-//! - moderation appeals are durable `ak.moderation.appeal.*` events submitted through `POST
-//!   /_arkret/self/events`. The four-state appeal FSM and separation-of-duties enforcement are
-//!   authoritative in the reducer (`soland_domain::reducer::apply_moderation`), surfaced at ingest
-//!   by the moderation projection preflight.
 
 use std::collections::BTreeSet;
 

@@ -129,6 +129,42 @@ pub(super) async fn current_mimi_room_binding_for_uri(
         .transpose()
 }
 
+/// Resolve an authority-carried room-binding Event ref to the unique current
+/// binding for that Event's signed canonical room URI.
+pub(super) async fn current_mimi_room_binding_for_event_id(
+    state: &AppState,
+    event_id: &arkret_wire::EventId,
+) -> Result<Option<MimiRoomBindingProjection>, AppError> {
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
+    let room_uri = records
+        .into_iter()
+        .map(|record| {
+            serde_json::from_value::<arkret_wire::Event>(record.envelope)
+                .map_err(|error| AppError::internal(format!("MIMI binding decode failed: {error}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .find(|event| {
+            event.event_id == *event_id && event.kind == arkret_wire::EventKind::MimiRoomBinding
+        })
+        .and_then(|event| {
+            event
+                .payload
+                .get("mimi_room_uri")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        });
+    let Some(room_uri) = room_uri else {
+        return Ok(None);
+    };
+    let current = current_mimi_room_binding_for_uri(state, &room_uri).await?;
+    Ok(current.filter(|binding| binding.event_id == event_id.as_str()))
+}
+
 pub(super) async fn mimi_bound_realm_id(
     state: &AppState,
     room_id: &str,

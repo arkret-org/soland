@@ -949,10 +949,11 @@ impl FrontierExchangeWorker {
         reason: &str,
     ) -> Result<ForkResolutionSubject, String> {
         // The subject is the disputed scope alone. It is deliberately not the
-        // evidence: a later `ak.fork.resolution` clears this row by matching
-        // the same cell subject, and single-bucket versus cross-bucket
-        // over-fork at one position must resolve into one row rather than two
-        // that could be cleared independently.
+        // evidence: a later `ak.fork.resolution` normalizes the same local cell
+        // subject, while this peer row clears only after a separate verified
+        // exact-scope alignment. Single-bucket versus cross-bucket over-fork
+        // at one position still maps to one row rather than two independently
+        // clearable scopes.
         match reason {
             "witness_disagreement" => {
                 // A collision needs both preimages to have actually been seen
@@ -1005,9 +1006,11 @@ impl FrontierExchangeWorker {
                     reason: reason.to_owned(),
                     evidence_scope,
                     observed_at: chrono::Utc::now().timestamp(),
-                    resolution_kind: None,
-                    resolution_digest: None,
-                    resolved_at: None,
+                    local_resolution_kind: None,
+                    local_resolution_digest: None,
+                    local_normalized_at: None,
+                    peer_alignment_digest: None,
+                    peer_aligned_at: None,
                 },
             )
             .await
@@ -1417,9 +1420,11 @@ mod tests {
                     reason: "fork_quarantine".to_owned(),
                     evidence_scope: serde_json::to_value(&subject).unwrap(),
                     observed_at: 5,
-                    resolution_kind: None,
-                    resolution_digest: None,
-                    resolved_at: None,
+                    local_resolution_kind: None,
+                    local_resolution_digest: None,
+                    local_normalized_at: None,
+                    peer_alignment_digest: None,
+                    peer_aligned_at: None,
                 },
             )
             .await
@@ -1471,11 +1476,28 @@ mod tests {
                     reason: "fork_quarantine".to_owned(),
                     evidence_scope: serde_json::to_value(&subject).unwrap(),
                     observed_at: 5,
-                    resolution_kind: None,
-                    resolution_digest: None,
-                    resolved_at: None,
+                    local_resolution_kind: None,
+                    local_resolution_digest: None,
+                    local_normalized_at: None,
+                    peer_alignment_digest: None,
+                    peer_aligned_at: None,
                 },
             )
+            .await
+            .unwrap();
+        let normalization =
+            soland_services::federation::FederationFrontierResolutionRecord {
+                realm_id: realm.to_owned(),
+                cell_subject_key: scope_key.to_string(),
+                subject: serde_json::to_value(&subject).unwrap(),
+                verdict: serde_json::json!({"kind": "void_all"}),
+                conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
+                resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
+                normalized_at: 8,
+            };
+        state
+            .federation()
+            .record_frontier_local_normalization(&normalization)
             .await
             .unwrap();
         assert!(
@@ -1512,7 +1534,7 @@ mod tests {
                     scope_key.as_str(),
                     "fork_resolution_event",
                     &format!("sha256:{}", "3".repeat(64)),
-                    9,
+                    11,
                 )
                 .await
                 .unwrap()
@@ -1542,9 +1564,11 @@ mod tests {
                     reason: "fork_quarantine".to_owned(),
                     evidence_scope: serde_json::to_value(&subject).unwrap(),
                     observed_at: 1,
-                    resolution_kind: None,
-                    resolution_digest: None,
-                    resolved_at: None,
+                    local_resolution_kind: None,
+                    local_resolution_digest: None,
+                    local_normalized_at: None,
+                    peer_alignment_digest: None,
+                    peer_aligned_at: None,
                 },
             )
             .await

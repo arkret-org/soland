@@ -1466,10 +1466,6 @@ impl FederationDispatcher {
                 || receipt.verification_method != admission.producer_verification_method
                 || Some(&receipt.producer_signer_resolution_evidence_ref)
                     != admission.producer_signer_resolution_evidence_ref.as_ref()
-                || Some(&receipt.producer_signer_resolution_evidence_digest)
-                    != admission
-                        .producer_signer_resolution_evidence_digest
-                        .as_ref()
                 || receipt.receiver_id != row.delivery.peer_id
             {
                 return Err("Agent Event receipt does not match the delivered Event".to_owned());
@@ -2735,7 +2731,6 @@ mod tests {
                     .unwrap(),
                     event_digest: event_digest.clone(),
                     signer_resolution_evidence_ref: None,
-                    signer_resolution_evidence_digest: None,
                     created_at: issued_at,
                     domain: None,
                     audience: None,
@@ -2763,14 +2758,8 @@ mod tests {
                     )
                     .unwrap(),
                     producer_signer_resolution_evidence_ref: None,
-                    producer_signer_resolution_evidence_digest: None,
                     signer_resolution_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
                         "ak:signer_evidence:sha256:{}",
-                        "11".repeat(32)
-                    ))
-                    .unwrap(),
-                    signer_resolution_evidence_digest: arkret_wire::Hash::new(format!(
-                        "sha256:{}",
                         "11".repeat(32)
                     ))
                     .unwrap(),

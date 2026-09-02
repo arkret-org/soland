@@ -480,6 +480,26 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
             )
             .await?)
     }
+    async fn record_frontier_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &arkret_identifiers::DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .record_peer_alignment(
+                realm_id,
+                peer_id,
+                evidence_scope_key,
+                alignment_digest,
+                aligned_at,
+            )
+            .await?)
+    }
 }
 
 #[async_trait::async_trait]
@@ -526,16 +546,6 @@ impl crate::governance::ModerationPort for PersistenceModeration {
             .moderation()
             .get_submitted_queue_item_for_report_event(report_event_id)
             .await?)
-    }
-    async fn append_appeal(&self, appeal: Value) -> crate::ServiceResult<()> {
-        self.0.moderation().append_appeal(appeal).await?;
-        Ok(())
-    }
-    async fn appeals(&self) -> crate::ServiceResult<Vec<Value>> {
-        Ok(self.0.moderation().list_appeals().await?)
-    }
-    async fn appeal_history(&self, appeal_id: &str) -> crate::ServiceResult<Vec<Value>> {
-        Ok(self.0.moderation().appeal_history(appeal_id).await?)
     }
 }
 

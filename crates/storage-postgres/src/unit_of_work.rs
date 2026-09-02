@@ -68,7 +68,7 @@ async fn commit_membership_compensation_evidence(
     if record.event_id != request.event.event_id
         || record.event_digest != request.event.canonical_digest
         || record.admission_id != record.evidence.delegation.core.admission_id.as_str()
-        || record.delegation_digest != record.evidence.delegation.delegation_digest.as_str()
+        || record.delegation_id != record.evidence.delegation.delegation_id.as_str()
         || record.canonical_bytes != expected_bytes
     {
         return Err(PersistenceError::Conflict(
@@ -109,12 +109,12 @@ async fn commit_membership_compensation_evidence(
     })?;
     sql_query(
         "INSERT INTO membership_compensation_evidence \
-         (event_pk, admission_id, delegation_digest, canonical_bytes, evidence) \
+         (event_pk, admission_id, delegation_id, canonical_bytes, evidence) \
          VALUES ($1, $2, $3, $4, $5)",
     )
     .bind::<BigInt, _>(event_pk)
     .bind::<Text, _>(&record.admission_id)
-    .bind::<Text, _>(&record.delegation_digest)
+    .bind::<Text, _>(&record.delegation_id)
     .bind::<Binary, _>(&record.canonical_bytes)
     .bind::<Jsonb, _>(&evidence_value)
     .execute(conn)

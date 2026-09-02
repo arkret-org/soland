@@ -407,12 +407,12 @@ async fn agent_signer_evidence_bundle_for_sync(
             if producers.next().is_some() {
                 continue;
             }
-            let (Some(evidence_ref), Some(evidence_digest)) = (
-                producer.signer_resolution_evidence_ref.as_ref(),
-                producer.signer_resolution_evidence_digest.as_ref(),
-            ) else {
+            let Some(evidence_ref) = producer.signer_resolution_evidence_ref.as_ref() else {
                 continue;
             };
+            let evidence_digest = evidence_ref
+                .content_digest()
+                .map_err(|error| AppError::param_invalid(error.to_string()))?;
             let selector = GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
                 content_digest: evidence_digest.clone(),
             };

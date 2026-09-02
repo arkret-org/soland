@@ -13,13 +13,6 @@ pub(crate) use agent_participation::{
 };
 use governance::*;
 #[cfg(test)]
-pub(crate) fn moderation_actor_for_test<'a>(
-    operation: &'a Operation,
-    kind: &arkret_wire::EventKind,
-) -> Result<Option<&'a arkret_wire::ActorId>, &'static str> {
-    governance::moderation_actor(operation, kind)
-}
-#[cfg(test)]
 pub(crate) async fn validate_member_state_policy_for_test(
     state: &AppState,
     operation: &Operation,

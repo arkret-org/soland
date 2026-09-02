@@ -66,18 +66,10 @@ pub struct ProjectionState {
     /// derived by joining this binding with the current controller member cell.
     pub agent_membership_bindings: BTreeMap<(String, String), AgentControllerMembershipBinding>,
     /// Immutable accepted decision payloads. OR-Set resolution returns only
-    /// active adds and does not carry our local decision_id augmentation;
-    /// appeal issuer checks must survive Seal reload and observed removal.
+    /// active adds and does not carry our local decision_id augmentation.
     pub moderation_decisions: BTreeMap<
         String,
         arkret_models_collaboration::events_payloads::moderation::ModerationDecisionPayload,
-    >,
-    /// Accepted appeal submit payloads, indexed independently of the FSM cell.
-    /// Seal reload replaces the cell with its canonical string state; authorization
-    /// metadata is rebuilt from accepted Events and must survive that replacement.
-    pub moderation_appeal_submissions: BTreeMap<
-        String,
-        arkret_models_collaboration::governance::moderation_appeal::AppealSubmitPayload,
     >,
     /// Server-side invite projection keyed by `invite_id`.
     /// `ak.invite.third_party` creates pending third-party invites and

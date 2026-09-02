@@ -1166,12 +1166,10 @@ pub async fn hydrate_projections_from_persistence(
     // The Strand mirror intentionally stores only common index fields. Replay
     // the accepted projection events after mirror hydration so Calendar
     // fields, schema activation, the schedule revision DAG, RSVP MV-register
-    // heads, Poll Message/vote state, and moderation OR-Set/FSM indexes survive
+    // heads, Poll Message/vote state, and moderation OR-Set indexes survive
     // a process restart from their canonical durable source. Poll responses
     // are replayed from the Event log into PollState and deliberately do not
-    // create standalone MessageState timeline rows. Moderation must be replayed
-    // from these accepted facts as a group: process-local arrival observation
-    // is not an admissible basis for appeal pairing or separation of duties.
+    // create standalone MessageState timeline rows.
     let mut replay_events = events
         .into_iter()
         .filter(|event| {
@@ -1185,10 +1183,6 @@ pub async fn hydrate_projections_from_persistence(
                     | arkret_wire::EventKind::MessageCreate
                     | arkret_wire::EventKind::ModerationDecision
                     | arkret_wire::EventKind::ModerationDecisionLift
-                    | arkret_wire::EventKind::ModerationAppealSubmit
-                    | arkret_wire::EventKind::ModerationAppealReview
-                    | arkret_wire::EventKind::ModerationAppealDecision
-                    | arkret_wire::EventKind::ModerationAppealClose
             )
         })
         .collect::<Vec<_>>();

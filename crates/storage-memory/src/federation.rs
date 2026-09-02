@@ -1,4 +1,4 @@
-use arkret_wire::DidCoreId;
+use arkret_wire::{DidCoreId, Hash};
 
 use super::{
     Arc, BTreeMap, FEDERATION_FRONTIER_STALE_FAILURES, FEDERATION_FRONTIER_STATUS_HEALTHY,
@@ -457,9 +457,11 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
         if !matches!(
             evidence.reason.as_str(),
             "witness_disagreement" | "fork_quarantine"
-        ) || evidence.resolution_kind.is_some()
-            || evidence.resolution_digest.is_some()
-            || evidence.resolved_at.is_some()
+        ) || evidence.local_resolution_kind.is_some()
+            || evidence.local_resolution_digest.is_some()
+            || evidence.local_normalized_at.is_some()
+            || evidence.peer_alignment_digest.is_some()
+            || evidence.peer_aligned_at.is_some()
         {
             return Err(PersistenceError::SchemaViolation(
                 "confirmed frontier evidence must be unresolved and use a registered reason"
@@ -474,7 +476,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
         let mut retained = self.evidence.lock();
         if retained
             .get(&evidence_key)
-            .is_some_and(|existing| existing.resolution_digest.is_some())
+            .is_some_and(|existing| existing.peer_alignment_digest.is_some())
         {
             return Ok(());
         }
@@ -512,7 +514,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
             .filter(|record| {
                 record.realm_id == realm_id
                     && &record.peer_id == peer_id
-                    && record.resolution_digest.is_none()
+                    && record.peer_alignment_digest.is_none()
             })
             .cloned()
             .collect())
@@ -537,6 +539,15 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
             )),
             None => {
                 resolutions.insert(key, resolution.clone());
+                for evidence in self.evidence.lock().values_mut().filter(|evidence| {
+                    evidence.realm_id == resolution.realm_id
+                        && evidence.evidence_scope_key == resolution.cell_subject_key
+                }) {
+                    evidence.local_resolution_kind = Some("fork_resolution_event".to_owned());
+                    evidence.local_resolution_digest =
+                        Some(resolution.resolution_event_digest.clone());
+                    evidence.local_normalized_at = Some(resolution.normalized_at);
+                }
                 Ok(())
             }
         }
@@ -568,47 +579,75 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
                 "frontier evidence resolution kind is not registered".to_owned(),
             ));
         }
-        let key = (
+        self.record_peer_alignment(
+            realm_id,
+            peer_id,
+            evidence_scope_key,
+            resolution_digest,
+            resolved_at,
+        )
+        .await
+    }
+
+    async fn record_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> PersistenceResult<bool> {
+        Hash::new(alignment_digest.to_owned()).map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "peer alignment evidence digest is invalid: {error}"
+            ))
+        })?;
+        let mut evidence = self.evidence.lock();
+        let Some(record) = evidence.get_mut(&(
             realm_id.to_owned(),
             peer_id.clone(),
             evidence_scope_key.to_owned(),
-        );
-        let mut evidence = self.evidence.lock();
-        let Some(record) = evidence.get_mut(&key) else {
+        )) else {
             return Ok(false);
         };
-        if record.resolution_digest.is_some() {
-            return Ok(false);
+        if record.local_resolution_digest.is_none() {
+            return Err(PersistenceError::Conflict(
+                "peer alignment cannot precede accepted local normalization".to_owned(),
+            ));
         }
-        record.resolution_kind = Some(resolution_kind.to_owned());
-        record.resolution_digest = Some(resolution_digest.to_owned());
-        record.resolved_at = Some(resolved_at);
-        // The peer only leaves the evidence-driven fail-closed state once it
-        // holds no other unresolved confirmed evidence. Ordinary failure
-        // counters are untouched here: they have their own window.
-        let unresolved = evidence.values().any(|other| {
-            other.realm_id == realm_id
-                && &other.peer_id == peer_id
-                && other.resolution_digest.is_none()
+        if let Some(existing) = record.peer_alignment_digest.as_deref() {
+            return if existing == alignment_digest {
+                Ok(false)
+            } else {
+                Err(PersistenceError::Conflict(
+                    "duplicate_conflict: peer alignment evidence differs".to_owned(),
+                ))
+            };
+        }
+        record.peer_alignment_digest = Some(alignment_digest.to_owned());
+        record.peer_aligned_at = Some(aligned_at);
+        let mut exchanges = self.data.lock();
+        let unresolved = evidence.values().any(|record| {
+            record.realm_id == realm_id
+                && &record.peer_id == peer_id
+                && record.peer_alignment_digest.is_none()
         });
-        if !unresolved {
-            let mut exchanges = self.data.lock();
-            if let Some(exchange) = exchanges.get_mut(&(realm_id.to_owned(), peer_id.clone()))
-                && matches!(
-                    exchange.last_error.as_deref(),
-                    Some("witness_disagreement" | "fork_quarantine")
-                )
-            {
-                exchange.last_error = None;
-                exchange.status =
-                    if exchange.consecutive_failures >= FEDERATION_FRONTIER_STALE_FAILURES {
-                        FEDERATION_FRONTIER_STATUS_PEER_STALE
-                    } else {
-                        FEDERATION_FRONTIER_STATUS_HEALTHY
-                    }
-                    .to_owned();
-                exchange.updated_at = resolved_at;
-            }
+        if !unresolved
+            && let Some(exchange) = exchanges.get_mut(&(realm_id.to_owned(), peer_id.clone()))
+            && matches!(
+                exchange.last_error.as_deref(),
+                Some("witness_disagreement" | "fork_quarantine")
+            )
+        {
+            exchange.last_error = None;
+            exchange.status =
+                if exchange.consecutive_failures >= FEDERATION_FRONTIER_STALE_FAILURES {
+                    FEDERATION_FRONTIER_STATUS_PEER_STALE
+                } else {
+                    FEDERATION_FRONTIER_STATUS_HEALTHY
+                }
+                .to_owned();
+            exchange.updated_at = aligned_at;
         }
         Ok(true)
     }

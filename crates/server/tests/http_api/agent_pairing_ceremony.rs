@@ -392,7 +392,6 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .unwrap(),
                 signer_resolution_evidence_ref: None,
-                signer_resolution_evidence_digest: None,
                 created_at,
                 domain: None,
                 audience: None,

@@ -521,12 +521,6 @@ async fn exact_human_mimi_report_body(
         .clone();
     let created_at = chrono::Utc::now();
     let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
-        strand_id: arkret_wire::StrandId::new(MIMI_TEST_STRAND_ID.to_owned()).unwrap(),
-        mimi_room_uri: arkret_wire::MimiRoomUri::new(room_uri.to_owned()).unwrap(),
-        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
-        target_ref: arkret_wire::NonEmptyString::new(realm_id.to_owned()).unwrap(),
-        reporter_id: fixture_actor_core_id("did:web:alice.example"),
-        source_provider_id: arkret_wire::DidCoreId::new(MIMI_SOURCE_SERVICE_ID).unwrap(),
         reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
             actor_id: reporter_actor,
             membership_event_id,
@@ -545,10 +539,7 @@ async fn exact_human_mimi_report_body(
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
-        abuse_reason_code: arkret_wire::NonEmptyString::new("spam").unwrap(),
-        evidence_package: None,
-        franking_proof: None,
-        description: None,
+        cba_proof_bundles: Vec::new(),
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
@@ -670,12 +661,6 @@ async fn exact_agent_mimi_report_body(
 
     let created_at = chrono::Utc::now();
     let mut body = arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
-        strand_id: arkret_wire::StrandId::new(MIMI_TEST_STRAND_ID.to_owned()).unwrap(),
-        mimi_room_uri: arkret_wire::MimiRoomUri::new(room_uri.to_owned()).unwrap(),
-        realm_id: arkret_wire::RealmId::new(realm_id.to_owned()).unwrap(),
-        target_ref: arkret_wire::NonEmptyString::new(realm_id.to_owned()).unwrap(),
-        reporter_id: fixture_actor_core_id("did:web:alice.example"),
-        source_provider_id: arkret_wire::DidCoreId::new(MIMI_SOURCE_SERVICE_ID).unwrap(),
         reporter_authority: arkret_models_collaboration::http_bodies::MimiReporterAuthority {
             actor_id: reporter_actor,
             membership_event_id,
@@ -694,10 +679,7 @@ async fn exact_agent_mimi_report_body(
             },
         },
         report_event: arkret_wire::EventInitialSubmission::online(report_event),
-        abuse_reason_code: arkret_wire::NonEmptyString::new("spam").unwrap(),
-        evidence_package: None,
-        franking_proof: None,
-        description: None,
+        cba_proof_bundles: Vec::new(),
     };
     body.reporter_authority.proof.payload_digest = body.payload_digest().unwrap();
     body.reporter_authority.proof.jws = arkret_signatures::jws::sign_jws_ed25519(
@@ -832,7 +814,6 @@ fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
                 "target_ref".to_owned(),
                 json!("ak:realm:AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
             );
-            resign_human_mimi_report_authority(&mut target_swap);
 
             let mut stale_membership = valid.clone();
             stale_membership.reporter_authority.membership_event_id =
@@ -845,16 +826,11 @@ fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
             resign_human_mimi_report_authority(&mut stale_room_binding);
 
             let mut provider_swap = valid.clone();
-            provider_swap.source_provider_id =
-                arkret_wire::DidCoreId::new("ak:did_core:web:other-provider.example".to_owned())
-                    .unwrap();
+            provider_swap.report_event.event.payload.insert(
+                "source_provider_id".to_owned(),
+                json!("ak:did_core:web:other-provider.example"),
+            );
             resign_human_mimi_report_authority(&mut provider_swap);
-
-            let mut room_swap = valid.clone();
-            room_swap.mimi_room_uri =
-                arkret_wire::MimiRoomUri::new("mimi://provider.example/rooms/other".to_owned())
-                    .unwrap();
-            resign_human_mimi_report_authority(&mut room_swap);
 
             let mut expired = valid.clone();
             expired.reporter_authority.proof.created_at -= chrono::Duration::minutes(10);
@@ -873,7 +849,6 @@ fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
                     "payload": "e30"
                 }))
                 .unwrap();
-            opaque_only.evidence_package = Some(opaque.clone());
             opaque_only.report_event.event.payload.insert(
                 "evidence_package".to_owned(),
                 serde_json::to_value(opaque).unwrap(),
@@ -886,7 +861,6 @@ fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
                 ("stale membership", stale_membership),
                 ("stale room binding", stale_room_binding),
                 ("provider swap", provider_swap),
-                ("room swap", room_swap),
                 ("expired authority", expired),
                 ("opaque without current membership", opaque_only),
             ] {
@@ -988,7 +962,7 @@ fn mimi_report_rejects_revoked_room_head_without_event_or_rate_side_effect() {
                 Some(MIMI_SOURCE_SERVICE_ID),
                 realm_id,
                 "post-rejection-probe",
-                body.target_ref.as_str(),
+                body.report_payload().unwrap().target_ref.as_str(),
             );
             assert!(
                 !rate_probe.rate_limited,
@@ -1035,7 +1009,7 @@ fn mimi_report_rejects_ambiguous_room_heads_without_event_or_rate_side_effect() 
                 Some(MIMI_SOURCE_SERVICE_ID),
                 realm_id,
                 "post-ambiguity-probe",
-                body.target_ref.as_str(),
+                body.report_payload().unwrap().target_ref.as_str(),
             );
             assert!(
                 !rate_probe.rate_limited,

@@ -9,7 +9,7 @@ use arkret_models_collaboration::history_key::{
     SelfHistoryTraversalAccess,
 };
 use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
-use arkret_wire::{AvailabilityReceipt, Hash, RealmId, SealId};
+use arkret_wire::{AvailabilityReceipt, CollisionVariantRecordId, Hash, RealmId, SealId};
 use soland_storage::{
     ExactWriteOutcome, GovernanceDependencyEdgeRecord, GovernanceDependencySource,
     GovernanceDependencyStore, GovernanceDependencyWrite, HistoricalAgentSignerEvidenceKey,
@@ -18,10 +18,10 @@ use soland_storage::{
     HistoryTraversalRetentionStore, HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput,
     PendingRrkAcquisitionRecord, PendingRrkAcquisitionState, PendingRrkAcquisitionStore,
     StorageCasOutcome, governance_dependency_canonical, governance_dependency_selector_parts,
-    governance_signer_evidence_canonical, historical_agent_signer_evidence_key,
-    history_traversal_canonical, history_traversal_retained_object_canonical,
-    history_traversal_retained_object_from_json, rrk_archive_authorization_tuple_digest,
-    validate_rrk_acceptance,
+    governance_dependency_selector_storage_parts, governance_signer_evidence_canonical,
+    historical_agent_signer_evidence_key, history_traversal_canonical,
+    history_traversal_retained_object_canonical, history_traversal_retained_object_from_json,
+    rrk_archive_authorization_tuple_digest, validate_rrk_acceptance,
 };
 
 use super::{
@@ -78,7 +78,7 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
     )
     .bind::<Text, _>(write.realm_id.as_str())
     .bind::<Text, _>(canonical.dependency_kind)
-    .bind::<Text, _>(canonical.object_digest.as_str())
+    .bind::<Text, _>(&canonical.selector_value)
     .bind::<Binary, _>(&canonical.canonical_bytes)
     .bind::<Jsonb, _>(&canonical.object_json)
     .execute(&mut *conn)
@@ -92,7 +92,7 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
         )
         .bind::<Text, _>(write.realm_id.as_str())
         .bind::<Text, _>(canonical.dependency_kind)
-        .bind::<Text, _>(canonical.object_digest.as_str())
+        .bind::<Text, _>(&canonical.selector_value)
         .get_result::<DependencyObjectRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -120,7 +120,7 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
     .bind::<Nullable<Text>, _>(seal_id)
     .bind::<Nullable<Text>, _>(event_digest)
     .bind::<Text, _>(canonical.dependency_kind)
-    .bind::<Text, _>(canonical.object_digest.as_str())
+    .bind::<Text, _>(&canonical.selector_value)
     .bind::<BigInt, _>(edge_index)
     .execute(&mut *conn)
     .await
@@ -151,7 +151,7 @@ pub(crate) async fn put_governance_dependency_exact_in_transaction(
         if rows.iter().any(|row| {
             row.edge_index == edge_index
                 && row.dependency_kind == canonical.dependency_kind
-                && row.object_digest == canonical.object_digest.as_str()
+                && row.object_digest == canonical.selector_value
         }) {
             return Ok(ExactWriteOutcome::ExactReplay);
         }
@@ -245,7 +245,7 @@ fn decode_dependency_edge(
 }
 
 fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDependency> {
-    let digest = stored_hash(row.object_digest, "governance dependency object")?;
+    let selector_value = row.object_digest;
     let object_json = row.object_json;
     let canonical_bytes = arkret_canonical::canonical_json_bytes(&object_json)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
@@ -257,7 +257,7 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
     let item = match row.dependency_kind.as_str() {
         "availability_receipt" => GovernanceDependency::AvailabilityReceipt {
             selector: GovernanceDependencySelector::AvailabilityReceipt {
-                content_digest: digest,
+                content_digest: stored_hash(selector_value, "availability receipt selector")?,
             },
             availability_receipt: serde_json::from_value::<AvailabilityReceipt>(object_json)
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
@@ -265,7 +265,10 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
         "authenticated_signer_resolution_evidence" => {
             GovernanceDependency::AuthenticatedSignerResolutionEvidence {
                 selector: GovernanceDependencySelector::AuthenticatedSignerResolutionEvidence {
-                    content_digest: digest,
+                    content_digest: stored_hash(
+                        selector_value,
+                        "authenticated signer evidence selector",
+                    )?,
                 },
                 authenticated_signer_resolution_evidence: Box::new(
                     serde_json::from_value::<AuthenticatedSignerResolutionEvidence>(object_json)
@@ -276,7 +279,10 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
         "minimal_metadata_mls_leaf_signer_evidence" => {
             GovernanceDependency::MinimalMetadataMlsLeafSignerEvidence {
                 selector: GovernanceDependencySelector::MinimalMetadataMlsLeafSignerEvidence {
-                    content_digest: digest,
+                    content_digest: stored_hash(
+                        selector_value,
+                        "minimal-metadata signer evidence selector",
+                    )?,
                 },
                 minimal_metadata_mls_leaf_signer_evidence: serde_json::from_value::<
                     MinimalMetadataMlsLeafSignerEvidence,
@@ -286,7 +292,8 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
         }
         "collision_variant_record" => GovernanceDependency::CollisionVariantRecord {
             selector: GovernanceDependencySelector::CollisionVariantRecord {
-                content_digest: digest,
+                collision_variant_record_id: CollisionVariantRecordId::new(selector_value)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             },
             collision_variant_record: Box::new(
                 serde_json::from_value::<CollisionVariantRecord>(object_json)
@@ -307,7 +314,7 @@ async fn load_dependency(
     conn: &mut AsyncPgConnection,
     realm_id: &RealmId,
     kind: &str,
-    digest: &Hash,
+    selector_value: &str,
 ) -> PersistenceResult<Option<GovernanceDependency>> {
     sql_query(
         "SELECT dependency_kind, object_digest, canonical_bytes, object_json \
@@ -316,7 +323,7 @@ async fn load_dependency(
     )
     .bind::<Text, _>(realm_id.as_str())
     .bind::<Text, _>(kind)
-    .bind::<Text, _>(digest.as_str())
+    .bind::<Text, _>(selector_value)
     .get_result::<DependencyObjectRow>(conn)
     .await
     .optional()
@@ -341,8 +348,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let lock_key = format!(
                 "governance-unscoped-signer:{}:{}",
-                canonical.dependency_kind,
-                canonical.object_digest.as_str()
+                canonical.dependency_kind, canonical.selector_value
             );
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&lock_key)
@@ -356,7 +362,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING",
             )
             .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
+            .bind::<Text, _>(&canonical.selector_value)
             .bind::<Binary, _>(&canonical.canonical_bytes)
             .bind::<Jsonb, _>(&canonical.object_json)
             .bind::<Nullable<Text>, _>(historical_key.as_ref().map(|key| key.agent_id.as_str()))
@@ -378,7 +384,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                  WHERE dependency_kind=$1 AND object_digest=$2",
             )
             .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
+            .bind::<Text, _>(&canonical.selector_value)
             .get_result::<DependencyObjectRow>(&mut *conn)
             .await
             .optional()?;
@@ -467,7 +473,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
                 "governance-dependency-object:{}:{}:{}",
                 realm_id.as_str(),
                 canonical.dependency_kind,
-                canonical.object_digest.as_str()
+                canonical.selector_value
             );
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&lock_key)
@@ -480,7 +486,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
             )
             .bind::<Text, _>(realm_id.as_str())
             .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
+            .bind::<Text, _>(&canonical.selector_value)
             .bind::<Binary, _>(&canonical.canonical_bytes)
             .bind::<Jsonb, _>(&canonical.object_json)
             .execute(&mut *conn)
@@ -495,7 +501,7 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
             )
             .bind::<Text, _>(realm_id.as_str())
             .bind::<Text, _>(canonical.dependency_kind)
-            .bind::<Text, _>(canonical.object_digest.as_str())
+            .bind::<Text, _>(&canonical.selector_value)
             .get_result::<DependencyObjectRow>(&mut *conn)
             .await?;
             if stored.canonical_bytes != canonical.canonical_bytes
@@ -531,9 +537,9 @@ impl GovernanceDependencyStore for PgGovernanceDependencyStore {
         realm_id: &RealmId,
         selector: &GovernanceDependencySelector,
     ) -> PersistenceResult<Option<GovernanceDependency>> {
-        let (kind, digest) = governance_dependency_selector_parts(selector)?;
+        let (kind, selector_value) = governance_dependency_selector_storage_parts(selector)?;
         let mut conn = pg_conn(&self.pool).await?;
-        load_dependency(&mut conn, realm_id, kind, &digest).await
+        load_dependency(&mut conn, realm_id, kind, &selector_value).await
     }
 
     async fn list_for_source(

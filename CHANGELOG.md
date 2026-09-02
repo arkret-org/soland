@@ -153,17 +153,13 @@ below. Producers on the old wire MUST upgrade.
 - **`AppConfig.trust_domain`** field plumbed from `SOLAND_TRUST_DOMAIN`
   env var (default derived from `service_id`). Required by the
   the now-removed legacy device-hierarchy reset replay defence (T08).
-- **15 new `ErrorCode` variants** mirroring the new spec registry:
+- **13 new `ErrorCode` variants** mirroring the new spec registry:
   `RelaxedWindowExceedsCeiling`, `E2eeRelaxedDisallowedInComplianceProfile`,
-  `CrossDomainReplayRejected`, `ResetEventIdMismatch`,
-  `AppealOverturnMissingLift`, `AppealSelfReviewForbidden`,
-  `RealmTerminalState`, `AuditAgentAttestationMismatch`,
+  `CrossDomainReplayRejected`, `ResetEventIdMismatch`, `RealmTerminalState`,
+  `AuditAgentAttestationMismatch`,
   `AuditPurposeMismatch`, `LegalHoldActive`, `BlobRedacted`,
   `MediaPlaintextServiceNotAuthorised`, `MlsGovernanceBindingStale`,
   `ExpiredInviteToken`, `LateRecoveryRejectedMembership`.
-- **Moderation appeal state machine** (`AppealState`, `appeal_cell_id`,
-  separation-of-duties + overturn/lift pairing checks) for the four new
-  `ak.moderation.appeal.{submit,review,decision,close}` event kinds (T06).
 - **Account deactivation fanout projection** (`DeactivationFanoutProjection`)
   tracking the 7 fanout domains with `outcome=partially_completed` when
   some succeed and some fail (T07).

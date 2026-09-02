@@ -236,6 +236,14 @@ pub trait FederationStatePort: Send + Sync {
         resolution_digest: &str,
         resolved_at: i64,
     ) -> ServiceResult<bool>;
+    async fn record_frontier_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
@@ -482,6 +490,24 @@ impl FederationService {
             )
             .await
     }
+    pub async fn record_frontier_peer_alignment(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
+        evidence_scope_key: &str,
+        alignment_digest: &str,
+        aligned_at: i64,
+    ) -> ServiceResult<bool> {
+        self.state
+            .record_frontier_peer_alignment(
+                realm_id,
+                peer_id,
+                evidence_scope_key,
+                alignment_digest,
+                aligned_at,
+            )
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -590,6 +616,16 @@ mod tests {
             _resolution_kind: &str,
             _resolution_digest: &str,
             _resolved_at: i64,
+        ) -> ServiceResult<bool> {
+            Ok(false)
+        }
+        async fn record_frontier_peer_alignment(
+            &self,
+            _realm_id: &str,
+            _peer_id: &DidCoreId,
+            _evidence_scope_key: &str,
+            _alignment_digest: &str,
+            _aligned_at: i64,
         ) -> ServiceResult<bool> {
             Ok(false)
         }
