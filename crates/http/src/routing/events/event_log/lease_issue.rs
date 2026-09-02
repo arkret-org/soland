@@ -152,12 +152,23 @@ async fn issue_event_leases(
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<Vec<AuthorizationLease>, AppError> {
     let context = anchor_context(events)?;
+    if context
+        .as_ref()
+        .is_some_and(|anchor| anchor.self_principal_pcr_bootstrap)
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "human self-principal PCR genesis MUST NOT carry an AuthorizationLease",
+        )
+        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
+    }
     let bootstrap_contexts = context
         .as_ref()
         .map(|value| vec![value.bootstrap_context.clone()])
         .unwrap_or_default();
     let mut projected_operations = Vec::with_capacity(events.len());
     let mut projected_cell_writes = Vec::with_capacity(events.len());
+    let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
         let envelope = serde_json::to_value(event).map_err(|error| {
             AppError::new(
@@ -166,6 +177,7 @@ async fn issue_event_leases(
             )
             .with_status(StatusCode::BAD_REQUEST)
         })?;
+        envelopes.push(envelope.clone());
         let parsed = validate_event_envelope_with_context(
             state,
             session,
@@ -183,15 +195,20 @@ async fn issue_event_leases(
             .with_status(StatusCode::BAD_REQUEST)
         })?;
         projected_operations.push(operation);
-        projected_cell_writes.push(state.projections().project_cell_writes(event).map_err(
-            |error| {
+        projected_cell_writes.push(
+            if context.is_some() {
+                genesis_cell_write_projector(event)
+            } else {
+                state.projections().project_cell_writes(event)
+            }
+            .map_err(|error| {
                 AppError::new(
                     ErrorCode::SchemaViolation,
                     format!("authorization lease Event cell projection failed: {error}"),
                 )
                 .with_status(StatusCode::BAD_REQUEST)
-            },
-        )?);
+            })?,
+        );
     }
     crate::routing::events::operations::validate_operation_semantics(state, &projected_operations)
         .map_err(|reason| {
@@ -228,19 +245,103 @@ async fn issue_event_leases(
     // but against an isolated projection clone. This catches current-state
     // preconditions (for example a same-state membership transition) without
     // storing Events or advancing the accepted frontier.
-    let mut staged = state.projections().snapshot();
-    let hlc = soland_domain::hlc::ServerHlc::new("authorization-lease-preflight");
-    let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
-    for (operation, cell_writes) in projected_operations
-        .iter()
-        .zip(projected_cell_writes.iter())
+    if super::submit::moderation_atomic::batch_requires_moderation_atomicity(&envelopes) {
+        super::submit::moderation_atomic::preflight_moderation_atomic_batch(
+            state,
+            &envelopes,
+            &projected_operations,
+        )
+        .await
+        .map_err(|error| {
+            super::submit::submit_one_error_to_app_error(
+                "authorization lease moderation batch preflight",
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })?;
+    } else if context
+        .as_ref()
+        .is_some_and(|anchor| anchor.bootstrap_context.authority_root.is_some())
     {
-        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-            staged.apply_via_lattice_registry(operation, cell_writes, &hlc, &registry)
+        let projected = projected_operations
+            .iter()
+            .cloned()
+            .zip(projected_cell_writes.iter().cloned())
+            .map(
+                |(operation, cell_writes)| soland_services::projection::ProjectedOperation {
+                    operation,
+                    cell_writes,
+                },
+            )
+            .collect::<Vec<_>>();
+        state
+            .projections()
+            .stage_realm_bootstrap(&projected, false)
+            .map_err(|error| {
+                let rendered = super::submit::realm_bootstrap::bootstrap_projection_error(error);
+                super::submit::submit_one_error_to_app_error(
+                    "authorization lease Realm bootstrap preflight",
+                    rendered.status,
+                    rendered.code,
+                    &rendered.message,
+                )
+            })?;
+    } else if context.is_some() {
+        let projected = projected_operations
+            .iter()
+            .cloned()
+            .zip(projected_cell_writes.iter().cloned())
+            .map(
+                |(operation, cell_writes)| soland_services::projection::ProjectedOperation {
+                    operation,
+                    cell_writes,
+                },
+            )
+            .collect::<Vec<_>>();
+        state
+            .projections()
+            .stage_realm_bootstrap(&projected, false)
+            .map_err(|error| {
+                let rendered = super::submit::realm_bootstrap::bootstrap_projection_error(error);
+                super::submit::submit_one_error_to_app_error(
+                    "authorization lease genesis preflight",
+                    rendered.status,
+                    rendered.code,
+                    &rendered.message,
+                )
+            })?;
+    } else {
+        let mut staged = state.projections().snapshot();
+        let hlc = soland_domain::hlc::ServerHlc::new("authorization-lease-preflight");
+        let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+        for (operation, cell_writes) in projected_operations
+            .iter()
+            .zip(projected_cell_writes.iter())
         {
-            return Err(AppError::new(ErrorCode::FailedPrecondition, reason.clone())
-                .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-                .with_reason_code(reason));
+            let contextual_operation = match
+                soland_services::operation_semantics::canonical_kind_for_operation(operation)
+            {
+                Some(arkret_wire::EventKind::MemberState) => Some(
+                    crate::routing::events::projection::accepted_member_state_reducer_operation(
+                        operation,
+                    ),
+                ),
+                Some(arkret_wire::EventKind::CircleMemberState) => Some(
+                    crate::routing::events::projection::accepted_circle_member_reducer_operation(
+                        operation,
+                    ),
+                ),
+                _ => None,
+            };
+            let reducer_operation = contextual_operation.as_ref().unwrap_or(operation);
+            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
+                staged.apply_via_lattice_registry(reducer_operation, cell_writes, &hlc, &registry)
+            {
+                return Err(AppError::new(ErrorCode::FailedPrecondition, reason.clone())
+                    .with_status(StatusCode::UNPROCESSABLE_ENTITY)
+                    .with_reason_code(reason));
+            }
         }
     }
     let anchor_basis = context.map(|value| value.basis);
@@ -384,6 +485,7 @@ async fn issue_intent_leases(
 struct AnchorIssueContext {
     bootstrap_context: RealmBootstrapBatchContext,
     basis: AnchorUnitLeaseBasis,
+    self_principal_pcr_bootstrap: bool,
 }
 
 fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppError> {
@@ -518,6 +620,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             authority_root,
         },
         basis,
+        self_principal_pcr_bootstrap,
     }))
 }
 

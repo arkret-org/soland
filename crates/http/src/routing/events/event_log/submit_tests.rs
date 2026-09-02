@@ -34,6 +34,44 @@ mod event_collision_reason_tests {
     }
 }
 
+mod circle_error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn non_realm_member_is_failed_precondition_with_registered_subreason() {
+        let error = submit_one_error_to_app_error(
+            "circle member admission",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            arkret_wire::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER.to_owned(),
+            "target actor is not a Realm member",
+        );
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(error.status, Some(StatusCode::UNPROCESSABLE_ENTITY));
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER)
+        );
+    }
+
+    #[test]
+    fn missing_circle_manage_capability_stays_capability_denied() {
+        let error = submit_one_error_to_app_error(
+            "circle member admission",
+            StatusCode::FORBIDDEN,
+            "circle_member_manage_capability_required".to_owned(),
+            "caller lacks Circle member management authority",
+        );
+
+        assert_eq!(error.code, ErrorCode::CapabilityDenied);
+        assert_eq!(error.status, Some(StatusCode::FORBIDDEN));
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some("circle_member_manage_capability_required")
+        );
+    }
+}
+
 mod applet_formal_admission_tests {
     use super::*;
 

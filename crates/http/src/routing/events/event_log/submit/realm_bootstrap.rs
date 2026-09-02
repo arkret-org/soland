@@ -30,7 +30,7 @@ fn bootstrap_error(
     }
 }
 
-fn bootstrap_projection_error(
+pub(in crate::routing::events::event_log) fn bootstrap_projection_error(
     error: soland_services::projection::RealmBootstrapProjectionError,
 ) -> SubmitOneError {
     // `encryption-and-audit.md` §2.10 — the history_access × content_scheme

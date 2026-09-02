@@ -148,9 +148,10 @@ impl ProjectionState {
         // circle.md §7: a Circle content floor MUST NOT be below the effective
         // parent Realm floor, and `e2ee_required` is only valid on an
         // MLS-backed Circle (a `none` Circle has no scope to carry ciphertext).
-        if content_floor_rank(content_encryption_floor.as_deref())
-            < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
-        {
+        if content_encryption_floor.as_deref().is_some_and(|floor| {
+            content_floor_rank(Some(floor))
+                < content_floor_rank(self.realm_content_encryption_floor(&realm_id).as_deref())
+        }) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::CIRCLE_ENCRYPTION_BELOW_REALM_FLOOR.to_owned(),
             };

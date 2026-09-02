@@ -97,7 +97,7 @@ fn accepted_operation_cell_writes(
     }
 }
 
-fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation {
+pub(crate) fn accepted_circle_member_reducer_operation(operation: &Operation) -> Operation {
     let mut contextual = operation.clone();
     if let Some(payload) = contextual.payload.as_object_mut() {
         payload.insert("manage_capability_verified".to_owned(), Value::Bool(true));

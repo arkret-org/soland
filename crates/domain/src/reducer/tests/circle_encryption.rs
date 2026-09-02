@@ -284,6 +284,66 @@ fn circle_self_join_requires_open_rule() {
     );
 }
 
+#[test]
+fn mls_circle_omitting_local_content_floor_inherits_parent_floor() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm = "ak:realm:AeJtxSuVLOh3OyPfR_18iXMUd0pL2wKdXB5RBZtF2u7Q";
+    let now = chrono::Utc::now();
+    state.realm_states.insert(
+        realm.to_owned(),
+        SolandRealmState {
+            realm_id: realm.to_owned(),
+            owner: Some(account_actor_string("ak:did_core:web:alice.example")),
+            title: Some("Encrypted Realm".to_owned()),
+            deleted: false,
+            archived: false,
+            frozen: false,
+            freeze_expires_at: None,
+            created_at: now,
+            updated_at: now,
+            trust_domain: None,
+            terminal_state: None,
+            successor_realm_id: None,
+            default_strand_id: None,
+        },
+    );
+    assert!(matches!(
+        apply_policy_bundle(
+            &mut state,
+            &hlc,
+            realm,
+            serde_json::json!({"content_encryption_floor": "e2ee_required"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::CircleCreate,
+            realm,
+            serde_json::json!({
+                "object": {
+                    "realm_id": realm,
+                    "title": "Inherited floor",
+                    "directory_visibility": "members",
+                    "join_rule": "invite",
+                    "history_access": "since_join",
+                    "encryption_profile": "mls_rfc9420",
+                    "content_scheme": "mls_rfc9420",
+                    "created_by": account_actor("ak:did_core:web:alice.example"),
+                    "created_at": now,
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(
+        matches!(effect, ProjectionEffect::CircleLifecycle { .. }),
+        "an omitted Circle-local floor inherits the e2ee parent floor: {effect:?}"
+    );
+}
+
 // AKP — encryption-floor one-way ratchet (realm-and-space.md §2.5,
 // circle.md §7). Vectors: ak.vector.e2ee.content_floor_downgrade_rejected,
 // ak.vector.e2ee.metadata_floor_downgrade_rejected, ak.vector.e2ee.in_place_enable.

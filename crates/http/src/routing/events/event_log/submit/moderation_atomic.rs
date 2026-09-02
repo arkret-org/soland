@@ -12,7 +12,9 @@ fn is_moderation_kind(kind: &str) -> bool {
     )
 }
 
-pub(super) fn batch_requires_moderation_atomicity(envelopes: &[Value]) -> bool {
+pub(in crate::routing::events::event_log) fn batch_requires_moderation_atomicity(
+    envelopes: &[Value],
+) -> bool {
     envelopes.iter().any(|envelope| {
         envelope.get("kind").and_then(Value::as_str)
             == Some(arkret_wire::event_kind_str::MODERATION_APPEAL_DECISION)
@@ -192,6 +194,17 @@ fn preflight_candidate_moderation_batch(
         effects.push(effect.into());
     }
     Ok(effects)
+}
+
+pub(in crate::routing::events::event_log) async fn preflight_moderation_atomic_batch(
+    state: &AppState,
+    envelopes: &[Value],
+    operations: &[arkret_event_draft::ProjectedEventOperation],
+) -> Result<(), SubmitOneError> {
+    let realm_id = moderation_batch_realm(envelopes)?;
+    let mut projection = rebuild_accepted_moderation_projection(state, &realm_id).await?;
+    preflight_candidate_moderation_batch(state, &mut projection, envelopes, operations)?;
+    Ok(())
 }
 
 fn map_atomic_commit_error(error: soland_services::ServiceError) -> SubmitOneError {

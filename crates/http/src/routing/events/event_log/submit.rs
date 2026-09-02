@@ -145,9 +145,9 @@ pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
 mod agent_membership_cascade;
 pub(in crate::routing) use agent_membership_cascade::submit_agent_membership_cascade;
 use agent_membership_cascade::submit_agent_membership_cascade_federation;
-mod realm_bootstrap;
+pub(in crate::routing::events::event_log) mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
-mod moderation_atomic;
+pub(in crate::routing::events::event_log) mod moderation_atomic;
 use moderation_atomic::{batch_requires_moderation_atomicity, submit_moderation_atomic_batch};
 
 fn rejected_item(
@@ -1023,22 +1023,13 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
     detail: &str,
 ) -> AppError {
     let message = format!("{context}: {detail}");
-    // These Circle operation contracts expose their semantic discriminator as
-    // the top-level wire code, not merely as a nested reducer reason. Ordinary
-    // admission already chose the required HTTP class; preserve that exact
-    // code when a convenience endpoint translates SubmitOneError to AppError.
-    if matches!(
-        code.as_str(),
-        "circle_member_must_be_realm_member" | "circle_member_manage_capability_required"
-    ) {
-        let mapped = if status == StatusCode::FORBIDDEN {
-            ErrorCode::CapabilityDenied
-        } else {
-            ErrorCode::SchemaViolation
-        };
-        return AppError::new(mapped, message)
+    // The Circle subset invariant is a registered sub-reason of
+    // `failed_precondition`, not a top-level error code. Preserve the 422
+    // admission class and carry the exact reducer discriminator separately.
+    if code == arkret_wire::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER {
+        return AppError::new(ErrorCode::FailedPrecondition, message)
             .with_status(status)
-            .with_wire_code(code);
+            .with_reason_code(code);
     }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
         return AppError::new(mapped, message).with_status(status);
