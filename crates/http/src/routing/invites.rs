@@ -1714,6 +1714,15 @@ fn evaluate_invite_receive(
         return opaque_drop(effective_kind);
     }
 
+    // consent-model.md §6.1 step 2 — `require_explicit_consent` profile: only
+    // verified `consent_grant` evidence may notify. Everything else is silently
+    // dropped on the holder Station inside the opaque `deferred` class: no
+    // quarantine, no quota charge, no holder-private write, and graded
+    // disclosure is forced opaque so the profile itself is not observable.
+    if policy.consent_profile.requires_explicit_consent() && effective_kind != "consent_grant" {
+        return opaque_drop(effective_kind);
+    }
+
     let trust_tier = trust_tier_for_kind(effective_kind);
 
     // §5 — allowlist gate. Evidence kinds not in `holder_allowed_introduction_kinds`
@@ -1889,6 +1898,12 @@ pub(crate) fn evaluate_contact_receive(
         || kind_forbidden_by_constraints(constraints, effective_kind)
         || !kind_permitted_by_constraints(constraints, effective_kind)
     {
+        return opaque_drop(effective_kind);
+    }
+
+    // consent-model.md §6.1 step 2 — the holder's `require_explicit_consent`
+    // profile applies to first-contact delivery exactly as to invites.
+    if policy.consent_profile.requires_explicit_consent() && effective_kind != "consent_grant" {
         return opaque_drop(effective_kind);
     }
 
@@ -2582,6 +2597,80 @@ mod invite_locator_security_tests {
             record.token_digest,
             format!("sha256:{}", sha256_hex(token.as_bytes()))
         );
+    }
+
+    /// `consent-model.md` section 6.1 step 2 -- under the holder's
+    /// `require_explicit_consent` profile every delivery without verified
+    /// `consent_grant` evidence is an opaque drop, even when the evidence kind
+    /// is allowlisted, configured to notify and disclosed with `outcome`. The
+    /// drop is what upstream maps to the same opaque `deferred` as a
+    /// quarantine, so the profile itself is not observable by the requester.
+    #[tokio::test]
+    async fn require_explicit_consent_profile_drops_every_non_consent_grant_delivery() {
+        let state = production_holder_state().await;
+        let holder_account = arkret_wire::AccountId::new(
+            DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
+        let mut policy = InviteReceivePolicy::spec_default(holder_account);
+        policy
+            .holder_allowed_introduction_kinds
+            .extend(["explicit_address".to_owned(), "same_station".to_owned()]);
+        policy.explicit_address_behavior = InviteReceiveAction::Notify;
+        policy.disclosure = Some(
+            arkret_models_collaboration::governance::invite_addressing::DisclosurePolicy {
+                high_trust: Some(DisclosureLevel::Outcome),
+                discovery_trust: Some(DisclosureLevel::Outcome),
+                low_trust: Some(DisclosureLevel::Outcome),
+            },
+        );
+        let inviter_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(PRODUCTION_INVITER.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        ));
+        let evaluate_invite = |policy: &InviteReceivePolicy| {
+            evaluate_invite_receive(
+                &state,
+                policy,
+                &IntroductionEvidence::ExplicitAddress,
+                &inviter_actor,
+                PRODUCTION_INVITER,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                state.service_id(),
+                true,
+            )
+        };
+        let evaluate_contact = |policy: &InviteReceivePolicy| {
+            evaluate_contact_receive(
+                &state,
+                policy,
+                &ContactIntroductionEvidence::ExplicitAddress,
+                PRODUCTION_INVITER,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                state.service_id(),
+            )
+        };
+
+        // Default profile: the holder's own notify choice stands.
+        assert_eq!(policy.consent_profile, arkret_wire::ConsentProfile::Default);
+        assert_eq!(evaluate_invite(&policy).action, InviteReceiveAction::Notify);
+        assert_eq!(
+            evaluate_contact(&policy).action,
+            InviteReceiveAction::Notify
+        );
+
+        policy.consent_profile = arkret_wire::ConsentProfile::RequireExplicitConsent;
+        let invite = evaluate_invite(&policy);
+        assert_eq!(invite.action, InviteReceiveAction::Drop);
+        assert!(
+            invite.disclosed_outcome.is_none(),
+            "the profile drop must stay inside the opaque deferred class"
+        );
+        let contact = evaluate_contact(&policy);
+        assert_eq!(contact.action, InviteReceiveAction::Drop);
+        assert!(contact.disclosed_outcome.is_none());
     }
 
     #[tokio::test]
