@@ -2425,17 +2425,19 @@ mod invite_locator_security_tests {
     }
 
     async fn production_holder_state() -> AppState {
-        let state = AppState::new(
-            crate::config::AppConfig {
-                development_mode: false,
-                seed_demo_data: false,
-                object_storage: crate::config::ObjectStorageConfig::local(
-                    std::env::temp_dir().join("soland-invite-service-fanout-test-blobs"),
-                ),
-                ..crate::config::AppConfig::test_default()
-            },
-            soland_storage_postgres::Db { pool: None },
-        );
+        production_holder_state_with_config(crate::config::AppConfig {
+            development_mode: false,
+            seed_demo_data: false,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-invite-service-fanout-test-blobs"),
+            ),
+            ..crate::config::AppConfig::test_default()
+        })
+        .await
+    }
+
+    async fn production_holder_state_with_config(config: crate::config::AppConfig) -> AppState {
+        let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
         let created_at = now();
         state
             .identities()
@@ -2796,6 +2798,163 @@ mod invite_locator_security_tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// One quarantine delivery from `inviter_id`, so a test can drive several
+    /// distinct sources at the same holder.
+    fn production_invite_delivery_from(
+        state: &AppState,
+        inviter_id: &str,
+        invite_event_id: &str,
+        idempotency_key: &str,
+    ) -> InviteDeliveryRequestBody {
+        let mut delivery = production_invite_delivery(state);
+        let account = arkret_wire::AccountId::new(
+            DidCoreId::new(inviter_id.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
+        delivery.invite_event.actor_id = arkret_wire::ActorId::account(account);
+        delivery.invite_event.event_id =
+            arkret_identifiers::EventId::new(invite_event_id.to_owned()).unwrap();
+        delivery.idempotency_key = idempotency_key.to_owned();
+        delivery
+    }
+
+    /// `consent-model.md` section 6.1.1.3 -- the third distinct new source is
+    /// over a `default_new_sources_per_window = 2` deployment ceiling, so it
+    /// must be dropped before the cell write while the two under the ceiling
+    /// are admitted. The caller only ever learns `false`, which upstream maps
+    /// to the same opaque `deferred` as an ordinary quarantine.
+    #[tokio::test]
+    async fn new_source_quota_denies_the_source_over_the_window_ceiling() {
+        let mut config = crate::config::AppConfig {
+            development_mode: false,
+            seed_demo_data: false,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-invite-new-source-quota-test-blobs"),
+            ),
+            ..crate::config::AppConfig::test_default()
+        };
+        config.receive_policy_constraints = Some(ReceivePolicyConstraints {
+            policy_version: None,
+            applies_to: None,
+            deployment_allowed_introduction_kinds: None,
+            deployment_denied_introduction_kinds: Vec::new(),
+            handle_claim_max_behavior: None,
+            explicit_address_max_behavior: None,
+            unknown_invites_max_behavior: None,
+            new_source_quota: Some(arkret_wire::receive_policy::NewSourceQuotaConstraints {
+                window_seconds: Some(3_600),
+                default_new_sources_per_window: Some(2),
+                max_new_sources_per_window: Some(10),
+                retention_seconds: Some(7_200),
+                default_new_sources_per_retention: Some(30),
+                max_new_sources_per_retention: Some(200),
+            }),
+            disclosure_max: None,
+            allowed_handle_domains: None,
+            trusted_handle_issuer_ids: None,
+            trusted_directory_ids: None,
+            trusted_source_ids: None,
+            denied_source_ids: None,
+            accepted_subject_did_methods: None,
+        });
+        let state = production_holder_state_with_config(config).await;
+        let decision = ReceiveDecision {
+            action: InviteReceiveAction::Quarantine,
+            effective_kind: "explicit_address",
+            trust_tier: TrustTier::Low,
+            disclosed_outcome: None,
+        };
+
+        let sources = [
+            (
+                "ak:did_core:web:quota-one.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E1",
+                "ak:idempotency:quota-one",
+            ),
+            (
+                "ak:did_core:web:quota-two.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E2",
+                "ak:idempotency:quota-two",
+            ),
+            (
+                "ak:did_core:web:quota-three.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E3",
+                "ak:idempotency:quota-three",
+            ),
+        ];
+        let mut admitted = Vec::new();
+        for (inviter_id, event_id, idempotency_key) in sources {
+            let delivery =
+                production_invite_delivery_from(&state, inviter_id, event_id, idempotency_key);
+            let body = serde_json::to_value(&delivery).unwrap();
+            admitted.push(
+                persist_invite_quarantine_entry(
+                    &state,
+                    PRODUCTION_HOLDER,
+                    state.service_id(),
+                    inviter_id,
+                    &delivery,
+                    &body,
+                    &decision,
+                )
+                .await
+                .expect("invite quarantine write"),
+            );
+        }
+        assert_eq!(
+            admitted,
+            vec![true, true, false],
+            "the deployment ceiling of two new sources per window was not enforced"
+        );
+
+        let cell = state
+            .account_data()
+            .entry(
+                &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                ))
+                .to_string(),
+                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            )
+            .await
+            .expect("invite quarantine cell")
+            .expect("invite quarantine write");
+        let entries = cell.payload["quarantine_entries"]
+            .as_array()
+            .expect("quarantine entries");
+        assert_eq!(
+            entries.len(),
+            2,
+            "the over-quota source reached the holder cell: {:?}",
+            cell.payload
+        );
+
+        // A repeat contact from an already-charged source is seen, not new, so
+        // it is admitted even though the window is full.
+        let repeat = production_invite_delivery_from(
+            &state,
+            "ak:did_core:web:quota-one.example",
+            "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_E4",
+            "ak:idempotency:quota-one-repeat",
+        );
+        let repeat_body = serde_json::to_value(&repeat).unwrap();
+        assert!(
+            persist_invite_quarantine_entry(
+                &state,
+                PRODUCTION_HOLDER,
+                state.service_id(),
+                "ak:did_core:web:quota-one.example",
+                &repeat,
+                &repeat_body,
+                &decision,
+            )
+            .await
+            .expect("repeat quarantine write"),
+            "a repeat contact from an admitted source must not be charged again"
         );
     }
 
