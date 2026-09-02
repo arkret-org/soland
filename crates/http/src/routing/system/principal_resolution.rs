@@ -211,7 +211,6 @@ async fn principal_method_history_evidence(
             let witness_proofs_digest = canonical_digest(&Vec::<serde_json::Value>::new())?;
             Ok((
                 ResolutionMethodHistoryEvidence::WebvhLog {
-                    adapter_version: "did:webvh:1.0".to_owned(),
                     boundary,
                     evidence: ResolutionDidBindingEvidenceReceipt {
                         kind: ResolutionDidBindingEvidenceKind::AkDidBindingEvidenceV1,
@@ -257,7 +256,6 @@ async fn principal_method_history_evidence(
                 validate_did_web_coordinates(projection, &evidence.document_digest)?;
                 Ok((
                     ResolutionMethodHistoryEvidence::DidWebDocument {
-                        adapter_version: "did:web:1".to_owned(),
                         boundary,
                         evidence,
                     },
@@ -267,7 +265,6 @@ async fn principal_method_history_evidence(
                 validate_did_key_coordinates(projection, &projection.did)?;
                 Ok((
                     ResolutionMethodHistoryEvidence::DidKeyExpansion {
-                        adapter_version: "did:key:1".to_owned(),
                         boundary,
                         evidence,
                     },

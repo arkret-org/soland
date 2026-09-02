@@ -262,8 +262,12 @@ pub(super) fn peer_router() -> Router {
         )
 }
 
+// The body is parsed by hand after the peer trust check, so the extractor does
+// not document it; the registry declares this POST with a request schema, so the
+// generated document must still publish it.
 #[salvo::oapi::endpoint(
     operation_id = "ak.peer.seals.read.mls_governance_proof",
+    request_body = MlsGovernanceProofRequestBody,
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.seals.read.mls_governance_proof.v1"))]
@@ -293,6 +297,7 @@ async fn resolve_peer_mls_governance_proof(
 
 #[salvo::oapi::endpoint(
     operation_id = "ak.peer.mls.read.group_state_material",
+    request_body = MlsGroupStateMaterialRequestBody,
     tags("governance")
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.mls.read.group_state_material.v1"))]

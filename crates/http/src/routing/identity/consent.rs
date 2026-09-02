@@ -1314,7 +1314,8 @@ mod tests {
         json!({
             "consent_id": CONSENT_ID,
             "peer": {"kind": "actor", "actor_id": {"kind": "account", "account_id": {
-                "principal_id": peer, "station_id": "ak:did_core:web:soland.test"
+                "principal_id": peer,
+                "station_id": crate::test_event::station_id().to_string()
             }}},
             "consent_scope": consent_scope,
         })

@@ -421,14 +421,11 @@ pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let resolution_commitment = arkret_models_identity::ResolutionCommitment {
-        did: arkret_wire::Did::new(
-            identity
-                .identity()
-                .expect("fixture serving identity")
-                .service_id
-                .to_string(),
-        )
-        .expect("fixture service DID"),
+        did: identity
+            .identity()
+            .expect("fixture serving identity")
+            .did
+            .clone(),
         method_history_head: format!("sha256:{}", "0".repeat(64)),
         version_id: "fixture-v1".to_owned(),
     };

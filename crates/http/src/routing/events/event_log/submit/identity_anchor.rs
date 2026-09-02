@@ -861,18 +861,16 @@ fn validate_identity_anchor_candidate_preconditions(
         descriptor
             .validate()
             .map_err(|error| unit_error(format!("invalid founding device descriptor: {error}")))?;
-        let device_key_digest = format!(
-            "sha256:{}",
-            sha256_hex(descriptor.device_public_key_did.as_bytes())
-        );
-        let hpke_key_digest = format!("sha256:{}", sha256_hex(descriptor.hpke_key.as_bytes()));
+        // The descriptor carries the keys, not their digests (review
+        // 2026-09-02-1955), so comparing the keys against the candidate
+        // authorization is the whole check; a digest comparison here would only
+        // restate it. The receipt side still carries digests because it carries
+        // no raw key, and recomputes them through the SDK's single accessor.
         if descriptor.device_id != authorize.device_id
             || descriptor.device_public_key_did != authorize.device_public_key_did
             || descriptor.hpke_key != authorize.hpke_key
             || descriptor.algorithms != authorize.algorithms
             || descriptor.founding_authorize_payload_digest != authorize_payload_digest
-            || descriptor.device_key_digest.as_str() != device_key_digest
-            || descriptor.hpke_key_digest.as_str() != hpke_key_digest
         {
             return Err(unit_error(
                 "PCR genesis descriptor does not match its candidate device authorization",
@@ -1284,7 +1282,6 @@ async fn validate_unit_relationships(
             "sha256:{}",
             sha256_hex(descriptor.device_public_key_did.as_bytes())
         );
-        let hpke_key_digest = format!("sha256:{}", sha256_hex(descriptor.hpke_key.as_bytes()));
         let authorized_by_root = matches!(
             &authorize.authorized_by,
             arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Principal(did)
@@ -1299,8 +1296,6 @@ async fn validate_unit_relationships(
             || descriptor.hpke_key != authorize.hpke_key
             || descriptor.algorithms != authorize.algorithms
             || descriptor.founding_authorize_payload_digest != authorize_payload_digest
-            || descriptor.device_key_digest.as_str() != device_key_digest
-            || descriptor.hpke_key_digest.as_str() != hpke_key_digest
         {
             return Err(unit_error(
                 "PCR genesis descriptor does not match its root-anchored founding authorization",
@@ -1855,9 +1850,13 @@ fn build_pcr_genesis_batch_receipt(
                 log_head_digest: pins.log_head_digest.clone(),
                 control_key_digest: pins.control_key_digest.clone(),
                 registration_evidence_digest: pins.registration_evidence_digest.clone(),
-                accepted_device_id: descriptor.device_id,
-                device_key_digest: descriptor.device_key_digest,
-                hpke_key_digest: descriptor.hpke_key_digest,
+                accepted_device_id: descriptor.device_id.clone(),
+                device_key_digest: descriptor.device_key_digest().map_err(|error| {
+                    unit_error(format!("founding device key digest: {error}"))
+                })?,
+                hpke_key_digest: descriptor.hpke_key_digest().map_err(|error| {
+                    unit_error(format!("founding device HPKE key digest: {error}"))
+                })?,
                 accepted_at: created_at,
                 audience_id: audience.clone(),
             },

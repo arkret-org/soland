@@ -108,7 +108,7 @@ impl VerifiedBindingRouteFetcher {
                 )?;
                 (
                     document,
-                    non_history_evidence(&record, digest, "web", "did:web:1", false),
+                    non_history_evidence(&record, digest, "web", false),
                 )
             }
             "key" => {
@@ -135,7 +135,7 @@ impl VerifiedBindingRouteFetcher {
                 let document_digest = canonical_document_digest(&document)?;
                 (
                     document,
-                    non_history_evidence(&record, document_digest, "key", "did:key:1", true),
+                    non_history_evidence(&record, document_digest, "key", true),
                 )
             }
             method => {
@@ -375,7 +375,6 @@ fn non_history_evidence(
     record: &arkret_models_identity::ServiceResolutionRecord,
     document_digest: Hash,
     method: &str,
-    adapter_version: &str,
     did_key: bool,
 ) -> ResolutionMethodHistoryEvidence {
     let evidence = ResolutionDidBindingEvidenceReceipt {
@@ -386,13 +385,11 @@ fn non_history_evidence(
     };
     if did_key {
         ResolutionMethodHistoryEvidence::DidKeyExpansion {
-            adapter_version: adapter_version.to_owned(),
             boundary: evidence_boundary(record),
             evidence,
         }
     } else {
         ResolutionMethodHistoryEvidence::DidWebDocument {
-            adapter_version: adapter_version.to_owned(),
             boundary: evidence_boundary(record),
             evidence,
         }

@@ -1529,7 +1529,7 @@ pub async fn attach_fixture_station_admission_proof(
     mut event: Event,
     producer_signing_key_did: arkret_wire::DidKey,
     accepted_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Event, String> {
+) -> Result<Option<Event>, String> {
     let digest_suite = arkret_canonical::DigestSuite::Sha256;
     let [arkret_wire::EventProof::Producer(producer)] = event.proofs.as_slice() else {
         return Err("fixture Event must carry exactly one producer proof".to_owned());
@@ -1542,10 +1542,19 @@ pub async fn attach_fixture_station_admission_proof(
     )
     .map_err(|error| error.to_string())?;
     let service_id = state.service_core_id();
+    // A Station with no resolvable service identity never accepted anything, so
+    // it has no admission proof to give. That is a property of the fixture state
+    // rather than a failure, and the caller decides what it means.
     let authenticated_resolution =
-        crate::routing::system::service_resolution::current_authenticated_service_resolution(state)
-            .await
-            .map_err(|error| error.to_string())?;
+        match crate::routing::system::service_resolution::current_authenticated_service_resolution(
+            state,
+        )
+        .await
+        {
+            Ok(resolution) => resolution,
+            Err(error) if error.code == ErrorCode::ServiceIdentityUnavailable => return Ok(None),
+            Err(error) => return Err(error.to_string()),
+        };
     let (_, verification_method) = state
         .current_service_receipt_binding()
         .await
@@ -1600,7 +1609,7 @@ pub async fn attach_fixture_station_admission_proof(
     event
         .validate_station_admission_binding(digest_suite)
         .map_err(|error| error.to_string())?;
-    Ok(event)
+    Ok(Some(event))
 }
 
 pub(super) async fn accepted_event_envelope(

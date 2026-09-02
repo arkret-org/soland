@@ -377,6 +377,14 @@ pub fn fixture_verification_method(actor_id: &str, device_id: &str) -> DidUrl {
 /// origin Station admission proof. A fixture that stops after the producer
 /// proof produces something no submit path could have produced, and every later
 /// re-validation of an accepted Event rejects it.
+///
+/// The one state a fixture can build that genuinely cannot issue the proof is
+/// [`soland_test_support::app_state_with_service_did`]: it installs a
+/// hand-written service DID, and a `did:webvh` SCID is derived from its own
+/// inception, so no durable WebVH history can exist for a DID that was not
+/// produced by one. Such a Station never accepted anything, so its fixtures get
+/// the producer-signed Event and MUST NOT rely on Seal admission or the MLS
+/// governance frontier — both re-validate the accepted proof set.
 pub async fn sign_accepted_fixture_event(
     state: &soland_http::state::AppState,
     event: Event,
@@ -397,12 +405,13 @@ pub async fn sign_accepted_fixture_event(
     let signed = sign_fixture_event(event, actor_id, device_id, signing_seed);
     soland_http::attach_fixture_station_admission_proof(
         state,
-        signed,
+        signed.clone(),
         producer_signing_key_did,
         accepted_at,
     )
     .await
     .expect("fixture Station admission proof")
+    .unwrap_or(signed)
 }
 
 pub fn sign_fixture_event(

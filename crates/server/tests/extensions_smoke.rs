@@ -654,7 +654,6 @@ fn managed_actor_fixture(
     };
     let method_history_evidence =
         arkret_models_identity::ResolutionMethodHistoryEvidence::WebvhLog {
-            adapter_version: "did:webvh:1.0".to_owned(),
             boundary,
             evidence: arkret_models_identity::ResolutionDidBindingEvidenceReceipt {
                 kind:
