@@ -118,6 +118,12 @@ impl FrontierExchangeWorker {
         {
             // Availability is not an authorized resolution of retained evidence.
             // Do not admit another increment through the backfill recovery rail.
+            // The one way out is the second phase: an authorized resolution has
+            // normalized the scope locally and this peer proves, in its own
+            // exact scope, that it now holds the verdict.
+            if let Err(error) = self.align_confirmed_evidence(peer_id, realm_id).await {
+                tracing::debug!(realm_id, peer_id = %peer_id, reason = %error, "frontier evidence alignment deferred");
+            }
             return Ok(None);
         }
         for _ in 0..3 {
@@ -655,6 +661,287 @@ impl FrontierExchangeWorker {
         Ok(admitted)
     }
 
+    /// Second phase of clearing confirmed fork evidence.
+    ///
+    /// An accepted `ak.fork.resolution` normalizes local state only. Before a
+    /// peer leaves `peer_stale`, that peer has to prove through its own
+    /// authenticated exact-scope challenge that its canonical sibling set now
+    /// equals the verdict — exactly the winner, or empty for `void_all`
+    /// (`sync/federation.md` section 4.5.3). Global root equality, an ordinary
+    /// successful exchange, and another peer having aligned are all
+    /// insufficient, so none of them reach this path.
+    ///
+    /// Only the exact evidence key that aligned is cleared. Other unresolved
+    /// evidence for the same peer and the ordinary failure window are
+    /// untouched.
+    async fn align_confirmed_evidence(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+    ) -> Result<(), String> {
+        let unresolved = self
+            .state
+            .federation()
+            .unresolved_frontier_confirmed_evidence(realm_id, peer_id)
+            .await
+            .map_err(|error| format!("temporarily_unavailable:evidence_store:{error}"))?;
+        for evidence in unresolved {
+            let Some(normalization) = self
+                .state
+                .federation()
+                .frontier_local_normalization(realm_id, &evidence.evidence_scope_key)
+                .await
+                .map_err(|error| format!("temporarily_unavailable:resolution_store:{error}"))?
+            else {
+                // No authorized resolution for this scope yet. Staying fail
+                // closed is the correct outcome, not an error.
+                continue;
+            };
+            let subject: ForkResolutionSubject =
+                serde_json::from_value(normalization.subject.clone())
+                    .map_err(|error| format!("schema_violation:{error}"))?;
+            let verdict: arkret_models_collaboration::events_payloads::ForkResolutionVerdict =
+                serde_json::from_value(normalization.verdict.clone())
+                    .map_err(|error| format!("schema_violation:{error}"))?;
+            if !self
+                .peer_scope_matches_verdict(peer_id, realm_id, &subject, &verdict)
+                .await?
+            {
+                continue;
+            }
+            self.state
+                .federation()
+                .resolve_frontier_confirmed_evidence_for_peer(
+                    realm_id,
+                    peer_id,
+                    &evidence.evidence_scope_key,
+                    "fork_resolution_event",
+                    &normalization.resolution_event_digest,
+                    chrono::Utc::now().timestamp(),
+                )
+                .await
+                .map_err(|error| format!("temporarily_unavailable:evidence_store:{error}"))?;
+        }
+        Ok(())
+    }
+
+    /// Ask this peer for the disputed scope and decide whether what it returns
+    /// is byte-for-byte the verdict.
+    async fn peer_scope_matches_verdict(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+        subject: &ForkResolutionSubject,
+        verdict: &arkret_models_collaboration::events_payloads::ForkResolutionVerdict,
+    ) -> Result<bool, String> {
+        use arkret_models_collaboration::events_payloads::ForkResolutionVerdict;
+        match subject {
+            ForkResolutionSubject::EventSiblingPosition {
+                actor_id,
+                actor_seq,
+            } => {
+                let siblings = self
+                    .peer_sibling_events(peer_id, realm_id, actor_id, *actor_seq)
+                    .await?;
+                let observed = siblings
+                    .iter()
+                    .map(|event| event.event_id.clone())
+                    .collect::<BTreeSet<_>>();
+                Ok(match verdict {
+                    ForkResolutionVerdict::SiblingWinner {
+                        winner_event_id, ..
+                    } => observed == BTreeSet::from([winner_event_id.clone()]),
+                    ForkResolutionVerdict::VoidAll { .. } => observed.is_empty(),
+                    // A collision verdict cannot govern a sibling position; the
+                    // Move that produced this pairing would not have been
+                    // admitted, so treat it as unaligned rather than guess.
+                    ForkResolutionVerdict::CollisionWinner { .. } => false,
+                })
+            }
+            ForkResolutionSubject::EventIdCollision { event_id } => {
+                let held = self.peer_variant_bytes(peer_id, realm_id, event_id).await?;
+                Ok(match verdict {
+                    ForkResolutionVerdict::VoidAll { .. } => held.is_none(),
+                    ForkResolutionVerdict::CollisionWinner {
+                        winner_preimage, ..
+                    } => {
+                        // Two variants share one identity, so alignment is only
+                        // provable on the complete canonical bytes.
+                        let Some(held) = held else {
+                            return Ok(false);
+                        };
+                        held == self
+                            .local_winner_canonical_bytes(realm_id, winner_preimage)
+                            .await?
+                    }
+                    ForkResolutionVerdict::SiblingWinner { .. } => false,
+                })
+            }
+        }
+    }
+
+    /// Every Event this peer discloses at one exact `(actor_id, actor_seq)`.
+    ///
+    /// Discovery only, and every row is fully re-verified: a peer claiming to
+    /// have aligned must show Events that stand on their own.
+    async fn peer_sibling_events(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+        actor_id: &arkret_wire::ActorId,
+        actor_seq: u64,
+    ) -> Result<Vec<arkret_wire::Event>, String> {
+        use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+        use arkret_models_collaboration::http_bodies::PeerEventsQueryOutcome;
+        let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
+            .map_err(|error| format!("invalid_realm_id:{error}"))?;
+        let mut cursor: Option<arkret_wire::Cursor> = None;
+        let mut cursors = BTreeSet::new();
+        let mut siblings = Vec::new();
+        for _ in 0..CHECKPOINT_SCAN_PAGES {
+            let request = EventsQueryPostRequestBody {
+                realm_ids: vec![realm.clone()],
+                actor_ids: vec![actor_id.clone()],
+                after: cursor.clone(),
+                order: Some("ascending".to_owned()),
+                limit: Some(256),
+                ..Default::default()
+            };
+            let (page, _, _): (PeerEventsQueryOutcome, _, _) = self
+                .peer_query(peer_id, "/_arkret/peer/events", &request)
+                .await?;
+            let has_more = page.has_more;
+            let next_cursor = page.next_cursor.clone();
+            for row in page.events {
+                let event = row
+                    .into_event()
+                    .ok_or_else(|| "schema_violation:alignment_requires_full_event".to_owned())?;
+                if event.realm_id != realm || &event.actor_id != actor_id {
+                    return Err("schema_violation:alignment_selector_mismatch".to_owned());
+                }
+                if event.actor_seq != actor_seq {
+                    continue;
+                }
+                crate::routing::events::event_log::verify_frontier_backfill_event(
+                    &self.state,
+                    &event,
+                )
+                .await?;
+                siblings.push(event);
+            }
+            if !has_more {
+                return Ok(siblings);
+            }
+            let next =
+                next_cursor.ok_or_else(|| "schema_violation:missing_scan_cursor".to_owned())?;
+            if !cursors.insert(next.clone()) {
+                return Err("schema_violation:repeated_scan_cursor".to_owned());
+            }
+            cursor = Some(arkret_wire::Cursor::new(next).map_err(|error| error.to_string())?);
+        }
+        // The peer did not finish disclosing this position inside the pass
+        // budget. That is not alignment, and it is not a peer failure either.
+        Err("temporarily_unavailable:alignment_page_budget".to_owned())
+    }
+
+    /// The canonical preimage bytes this peer holds for one colliding identity,
+    /// or `None` when it holds no variant at all.
+    async fn peer_variant_bytes(
+        &self,
+        peer_id: &arkret_wire::DidCoreId,
+        realm_id: &str,
+        event_id: &arkret_wire::EventId,
+    ) -> Result<Option<Vec<u8>>, String> {
+        use arkret_models_collaboration::http_bodies::{
+            PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
+        };
+        let request = PeerEventsResolveRequestBody {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .map_err(|error| format!("invalid_realm_id:{error}"))?,
+            event_ids: vec![event_id.clone()],
+            event_digests: Vec::new(),
+            include_payload: Some(true),
+            max_response_bytes: Some(8 * 1024 * 1024),
+            history_traversal_access: None,
+            directory_source_ref_access: None,
+        };
+        let (outcome, _, _): (PeerEventsResolveOutcome, _, _) = self
+            .peer_query(peer_id, "/_arkret/peer/events/resolve", &request)
+            .await?;
+        let Some(submission) = outcome.events.into_iter().next() else {
+            return Ok(None);
+        };
+        let digest_suite = arkret::signed_event_digest_claim(&submission.event)
+            .and_then(|digest| digest.digest_suite().map_err(Into::into))
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        submission
+            .validate_structural(digest_suite)
+            .map_err(|error| format!("schema_violation:{error}"))?;
+        let event = submission.event;
+        if event.event_id != *event_id || event.realm_id.as_str() != realm_id {
+            return Err("schema_violation:alignment_selector_mismatch".to_owned());
+        }
+        crate::routing::events::event_log::verify_frontier_backfill_event(&self.state, &event)
+            .await?;
+        Ok(Some(
+            arkret_canonical::canonical_json_bytes(
+                &event
+                    .digest_payload()
+                    .map_err(|error| format!("schema_violation:{error}"))?,
+            )
+            .map_err(|error| format!("schema_violation:{error}"))?,
+        ))
+    }
+
+    /// Canonical bytes of the winner the local verdict names.
+    ///
+    /// The resolution Move is already accepted here, so its inline bytes and
+    /// the governance-dependency record it may reference are both local reads.
+    async fn local_winner_canonical_bytes(
+        &self,
+        realm_id: &str,
+        winner: &arkret_models_collaboration::events_payloads::ForkResolutionVariantLocator,
+    ) -> Result<Vec<u8>, String> {
+        use arkret_models_collaboration::events_payloads::ForkResolutionVariantLocator;
+        use arkret_models_collaboration::governance_dependencies::{
+            GovernanceDependency, GovernanceDependencySelector,
+        };
+        match winner {
+            ForkResolutionVariantLocator::InlineCanonicalBytes {
+                canonical_event_bytes_b64u,
+            } => arkret_canonical::base64url_decode(canonical_event_bytes_b64u.as_str())
+                .map_err(|error| format!("schema_violation:{error}")),
+            ForkResolutionVariantLocator::CollisionVariantRecord {
+                collision_variant_record_digest,
+                ..
+            } => {
+                let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
+                    .map_err(|error| format!("invalid_realm_id:{error}"))?;
+                let selector = GovernanceDependencySelector::CollisionVariantRecord {
+                    content_digest: collision_variant_record_digest.clone(),
+                };
+                let dependency = self
+                    .state
+                    .persistence()
+                    .governance_dependency_store()
+                    .get(&realm, &selector)
+                    .await
+                    .map_err(|error| format!("temporarily_unavailable:record_store:{error}"))?
+                    .ok_or_else(|| "dependency_missing:collision_variant_record".to_owned())?;
+                let GovernanceDependency::CollisionVariantRecord {
+                    collision_variant_record,
+                    ..
+                } = dependency
+                else {
+                    return Err("schema_violation:collision_variant_record_kind".to_owned());
+                };
+                collision_variant_record
+                    .canonical_event_bytes()
+                    .map_err(|error| format!("schema_violation:{error}"))
+            }
+        }
+    }
+
     async fn confirmed_evidence_subject(
         &self,
         event: &arkret_wire::Event,
@@ -1153,10 +1440,11 @@ mod tests {
                 .unwrap()
         );
         assert!(
-            state
+            !state
                 .federation()
-                .resolve_frontier_confirmed_evidence(
+                .resolve_frontier_confirmed_evidence_for_peer(
                     realm,
+                    &peer,
                     "sha256:wrong-scope",
                     "fork_resolution_event",
                     &format!("sha256:{}", "3".repeat(64)),
@@ -1164,35 +1452,63 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .is_empty()
         );
         assert!(
             inbound_peer_is_stale(&state, realm, peer.as_str())
                 .await
                 .unwrap()
         );
-        let resolved = state
+        // Alignment is proved one peer at a time: a second peer holding the
+        // same disputed scope stays fail closed while this one clears.
+        let other_peer = arkret_wire::DidCoreId::new("ak:did_core:web:peer-b.example").unwrap();
+        state
             .federation()
-            .resolve_frontier_confirmed_evidence(
-                realm,
-                scope_key.as_str(),
-                "fork_resolution_event",
-                &format!("sha256:{}", "3".repeat(64)),
-                8,
+            .record_frontier_confirmed_evidence(
+                &soland_services::federation::FederationFrontierConfirmedEvidenceRecord {
+                    realm_id: realm.to_owned(),
+                    peer_id: other_peer.clone(),
+                    evidence_scope_key: scope_key.to_string(),
+                    reason: "fork_quarantine".to_owned(),
+                    evidence_scope: serde_json::to_value(&subject).unwrap(),
+                    observed_at: 5,
+                    resolution_kind: None,
+                    resolution_digest: None,
+                    resolved_at: None,
+                },
             )
             .await
             .unwrap();
-        assert_eq!(resolved, vec![peer.clone()]);
+        assert!(
+            state
+                .federation()
+                .resolve_frontier_confirmed_evidence_for_peer(
+                    realm,
+                    &peer,
+                    scope_key.as_str(),
+                    "fork_resolution_event",
+                    &format!("sha256:{}", "3".repeat(64)),
+                    8,
+                )
+                .await
+                .unwrap()
+        );
         assert!(
             !inbound_peer_is_stale(&state, realm, peer.as_str())
                 .await
                 .unwrap()
         );
         assert!(
-            state
+            inbound_peer_is_stale(&state, realm, other_peer.as_str())
+                .await
+                .unwrap(),
+            "another peer aligning must not clear this one"
+        );
+        assert!(
+            !state
                 .federation()
-                .resolve_frontier_confirmed_evidence(
+                .resolve_frontier_confirmed_evidence_for_peer(
                     realm,
+                    &peer,
                     scope_key.as_str(),
                     "fork_resolution_event",
                     &format!("sha256:{}", "3".repeat(64)),
@@ -1200,7 +1516,90 @@ mod tests {
                 )
                 .await
                 .unwrap()
-                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn local_normalization_is_recorded_once_and_clears_no_peer_by_itself() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm = "ak:realm:AQOJcuEsMahV_eXZxrvKxOc_1fBMQCLgofI2jenpts5n";
+        let peer = arkret_wire::DidCoreId::new("ak:did_core:web:peer-a.example").unwrap();
+        let subject = ForkResolutionSubject::EventSiblingPosition {
+            actor_id: arkret_wire::ActorId::service(peer.clone()),
+            actor_seq: 7,
+        };
+        let scope_key = subject.cell_subject_key().unwrap();
+        state
+            .federation()
+            .record_frontier_confirmed_evidence(
+                &soland_services::federation::FederationFrontierConfirmedEvidenceRecord {
+                    realm_id: realm.to_owned(),
+                    peer_id: peer.clone(),
+                    evidence_scope_key: scope_key.to_string(),
+                    reason: "fork_quarantine".to_owned(),
+                    evidence_scope: serde_json::to_value(&subject).unwrap(),
+                    observed_at: 1,
+                    resolution_kind: None,
+                    resolution_digest: None,
+                    resolved_at: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        let normalization = soland_services::federation::FederationFrontierResolutionRecord {
+            realm_id: realm.to_owned(),
+            cell_subject_key: scope_key.to_string(),
+            subject: serde_json::to_value(&subject).unwrap(),
+            verdict: serde_json::json!({"kind": "void_all"}),
+            conflict_evidence_digest: format!("sha256:{}", "4".repeat(64)),
+            resolution_event_digest: format!("sha256:{}", "5".repeat(64)),
+            normalized_at: 2,
+        };
+        state
+            .federation()
+            .record_frontier_local_normalization(&normalization)
+            .await
+            .unwrap();
+        // Replaying one accepted Event is idempotent.
+        state
+            .federation()
+            .record_frontier_local_normalization(&normalization)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .federation()
+                .frontier_local_normalization(realm, scope_key.as_str())
+                .await
+                .unwrap()
+                .as_ref(),
+            Some(&normalization)
+        );
+        // Local normalization on its own leaves the peer fail closed: nothing
+        // yet shows that this peer's sibling set matches the verdict.
+        assert!(
+            inbound_peer_is_stale(&state, realm, peer.as_str())
+                .await
+                .unwrap()
+        );
+
+        // A second, different verdict for a settled subject is a causal
+        // successor that must fail rather than silently re-adjudicate.
+        let mut reversed = normalization.clone();
+        reversed.verdict = serde_json::json!({
+            "kind": "canonical_winner",
+            "winner_event_id": "ak:event:AUl7i16DNG_PX5V_-ud5fDx65PwcMpaj4uSW2K4C0Ev9"
+        });
+        assert!(
+            state
+                .federation()
+                .record_frontier_local_normalization(&reversed)
+                .await
+                .is_err()
         );
     }
 

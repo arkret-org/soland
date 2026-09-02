@@ -938,6 +938,25 @@ pub struct FederationFrontierConfirmedEvidenceRecord {
     pub resolved_at: Option<i64>,
 }
 
+/// Local normalization of one disputed scope — the first of the two phases
+/// that clear confirmed fork evidence.
+///
+/// It is projected only from an accepted `ak.fork.resolution` Control Move and
+/// says nothing about any peer: a peer clears only after its own exact-scope
+/// challenge shows a canonical sibling set equal to this verdict. The key is
+/// the resolution cell subject alone, so single-bucket and cross-bucket
+/// over-fork at one position can never produce two verdicts that disagree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationFrontierResolutionRecord {
+    pub realm_id: String,
+    pub cell_subject_key: String,
+    pub subject: Value,
+    pub verdict: Value,
+    pub conflict_evidence_digest: String,
+    pub resolution_event_digest: String,
+    pub normalized_at: i64,
+}
+
 /// Durable progress through one immutable remote frontier observation.
 ///
 /// The actor is the complete closed `ActorId`; a principal-only projection is

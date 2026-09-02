@@ -437,19 +437,42 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
             .unresolved_confirmed_evidence(realm_id, peer_id)
             .await?)
     }
-    async fn resolve_frontier_confirmed_evidence(
+    async fn record_frontier_local_normalization(
+        &self,
+        resolution: &crate::federation::FederationFrontierResolutionRecord,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .federation_frontier_exchange()
+            .record_local_normalization(resolution)
+            .await?;
+        Ok(())
+    }
+    async fn frontier_local_normalization(
         &self,
         realm_id: &str,
+        cell_subject_key: &str,
+    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierResolutionRecord>> {
+        Ok(self
+            .0
+            .federation_frontier_exchange()
+            .local_normalization(realm_id, cell_subject_key)
+            .await?)
+    }
+    async fn resolve_frontier_confirmed_evidence_for_peer(
+        &self,
+        realm_id: &str,
+        peer_id: &arkret_identifiers::DidCoreId,
         evidence_scope_key: &str,
         resolution_kind: &str,
         resolution_digest: &str,
         resolved_at: i64,
-    ) -> crate::ServiceResult<Vec<arkret_identifiers::DidCoreId>> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .federation_frontier_exchange()
-            .resolve_confirmed_evidence(
+            .resolve_confirmed_evidence_for_peer(
                 realm_id,
+                peer_id,
                 evidence_scope_key,
                 resolution_kind,
                 resolution_digest,

@@ -1659,7 +1659,7 @@ CREATE TABLE public.federation_frontier_confirmed_evidence (
     reason text NOT NULL CHECK (reason IN ('witness_disagreement', 'fork_quarantine')),
     evidence_scope jsonb NOT NULL,
     observed_at bigint NOT NULL,
-    resolution_kind text CHECK (resolution_kind IN ('fork_resolution_event', 'witness_reagreement')),
+    resolution_kind text CHECK (resolution_kind IN ('fork_resolution_event')),
     resolution_digest text,
     resolved_at bigint,
     CHECK ((resolution_kind IS NULL) = (resolution_digest IS NULL)),
@@ -1675,6 +1675,22 @@ CREATE INDEX federation_frontier_confirmed_evidence_unresolved_idx
     ON public.federation_frontier_confirmed_evidence
     (realm_id, peer_id, evidence_scope_key)
     WHERE resolution_digest IS NULL;
+
+-- First phase of clearing confirmed fork evidence. One accepted
+-- ak.fork.resolution normalizes the local disputed scope; it does not clear any
+-- peer. Rows are keyed by the resolution cell subject alone, so single-bucket
+-- and cross-bucket over-fork at one position land on one verdict.
+CREATE TABLE public.federation_frontier_resolution (
+    realm_id text NOT NULL,
+    cell_subject_key text NOT NULL,
+    subject jsonb NOT NULL,
+    verdict jsonb NOT NULL,
+    conflict_evidence_digest text NOT NULL,
+    resolution_event_digest text NOT NULL,
+    normalized_at bigint NOT NULL,
+    CONSTRAINT federation_frontier_resolution_pkey
+        PRIMARY KEY (realm_id, cell_subject_key)
+);
 
 CREATE TABLE public.federation_frontier_reduction_checkpoint (
     realm_id text NOT NULL,

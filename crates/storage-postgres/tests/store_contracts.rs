@@ -159,12 +159,13 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .unresolved_confirmed_evidence(realm.as_str(), &peer)
             .await
             .unwrap(),
-        vec![evidence_record]
+        vec![evidence_record.clone()]
     );
     assert!(
-        restarted
-            .resolve_confirmed_evidence(
+        !restarted
+            .resolve_confirmed_evidence_for_peer(
                 realm.as_str(),
+                &peer,
                 "sha256:wrong-scope",
                 "fork_resolution_event",
                 &format!("sha256:{}", "3".repeat(64)),
@@ -172,7 +173,6 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             )
             .await
             .unwrap()
-            .is_empty()
     );
     assert_eq!(
         restarted
@@ -182,18 +182,52 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .status,
         "peer_stale"
     );
-    assert_eq!(
+    // A second peer holding the same disputed scope is untouched: alignment is
+    // proved one peer at a time, so clearing this one says nothing about that
+    // one.
+    let other_peer = arkret_wire::DidCoreId::new("ak:did_core:web:frontier-peer-b.example").unwrap();
+    restarted
+        .record_confirmed_evidence(&soland_storage::FederationFrontierConfirmedEvidenceRecord {
+            peer_id: other_peer.clone(),
+            ..evidence_record.clone()
+        })
+        .await
+        .unwrap();
+    assert!(
         restarted
-            .resolve_confirmed_evidence(
+            .resolve_confirmed_evidence_for_peer(
                 realm.as_str(),
+                &peer,
                 evidence_scope_key.as_str(),
                 "fork_resolution_event",
                 &format!("sha256:{}", "3".repeat(64)),
                 9,
             )
             .await
-            .unwrap(),
-        vec![peer.clone()]
+            .unwrap()
+    );
+    assert_eq!(
+        restarted
+            .unresolved_confirmed_evidence(realm.as_str(), &other_peer)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "another peer aligning must not clear this peer"
+    );
+    // Replay is visibly idempotent rather than a second transition.
+    assert!(
+        !restarted
+            .resolve_confirmed_evidence_for_peer(
+                realm.as_str(),
+                &peer,
+                evidence_scope_key.as_str(),
+                "fork_resolution_event",
+                &format!("sha256:{}", "3".repeat(64)),
+                10,
+            )
+            .await
+            .unwrap()
     );
     assert_eq!(
         restarted

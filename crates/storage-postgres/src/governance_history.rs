@@ -1,3 +1,4 @@
+use arkret_models_collaboration::events_payloads::state::CollisionVariantRecord;
 use arkret_models_collaboration::governance_dependencies::{
     GovernanceDependency, GovernanceDependencySelector,
 };
@@ -283,6 +284,15 @@ fn decode_dependency(row: DependencyObjectRow) -> PersistenceResult<GovernanceDe
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?,
             }
         }
+        "collision_variant_record" => GovernanceDependency::CollisionVariantRecord {
+            selector: GovernanceDependencySelector::CollisionVariantRecord {
+                content_digest: digest,
+            },
+            collision_variant_record: Box::new(
+                serde_json::from_value::<CollisionVariantRecord>(object_json)
+                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+            ),
+        },
         kind => {
             return Err(PersistenceError::Internal(format!(
                 "stored governance dependency kind is invalid: {kind}"

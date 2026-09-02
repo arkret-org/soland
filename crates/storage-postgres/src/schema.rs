@@ -575,6 +575,18 @@ diesel::table! {
 }
 
 diesel::table! {
+    federation_frontier_resolution (realm_id, cell_subject_key) {
+        realm_id -> Text,
+        cell_subject_key -> Text,
+        subject -> Jsonb,
+        verdict -> Jsonb,
+        conflict_evidence_digest -> Text,
+        resolution_event_digest -> Text,
+        normalized_at -> Int8,
+    }
+}
+
+diesel::table! {
     federation_frontier_reduction_checkpoint (realm_id, peer_id) {
         realm_id -> Text,
         peer_id -> Text,
@@ -1904,6 +1916,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     federation_frontier_confirmed_evidence,
     federation_frontier_exchange,
     federation_frontier_reduction_checkpoint,
+    federation_frontier_resolution,
     federation_operations,
     federation_outbox,
     federation_outbox_dead_letter,

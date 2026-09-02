@@ -142,6 +142,13 @@ pub(crate) async fn verified_availability_dependency_writes(
         .collect()
 }
 
+/// Verify every `ak.fork.resolution` an accepted Seal covers, then record the
+/// local normalization it produces.
+///
+/// This is the first of the two phases that clear confirmed fork evidence
+/// (`sync/federation.md` §4.5.3). It normalizes local state and nothing else:
+/// no peer leaves `peer_stale` here, because an accepted verdict says nothing
+/// about whether any particular replica has aligned its sibling set with it.
 pub(crate) async fn validate_accepted_fork_resolution_records(
     state: &AppState,
     seal: &Seal,
@@ -160,19 +167,108 @@ pub(crate) async fn validate_accepted_fork_resolution_records(
         if event.kind != arkret_wire::EventKind::ForkResolution {
             continue;
         }
-        let _record =
+        let record =
             arkret_models_collaboration::events_payloads::ForkResolutionRecord::from_accepted_seal(
                 &event,
                 seal,
                 digest_suite,
             )
             .map_err(|error| seal_admission_error(error.to_string()))?;
-        // The accepted control-cell projection authorizes local normalization
-        // only. It does not prove that any particular peer has aligned its
-        // exact sibling scope, so confirmed evidence remains fail-closed until
-        // the frontier worker supplies that separate per-peer proof.
+        // The Move can only name its collision variants; the bytes behind a
+        // reference live in a typed governance-dependency record that has to be
+        // resolved and independently re-verified before the claim means
+        // anything. A record we do not hold is a dependency miss, not a licence
+        // to adjudicate on the inline arm alone.
+        let records = resolved_collision_variant_records(state, &event, digest_suite).await?;
+        record
+            .validate_collision_evidence(&event, &records, digest_suite)
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        record_fork_resolution_normalization(state, &event, &record).await?;
     }
     Ok(())
+}
+
+async fn resolved_collision_variant_records(
+    state: &AppState,
+    event: &Event,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<
+    BTreeMap<
+        arkret_identifiers::CollisionVariantRecordId,
+        arkret_models_collaboration::events_payloads::state::CollisionVariantRecord,
+    >,
+    AppError,
+> {
+    let selectors =
+        arkret_models_collaboration::governance_dependencies::fork_resolution_variant_record_selectors(
+            event,
+        )
+        .map_err(|error| seal_admission_error(error.to_string()))?;
+    let store = state.persistence().governance_dependency_store();
+    let mut records = BTreeMap::new();
+    for selector in selectors {
+        let dependency = store
+            .get(&event.realm_id, &selector)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("collision variant record lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::DependencyMissing,
+                    "fork resolution references a collision variant record that is not durably                      available",
+                )
+            })?;
+        let GovernanceDependency::CollisionVariantRecord {
+            collision_variant_record,
+            ..
+        } = dependency
+        else {
+            return Err(seal_admission_error(
+                "collision variant selector resolved to another dependency kind",
+            ));
+        };
+        collision_variant_record
+            .validate(digest_suite)
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        records.insert(
+            collision_variant_record.collision_variant_record_id.clone(),
+            *collision_variant_record,
+        );
+    }
+    Ok(records)
+}
+
+async fn record_fork_resolution_normalization(
+    state: &AppState,
+    event: &Event,
+    record: &arkret_models_collaboration::events_payloads::ForkResolutionRecord,
+) -> Result<(), AppError> {
+    let cell_subject_key = record
+        .subject
+        .cell_subject_key()
+        .map_err(|error| seal_admission_error(error.to_string()))?;
+    let conflict_evidence_digest = arkret_canonical::canonical_sha256(&record.conflict_evidence)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let normalization = soland_services::federation::FederationFrontierResolutionRecord {
+        realm_id: event.realm_id.as_str().to_owned(),
+        cell_subject_key: cell_subject_key.to_string(),
+        subject: serde_json::to_value(&record.subject)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        verdict: serde_json::to_value(&record.verdict)
+            .map_err(|error| AppError::internal(error.to_string()))?,
+        conflict_evidence_digest,
+        resolution_event_digest: record.resolution_event_digest.as_str().to_owned(),
+        normalized_at: chrono::Utc::now().timestamp(),
+    };
+    state
+        .federation()
+        .record_frontier_local_normalization(&normalization)
+        .await
+        .map_err(|error| seal_admission_error(error.to_string()))
 }
 
 /// Map an SDK [`SealReject`] onto an [`AppError`].

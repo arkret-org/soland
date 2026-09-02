@@ -2,7 +2,8 @@ use arkret_wire::DidCoreId;
 
 use super::{
     FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
-    FederationFrontierReductionCheckpoint, FederationOutboxDeadLetterRecord,
+    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
+    FederationOutboxDeadLetterRecord,
     FederationOutboxRecord, FederationOutboxState, PersistenceError, PersistenceResult,
     ProjectedEventOperation, async_trait,
 };
@@ -323,14 +324,35 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
         realm_id: &str,
         peer_id: &DidCoreId,
     ) -> PersistenceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
-    async fn resolve_confirmed_evidence(
+    /// Record the local normalization an accepted `ak.fork.resolution`
+    /// produces. Idempotent by `(realm_id, cell_subject_key)`: the same Event
+    /// replays into one row, and a second, byte-different verdict for a subject
+    /// that is already settled is refused rather than silently re-adjudicated.
+    async fn record_local_normalization(
+        &self,
+        resolution: &FederationFrontierResolutionRecord,
+    ) -> PersistenceResult<()>;
+    async fn local_normalization(
         &self,
         realm_id: &str,
+        cell_subject_key: &str,
+    ) -> PersistenceResult<Option<FederationFrontierResolutionRecord>>;
+    /// Second phase: clear one peer's evidence for one exact scope.
+    ///
+    /// Deliberately per peer. An accepted resolution normalizes local state but
+    /// proves nothing about any particular replica, so alignment is established
+    /// and recorded one peer at a time; another peer having aligned is not
+    /// evidence about this one. Returns whether a row actually transitioned, so
+    /// a replay is visibly idempotent.
+    async fn resolve_confirmed_evidence_for_peer(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
         evidence_scope_key: &str,
         resolution_kind: &str,
         resolution_digest: &str,
         resolved_at: i64,
-    ) -> PersistenceResult<Vec<DidCoreId>>;
+    ) -> PersistenceResult<bool>;
 }
 
 #[cfg(test)]

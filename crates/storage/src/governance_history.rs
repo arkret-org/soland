@@ -152,6 +152,34 @@ pub fn governance_dependency_canonical(
                 serde_json::to_value(minimal_metadata_mls_leaf_signer_evidence),
             )
         }
+        GovernanceDependency::CollisionVariantRecord {
+            selector: GovernanceDependencySelector::CollisionVariantRecord { content_digest },
+            collision_variant_record,
+        } => {
+            // The record is addressed under the Realm's active suite, so the
+            // suite that named it is the suite that recomputes the colliding
+            // Event identity it claims.
+            let digest_suite = content_digest
+                .digest_suite()
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            collision_variant_record
+                .validate(digest_suite)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+            if collision_variant_record
+                .content_digest(digest_suite)
+                .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?
+                != *content_digest
+            {
+                return Err(PersistenceError::SchemaViolation(
+                    "collision variant record selector digest mismatch".to_owned(),
+                ));
+            }
+            (
+                "collision_variant_record",
+                content_digest.clone(),
+                serde_json::to_value(collision_variant_record),
+            )
+        }
         _ => {
             return Err(PersistenceError::SchemaViolation(
                 "governance dependency item branch does not match its selector".to_owned(),
@@ -211,6 +239,9 @@ pub fn governance_dependency_selector_parts(
             "minimal_metadata_mls_leaf_signer_evidence",
             content_digest.clone(),
         ),
+        GovernanceDependencySelector::CollisionVariantRecord { content_digest } => {
+            ("collision_variant_record", content_digest.clone())
+        }
     })
 }
 

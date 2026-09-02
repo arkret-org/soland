@@ -6,6 +6,7 @@ use async_trait::async_trait;
 pub use soland_storage::{
     FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
     FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
+    FederationFrontierResolutionRecord,
 };
 
 use crate::ServiceResult;
@@ -217,14 +218,24 @@ pub trait FederationStatePort: Send + Sync {
         realm_id: &str,
         peer_id: &DidCoreId,
     ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
-    async fn resolve_frontier_confirmed_evidence(
+    async fn record_frontier_local_normalization(
+        &self,
+        resolution: &FederationFrontierResolutionRecord,
+    ) -> ServiceResult<()>;
+    async fn frontier_local_normalization(
         &self,
         realm_id: &str,
+        cell_subject_key: &str,
+    ) -> ServiceResult<Option<FederationFrontierResolutionRecord>>;
+    async fn resolve_frontier_confirmed_evidence_for_peer(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
         evidence_scope_key: &str,
         resolution_kind: &str,
         resolution_digest: &str,
         resolved_at: i64,
-    ) -> ServiceResult<Vec<DidCoreId>>;
+    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
@@ -430,17 +441,40 @@ impl FederationService {
             .unresolved_frontier_confirmed_evidence(realm_id, peer_id)
             .await
     }
-    pub async fn resolve_frontier_confirmed_evidence(
+    /// First phase: record what an accepted `ak.fork.resolution` normalized
+    /// locally. This clears nothing on any peer.
+    pub async fn record_frontier_local_normalization(
+        &self,
+        resolution: &FederationFrontierResolutionRecord,
+    ) -> ServiceResult<()> {
+        self.state
+            .record_frontier_local_normalization(resolution)
+            .await
+    }
+    pub async fn frontier_local_normalization(
         &self,
         realm_id: &str,
+        cell_subject_key: &str,
+    ) -> ServiceResult<Option<FederationFrontierResolutionRecord>> {
+        self.state
+            .frontier_local_normalization(realm_id, cell_subject_key)
+            .await
+    }
+    /// Second phase: clear one peer once its own exact-scope challenge matched
+    /// the verdict. Another peer having aligned is not evidence about this one.
+    pub async fn resolve_frontier_confirmed_evidence_for_peer(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
         evidence_scope_key: &str,
         resolution_kind: &str,
         resolution_digest: &str,
         resolved_at: i64,
-    ) -> ServiceResult<Vec<DidCoreId>> {
+    ) -> ServiceResult<bool> {
         self.state
-            .resolve_frontier_confirmed_evidence(
+            .resolve_frontier_confirmed_evidence_for_peer(
                 realm_id,
+                peer_id,
                 evidence_scope_key,
                 resolution_kind,
                 resolution_digest,
@@ -535,15 +569,29 @@ mod tests {
         ) -> ServiceResult<Vec<FederationFrontierConfirmedEvidenceRecord>> {
             Ok(Vec::new())
         }
-        async fn resolve_frontier_confirmed_evidence(
+        async fn record_frontier_local_normalization(
+            &self,
+            _resolution: &FederationFrontierResolutionRecord,
+        ) -> ServiceResult<()> {
+            Ok(())
+        }
+        async fn frontier_local_normalization(
             &self,
             _realm_id: &str,
+            _cell_subject_key: &str,
+        ) -> ServiceResult<Option<FederationFrontierResolutionRecord>> {
+            Ok(None)
+        }
+        async fn resolve_frontier_confirmed_evidence_for_peer(
+            &self,
+            _realm_id: &str,
+            _peer_id: &DidCoreId,
             _evidence_scope_key: &str,
             _resolution_kind: &str,
             _resolution_digest: &str,
             _resolved_at: i64,
-        ) -> ServiceResult<Vec<DidCoreId>> {
-            Ok(Vec::new())
+        ) -> ServiceResult<bool> {
+            Ok(false)
         }
     }
 

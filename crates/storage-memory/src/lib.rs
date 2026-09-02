@@ -30,6 +30,7 @@ pub(crate) use soland_storage::{
     FEDERATION_FRONTIER_STATUS_HEALTHY, FEDERATION_FRONTIER_STATUS_PEER_STALE,
     FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
     FederationFrontierExchangeStore, FederationFrontierReductionCheckpoint,
+    FederationFrontierResolutionRecord,
     FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
     FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
     FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,

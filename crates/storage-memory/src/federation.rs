@@ -4,7 +4,8 @@ use super::{
     Arc, BTreeMap, FEDERATION_FRONTIER_STALE_FAILURES, FEDERATION_FRONTIER_STATUS_HEALTHY,
     FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
     FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
-    FederationFrontierReductionCheckpoint, FederationOperationsStore, FederationOutboxClaim,
+    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
+    FederationOperationsStore, FederationOutboxClaim,
     FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
     FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
     FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Mutex,
@@ -348,6 +349,7 @@ pub(crate) struct MemoryFederationFrontierExchangeStore {
     evidence: Arc<
         Mutex<BTreeMap<(String, DidCoreId, String), FederationFrontierConfirmedEvidenceRecord>>,
     >,
+    resolutions: Arc<Mutex<BTreeMap<(String, String), FederationFrontierResolutionRecord>>>,
 }
 impl MemoryFederationFrontierExchangeStore {
     pub(crate) fn new() -> Self {
@@ -355,6 +357,7 @@ impl MemoryFederationFrontierExchangeStore {
             data: Arc::new(Mutex::new(BTreeMap::new())),
             checkpoints: Arc::new(Mutex::new(BTreeMap::new())),
             evidence: Arc::new(Mutex::new(BTreeMap::new())),
+            resolutions: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
@@ -516,46 +519,82 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
             .collect())
     }
 
-    async fn resolve_confirmed_evidence(
+    async fn record_local_normalization(
+        &self,
+        resolution: &FederationFrontierResolutionRecord,
+    ) -> PersistenceResult<()> {
+        let key = (
+            resolution.realm_id.clone(),
+            resolution.cell_subject_key.clone(),
+        );
+        let mut resolutions = self.resolutions.lock();
+        match resolutions.get(&key) {
+            // Replaying one accepted Event is idempotent; a second, different
+            // verdict for a settled subject is a causal successor that must
+            // fail rather than quietly re-adjudicate.
+            Some(existing) if existing == resolution => Ok(()),
+            Some(_) => Err(PersistenceError::Conflict(
+                "failed_precondition: fork resolution subject is already settled".to_owned(),
+            )),
+            None => {
+                resolutions.insert(key, resolution.clone());
+                Ok(())
+            }
+        }
+    }
+
+    async fn local_normalization(
         &self,
         realm_id: &str,
+        cell_subject_key: &str,
+    ) -> PersistenceResult<Option<FederationFrontierResolutionRecord>> {
+        Ok(self
+            .resolutions
+            .lock()
+            .get(&(realm_id.to_owned(), cell_subject_key.to_owned()))
+            .cloned())
+    }
+
+    async fn resolve_confirmed_evidence_for_peer(
+        &self,
+        realm_id: &str,
+        peer_id: &DidCoreId,
         evidence_scope_key: &str,
         resolution_kind: &str,
         resolution_digest: &str,
         resolved_at: i64,
-    ) -> PersistenceResult<Vec<DidCoreId>> {
-        if !matches!(
-            resolution_kind,
-            "fork_resolution_event" | "witness_reagreement"
-        ) {
+    ) -> PersistenceResult<bool> {
+        if resolution_kind != "fork_resolution_event" {
             return Err(PersistenceError::SchemaViolation(
                 "frontier evidence resolution kind is not registered".to_owned(),
             ));
         }
+        let key = (
+            realm_id.to_owned(),
+            peer_id.clone(),
+            evidence_scope_key.to_owned(),
+        );
         let mut evidence = self.evidence.lock();
-        let peers = evidence
-            .values_mut()
-            .filter(|record| {
-                record.realm_id == realm_id
-                    && record.evidence_scope_key == evidence_scope_key
-                    && record.resolution_digest.is_none()
-            })
-            .map(|record| {
-                record.resolution_kind = Some(resolution_kind.to_owned());
-                record.resolution_digest = Some(resolution_digest.to_owned());
-                record.resolved_at = Some(resolved_at);
-                record.peer_id.clone()
-            })
-            .collect::<std::collections::BTreeSet<_>>();
-        let mut exchanges = self.data.lock();
-        for peer in &peers {
-            let unresolved = evidence.values().any(|record| {
-                record.realm_id == realm_id
-                    && &record.peer_id == peer
-                    && record.resolution_digest.is_none()
-            });
-            if !unresolved
-                && let Some(exchange) = exchanges.get_mut(&(realm_id.to_owned(), peer.clone()))
+        let Some(record) = evidence.get_mut(&key) else {
+            return Ok(false);
+        };
+        if record.resolution_digest.is_some() {
+            return Ok(false);
+        }
+        record.resolution_kind = Some(resolution_kind.to_owned());
+        record.resolution_digest = Some(resolution_digest.to_owned());
+        record.resolved_at = Some(resolved_at);
+        // The peer only leaves the evidence-driven fail-closed state once it
+        // holds no other unresolved confirmed evidence. Ordinary failure
+        // counters are untouched here: they have their own window.
+        let unresolved = evidence.values().any(|other| {
+            other.realm_id == realm_id
+                && &other.peer_id == peer_id
+                && other.resolution_digest.is_none()
+        });
+        if !unresolved {
+            let mut exchanges = self.data.lock();
+            if let Some(exchange) = exchanges.get_mut(&(realm_id.to_owned(), peer_id.clone()))
                 && matches!(
                     exchange.last_error.as_deref(),
                     Some("witness_disagreement" | "fork_quarantine")
@@ -572,7 +611,7 @@ impl FederationFrontierExchangeStore for MemoryFederationFrontierExchangeStore {
                 exchange.updated_at = resolved_at;
             }
         }
-        Ok(peers.into_iter().collect())
+        Ok(true)
     }
 }
 #[derive(Default)]
