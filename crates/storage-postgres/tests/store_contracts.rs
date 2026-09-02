@@ -3149,8 +3149,16 @@ mod control_move_ingress_negatives {
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("ack-only");
         let mut ack = fixture.ack.clone();
-        ack.proposal_digest =
+        // Repoint the whole aggregate, members included. Moving only the
+        // envelope's digest would trip the SDK's aggregate-consistency check
+        // first and never reach the binding check this case exists for.
+        let unbound_digest =
             arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        ack.proposal_digest = unbound_digest.clone();
+        for member in &mut ack.authority_acks {
+            member.proposal_digest = unbound_digest.clone();
+            member.signature.payload_digest = member.authority_ack_digest().unwrap();
+        }
 
         let error = PgEventCommitUnitOfWork::new(pool.clone())
             .commit_event(fixture.commit_request(Some(
