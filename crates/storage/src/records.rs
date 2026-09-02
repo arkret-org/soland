@@ -1071,7 +1071,6 @@ pub struct PolicyDocumentRecord {
 #[derive(Clone, Debug)]
 pub struct OrganizationRecord {
     pub organization_id: String,
-    pub organization_principal_id: arkret_identifiers::DidCoreId,
     pub handle: Option<String>,
     pub display_name: String,
     pub source_refs: Vec<String>,

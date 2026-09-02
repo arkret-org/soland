@@ -22,6 +22,7 @@ use arkret_models_discovery::DirectoryIntent;
 use arkret_models_identity::handle::Handle;
 use arkret_models_identity::proof::DetachedPayloadProof;
 use arkret_models_identity::{HandleClaim, HandleClaimStatus, ServiceResolutionCarrier};
+use arkret_wire::receive_policy::EffectiveNewSourceQuota;
 use arkret_wire::{
     AccountDataKey, InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface,
     UnknownInviteAction,
@@ -46,6 +47,7 @@ use soland_services::federation::{EnqueueFederationDeliveryCommand, FederationDe
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
 };
+use soland_storage::NewSourceAdmission;
 
 use crate::routing::identity::device_messages::{
     fanout_actor_private_update, station_device_message_sender,
@@ -1209,6 +1211,28 @@ async fn persist_invite_quarantine_entry(
     }
 
     let received_at = now();
+
+    // `consent-model.md` section 6.1.1.3 -- the per-holder new-source quota is
+    // evaluated here, at the single admission chokepoint, exactly once and
+    // strictly before the CAS write. Deciding inside the retry loop below would
+    // charge one delivery several times.
+    if !admit_quarantine_new_source(state, account_id, inviter_id, received_at).await? {
+        super::append_audit_log(
+            state,
+            Some(subject),
+            "peer.invites.quarantine",
+            json!({
+                "invitee_id": subject,
+                "source_id": source_id,
+                "receive_action": receive_action_str(&decision.action),
+                "reason": "new_source_quota_exhausted",
+            }),
+            "skipped",
+        )
+        .await;
+        return Ok(false);
+    }
+
     let expires_at = received_at + Duration::days(INVITE_QUARANTINE_TTL_DAYS);
     let invite_event_id = body
         .pointer("/invite_event/event_id")
@@ -1348,6 +1372,77 @@ async fn persist_invite_quarantine_entry(
     )
     .await;
     Ok(true)
+}
+
+/// Run the quarantine admission chokepoint for one first contact.
+///
+/// Returns `true` when the caller may proceed to the quarantine cell write --
+/// either because this source was already admitted inside the retention window,
+/// or because it fit under both sliding ceilings and was just charged. `false`
+/// means the delivery is silently dropped: no ledger write, no cell write, and
+/// the same opaque `deferred` the requester sees for every other member of the
+/// `consent-model.md` section 6.1.1 equivalence class.
+async fn admit_quarantine_new_source(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    inviter_id: &str,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<bool, AppError> {
+    let quota = effective_new_source_quota(state, account_id)?;
+    let source_digest = new_source_ledger_digest(state, account_id, inviter_id);
+    let admission = state
+        .persistence()
+        .invite_new_source_ledger_store()
+        .admit_new_source(account_id, &source_digest, received_at, &quota)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    Ok(admission != NewSourceAdmission::Denied)
+}
+
+/// Intersect the deployment ceiling with the holder override.
+///
+/// An absent deployment object is not "quota off": section 6.1.1.1 makes the
+/// quota a MUST, so the specification defaults apply and the empty constraints
+/// object produces exactly those.
+fn effective_new_source_quota(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+) -> Result<EffectiveNewSourceQuota, AppError> {
+    let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery)
+        .and_then(|constraints| constraints.new_source_quota.clone())
+        .unwrap_or_default();
+    let policy = resolve_core_invite_receive_policy(state, account_id);
+    constraints
+        .effective(policy.new_source_quota.as_ref())
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+/// Keyed digest of `(holder, source peer principal)`.
+///
+/// Section 6.1.1.4 only needs equality for membership testing, so the ledger
+/// stores a digest keyed by this Station's private notary key rather than a
+/// readable list of every stranger who has contacted a holder. The holder is
+/// bound into the transcript as well, so one holder's rows cannot be correlated
+/// with another's.
+fn new_source_ledger_digest(
+    state: &AppState,
+    account_id: &arkret_wire::AccountId,
+    inviter_id: &str,
+) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let secret = state.notary_signing_key().to_bytes();
+    let material = format!(
+        "soland-invite-new-source-ledger-v1\0{}\0{}\0{inviter_id}",
+        account_id.principal_id.as_str(),
+        account_id.station_id.as_str()
+    );
+    let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(&secret)
+        .expect("HMAC accepts keys of any length");
+    mac.update(material.as_bytes());
+    let tag: [u8; 32] = mac.finalize().into_bytes().into();
+    hex::encode(tag)
 }
 
 fn merge_invite_quarantine_cell(

@@ -24,6 +24,7 @@ pub struct PgPersistenceStore {
     contact_verified_mirrors: PgContactVerifiedMirrorStore,
     invite_receive_policies: PgInviteReceivePolicyStore,
     invite_locators: PgInviteLocatorStore,
+    invite_new_source_ledger: PgInviteNewSourceLedgerStore,
     consent_cells: PgConsentCellStore,
     mimi_consent_correlations: PgMimiConsentCorrelationStore,
     realm_meta: PgRealmMetaStore,
@@ -104,6 +105,7 @@ impl PgPersistenceStore {
             contact_verified_mirrors: PgContactVerifiedMirrorStore { pool: pool.clone() },
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
+            invite_new_source_ledger: PgInviteNewSourceLedgerStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
             mimi_consent_correlations: PgMimiConsentCorrelationStore { pool: pool.clone() },
             realm_meta: PgRealmMetaStore { pool: pool.clone() },
@@ -225,6 +227,10 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn invite_locators(&self) -> &dyn InviteLocatorStore {
         &self.invite_locators
+    }
+
+    fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore {
+        &self.invite_new_source_ledger
     }
 
     fn consent_cells(&self) -> &dyn ConsentCellStore {

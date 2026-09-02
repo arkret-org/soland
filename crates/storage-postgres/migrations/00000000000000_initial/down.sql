@@ -75,6 +75,7 @@ DROP TABLE IF EXISTS federation_outbox CASCADE;
 DROP TABLE IF EXISTS event_federation_outbox CASCADE;
 DROP TABLE IF EXISTS federation_outbox_dead_letter CASCADE;
 DROP TABLE IF EXISTS invite_receive_policies CASCADE;
+DROP TABLE IF EXISTS invite_new_source_ledgers CASCADE;
 DROP TABLE IF EXISTS invite_locators CASCADE;
 DROP TABLE IF EXISTS key_backup_delete_challenges CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;

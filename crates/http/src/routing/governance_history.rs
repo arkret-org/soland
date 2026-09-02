@@ -1673,7 +1673,7 @@ async fn local_rrk_source_authority(
     .filter(|record| {
         let archive = &record.input.archive_replica.archive;
         record.accepted_outcome.is_some()
-            && archive.holder_principal_id == *response.source_actor_id.signing_principal_id()
+            && archive.controller_id == *response.source_actor_id.signing_principal_id()
             && archive.holder_id == local_service_id
             && archive.effective_scope == response.effective_scope
             && request
@@ -1796,7 +1796,7 @@ async fn history_response_coverage_ranges(
 async fn accepted_rrk_for_ranges(
     state: &AppState,
     effective_scope: &HistoryEffectiveScope,
-    holder_principal_id: &arkret_wire::DidCoreId,
+    controller_id: &arkret_wire::DidCoreId,
     holder_id: &arkret_wire::DidCoreId,
     ranges: &[arkret_models_collaboration::history_key::EpochRange],
 ) -> Result<Vec<soland_storage::PendingRrkAcquisitionRecord>, AppError> {
@@ -1815,7 +1815,7 @@ async fn accepted_rrk_for_ranges(
             .governance_history_service()
             .list_accepted_rrk_for_authority(
                 effective_scope,
-                holder_principal_id,
+                controller_id,
                 holder_id,
                 range.from_epoch,
                 range.to_epoch,
@@ -1839,7 +1839,7 @@ async fn accepted_rrk_for_ranges(
 fn current_rrk_holder_authority_observation(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
-    holder_principal_id: &arkret_wire::DidCoreId,
+    controller_id: &arkret_wire::DidCoreId,
     holder_id: &arkret_wire::DidCoreId,
     archive_authorization_tuple_digest: arkret_wire::Hash,
     observed_at: chrono::DateTime<chrono::Utc>,
@@ -1865,10 +1865,10 @@ fn current_rrk_holder_authority_observation(
         .get("key_tuple")
         .and_then(serde_json::Value::as_object)
         .ok_or_else(|| AppError::internal("current RRK cell omits key_tuple"))?;
-    let current_holder_principal_id = key_tuple
-        .get("holder_principal_id")
+    let current_controller_id = key_tuple
+        .get("controller_id")
         .cloned()
-        .ok_or_else(|| AppError::internal("current RRK cell omits holder_principal_id"))
+        .ok_or_else(|| AppError::internal("current RRK cell omits controller_id"))
         .and_then(|value| {
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
@@ -1881,13 +1881,13 @@ fn current_rrk_holder_authority_observation(
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
-    if &current_holder_principal_id != holder_principal_id || &current_holder_id != holder_id {
+    if &current_controller_id != controller_id || &current_holder_id != holder_id {
         return Err(AppError::capability_denied(
             "current RRK authority names a different holder",
         ));
     }
     let observation = RrkHolderAuthorityObservation {
-        holder_principal_id: current_holder_principal_id,
+        controller_id: current_controller_id,
         holder_id: current_holder_id,
         current_holder_signing_ref: key_tuple
             .get("holder_signing_ref")
@@ -1962,7 +1962,7 @@ async fn validate_history_source_relay_binding(
             let replica = &record.input.archive_replica;
             record.accepted_outcome.is_some()
                 && replica.archive.effective_scope == attestation.effective_scope
-                && replica.archive.holder_principal_id
+                && replica.archive.controller_id
                     == *attestation.source_actor_id.signing_principal_id()
                 && replica.archive.holder_id == attestation.source_id
                 && authority_observation
@@ -3144,7 +3144,7 @@ async fn validate_rrk_release_coverage(
         let archive = &replica.archive;
         if record.accepted_outcome.is_none()
             || archive.effective_scope != response.effective_scope
-            || archive.holder_principal_id != *source_relay.source_actor_id.signing_principal_id()
+            || archive.controller_id != *source_relay.source_actor_id.signing_principal_id()
             || archive.holder_id != source_relay.source_id
             || archive.epoch < released_range.from_epoch
             || archive.epoch > released_range.to_epoch
@@ -4043,7 +4043,7 @@ async fn validate_history_request_replica_destination(
             }
         }
         HistoryKeyRequestReplicaDestinationAuthorization::OrganizationRecoveryHolder {
-            holder_principal_id,
+            controller_id,
             holder_id,
             archive_tuple_digest,
         } => {
@@ -4055,14 +4055,14 @@ async fn validate_history_request_replica_destination(
             let accepted = accepted_rrk_for_ranges(
                 state,
                 &replica.request.effective_scope,
-                holder_principal_id,
+                controller_id,
                 holder_id,
                 &replica.request.requested_ranges,
             )
             .await?;
             let authorized = accepted.iter().any(|record| {
                 let archive = &record.input.archive_replica.archive;
-                archive.holder_principal_id == *holder_principal_id
+                archive.controller_id == *controller_id
                     && archive.holder_id == *holder_id
                     && archive.effective_scope == replica.request.effective_scope
                     && replica.request.requested_ranges.iter().any(|range| {

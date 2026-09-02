@@ -108,7 +108,7 @@ pub(super) fn rrk_record_authorizes_request(
 ) -> bool {
     let replica = &record.input.archive_replica;
     record.accepted_outcome.is_some()
-        && replica.archive.holder_principal_id == *caller
+        && replica.archive.controller_id == *caller
         && replica.archive.effective_scope == request.effective_scope
         && request.requested_ranges.iter().any(|range| {
             range.from_epoch <= replica.archive.epoch && replica.archive.epoch <= range.to_epoch

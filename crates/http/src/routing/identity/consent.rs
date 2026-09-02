@@ -168,7 +168,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 Some(admission.holder.as_str()),
                 "consent.grant",
                 json!({
-                    "holder_principal_id": admission.holder,
+                    "holder_id": admission.holder,
                     "peer": admission.commit.cell.peer,
                     "consent_scope": admission.commit.cell.consent_scope,
                     "consent_id": admission.consent_id,
@@ -189,7 +189,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 Some(admission.holder.as_str()),
                 "consent.revoke",
                 json!({
-                    "holder_principal_id": admission.holder,
+                    "holder_id": admission.holder,
                     "peer": admission.commit.cell.peer,
                     "consent_scope": admission.commit.cell.consent_scope,
                     "consent_id": admission.consent_id,
@@ -221,7 +221,7 @@ pub(crate) async fn apply_committed_consent_admission(
                     Some(admission.holder.as_str()),
                     "consent.revoke.invite_quarantine_invalidation",
                     json!({
-                        "holder_principal_id": admission.holder,
+                        "holder_id": admission.holder,
                         "peer": admission.commit.cell.peer,
                         "consent_scope": admission.commit.cell.consent_scope,
                         "removed_entries": quarantine_entries_invalidated,
@@ -278,7 +278,7 @@ async fn plan_consent_grant(
         }
         None => ConsentCellRecord {
             cell_id: cell_id.clone(),
-            holder_principal_id: holder.clone(),
+            holder_id: holder.clone(),
             peer: peer.clone(),
             consent_scope: consent_scope.clone(),
             grant_dots: BTreeMap::new(),
@@ -1178,15 +1178,12 @@ async fn emit_consent_revoke_invalidation(
     } else {
         vec![cell.consent_scope.as_str()]
     };
-    let target_peer_ids = consent_invalidation_peer_ids(
-        state,
-        &cell.holder_principal_id,
-        consent_peer_principal(&cell.peer),
-    )
-    .await;
+    let target_peer_ids =
+        consent_invalidation_peer_ids(state, &cell.holder_id, consent_peer_principal(&cell.peer))
+            .await;
     let payload = json!({
         "schema": "ak.vector.consent.cache_invalidation.v1",
-        "holder_principal_id": cell.holder_principal_id,
+        "holder_id": cell.holder_id,
         "peer": cell.peer,
         "consent_scope": cell.consent_scope,
         "cell_id": cell.cell_id,
@@ -1205,7 +1202,7 @@ async fn emit_consent_revoke_invalidation(
     });
     append_audit_log(
         state,
-        Some(cell.holder_principal_id.as_str()),
+        Some(cell.holder_id.as_str()),
         "consent.revoke.cache_invalidation",
         payload,
         "accepted",
@@ -1349,7 +1346,7 @@ mod tests {
     ) -> ConsentCellRecord {
         ConsentCellRecord {
             cell_id: consent_cell_id_for_consent_id(consent_id).expect("cell id"),
-            holder_principal_id: DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            holder_id: DidCoreId::new(HOLDER.to_owned()).unwrap(),
             peer: ConsentPeer::Actor {
                 actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     DidCoreId::new(peer.to_owned()).unwrap(),

@@ -44,25 +44,26 @@ pub(crate) use soland_storage::{
     HandleClaimEvidenceRecord, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
     IdentityAnchorAccountSlot, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
     IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    KeyBackupDeleteChallengeRecord, KeyBackupStore, MemberIdentityEventRecord, MemberIdentityStore,
-    MemberIdentitySubjectKey, MembershipCompensationEvidenceRecord, MessageRecord, MessageStore,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteNewSourceLedgerStore,
+    InviteReceivePolicyStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
+    MemberIdentityEventRecord, MemberIdentityStore, MemberIdentitySubjectKey,
+    MembershipCompensationEvidenceRecord, MessageRecord, MessageStore,
     MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
     MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim,
     MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
     MlsWelcomeStore, ModerationStore, MorphProjectionRecord, MorphProjectionStore,
-    MultisigPendingRecord, MultisigPendingStore, NotificationStore, OneTimeKeyStore,
-    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
-    OutboundPushBridgeCacheRecord, PeerClaimTerminalTransition, PeerEventsPageQuery,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
-    PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
-    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
-    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
-    RealmMetaRecord, RealmMetaStore, RealmOrganizationStatementRecord,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
-    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    MultisigPendingRecord, MultisigPendingStore, NewSourceAdmission, NotificationStore,
+    OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
+    OrganizationStore, OutboundPushBridgeCacheRecord, PeerClaimTerminalTransition,
+    PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
+    PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome,
+    ProjectionEventRecord, ProjectionEventStore, PublicationEvidenceRecord,
+    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmEventStats,
+    RealmInviteRecord, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
+    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
+    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID, SecurityTransactionFirstWriteDecision,
     SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
@@ -115,6 +116,7 @@ mod governance_history;
 mod history_response_stream;
 mod idempotency;
 mod invite_locators;
+mod invite_new_source_ledger;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -165,6 +167,7 @@ pub use governance_history::*;
 pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
+pub use invite_new_source_ledger::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;

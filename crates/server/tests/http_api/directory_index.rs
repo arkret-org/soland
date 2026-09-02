@@ -76,7 +76,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
             .await
             .unwrap();
     assert_eq!(
-        organization_previews["organizations"][0]["organization_principal_id"],
+        organization_previews["organizations"][0]["organization_id"],
         soland_test_support::fixture_station_id().as_str()
     );
     assert_eq!(

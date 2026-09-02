@@ -451,7 +451,7 @@ async fn commit_consent_projection(
     )
     .bind::<Uuid, _>(uuid::Uuid::now_v7())
     .bind::<Text, _>(&cell.cell_id)
-    .bind::<Text, _>(&cell.holder_principal_id)
+    .bind::<Text, _>(&cell.holder_id)
     .bind::<Jsonb, _>(serde_json::to_value(&cell.peer).map_err(|error| {
         PersistenceError::SchemaViolation(format!("consent peer is not serializable: {error}"))
     })?)

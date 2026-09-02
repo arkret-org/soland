@@ -46,6 +46,7 @@ mod idempotency;
 #[doc(hidden)]
 pub mod ids;
 mod invite_locators;
+mod invite_new_source_ledger;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -91,6 +92,7 @@ pub use governance_history::*;
 pub use history_response_stream::*;
 pub use idempotency::*;
 pub use invite_locators::*;
+pub use invite_new_source_ledger::*;
 pub use key_backup::*;
 pub use member_identity::*;
 pub use mls::*;
@@ -314,6 +316,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn contact_verified_mirrors(&self) -> &dyn ContactVerifiedMirrorStore;
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore;
     fn invite_locators(&self) -> &dyn InviteLocatorStore;
+    fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore;
     fn consent_cells(&self) -> &dyn ConsentCellStore;
     fn mimi_consent_correlations(&self) -> &dyn MimiConsentCorrelationStore;
     fn realm_meta(&self) -> &dyn RealmMetaStore;

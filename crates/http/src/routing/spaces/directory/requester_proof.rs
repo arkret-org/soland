@@ -12,9 +12,9 @@
 //!
 //! The SDK helper already enforces the wire-shape half of §9.0.1 — production
 //! proof material, `payload_digest` equality against the proofs-stripped
-//! canonical request, single-valued `audience` in `did_core_id` form, absent
-//! `domain` and absent `proof_purpose`. This module adds the receiver-side
-//! half: the audience must name *this* service, the proof must be fresh, and
+//! canonical request, required typed `audience_id`, and no generic `domain` or
+//! `proof_purpose` members. This module adds the receiver-side half: the
+//! audience_id must name *this* service, the proof must be fresh, and
 //! the JWS must verify under the family's originator.
 
 use super::*;
@@ -41,9 +41,9 @@ const DIRECTORY_REQUESTER_PROOF_WINDOW_SECONDS: i64 = 300;
 /// accepted here and the surface's own visibility rules still apply.
 pub(super) async fn directory_requester_proofs_verified(
     state: &AppState,
-    proofs: &[PayloadProof],
+    proofs: &[DirectoryRequestProof],
     issuer: Option<&str>,
-    binding_for: impl Fn(&PayloadProof) -> Option<Vec<u8>>,
+    binding_for: impl Fn(&DirectoryRequestProof) -> Option<Vec<u8>>,
 ) -> bool {
     for proof in proofs {
         if !directory_requester_proof_verified(state, proof, issuer, &binding_for).await {
@@ -55,22 +55,19 @@ pub(super) async fn directory_requester_proofs_verified(
 
 async fn directory_requester_proof_verified(
     state: &AppState,
-    proof: &PayloadProof,
+    proof: &DirectoryRequestProof,
     issuer: Option<&str>,
-    binding_for: impl Fn(&PayloadProof) -> Option<Vec<u8>>,
+    binding_for: impl Fn(&DirectoryRequestProof) -> Option<Vec<u8>>,
 ) -> bool {
     if proof.kind != proof_kind::DETACHED_JWS {
         return false;
     }
-    // §9.0.1: `audience` MUST be the target Directory `service_id` published by
-    // `ak.find.directory.read.describe.v1`, single valued and in `did_core_id`
-    // form. The SDK rejects any other shape; the receiver decides whether the
-    // single value actually names it. `state.service_id()` is this deployment's
+    // §9.0.1: `audience_id` MUST be the target Directory `service_id` published
+    // by `ak.find.directory.read.describe.v1`. The SDK rejects any other shape;
+    // the receiver decides whether the typed value actually names it.
+    // `state.service_id()` is this deployment's
     // projected core id, which is exactly the value describe publishes.
-    let Some(Audience::Single(audience)) = proof.audience.as_ref() else {
-        return false;
-    };
-    if audience != state.service_id() {
+    if proof.audience_id.as_str() != state.service_id() {
         return false;
     }
     let age_seconds = Utc::now()
@@ -128,8 +125,12 @@ mod tests {
         project_did_to_core_id(&did).unwrap()
     }
 
-    fn proof(audience: &str, created_at: DateTime<Utc>, payload_digest: Hash) -> PayloadProof {
-        PayloadProof {
+    fn proof(
+        audience: &str,
+        created_at: DateTime<Utc>,
+        payload_digest: Hash,
+    ) -> DirectoryRequestProof {
+        DirectoryRequestProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             verification_method: arkret_wire::DidUrl::new(
                 "did:web:directory-proof-test.invalid#ak:key:directory-requester_id".to_owned(),
@@ -137,14 +138,12 @@ mod tests {
             .unwrap(),
             payload_digest,
             created_at,
-            domain: None,
-            audience: Some(Audience::Single(audience.to_owned())),
-            proof_purpose: None,
+            audience_id: DidCoreId::new(audience).unwrap(),
             jws: "eyJhbGciOiJFZERTQSJ9..c2lnbmF0dXJl".to_owned(),
         }
     }
 
-    fn target_body(proofs: Vec<PayloadProof>) -> DirectoryResolveTargetRequestBody {
+    fn target_body(proofs: Vec<DirectoryRequestProof>) -> DirectoryResolveTargetRequestBody {
         DirectoryResolveTargetRequestBody {
             address: "ak://realm/release".to_owned(),
             requester_id: Some(requester_id()),
@@ -155,7 +154,7 @@ mod tests {
         }
     }
 
-    fn handle_body(proofs: Vec<PayloadProof>) -> DirectoryResolveHandleRequestBody {
+    fn handle_body(proofs: Vec<DirectoryRequestProof>) -> DirectoryResolveHandleRequestBody {
         DirectoryResolveHandleRequestBody {
             handle: "@alice:directory-proof-test.invalid".to_owned(),
             expected_principal_id: None,
@@ -255,24 +254,25 @@ mod tests {
         assert!(target.proof_binding_bytes(&borrowed).is_err());
     }
 
-    /// §9.0.1: `domain` and `proof_purpose` MUST be absent on the read surface;
-    /// `governance_authorization` belongs to the §8.7.1 write surface only.
+    /// §9.0.1 uses a closed leaf, so generic proof members are not aliases.
     #[test]
-    fn domain_and_proof_purpose_are_refused_on_the_read_surface() {
+    fn generic_proof_members_are_refused_on_the_read_surface() {
         let now = Utc::now();
         let target = target_body(Vec::new());
         let digest = target.payload_digest().unwrap();
-
-        let mut with_domain = proof("ak:did_core:web:svc.invalid", now, digest.clone());
-        with_domain.domain = Some("directory-proof-test.invalid".to_owned());
-        assert!(target.proof_binding_bytes(&with_domain).is_err());
-
-        let mut with_purpose = proof("ak:did_core:web:svc.invalid", now, digest);
-        with_purpose.proof_purpose = Some(arkret_wire::PayloadProofPurpose::HolderAcceptance);
-        assert!(target.proof_binding_bytes(&with_purpose).is_err());
+        let canonical =
+            serde_json::to_value(proof("ak:did_core:web:svc.invalid", now, digest)).unwrap();
+        for field in ["domain", "proof_purpose", "audience"] {
+            let mut legacy = canonical.clone();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .insert(field.to_owned(), serde_json::json!("legacy"));
+            assert!(serde_json::from_value::<DirectoryRequestProof>(legacy).is_err());
+        }
     }
 
-    /// §9.0.1: `audience` MUST be the single target Directory `service_id` in
+    /// §9.0.1: `audience_id` MUST be the target Directory `service_id` in
     /// `did_core_id` form. A well-formed core id naming a different directory
     /// is still rejected.
     #[tokio::test]

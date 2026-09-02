@@ -11,8 +11,8 @@ pub(super) async fn search_actors(
     require_demo_directory_provider(state)?;
     let body = body.into_inner();
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
-    if let Some(organization_principal_id) = body.organization_principal_id.as_ref()
-        && organization_principal_id.as_str() != state.service_id()
+    if let Some(organization_id) = body.organization_id.as_ref()
+        && organization_id.as_str() != state.service_id()
     {
         return json_ok(DirectoryActorSearchOutcome {
             actors: Vec::new(),

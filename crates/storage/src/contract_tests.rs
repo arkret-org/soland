@@ -5416,7 +5416,7 @@ pub async fn assert_consent_projection_commit_contract(
     let dot = format!("{grant_event_id}:0");
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
-        holder_principal_id: holder.clone(),
+        holder_id: holder.clone(),
         peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
             principal_id: peer.clone(),
         },
@@ -5649,4 +5649,134 @@ fn consent_commit_request(
         idempotency: None,
         outbox: Vec::new(),
     }
+}
+
+/// Shared behaviour every `InviteNewSourceLedgerStore` backend must reproduce
+/// (`identity/consent-model.md` sections 6.1.1.3 and 6.1.1.4).
+///
+/// The two backends have completely different concurrency stories -- one lock
+/// versus one PostgreSQL transaction -- so the ledger contract has to be proved
+/// on both rather than on the in-memory one alone.
+pub async fn assert_invite_new_source_ledger_contract(
+    ledger: &dyn super::InviteNewSourceLedgerStore,
+    accounts: &dyn super::AccountStore,
+    namespace: &str,
+) {
+    let holder = arkret_wire::AccountId::new(
+        DidCoreId::new(format!("ak:did_core:web:{namespace}.example")).unwrap(),
+        DidCoreId::new("ak:did_core:web:soland.example").unwrap(),
+    );
+    accounts
+        .put(&super::AccountRecord {
+            pk: AccountPk(0),
+            principal_id: holder.principal_id.clone(),
+            station_id: holder.station_id.clone(),
+            localpart: String::new(),
+            display_name: None,
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: database_timestamp_now(),
+        })
+        .await
+        .expect("register new-source ledger holder");
+
+    let now = database_timestamp_now();
+    let quota = arkret_wire::receive_policy::EffectiveNewSourceQuota {
+        window_seconds: 3_600,
+        new_sources_per_window: 2,
+        retention_seconds: 7_200,
+        new_sources_per_retention: 3,
+    };
+
+    // Two first contacts fit under both ceilings.
+    for suffix in ["a", "b"] {
+        assert_eq!(
+            ledger
+                .admit_new_source(&holder, &format!("{namespace}-{suffix}"), now, &quota)
+                .await
+                .expect("admit new source"),
+            super::NewSourceAdmission::Admitted,
+            "a source inside both ceilings must be admitted"
+        );
+    }
+
+    // An already-charged source is seen, not new, so it is admitted without
+    // consuming quota.
+    assert_eq!(
+        ledger
+            .admit_new_source(&holder, &format!("{namespace}-a"), now, &quota)
+            .await
+            .expect("re-admit seen source"),
+        super::NewSourceAdmission::Seen
+    );
+
+    // The third distinct source is over the short window.
+    assert_eq!(
+        ledger
+            .admit_new_source(&holder, &format!("{namespace}-c"), now, &quota)
+            .await
+            .expect("evaluate over-quota source"),
+        super::NewSourceAdmission::Denied
+    );
+    assert_eq!(
+        ledger
+            .retained_source_count(&holder)
+            .await
+            .expect("count ledger rows"),
+        2,
+        "a denied source must not be written, or the next window would read it as seen"
+    );
+
+    // Sliding the short window forward frees rate but keeps the retention
+    // total, so the previously denied source is now admitted.
+    let later = now + Duration::seconds(4_000);
+    assert_eq!(
+        ledger
+            .admit_new_source(&holder, &format!("{namespace}-c"), later, &quota)
+            .await
+            .expect("admit after the short window slid"),
+        super::NewSourceAdmission::Admitted
+    );
+
+    // The retention total is now full: a fourth distinct source is denied even
+    // though the short window has room.
+    assert_eq!(
+        ledger
+            .admit_new_source(&holder, &format!("{namespace}-d"), later, &quota)
+            .await
+            .expect("evaluate over-retention source"),
+        super::NewSourceAdmission::Denied
+    );
+
+    // Past the retention window every row expires, so a brand new contact is
+    // admitted again and the expired rows are physically gone.
+    let past_retention = now + Duration::seconds(12_000);
+    assert_eq!(
+        ledger
+            .admit_new_source(&holder, &format!("{namespace}-e"), past_retention, &quota)
+            .await
+            .expect("admit after retention expiry"),
+        super::NewSourceAdmission::Admitted
+    );
+    assert_eq!(
+        ledger
+            .retained_source_count(&holder)
+            .await
+            .expect("count ledger rows after prune"),
+        1,
+        "expired rows must be pruned, not merely ignored"
+    );
+
+    // Erasure drops the holder's whole ledger.
+    ledger
+        .delete_for_holder(&holder)
+        .await
+        .expect("delete ledger for holder");
+    assert_eq!(
+        ledger
+            .retained_source_count(&holder)
+            .await
+            .expect("count ledger rows after erasure"),
+        0
+    );
 }

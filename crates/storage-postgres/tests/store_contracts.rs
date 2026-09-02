@@ -9,9 +9,10 @@ use soland_storage::contract_tests::{
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
-    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
-    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
-    assert_organization_registration_store_contract, minimal_history_signer_evidence,
+    assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
+    assert_last_resort_claim_ledger_contract, assert_mimi_consent_correlation_store_contract,
+    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
+    minimal_history_signer_evidence,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountNotificationDeltaWrite,
@@ -24,9 +25,9 @@ use soland_storage_postgres::{
     Db, PgAccountDataStore, PgAccountLocalpartStore, PgAccountStore, PgAgentStore, PgAppletStore,
     PgContactStore, PgControlProposalAuthorityAckStore, PgDeviceInventoryStore,
     PgDeviceMessageStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
-    PgGovernanceDependencyStore, PgIdempotencyStore, PgInviteReceivePolicyStore,
-    PgMimiConsentCorrelationStore, PgMlsKeyPackageStore, PgNotificationStore,
-    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgGovernanceDependencyStore, PgIdempotencyStore, PgInviteNewSourceLedgerStore,
+    PgInviteReceivePolicyStore, PgMimiConsentCorrelationStore, PgMlsKeyPackageStore,
+    PgNotificationStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
 
 #[tokio::test]
@@ -3334,4 +3335,16 @@ async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
             author
         );
     }
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_invite_new_source_ledger_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let ledger = PgInviteNewSourceLedgerStore { pool: pool.clone() };
+    let accounts = PgAccountStore { pool };
+    let namespace = format!("postgres-invite-new-source-{}", uuid::Uuid::now_v7());
+    assert_invite_new_source_ledger_contract(&ledger, &accounts, &namespace).await;
 }

@@ -1229,7 +1229,7 @@ fn discovery_payload_resource_key(
     match kind.as_str() {
         "ak.realm.discovery" => Some(realm_id.to_owned()),
         "ak.organization.discovery" => payload
-            .get("organization_principal_id")
+            .get("organization_id")
             .and_then(Value::as_str)
             .map(str::to_owned),
         "ak.actor.discovery" | "ak.applet.discovery" | "ak.handle.discovery" => payload

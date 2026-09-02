@@ -214,11 +214,11 @@ impl MemoryConsentCellStore {
 impl ConsentCellStore for MemoryConsentCellStore {
     async fn get(
         &self,
-        holder_principal_id: &DidCoreId,
+        holder_id: &DidCoreId,
         cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let key = ConsentCellKey {
-            holder_principal_id: holder_principal_id.clone(),
+            holder_id: holder_id.clone(),
             cell_id: cell_id.clone(),
         };
         Ok(self.data.lock().get(&key).cloned())

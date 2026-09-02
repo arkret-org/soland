@@ -947,7 +947,6 @@ diesel::table! {
 diesel::table! {
     organizations (organization_id) {
         organization_id -> Text,
-        organization_principal_id -> Text,
         handle -> Nullable<Text>,
         display_name -> Text,
         source_refs -> Jsonb,
@@ -1766,7 +1765,7 @@ diesel::table! {
         mls_group_id -> Text,
         epoch -> Int8,
         recovery_key_id -> Text,
-        holder_principal_id -> Text,
+        controller_id -> Text,
         holder_id -> Text,
         container_event_ref -> Text,
         archive_tuple_digest -> Text,

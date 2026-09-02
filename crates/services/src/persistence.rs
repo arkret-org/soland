@@ -674,6 +674,16 @@ impl PersistenceHandle {
         self.persistence.governance_dependencies()
     }
 
+    /// Server-internal seen-source ledger behind the invite quarantine
+    /// new-source quota (`identity/consent-model.md` section 6.1.1.4). It is
+    /// reachable only from the admission chokepoint and from account erasure;
+    /// no operation projects it onto the wire.
+    pub fn invite_new_source_ledger_store(
+        &self,
+    ) -> &dyn soland_storage::InviteNewSourceLedgerStore {
+        self.persistence.invite_new_source_ledger()
+    }
+
     pub fn event_services(&self) -> PersistenceEventServices {
         build_persistence_event_services(self.persistence.clone())
     }

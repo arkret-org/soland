@@ -29,7 +29,7 @@ use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
     DirectoryHandleResolutionOutcome, DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
-    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome, DirectoryRequestProof,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,

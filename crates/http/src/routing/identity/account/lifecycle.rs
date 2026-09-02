@@ -549,6 +549,15 @@ pub(crate) async fn execute_account_status_erasure(
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
     let fanout = run_account_deactivation_fanout(state, actor, account_pk).await?;
+    // `consent-model.md` section 6.1.1.4 -- erasure MUST drop the holder's
+    // whole seen-source ledger. Consent revoke and source list edits must not,
+    // which is why this lives here and not in those paths.
+    state
+        .persistence()
+        .invite_new_source_ledger_store()
+        .delete_for_holder(account_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let memberships_removed = remove_realm_memberships_for_actor(state, actor);
     let changed_at = now();
     persist_account_lifecycle_record(

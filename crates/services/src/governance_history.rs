@@ -400,7 +400,7 @@ impl GovernanceHistoryService {
                     ..
                 },
             ) => {
-                &archive_authorization_tuple.holder_principal_id
+                &archive_authorization_tuple.controller_id
                     == caller.signing_principal_id()
             }
             (
@@ -473,7 +473,7 @@ impl GovernanceHistoryService {
     pub async fn list_accepted_rrk_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,
-        holder_principal_id: &DidCoreId,
+        controller_id: &DidCoreId,
         holder_id: &DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
@@ -484,7 +484,7 @@ impl GovernanceHistoryService {
             .pending_rrk_acquisitions()
             .list_accepted_for_authority(
                 effective_scope,
-                holder_principal_id,
+                controller_id,
                 holder_id,
                 from_epoch,
                 to_epoch,
@@ -496,19 +496,14 @@ impl GovernanceHistoryService {
     pub async fn list_accepted_rrk_for_archive_query(
         &self,
         query: &OrganizationRecoveryArchiveListQuery,
-        holder_principal_id: &DidCoreId,
+        controller_id: &DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
     ) -> ServiceResult<Vec<PendingRrkAcquisitionRecord>> {
         Ok(self
             .persistence
             .pending_rrk_acquisitions()
-            .list_accepted_for_archive_query(
-                query,
-                holder_principal_id,
-                after_archive_sequence,
-                limit,
-            )
+            .list_accepted_for_archive_query(query, controller_id, after_archive_sequence, limit)
             .await?)
     }
 

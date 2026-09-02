@@ -10,10 +10,11 @@ use soland_storage::contract_tests::{
     assert_device_message_snapshot_guard_contract,
     assert_device_revocation_seal_settlement_contract, assert_event_commit_unit_of_work_contract,
     assert_federation_outbox_store_contract, assert_governance_unscoped_signer_evidence_contract,
-    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
-    assert_member_identity_store_contract, assert_message_store_contract,
-    assert_mimi_consent_correlation_store_contract, assert_mls_keypackage_retirement_contract,
-    assert_one_time_key_store_contract, assert_realm_meta_store_contract,
+    assert_idempotency_store_contract, assert_invite_new_source_ledger_contract,
+    assert_last_resort_claim_ledger_contract, assert_member_identity_store_contract,
+    assert_message_store_contract, assert_mimi_consent_correlation_store_contract,
+    assert_mls_keypackage_retirement_contract, assert_one_time_key_store_contract,
+    assert_realm_meta_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, EventProjectionStoreRegistry,
@@ -355,4 +356,15 @@ async fn memory_adapter_satisfies_one_time_key_store_contract() {
 async fn memory_adapter_satisfies_member_identity_store_contract() {
     let store = SolandMemoryPersistenceStore::new();
     assert_member_identity_store_contract(store.member_identity(), "memory-member-identity").await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_invite_new_source_ledger_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_invite_new_source_ledger_contract(
+        store.invite_new_source_ledger(),
+        store.accounts(),
+        "memory-invite-new-source-ledger",
+    )
+    .await;
 }

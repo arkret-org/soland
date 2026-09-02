@@ -819,7 +819,7 @@ pub fn rrk_archive_authorization_tuple(
     ArchiveAuthorizationTuple {
         recovery_key_id: archive.recovery_key_id.clone(),
         key_agreement_ref: archive.key_agreement_ref.clone(),
-        holder_principal_id: archive.holder_principal_id.clone(),
+        controller_id: archive.controller_id.clone(),
         holder_id: archive.holder_id.clone(),
         holder_signing_ref: archive.holder_signing_ref.clone(),
         accepted_key_evidence_ref: archive.accepted_key_evidence_ref.clone(),
@@ -923,7 +923,7 @@ pub trait PendingRrkAcquisitionStore: Send + Sync {
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
@@ -933,7 +933,7 @@ pub trait PendingRrkAcquisitionStore: Send + Sync {
     async fn list_accepted_for_archive_query(
         &self,
         query: &OrganizationRecoveryArchiveListQuery,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
     ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>>;

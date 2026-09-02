@@ -32,7 +32,7 @@ pub(super) fn require_demo_directory_provider(state: &AppState) -> Result<(), Ap
 pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> Value {
     json!({
         "organization_id": service_id,
-        "organization_principal_id": service_id,
+        "organization_id": service_id,
         "handle": "@arkret-demo",
         "title": "Arkret Demo Organization",
         "display_name": "Arkret Demo Organization",

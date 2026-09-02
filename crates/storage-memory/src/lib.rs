@@ -37,17 +37,18 @@ pub(crate) use soland_storage::{
     HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorAccountSlot,
     IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
     InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
-    InviteLocatorStore, InviteReceivePolicyStore, KeyBackupDeleteChallengeRecord, KeyBackupStore,
-    MemberIdentityEventRecord, MemberIdentityStore, MembershipCompensationEvidenceRecord,
-    MessageRecord, MessageStore, MimiConsentCorrelationRecord, MimiConsentCorrelationStore,
-    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis,
-    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
-    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
-    OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
-    OrganizationRegistrationStore, OrganizationStore, OutboundPushBridgeCacheRecord,
-    PeerClaimTerminalTransition, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    InviteLocatorStore, InviteNewSourceLedgerStore, InviteReceivePolicyStore,
+    KeyBackupDeleteChallengeRecord, KeyBackupStore, MemberIdentityEventRecord, MemberIdentityStore,
+    MembershipCompensationEvidenceRecord, MessageRecord, MessageStore,
+    MimiConsentCorrelationRecord, MimiConsentCorrelationStore, MlsCommitEpochAdvance,
+    MlsCommitEpochRecord, MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore,
+    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
+    MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NewSourceAdmission,
+    NotificationStore, OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore,
+    OrganizationRecord, OrganizationRegistrationStore, OrganizationStore,
+    OutboundPushBridgeCacheRecord, PeerClaimTerminalTransition, PeerEventsPageQuery,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PendingAgentPairingCommitIntent, PersistenceError,
     PersistenceResult, PersistenceStore, PolicyDocumentRecord, PolicyDocumentStore,
     PrincipalResolutionStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
@@ -101,6 +102,7 @@ mod governance_history;
 mod history_response_stream;
 mod idempotency;
 mod invite_locators;
+mod invite_new_source_ledger;
 mod key_backup;
 mod member_identity;
 mod mls;
@@ -166,6 +168,7 @@ pub(crate) use governance_history::{
 pub(crate) use history_response_stream::MemoryHistoryResponseStreamStore;
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
+pub(crate) use invite_new_source_ledger::MemoryInviteNewSourceLedgerStore;
 pub(crate) use key_backup::MemoryKeyBackupStore;
 pub(crate) use member_identity::MemoryMemberIdentityStore;
 pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore};

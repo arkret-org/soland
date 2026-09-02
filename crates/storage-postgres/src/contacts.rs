@@ -740,7 +740,7 @@ struct ConsentCellRow {
     #[diesel(sql_type = Text)]
     cell_id: CellRef,
     #[diesel(sql_type = Text)]
-    holder_principal_id: DidCoreId,
+    holder_id: DidCoreId,
     #[diesel(sql_type = Jsonb)]
     peer: Value,
     #[diesel(sql_type = Text)]
@@ -765,12 +765,12 @@ impl ConsentCellRow {
             })
             .unwrap_or_default();
         let key = ConsentCellKey {
-            holder_principal_id: self.holder_principal_id.clone(),
+            holder_id: self.holder_id.clone(),
             cell_id: self.cell_id.clone(),
         };
         let record = ConsentCellRecord {
             cell_id: self.cell_id,
-            holder_principal_id: self.holder_principal_id,
+            holder_id: self.holder_id,
             peer: serde_json::from_value(self.peer).expect("persisted consent peer is valid"),
             consent_scope: self.consent_scope,
             grant_dots: decode_grant_dots(&self.grant_dots),
@@ -780,12 +780,13 @@ impl ConsentCellRow {
         (key, record)
     }
 }
-const CONSENT_CELL_COLUMNS: &str = "cell_id, holder_id AS holder_principal_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
+const CONSENT_CELL_COLUMNS: &str =
+    "cell_id, holder_id AS holder_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(
         &self,
-        holder_principal_id: &DidCoreId,
+        holder_id: &DidCoreId,
         cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let mut conn = pg_conn(&self.pool)
@@ -794,7 +795,7 @@ impl ConsentCellStore for PgConsentCellStore {
         let row = sql_query(format!(
             "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells              WHERE holder_id = $1 AND cell_id = $2"
         ))
-        .bind::<Text, _>(holder_principal_id)
+        .bind::<Text, _>(holder_id)
         .bind::<Text, _>(cell_id)
         .get_result::<ConsentCellRow>(&mut *conn)
         .await

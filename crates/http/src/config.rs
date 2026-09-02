@@ -1693,6 +1693,58 @@ fn load_notary_signing_key_seed(
     Ok(Some(seed))
 }
 
+/// Deployment carrier for the per-holder new-source quota
+/// (`identity/consent-model.md` section 6.1.1.1).
+///
+/// An omitted variable is NOT "quota off": the omitted member simply falls back
+/// to the specification default inside
+/// `NewSourceQuotaConstraints::effective`, because the quota itself is a MUST.
+/// Declaring the values here is what makes them reachable from `describe`,
+/// which is the only place a holder UI can learn its own ceiling.
+fn load_new_source_quota(
+    values: &BTreeMap<String, String>,
+) -> anyhow::Result<Option<arkret_wire::receive_policy::NewSourceQuotaConstraints>> {
+    let quota = arkret_wire::receive_policy::NewSourceQuotaConstraints {
+        window_seconds: env_u64(values, "SOLAND_RECEIVE_POLICY_NEW_SOURCE_WINDOW_SECONDS")?,
+        default_new_sources_per_window: env_u64(
+            values,
+            "SOLAND_RECEIVE_POLICY_NEW_SOURCE_DEFAULT_PER_WINDOW",
+        )?,
+        max_new_sources_per_window: env_u64(
+            values,
+            "SOLAND_RECEIVE_POLICY_NEW_SOURCE_MAX_PER_WINDOW",
+        )?,
+        retention_seconds: env_u64(values, "SOLAND_RECEIVE_POLICY_NEW_SOURCE_RETENTION_SECONDS")?,
+        default_new_sources_per_retention: env_u64(
+            values,
+            "SOLAND_RECEIVE_POLICY_NEW_SOURCE_DEFAULT_PER_RETENTION",
+        )?,
+        max_new_sources_per_retention: env_u64(
+            values,
+            "SOLAND_RECEIVE_POLICY_NEW_SOURCE_MAX_PER_RETENTION",
+        )?,
+    };
+    if quota == arkret_wire::receive_policy::NewSourceQuotaConstraints::default() {
+        return Ok(None);
+    }
+    // Reject a deployment that violates the cross-field invariants at boot
+    // rather than silently advertising a quota the admission path would refuse.
+    quota.effective(None).map_err(|error| {
+        anyhow::anyhow!("SOLAND_RECEIVE_POLICY_NEW_SOURCE_* is invalid: {error}")
+    })?;
+    Ok(Some(quota))
+}
+
+fn env_u64(values: &BTreeMap<String, String>, name: &str) -> anyhow::Result<Option<u64>> {
+    let Some(raw) = env_non_empty(values, name) else {
+        return Ok(None);
+    };
+    raw.trim()
+        .parse::<u64>()
+        .map(Some)
+        .map_err(|error| anyhow::anyhow!("{name} must be a non-negative integer: {error}"))
+}
+
 fn load_receive_policy_constraints(
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {
@@ -1763,8 +1815,10 @@ fn load_receive_policy_constraints(
         env_did_csv_cap(values, "SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
         env_csv_cap(values, "SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
+    let new_source_quota = load_new_source_quota(values)?;
 
     let has_any_constraint = applies_to.is_some()
+        || new_source_quota.is_some()
         || deployment_allowed_introduction_kinds.is_some()
         || !deployment_denied_introduction_kinds.is_empty()
         || handle_claim_max_behavior.is_some()
@@ -1790,6 +1844,7 @@ fn load_receive_policy_constraints(
             handle_claim_max_behavior,
             explicit_address_max_behavior,
             unknown_invites_max_behavior,
+            new_source_quota,
             disclosure_max,
             allowed_handle_domains,
             trusted_handle_issuer_ids,

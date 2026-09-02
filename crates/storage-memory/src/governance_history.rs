@@ -682,7 +682,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
@@ -701,7 +701,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
             .filter(|record| {
                 let archive = &record.input.archive_replica.archive;
                 &archive.effective_scope == effective_scope
-                    && &archive.holder_principal_id == holder_principal_id
+                    && &archive.controller_id == controller_id
                     && &archive.holder_id == holder_id
                     && from_epoch <= archive.epoch
                     && archive.epoch <= to_epoch
@@ -737,7 +737,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
     async fn list_accepted_for_archive_query(
         &self,
         query: &arkret_models_collaboration::history_key::OrganizationRecoveryArchiveListQuery,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
     ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
@@ -758,7 +758,7 @@ impl PendingRrkAcquisitionStore for MemoryPendingRrkAcquisitionStore {
             })
             .filter(|record| {
                 let archive = &record.input.archive_replica.archive;
-                &archive.holder_principal_id == holder_principal_id
+                &archive.controller_id == controller_id
                     && archive.effective_scope == query.effective_scope
                     && archive.recovery_key_id == query.recovery_key_id
                     && archive.key_agreement_ref == query.key_agreement_ref

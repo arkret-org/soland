@@ -386,7 +386,7 @@ fn realm_preview_from_directory_entry_with_alias(
         alias,
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
-        organization_principal_id: None,
+        organization_id: None,
         join_rule: Some(default_join_rule().to_owned()),
         member_count_bucket: entry
             .public
@@ -469,8 +469,8 @@ pub(super) fn organization_preview_from_value(
     organization: &Value,
     state: &AppState,
 ) -> Result<OrganizationPreview, AppError> {
-    let organization_principal_id = organization
-        .get("organization_principal_id")
+    let organization_id = organization
+        .get("organization_id")
         .and_then(Value::as_str)
         .unwrap_or(state.service_id().as_str());
     let as_of = organization_timestamp(organization).unwrap_or_else(now);
@@ -493,13 +493,9 @@ pub(super) fn organization_preview_from_value(
         .and_then(Value::as_u64)
         .or_else(|| (!realms.is_empty()).then_some(realms.len() as u64));
     Ok(OrganizationPreview {
-        organization_principal_id: DidCoreId::new(organization_principal_id.to_owned()).map_err(
-            |error| {
-                AppError::internal(format!(
-                    "directory organization_principal_id is invalid: {error}"
-                ))
-            },
-        )?,
+        organization_id: DidCoreId::new(organization_id.to_owned()).map_err(|error| {
+            AppError::internal(format!("directory organization_id is invalid: {error}"))
+        })?,
         handle: organization
             .get("handle")
             .and_then(Value::as_str)
@@ -599,8 +595,8 @@ pub(super) fn actor_preview_from_value(
             .get("display_name")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned),
-        organization_principal_id: actor
-            .get("organization_principal_id")
+        organization_id: actor
+            .get("organization_id")
             .and_then(Value::as_str)
             .map(|value| DidCoreId::new(value.to_owned()))
             .transpose()

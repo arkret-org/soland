@@ -23,9 +23,7 @@ use crate::{JsonResult, json_ok};
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct UpsertOrganizationRequestBody {
-    #[serde(default)]
-    organization_id: Option<String>,
-    organization_principal_id: DidCoreId,
+    organization_id: DidCoreId,
     #[serde(default)]
     handle: Option<String>,
     #[serde(default)]
@@ -46,7 +44,6 @@ struct LinkOrganizationRealmRequestBody {
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct OrganizationView {
     organization_id: String,
-    organization_principal_id: DidCoreId,
     #[serde(skip_serializing_if = "Option::is_none")]
     handle: Option<String>,
     display_name: String,
@@ -131,7 +128,7 @@ pub(crate) fn router() -> Router {
         .get(list_organizations)
         .post(upsert_organization)
         .push(
-            Router::with_path("{organization_principal_id}")
+            Router::with_path("{organization_id}")
                 .get(get_organization)
                 .push(Router::with_path("policy").get(get_organization_policy))
                 .push(Router::with_path("policy").post(upsert_organization_policy))
@@ -211,11 +208,7 @@ async fn upsert_organization(
     ensure_organization_registry_admin(state, &session.actor)?;
     let body = body.into_inner();
     let now = Utc::now();
-    let organization_id = normalized_organization_id(
-        body.organization_id
-            .as_deref()
-            .unwrap_or(body.organization_principal_id.as_str()),
-    )?;
+    let organization_id = normalized_organization_id(body.organization_id.as_str())?;
     let display_name = body
         .display_name
         .filter(|value| !value.trim().is_empty())
@@ -228,7 +221,6 @@ async fn upsert_organization(
     let member_count = body.member_count.unwrap_or(members.len());
     let record = OrganizationRecord {
         organization_id: organization_id.clone(),
-        organization_principal_id: body.organization_principal_id,
         handle: body.handle,
         display_name,
         // No source Event stands behind a locally registered organization.
@@ -261,15 +253,15 @@ async fn get_organization(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_principal_id: PathParam<DidCoreId>,
+    organization_id: PathParam<DidCoreId>,
 ) -> JsonResult<OrganizationView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_principal_id = organization_principal_id.into_inner();
-    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
+    let organization_did = organization_id.into_inner();
+    let organization_id = normalized_organization_id(organization_did.as_str())?;
     let record = state
         .governance()
         .cached_organization(&organization_id)
@@ -290,15 +282,15 @@ async fn get_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_principal_id: PathParam<DidCoreId>,
+    organization_id: PathParam<DidCoreId>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     refresh_organization_projection(state)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let organization_principal_id = organization_principal_id.into_inner();
-    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
+    let organization_id = organization_id.into_inner();
+    let organization_id = normalized_organization_id(organization_id.as_str())?;
     let policy = state
         .governance()
         .cached_organization_policy(&organization_id)
@@ -319,14 +311,13 @@ async fn upsert_organization_policy(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_principal_id: PathParam<DidCoreId>,
+    organization_id: PathParam<DidCoreId>,
     body: JsonBody<OrganizationModerationPolicyReplaceRequestBody>,
 ) -> JsonResult<OrganizationPolicyView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_id =
-        normalized_organization_id(organization_principal_id.into_inner().as_str())?;
+    let organization_id = normalized_organization_id(organization_id.into_inner().as_str())?;
     let actor_id = DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("authenticated principal_id: {error}")))?;
     ensure_organization_placeholder(state, &organization_id, &actor_id)
@@ -345,14 +336,14 @@ async fn upsert_organization_policy(
         );
     }
     if payload
-        .get("organization_principal_id")
+        .get("organization_id")
         .and_then(Value::as_str)
         .is_none()
     {
-        payload.as_object_mut().expect("object checked").insert(
-            "organization_principal_id".to_owned(),
-            json!(organization_id.clone()),
-        );
+        payload
+            .as_object_mut()
+            .expect("object checked")
+            .insert("organization_id".to_owned(), json!(organization_id.clone()));
     }
     let now = Utc::now();
     let version = state
@@ -404,21 +395,21 @@ async fn link_organization_realm(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    organization_principal_id: PathParam<DidCoreId>,
+    organization_id: PathParam<DidCoreId>,
     body: JsonBody<LinkOrganizationRealmRequestBody>,
 ) -> JsonResult<OrganizationRealmLinkOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     ensure_organization_registry_admin(state, &session.actor)?;
-    let organization_principal_id = organization_principal_id.into_inner();
-    let organization_id = normalized_organization_id(organization_principal_id.as_str())?;
+    let organization_did = organization_id.into_inner();
+    let organization_id = normalized_organization_id(organization_did.as_str())?;
     let body = body.into_inner();
     let actor_id = DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::param_invalid(format!("authenticated principal_id: {error}")))?;
     ensure_organization_placeholder(state, &organization_id, &actor_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
-    link_realm_to_organization(state, &body.realm_id, &organization_principal_id)
+    link_realm_to_organization(state, &body.realm_id, &organization_did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     json_ok(OrganizationRealmLinkOutcome {
@@ -456,15 +447,13 @@ pub(crate) async fn record_realm_organizations_from_event(
             return;
         }
     };
-    for organization_principal_id in organization_ids {
-        let org_id = organization_principal_id.to_string();
+    for organization_id in organization_ids {
+        let org_id = organization_id.to_string();
         if let Err(error) = ensure_organization_placeholder(state, &org_id, created_by).await {
             tracing::warn!(%error, organization_id = %org_id, "failed to persist organization placeholder from Realm event");
             continue;
         }
-        if let Err(error) =
-            link_realm_to_organization(state, realm_id, &organization_principal_id).await
-        {
+        if let Err(error) = link_realm_to_organization(state, realm_id, &organization_id).await {
             tracing::warn!(%error, %realm_id, organization_id = %org_id, "failed to persist Realm organization link");
         }
     }
@@ -544,7 +533,7 @@ pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str)
         .cached_organization_policies(&directory_org_ids)
         .into_iter()
         .map(|(org_id, policy)| {
-            let organization_principal_id = DidCoreId::new(org_id.clone())
+            let organization_id = DidCoreId::new(org_id.clone())
                 .expect("verified organization id remains a DID core id");
             OrganizationPolicyLayer {
                 source: "organization".to_owned(),
@@ -554,7 +543,7 @@ pub(crate) fn effective_policy_value_for_realm(state: &AppState, realm_id: &str)
                 policy: policy.payload.clone(),
                 applies_to_realms: state
                     .governance()
-                    .cached_organization_realms(&organization_principal_id),
+                    .cached_organization_realms(&organization_id),
             }
         })
         .collect::<Vec<_>>();
@@ -612,13 +601,6 @@ async fn ensure_organization_placeholder(
     let now = Utc::now();
     let record = OrganizationRecord {
         organization_id: organization_id.to_owned(),
-        organization_principal_id: arkret_wire::DidCoreId::new(organization_id).map_err(
-            |error| {
-                soland_services::ServiceError::internal(format!(
-                    "normalized organization principal is invalid: {error}"
-                ))
-            },
-        )?,
         handle: None,
         display_name: display_name_from_organization_id(organization_id),
         // A placeholder record for an organization this server only knows locally:
@@ -639,13 +621,14 @@ async fn ensure_organization_placeholder(
 }
 
 fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {
+    let organization_id = DidCoreId::new(record.organization_id.clone())
+        .expect("stored organization id remains a DID core id");
     let realms = state
         .governance()
-        .cached_organization_realms(&record.organization_principal_id);
+        .cached_organization_realms(&organization_id);
     let realm_count = realms.len();
     OrganizationView {
         organization_id: record.organization_id.clone(),
-        organization_principal_id: record.organization_principal_id.clone(),
         handle: record.handle.clone(),
         display_name: record.display_name.clone(),
         source_refs: record.source_refs.clone(),
@@ -674,9 +657,11 @@ fn organization_policy_record_view(
         .governance()
         .cached_organization(&record.organization_id)
         .map(|organization| {
+            let organization_id = DidCoreId::new(organization.organization_id.clone())
+                .expect("stored organization id remains a DID core id");
             state
                 .governance()
-                .cached_organization_realms(&organization.organization_principal_id)
+                .cached_organization_realms(&organization_id)
         })
         .unwrap_or_default();
     OrganizationPolicyView {
@@ -887,10 +872,9 @@ mod tests {
     }
 
     #[test]
-    fn declared_organization_ids_do_not_read_legacy_single_value_fields() {
+    fn declared_organization_ids_do_not_treat_single_value_fields_as_verified_ownership() {
         let object = serde_json::json!({
             "organization_id": "ak:did_core:webvh:zOrganizationA",
-            "organization_principal_id": "ak:did_core:webvh:zOrganizationB",
             "organization_ref": "ak:did_core:webvh:zOrganizationC"
         });
         assert!(

@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 /// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
-    pub holder_principal_id: DidCoreId,
+    pub holder_id: DidCoreId,
     pub cell_id: CellRef,
 }
 
@@ -35,7 +35,7 @@ pub struct ConsentGrantDot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
     pub cell_id: CellRef,
-    pub holder_principal_id: DidCoreId,
+    pub holder_id: DidCoreId,
     pub peer: ConsentPeer,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,

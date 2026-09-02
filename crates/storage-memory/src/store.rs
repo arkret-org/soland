@@ -10,8 +10,8 @@ use super::{
     ContactVerifiedMirrorStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
     EventStore, FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxStore,
-    HandleReleaseStore, IdempotencyStore, InviteLocatorStore, InviteReceivePolicyStore,
-    KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
+    HandleReleaseStore, IdempotencyStore, InviteLocatorStore, InviteNewSourceLedgerStore,
+    InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore, MemoryAccountLifecycleStore,
     MemoryAccountLocalpartStore, MemoryAccountStatusReplicaStore, MemoryAccountStore,
     MemoryAgentMembershipCascadeStore, MemoryAgentParticipationStore, MemoryAgentStore,
     MemoryAppletStore, MemoryAuditStore, MemoryBlobStore, MemoryCircleProjectionStore,
@@ -21,18 +21,19 @@ use super::{
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
     MemoryFederationOutboxStore, MemoryGovernanceDependencyStore, MemoryHandleReleaseStore,
     MemoryHistoryResponseStreamStore, MemoryHistoryTraversalRetentionStore, MemoryIdempotencyStore,
-    MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryKeyBackupStore,
-    MemoryMemberIdentityStore, MemoryMessageStore, MemoryMimiConsentCorrelationStore,
-    MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
-    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
-    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
-    MemoryOrganizationStore, MemoryPendingRrkAcquisitionStore, MemoryPolicyDocumentStore,
-    MemoryPrincipalResolutionStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
-    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
-    MemoryRealmMetaStore, MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore,
-    MemoryRecoveryPolicyStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
-    MemoryRetentionTombstoneStore, MemorySecurityTransactionStore, MemoryServiceIdentityStore,
-    MemoryServiceRouteStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemoryInviteLocatorStore, MemoryInviteNewSourceLedgerStore, MemoryInviteReceivePolicyStore,
+    MemoryKeyBackupStore, MemoryMemberIdentityStore, MemoryMessageStore,
+    MemoryMimiConsentCorrelationStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
+    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
+    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
+    MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore, MemoryOrganizationStore,
+    MemoryPendingRrkAcquisitionStore, MemoryPolicyDocumentStore, MemoryPrincipalResolutionStore,
+    MemoryProjectionEventStore, MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore,
+    MemoryPushDeviceStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemoryServiceRouteStore,
+    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
     MemoryStrandWatchProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore,
     MemoryWebvhStore, MessageStore, MimiConsentCorrelationStore, MlsCommitStore,
@@ -64,6 +65,7 @@ pub struct SolandMemoryPersistenceStore {
     pub(crate) contact_verified_mirrors: MemoryContactVerifiedMirrorStore,
     pub(crate) invite_receive_policies: MemoryInviteReceivePolicyStore,
     invite_locators: MemoryInviteLocatorStore,
+    invite_new_source_ledger: MemoryInviteNewSourceLedgerStore,
     pub(crate) consent_cells: MemoryConsentCellStore,
     mimi_consent_correlations: MemoryMimiConsentCorrelationStore,
     realm_meta: MemoryRealmMetaStore,
@@ -181,6 +183,7 @@ impl SolandMemoryPersistenceStore {
             contact_verified_mirrors: MemoryContactVerifiedMirrorStore::new(),
             invite_receive_policies: MemoryInviteReceivePolicyStore::new(),
             invite_locators: MemoryInviteLocatorStore::new(),
+            invite_new_source_ledger: MemoryInviteNewSourceLedgerStore::new(),
             consent_cells: MemoryConsentCellStore::new(),
             mimi_consent_correlations: MemoryMimiConsentCorrelationStore::new(),
             realm_meta: MemoryRealmMetaStore::new(),
@@ -379,6 +382,10 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn invite_receive_policies(&self) -> &dyn InviteReceivePolicyStore {
         &self.invite_receive_policies
+    }
+
+    fn invite_new_source_ledger(&self) -> &dyn InviteNewSourceLedgerStore {
+        &self.invite_new_source_ledger
     }
 
     fn invite_locators(&self) -> &dyn InviteLocatorStore {

@@ -663,52 +663,50 @@ impl ConsentService {
     /// projection. The Event commit already succeeded, so this only refreshes
     /// the working view a restart would rebuild from `hydrate_runtime`.
     pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
-        let key = consent_cell_key(&cell.holder_principal_id, &cell.cell_id);
+        let key = consent_cell_key(&cell.holder_id, &cell.cell_id);
         self.runtime_cells.lock().insert(key, cell);
     }
 
     /// Every consent cell the holder owns. Consent is holder-private
     /// (`consent-model.md` section 8): a peer never reads cells, dots or
     /// expiry, so there is no peer-visible listing.
-    pub fn holder_cells(&self, holder_principal_id: impl AsRef<str>) -> Vec<ConsentCellRecord> {
-        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
-        else {
+    pub fn holder_cells(&self, holder_id: impl AsRef<str>) -> Vec<ConsentCellRecord> {
+        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
             return Vec::new();
         };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder_principal_id == holder_principal_id)
+            .filter(|cell| cell.holder_id == holder_id)
             .cloned()
             .collect()
     }
 
     pub fn holder_cell(
         &self,
-        holder_principal_id: impl AsRef<str>,
+        holder_id: impl AsRef<str>,
         cell_id: impl AsRef<str>,
     ) -> Option<ConsentCellRecord> {
-        let holder_principal_id = DidCoreId::new(holder_principal_id.as_ref().to_owned()).ok()?;
+        let holder_id = DidCoreId::new(holder_id.as_ref().to_owned()).ok()?;
         let cell_id = CellRef::new(cell_id.as_ref().to_owned()).ok()?;
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(&holder_principal_id, &cell_id))
+            .get(&consent_cell_key(&holder_id, &cell_id))
             .cloned()
     }
 
     pub fn cells_for_pair(
         &self,
-        holder_principal_id: impl AsRef<str>,
+        holder_id: impl AsRef<str>,
         peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
     ) -> Vec<ConsentCellRecord> {
-        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
-        else {
+        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
             return Vec::new();
         };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder_principal_id == holder_principal_id && &cell.peer == peer)
+            .filter(|cell| cell.holder_id == holder_id && &cell.peer == peer)
             .cloned()
             .collect()
     }
@@ -716,19 +714,18 @@ impl ConsentService {
     /// Holder cells whose frozen intent is exactly `(peer, consent_scope)`.
     pub fn cells_for_intent(
         &self,
-        holder_principal_id: impl AsRef<str>,
+        holder_id: impl AsRef<str>,
         peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
         consent_scope: &str,
     ) -> Vec<ConsentCellRecord> {
-        let Ok(holder_principal_id) = DidCoreId::new(holder_principal_id.as_ref().to_owned())
-        else {
+        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
             return Vec::new();
         };
         self.runtime_cells
             .lock()
             .values()
             .filter(|cell| {
-                cell.holder_principal_id == holder_principal_id
+                cell.holder_id == holder_id
                     && &cell.peer == peer
                     && cell.consent_scope == consent_scope
             })
@@ -737,9 +734,9 @@ impl ConsentService {
     }
 }
 
-fn consent_cell_key(holder_principal_id: &DidCoreId, cell_id: &CellRef) -> ConsentCellKey {
+fn consent_cell_key(holder_id: &DidCoreId, cell_id: &CellRef) -> ConsentCellKey {
     ConsentCellKey {
-        holder_principal_id: holder_principal_id.clone(),
+        holder_id: holder_id.clone(),
         cell_id: cell_id.clone(),
     }
 }

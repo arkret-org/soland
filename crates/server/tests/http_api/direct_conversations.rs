@@ -365,7 +365,7 @@ async fn seed_remote_claim_prerequisites(
                 .to_owned(),
         )
         .unwrap(),
-        holder_principal_id: core_id(BOB_DID),
+        holder_id: core_id(BOB_DID),
         peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
             principal_id: core_id(alice),
         },

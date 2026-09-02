@@ -107,7 +107,7 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
             true,
         )
         .json(&serde_json::json!({
-            "holder_principal_id": bob,
+            "holder_id": bob,
             "consent_scope": "direct_message",
         }))
         .send(&app)

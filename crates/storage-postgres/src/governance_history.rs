@@ -1297,7 +1297,7 @@ struct PendingRrkRow {
     #[diesel(sql_type = Text)]
     recovery_key_id: String,
     #[diesel(sql_type = Text)]
-    holder_principal_id: arkret_wire::DidCoreId,
+    controller_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     holder_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
@@ -1377,7 +1377,7 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
         || row.mls_group_id != archive_replica.archive.mls_group_id
         || i64_to_u64(row.epoch, "pending RRK epoch")? != archive_replica.archive.epoch
         || row.recovery_key_id != archive_replica.archive.recovery_key_id
-        || row.holder_principal_id != archive_replica.archive.holder_principal_id
+        || row.controller_id != archive_replica.archive.controller_id
         || row.holder_id != archive_replica.archive.holder_id
         || row.container_event_ref != archive_replica.container_event_ref.as_str()
         || row.archive_tuple_digest != expected_tuple_digest.as_str()
@@ -1472,7 +1472,7 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
 }
 
 const RRK_SELECT: &str = "acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, recovery_key_id, \
-     holder_principal_id, holder_id, container_event_ref, archive_tuple_digest, \
+     controller_id, holder_id, container_event_ref, archive_tuple_digest, \
      archive_replica_digest, archive_replica_bytes, \
      archive_replica_json, retention_digest, state, attempt_count, next_attempt_at, claim_token, \
      claim_until, ready_at, accepted_at, archive_sequence, accepted_outcome_bytes, \
@@ -1517,7 +1517,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             let inserted = sql_query(
                 "INSERT INTO pending_rrk_acquisitions \
                     (acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, \
-                     recovery_key_id, holder_principal_id, holder_id, \
+                     recovery_key_id, controller_id, holder_id, \
                      container_event_ref, archive_tuple_digest, archive_replica_digest, \
                      archive_replica_bytes, archive_replica_json, retention_digest, \
                      next_attempt_at, created_at, updated_at) \
@@ -1530,7 +1530,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             .bind::<Text, _>(&input.archive_replica.archive.mls_group_id)
             .bind::<BigInt, _>(epoch)
             .bind::<Text, _>(&input.archive_replica.archive.recovery_key_id)
-            .bind::<Text, _>(input.archive_replica.archive.holder_principal_id.as_str())
+            .bind::<Text, _>(input.archive_replica.archive.controller_id.as_str())
             .bind::<Text, _>(&input.archive_replica.archive.holder_id.to_string())
             .bind::<Text, _>(input.archive_replica.container_event_ref.as_str())
             .bind::<Text, _>(archive_tuple_digest.as_str())
@@ -1574,7 +1574,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         holder_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
@@ -1596,12 +1596,12 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         let rows = sql_query(format!(
             "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
              WHERE state = 'accepted' AND effective_scope = $1 \
-               AND holder_principal_id = $2 AND holder_id = $3 \
+               AND controller_id = $2 AND holder_id = $3 \
                AND epoch BETWEEN $4 AND $5 \
              ORDER BY epoch, container_event_ref, archive_replica_digest LIMIT $6"
         ))
         .bind::<Jsonb, _>(&effective_scope)
-        .bind::<Text, _>(holder_principal_id.as_str())
+        .bind::<Text, _>(controller_id.as_str())
         .bind::<Text, _>(holder_id.as_str())
         .bind::<BigInt, _>(from_epoch)
         .bind::<BigInt, _>(to_epoch)
@@ -1615,7 +1615,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     async fn list_accepted_for_archive_query(
         &self,
         query: &arkret_models_collaboration::history_key::OrganizationRecoveryArchiveListQuery,
-        holder_principal_id: &arkret_wire::DidCoreId,
+        controller_id: &arkret_wire::DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
     ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
@@ -1647,7 +1647,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         let rows = sql_query(format!(
             "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
              WHERE state = 'accepted' AND archive_sequence > $1 \
-               AND holder_principal_id = $2 AND effective_scope = $3 \
+               AND controller_id = $2 AND effective_scope = $3 \
                AND recovery_key_id = $4 \
                AND archive_replica_json #>> '{{archive,key_agreement_ref}}' = $5 \
                AND archive_replica_json #>> '{{archive,accepted_key_evidence_ref}}' = $6 \
@@ -1656,7 +1656,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
              ORDER BY archive_sequence LIMIT $10"
         ))
         .bind::<BigInt, _>(after)
-        .bind::<Text, _>(holder_principal_id.as_str())
+        .bind::<Text, _>(controller_id.as_str())
         .bind::<Jsonb, _>(&effective_scope)
         .bind::<Text, _>(&query.recovery_key_id)
         .bind::<Text, _>(query.key_agreement_ref.as_str())

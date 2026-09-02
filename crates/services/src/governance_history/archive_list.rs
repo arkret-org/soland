@@ -28,7 +28,7 @@ pub fn build_archive_list_page(
         };
         let replica = &record.input.archive_replica;
         let archive = &replica.archive;
-        if archive.holder_principal_id != *caller
+        if archive.controller_id != *caller
             || archive.effective_scope != query.effective_scope
             || archive.recovery_key_id != query.recovery_key_id
             || archive.key_agreement_ref != query.key_agreement_ref
@@ -113,12 +113,7 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        let caller = record
-            .input
-            .archive_replica
-            .archive
-            .holder_principal_id
-            .clone();
+        let caller = record.input.archive_replica.archive.controller_id.clone();
         (query, record, caller)
     }
 

@@ -522,7 +522,7 @@ fn stage_consent_projection(
         return Ok(());
     };
     let key = soland_storage::ConsentCellKey {
-        holder_principal_id: commit.cell.holder_principal_id.clone(),
+        holder_id: commit.cell.holder_id.clone(),
         cell_id: commit.cell.cell_id.clone(),
     };
     if let Some(current) = staged_cells.get(&key)

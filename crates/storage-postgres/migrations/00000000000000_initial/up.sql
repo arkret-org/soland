@@ -1154,7 +1154,7 @@ CREATE TABLE public.pending_rrk_acquisitions (
     mls_group_id text NOT NULL,
     epoch bigint NOT NULL,
     recovery_key_id text NOT NULL,
-    holder_principal_id text NOT NULL CHECK (holder_principal_id LIKE 'ak:did_core:%'),
+    controller_id text NOT NULL CHECK (controller_id LIKE 'ak:did_core:%'),
     holder_id text NOT NULL,
     container_event_ref text NOT NULL,
     archive_tuple_digest text NOT NULL,
@@ -1211,7 +1211,7 @@ CREATE INDEX pending_rrk_acquisitions_due_idx
 CREATE INDEX pending_rrk_acquisitions_authority_epoch_idx
     ON public.pending_rrk_acquisitions (
         effective_scope,
-        holder_principal_id,
+        controller_id,
         holder_id,
         epoch,
         container_event_ref,
@@ -1221,7 +1221,7 @@ CREATE INDEX pending_rrk_acquisitions_authority_epoch_idx
 
 CREATE INDEX pending_rrk_acquisitions_archive_list_idx
     ON public.pending_rrk_acquisitions (
-        holder_principal_id,
+        controller_id,
         effective_scope,
         recovery_key_id,
         archive_sequence
@@ -1675,6 +1675,16 @@ CREATE TABLE public.invite_receive_policies (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.invite_new_source_ledgers (
+    account_pk bigint NOT NULL REFERENCES public.accounts(pk) ON DELETE CASCADE,
+    source_digest text NOT NULL,
+    first_admitted_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (account_pk, source_digest)
+);
+
+CREATE INDEX invite_new_source_ledgers_first_admitted_at_idx
+    ON public.invite_new_source_ledgers (account_pk, first_admitted_at);
+
 CREATE TABLE public.invite_locators (
     locator_id text PRIMARY KEY,
     token_digest text NOT NULL UNIQUE,
@@ -1945,8 +1955,7 @@ CREATE TABLE public.moderation_appeal_events (
 CREATE INDEX moderation_appeal_events_appeal_idx ON public.moderation_appeal_events USING btree (appeal_id, pk);
 
 CREATE TABLE public.organizations (
-    organization_id text PRIMARY KEY,
-    organization_principal_id text NOT NULL CHECK (organization_principal_id LIKE 'ak:did_core:%'),
+    organization_id text PRIMARY KEY CHECK (organization_id LIKE 'ak:did_core:%'),
     handle text,
     display_name text NOT NULL,
     source_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
@@ -1960,8 +1969,6 @@ CREATE TABLE public.organizations (
 );
 
 CREATE INDEX organizations_handle_idx ON public.organizations USING btree (handle) WHERE (handle IS NOT NULL);
-
-CREATE INDEX organizations_principal_id_idx ON public.organizations USING btree (organization_principal_id);
 
 CREATE TABLE public.organization_registration_challenges (
     challenge_id text PRIMARY KEY,

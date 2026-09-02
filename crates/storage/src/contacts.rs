@@ -114,7 +114,7 @@ pub fn validate_invite_policy_account(
 pub trait ConsentCellStore: Send + Sync {
     async fn get(
         &self,
-        holder_principal_id: &DidCoreId,
+        holder_id: &DidCoreId,
         cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
