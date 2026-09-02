@@ -149,7 +149,7 @@ mod webvh;
 pub(crate) use account_status::PgAccountStatusReplicaStore;
 pub use accounts::*;
 pub use agent_membership_cascades::*;
-pub(crate) use agent_principal_row::AgentPrincipalRow;
+pub(crate) use agent_principal_row::{AgentPrincipalRow, pack_runtime_key_material};
 pub use agents::*;
 pub use applets::*;
 pub use audit::*;

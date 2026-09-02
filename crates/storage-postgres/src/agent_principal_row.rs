@@ -40,10 +40,10 @@ pub(crate) struct AgentPrincipalRow {
     pub controller_account_pk: Option<i64>,
     pub recipient_id: Option<DidCoreId>,
     pub runtime_key_binding_digest: Option<String>,
-    pub runtime_public_key_digest: Option<String>,
-    pub runtime_attestation_digest: Option<String>,
     pub approval_notification_id: Option<Uuid>,
-    pub runtime_key_request: Option<Value>,
+    /// Envelope for the pending runtime key request and its two digests; see
+    /// [`RuntimeKeyMaterial`].
+    pub runtime_key_material: Option<Value>,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
@@ -53,6 +53,66 @@ pub(crate) struct AgentPrincipalRow {
     #[diesel(skip_update)]
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+/// Storage-local envelope for the pending runtime key request.
+///
+/// The controller projection and the public-key / attestation digests are
+/// always written together (`put_runtime_approval_if_compatible`) and always
+/// cleared together (`activate_runtime_if_current`, and a pairing re-open in
+/// the routing layer), and none of the three is ever a query predicate, so they
+/// share one column instead of three. That keeps `agent_principals` under
+/// Diesel's 32-column ceiling, which is what lets the workspace stay off the
+/// `64-column-tables` feature.
+///
+/// `runtime_key_binding_digest` is deliberately *not* part of this envelope:
+/// the compare-and-swap updates filter on it, so it has to stay a real column.
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct RuntimeKeyMaterial {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    request: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    public_key_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    attestation_digest: Option<String>,
+}
+
+/// Packs the runtime key request and its digests into the single stored column.
+///
+/// Returns `None` when all three parts are absent so an agent without a pending
+/// runtime key request stores SQL `NULL` rather than an empty object.
+pub(crate) fn pack_runtime_key_material(
+    request: Option<Value>,
+    public_key_digest: Option<String>,
+    attestation_digest: Option<String>,
+) -> Result<Option<Value>, PersistenceError> {
+    if request.is_none() && public_key_digest.is_none() && attestation_digest.is_none() {
+        return Ok(None);
+    }
+    serde_json::to_value(RuntimeKeyMaterial {
+        request,
+        public_key_digest,
+        attestation_digest,
+    })
+    .map(Some)
+    .map_err(|error| {
+        PersistenceError::Internal(format!("encode Agent runtime key material: {error}"))
+    })
+}
+
+/// Splits the stored column back into the three record fields.
+fn unpack_runtime_key_material(
+    material: Option<Value>,
+) -> Result<RuntimeKeyMaterial, PersistenceError> {
+    material
+        .map(serde_json::from_value::<RuntimeKeyMaterial>)
+        .transpose()
+        .map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "stored Agent runtime key material is invalid: {error}"
+            ))
+        })
+        .map(Option::unwrap_or_default)
 }
 
 impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
@@ -107,18 +167,20 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
             controller_account_pk: record.controller_account_pk.map(AccountPk::get),
             recipient_id,
             runtime_key_binding_digest: record.runtime_key_binding_digest,
-            runtime_public_key_digest: record.runtime_public_key_digest,
-            runtime_attestation_digest: record.runtime_attestation_digest,
             approval_notification_id: record.approval_notification_id,
-            runtime_key_request: record
-                .runtime_key_request
-                .map(serde_json::to_value)
-                .transpose()
-                .map_err(|error| {
-                    PersistenceError::Internal(format!(
-                        "encode typed Agent runtime key request: {error}"
-                    ))
-                })?,
+            runtime_key_material: pack_runtime_key_material(
+                record
+                    .runtime_key_request
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(|error| {
+                        PersistenceError::Internal(format!(
+                            "encode typed Agent runtime key request: {error}"
+                        ))
+                    })?,
+                record.runtime_public_key_digest,
+                record.runtime_attestation_digest,
+            )?,
             approval_requested_at: record.approval_requested_at,
             authorized_event_ref: record.authorized_event_ref,
             authorized_verification_method: record.authorized_verification_method,
@@ -179,6 +241,7 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
     type Error = PersistenceError;
 
     fn try_from(row: AgentPrincipalRow) -> Result<Self, Self::Error> {
+        let material = unpack_runtime_key_material(row.runtime_key_material)?;
         Ok(Self {
             id: row.id.to_string(),
             controller_id: row.controller_id.to_string(),
@@ -220,11 +283,11 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
             controller_account_pk: row.controller_account_pk.map(AccountPk),
             recipient_id: row.recipient_id.map(|id| id.to_string()),
             runtime_key_binding_digest: row.runtime_key_binding_digest,
-            runtime_public_key_digest: row.runtime_public_key_digest,
-            runtime_attestation_digest: row.runtime_attestation_digest,
+            runtime_public_key_digest: material.public_key_digest,
+            runtime_attestation_digest: material.attestation_digest,
             approval_notification_id: row.approval_notification_id,
-            runtime_key_request: row
-                .runtime_key_request
+            runtime_key_request: material
+                .request
                 .map(serde_json::from_value)
                 .transpose()
                 .map_err(|error| {

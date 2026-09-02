@@ -25,7 +25,7 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 chrono = { workspace = true }
 deadpool = { workspace = true, features = ["rt_tokio_1"] }
-diesel = { workspace = true, features = ["postgres", "serde_json", "chrono", "uuid", "pq-src", "64-column-tables"] }
+diesel = { workspace = true, features = ["postgres", "serde_json", "chrono", "uuid", "pq-src"] }
 diesel-async = { workspace = true, features = ["postgres", "deadpool", "async-connection-wrapper"] }
 diesel_migrations = { workspace = true, features = ["postgres"] }
 parking_lot = { workspace = true }

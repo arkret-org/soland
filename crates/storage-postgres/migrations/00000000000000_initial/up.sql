@@ -193,10 +193,16 @@ CREATE TABLE public.agent_principals (
     controller_account_pk bigint,
     recipient_id text,
     runtime_key_binding_digest text,
-    runtime_public_key_digest text,
-    runtime_attestation_digest text,
     approval_notification_id uuid,
-    runtime_key_request jsonb,
+    -- The pending runtime key request travels with its public-key and
+    -- attestation digests: all three are written by one command and cleared
+    -- together, and none of them is ever a query predicate, so they share one
+    -- column ({"request": …, "public_key_digest": …, "attestation_digest": …}).
+    -- Keeping them apart put this table at 33 columns, one past Diesel's
+    -- default 32-column ceiling, which forced the whole build onto the
+    -- `64-column-tables` feature. `runtime_key_binding_digest` stays a real
+    -- column because the compare-and-swap updates filter on it.
+    runtime_key_material jsonb,
     approval_requested_at timestamp with time zone,
     authorized_event_ref text,
     authorized_verification_method text,

@@ -10,8 +10,8 @@ use super::{
     AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome,
     AgentRuntimeMessageRecord, AgentStore, Array, BigInt, Bool, EnqueueAgentRuntimeMessage, Jsonb,
     Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn,
-    sql_query, sql_types,
+    QueryableByName, RunQueryDsl, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids,
+    pack_runtime_key_material, pg_conn, sql_query, sql_types,
 };
 use crate::schema::agent_principals;
 
@@ -455,11 +455,11 @@ impl AgentStore for PgAgentStore {
             agent_principals::paired_pairing_request_id.eq(activation.pairing_request_id.as_str()),
             agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
             agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
-            agent_principals::runtime_key_request.eq(None::<Value>),
             agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
             agent_principals::runtime_key_binding_digest.eq(None::<String>),
-            agent_principals::runtime_public_key_digest.eq(None::<String>),
-            agent_principals::runtime_attestation_digest.eq(None::<String>),
+            // Clears the pending request together with its public-key and
+            // attestation digests; they share one column.
+            agent_principals::runtime_key_material.eq(None::<Value>),
         ))
         .execute(&mut *conn)
         .await
@@ -558,6 +558,11 @@ impl AgentStore for PgAgentStore {
                     "encode typed Agent runtime key request: {error}"
                 ))
             })?;
+        let runtime_key_material = pack_runtime_key_material(
+            Some(runtime_key_request),
+            Some(write.runtime_public_key_digest.clone()),
+            Some(write.runtime_attestation_digest.clone()),
+        )?;
         let record = diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&write.agent_id))
@@ -597,9 +602,7 @@ impl AgentStore for PgAgentStore {
             agent_principals::controller_account_pk.eq(write.controller_account_pk.get()),
             agent_principals::recipient_id.eq(&write.recipient_id),
             agent_principals::runtime_key_binding_digest.eq(&write.runtime_key_binding_digest),
-            agent_principals::runtime_public_key_digest.eq(&write.runtime_public_key_digest),
-            agent_principals::runtime_attestation_digest.eq(&write.runtime_attestation_digest),
-            agent_principals::runtime_key_request.eq(&runtime_key_request),
+            agent_principals::runtime_key_material.eq(runtime_key_material),
             agent_principals::updated_at.eq(Utc::now()),
         ))
         .returning(AgentPrincipalRow::as_returning())
