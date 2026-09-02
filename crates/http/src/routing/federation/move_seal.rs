@@ -1798,18 +1798,39 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
     // Without this, the narrow section 6.3.2 exception would let a recovery
     // signer attach an ordinary membership, capability or policy Move to the
     // same Seal and become a general signing authority.
-    let delta_kinds = seal
-        .delta
-        .iter()
-        .filter_map(|digest| state.projections().control_event(digest).ok().flatten())
-        .map(|event| event.kind)
-        .collect::<Vec<_>>();
-    if !notary.authorizes_seal_delta(&methods, &delta_kinds) {
-        return Err(AppError::new(
-            ErrorCode::SealSignerUnauthorized,
-            "a recovery-signed fork-resolution Seal must cover only ak.fork.resolution Moves"
-                .to_owned(),
-        ));
+    //
+    // Every delta kind has to resolve for the closure to mean anything: a Move
+    // this node cannot read is a Move whose kind it cannot rule out, so
+    // skipping it would let an unreadable ordinary Move ride along beside a
+    // fork resolution. Only recovery-signed Seals pay this cost.
+    if notary.signers_are_recovery_set(&methods) {
+        let mut delta_kinds = Vec::with_capacity(seal.delta.len());
+        for digest in &seal.delta {
+            let event = state
+                .projections()
+                .control_event(digest)
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::InternalError,
+                        format!("load recovery-Seal Control Move: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCode::SealSignerUnauthorized,
+                        "a recovery-signed Seal must cover Control Moves this node can read"
+                            .to_owned(),
+                    )
+                })?;
+            delta_kinds.push(event.kind);
+        }
+        if !notary.authorizes_seal_delta(&methods, &delta_kinds) {
+            return Err(AppError::new(
+                ErrorCode::SealSignerUnauthorized,
+                "a recovery-signed fork-resolution Seal must cover only ak.fork.resolution Moves"
+                    .to_owned(),
+            ));
+        }
     }
     for signature in signatures {
         let descriptor = notary
