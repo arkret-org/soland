@@ -176,8 +176,10 @@ async fn assign_queue_item(
         .flatten()
         .ok_or_else(|| AppError::not_found("queue item"))?;
     if let Some(obj) = item.as_object_mut() {
+        // Routing only: the two-state item status (content-moderation.md §3.3)
+        // is derived from an accepted `ak.moderation.decision`; assignment MUST
+        // NOT fabricate a status value here (§5.4).
         obj.insert("assigned_to".to_owned(), json!(body.into_inner().reviewers));
-        obj.insert("status".to_owned(), json!("reviewing"));
         obj.insert(
             "updated_at".to_owned(),
             json!(arkret_canonical::format_timestamp_canonical(Utc::now())),
