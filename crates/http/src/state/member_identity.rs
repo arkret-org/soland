@@ -422,21 +422,6 @@ pub(crate) fn display_state_digest(
     .ok()
 }
 
-fn canonical_digest(
-    projection: &Value,
-    realm_id: &str,
-    actor_id: &str,
-    label: &str,
-) -> Option<String> {
-    match crate::util::canonical_digest(projection) {
-        Ok(digest) => Some(digest),
-        Err(err) => {
-            tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
-            None
-        }
-    }
-}
-
 #[cfg(test)]
 pub(crate) fn test_handle_claim(
     subject_account_id: arkret_wire::AccountId,

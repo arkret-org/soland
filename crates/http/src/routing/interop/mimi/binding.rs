@@ -310,16 +310,6 @@ pub(super) fn validate_mimi_submit_governance_binding(
     Ok(())
 }
 
-pub(super) fn non_empty_json_value(value: &Value) -> bool {
-    match value {
-        Value::Null => false,
-        Value::Bool(_) | Value::Number(_) => true,
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        Value::Object(object) => !object.is_empty(),
-    }
-}
-
 /// Admit the exact caller-authored room-binding Event carried by a MIMI update.
 pub(super) async fn admit_mimi_room_binding_event(
     state: &AppState,

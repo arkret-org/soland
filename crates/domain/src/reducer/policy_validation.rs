@@ -592,12 +592,6 @@ fn json_list_contains(
     })
 }
 
-pub(crate) fn did_list_non_empty(gate: &serde_json::Map<String, Value>, field: &str) -> bool {
-    gate.get(field)
-        .and_then(Value::as_array)
-        .is_some_and(|values| !values.is_empty())
-}
-
 pub(crate) fn did_list_contains(
     gate: &serde_json::Map<String, Value>,
     field: &str,

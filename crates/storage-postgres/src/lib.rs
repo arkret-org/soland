@@ -92,7 +92,7 @@ pub mod query_rows;
 pub mod schema;
 
 pub use db::{Db, PgPool, PoolTuning};
-pub(crate) use query_rows::{ClaimSeqRow, ExistsRow, JsonPayloadRow, MaxSeqRow};
+pub(crate) use query_rows::{ExistsRow, JsonPayloadRow, MaxSeqRow};
 
 mod account_status;
 mod accounts;

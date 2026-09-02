@@ -59,13 +59,6 @@ fn event_digest_for_frozen_claim(event: &Event, claim: &Hash) -> Result<Hash, Ap
     .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))
 }
 
-fn core_id_matches_actor(
-    core_id: &arkret_wire::DidCoreId,
-    actor_id: &arkret_wire::ActorId,
-) -> bool {
-    core_id == actor_id.signing_principal_id()
-}
-
 use super::now;
 use crate::state::AppState;
 

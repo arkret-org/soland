@@ -15,12 +15,6 @@ pub struct ExistsRow {
 }
 
 #[derive(QueryableByName)]
-pub struct ClaimSeqRow {
-    #[diesel(sql_type = BigInt)]
-    pub claim_seq: i64,
-}
-
-#[derive(QueryableByName)]
 pub struct MaxSeqRow {
     #[diesel(sql_type = Nullable<BigInt>)]
     pub max_seq: Option<i64>,
