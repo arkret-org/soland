@@ -589,4 +589,23 @@ mod tests {
             arkret_wire::BindingKind::HttpJson,
         ));
     }
+
+    #[test]
+    fn device_pairing_selectors_are_reachable_through_the_registered_bundle() {
+        let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
+        let operations = [
+            arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
+            arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
+            arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
+        ];
+
+        for operation in operations {
+            assert!(locally_advertises(
+                &state,
+                operation,
+                arkret_wire::BindingKind::HttpJson,
+            ));
+            assert!(operation.matches_http_request("POST", operation.descriptor().http_path));
+        }
+    }
 }

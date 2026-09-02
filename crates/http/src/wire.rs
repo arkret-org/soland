@@ -611,6 +611,7 @@ pub fn describe(
             "ak.operation_bundle.station.applet_install.v1".to_owned(),
             "ak.operation_bundle.station.current_signer_evidence.v1".to_owned(),
             "ak.operation_bundle.station.describe.v1".to_owned(),
+            "ak.operation_bundle.station.device_pairing_handoff.v1".to_owned(),
             "ak.operation_bundle.station.history_key_recovery.v1".to_owned(),
             "ak.operation_bundle.station.http_core.v1".to_owned(),
             "ak.operation_bundle.station.mimi_interop.v1".to_owned(),
@@ -921,6 +922,9 @@ mod tests {
             "ak.operation_bundle.station.current_signer_evidence.v1"
         )));
         assert!(bundles.contains(&json!(
+            "ak.operation_bundle.station.device_pairing_handoff.v1"
+        )));
+        assert!(bundles.contains(&json!(
             "ak.operation_bundle.station.history_key_recovery.v1"
         )));
         assert!(bundles.contains(&json!("ak.operation_bundle.station.http_core.v1")));
@@ -956,6 +960,16 @@ mod tests {
             arkret_wire::ServiceOperationId::SelfHistoryKeyRequestsReadListV1,
             arkret_wire::BindingKind::HttpJson,
         ));
+        for operation in [
+            arkret_wire::ServiceOperationId::OpenDevicePairingCommandStageV1,
+            arkret_wire::ServiceOperationId::OpenDevicePairingReadResolveV1,
+            arkret_wire::ServiceOperationId::OpenDevicePairingReadStatusV1,
+        ] {
+            assert!(
+                description
+                    .supports_operation_binding(operation, arkret_wire::BindingKind::HttpJson,)
+            );
+        }
         description
             .validate()
             .expect("history-key recovery advertisement must remain transport-closed");
