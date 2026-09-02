@@ -311,11 +311,6 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "TSP transport/route/audit handlers remain unmounted until real envelope verify/decrypt and persistent signed audit chain exist"
         }),
         json!({
-            "area": "extensions.sovereign",
-            "status": "stub_contract",
-            "reason": "sovereign deployment endpoints are local boundary/scenario scaffolding; outbound guard integration is incomplete outside startup/profile checks"
-        }),
-        json!({
             "area": "blob.presign",
             "status": "local_direct_serve",
             "reason": "presign issues a short-lived soland-signed local /blob/get URL; backend-native object-store presign is not claimed"
@@ -674,7 +669,6 @@ pub fn describe(
         supported_features: vec![
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
-            "ak.feature.events_query_range_completeness.v1".to_owned(),
             "ak.feature.history_key_recovery.v1".to_owned(),
             "ak.feature.mls_exporter_aead.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),

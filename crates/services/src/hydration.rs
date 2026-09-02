@@ -1259,6 +1259,7 @@ pub async fn hydrate_realms_from_canonical_events(
             arkret_wire::EventKind::RealmHistoryAccess
                 | arkret_wire::EventKind::RealmPreviewPolicy
                 | arkret_wire::EventKind::RealmAssetPrivacyPolicy
+                | arkret_wire::EventKind::RealmPlaintextVisibleServices
         ) {
             hydrate_realm_policy_event(persistence, record).await;
         }

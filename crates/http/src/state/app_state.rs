@@ -30,7 +30,7 @@ use soland_services::events::{
     RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryService, RealmInviteService,
     RealmQueryService,
 };
-use soland_services::federation::{FederationService, SovereignDeploymentState};
+use soland_services::federation::FederationService;
 use soland_services::governance::{GovernanceService, RuntimeSettingsPort};
 use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::identity::{
@@ -165,11 +165,6 @@ pub struct AppState {
     /// numeric `position <= ack_position` pruning, so positions must advance
     /// even when multiple fanout writes land in the same wall-clock microsecond.
     to_device_position_counter: Arc<AtomicI64>,
-    /// Runtime state for sovereign-main / enclave deployment handshakes,
-    /// trust-root decisions, boundary audit, and store-and-forward queues.
-    /// The P2-056 implementation keeps this in memory so the dual-soland
-    /// conformance harness can exercise the protocol shape locally; a durable
-    /// store can replace the backing map without changing the HTTP contract.
     /// Runtime-only verification keys learned from endpoint-discovered
     /// federation peer DID documents. Entries are keyed either by service DID
     /// (the HTTP Message Signature key) or by an exact verification-method
@@ -590,7 +585,7 @@ mod test_construction {
                 arkret_state::lattice::ordered_log::IssuedOp,
             )],
             covered: &BTreeSet<arkret_identifiers::Hash>,
-            data_event_leaf_manifest: &BTreeSet<arkret_identifiers::Hash>,
+            data_event_leaf_manifest: Option<&BTreeSet<arkret_identifiers::Hash>>,
             governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> arkret_state::state::StoreResult<bool> {
             self.0.commit_if_frontier(
@@ -1118,10 +1113,6 @@ impl AppState {
             runtime_health,
             sync_cursor_hmac_key,
         );
-        federation.install_sovereign_state(SovereignDeploymentState {
-            upstream_available: true,
-            ..Default::default()
-        });
         let service_route_store: Arc<dyn soland_storage::ServiceRouteStore> =
             Arc::new(persistence.clone());
         let service_route_resolver = Arc::new(ServiceRouteResolver::new(
@@ -2175,6 +2166,7 @@ mod membership_hydration_tests {
     use arkret_identifiers::RealmId;
     use soland_services::hydration::{
         hydrate_projections_from_persistence, hydrate_realm_member_state_event,
+        hydrate_realms_from_canonical_events,
     };
     use soland_storage::{
         CanonicalEventRecord, EventProjectionStoreRegistry, IdentityStoreRegistry,
@@ -2917,5 +2909,65 @@ mod membership_hydration_tests {
             realm_id,
             chrono::Utc::now(),
         ));
+    }
+
+    #[tokio::test]
+    async fn plaintext_visible_services_rehydrate_from_bootstrap_policy_event() {
+        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
+        let actor_id = "ak:did_core:web:alice.example";
+        let service_id = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let store = SolandMemoryPersistenceStore::new();
+        store
+            .events()
+            .put(canonical_projection_source_event(
+                realm_id,
+                actor_id,
+                0,
+                arkret_wire::EventKind::RealmCreate,
+                serde_json::json!({
+                    "object": {
+                        "purpose": "collaboration",
+                        "default_discoverability": "invite_only",
+                        "history_access": "since_join",
+                        "encryption_profile": "none"
+                    }
+                }),
+                created_at,
+            ))
+            .await
+            .unwrap();
+        store
+            .events()
+            .put(canonical_projection_source_event(
+                realm_id,
+                actor_id,
+                1,
+                arkret_wire::EventKind::RealmPlaintextVisibleServices,
+                serde_json::json!({
+                    "services": [{
+                        "service_id": service_id,
+                        "service_kind": "station",
+                        "purposes": ["message_index"],
+                        "data_classes": ["message_content"],
+                        "visibility": "private_plaintext"
+                    }]
+                }),
+                created_at + chrono::Duration::milliseconds(1),
+            ))
+            .await
+            .unwrap();
+
+        let mut realms = RealmDirectoryIndex::new();
+        hydrate_realms_from_canonical_events(&store, &mut realms).await;
+
+        let meta = store.realm_meta().get(realm_id).await.unwrap().unwrap();
+        assert!(meta.plaintext_visible_services.contains(service_id));
+        assert!(
+            meta.plaintext_visible_service_classes[service_id]
+                .contains(&arkret_wire::PlaintextDataClassKind::MessageContent)
+        );
     }
 }

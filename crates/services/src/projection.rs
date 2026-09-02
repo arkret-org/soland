@@ -108,7 +108,7 @@ pub trait EventSealCommitPort: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
-        data_event_leaf_manifest: &std::collections::BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&std::collections::BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 
@@ -1725,7 +1725,7 @@ impl ProjectionService {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<Hash>,
-        data_event_leaf_manifest: &std::collections::BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&std::collections::BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
@@ -3456,7 +3456,7 @@ mod effective_checkpoint_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
-            _data_event_leaf_manifest: &BTreeSet<Hash>,
+            _data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("checkpoint lookup test must not commit a Seal")
@@ -3617,7 +3617,7 @@ mod control_governance_health_tests {
             _expected_store_frontier: &[SealId],
             _new_ops: &[(CellRef, IssuedOp)],
             _covered: &BTreeSet<Hash>,
-            _data_event_leaf_manifest: &BTreeSet<Hash>,
+            _data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
             _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
         ) -> StoreResult<bool> {
             panic!("governance health must not commit a Seal")

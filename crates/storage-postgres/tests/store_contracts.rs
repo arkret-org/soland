@@ -1512,7 +1512,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
-                &genesis_manifest,
+                Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
             .unwrap()
@@ -1588,7 +1588,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &genesis_covered,
-                &genesis_manifest,
+                Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
             .unwrap(),
@@ -1605,7 +1605,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &genesis_covered,
-            &genesis_manifest,
+            Some(&genesis_manifest),
             &[GovernanceDependencyWrite {
                 realm_id: realm_id.clone(),
                 source: GovernanceDependencySource::Seal(genesis_seal.id.clone()),
@@ -1682,7 +1682,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 std::slice::from_ref(&genesis_seal.id),
                 &[],
                 &covered,
-                &std::collections::BTreeSet::new(),
+                Some(&std::collections::BTreeSet::new()),
                 &[write],
             )
             .unwrap_err();
@@ -1753,7 +1753,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &cas_covered,
-            &root_mismatch_manifest,
+            Some(&root_mismatch_manifest),
             std::slice::from_ref(&cas_write),
         )
         .unwrap_err();
@@ -1776,7 +1776,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 &[],
                 &[],
                 &cas_covered,
-                &std::collections::BTreeSet::new(),
+                Some(&std::collections::BTreeSet::new()),
                 &[cas_write],
             )
             .unwrap()
@@ -1813,7 +1813,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &[],
             &[],
             &genesis_covered,
-            &genesis_manifest,
+            Some(&genesis_manifest),
             std::slice::from_ref(&genesis_write),
         )
         .unwrap_err();

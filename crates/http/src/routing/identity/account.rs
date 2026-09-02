@@ -748,10 +748,6 @@ async fn local_account_register(
     let body = body.into_inner();
     let did =
         validate_did(&body.did).map_err(|_| AppError::param_invalid("invalid account DID"))?;
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(
-        state,
-        did.as_str(),
-    )?;
     let principal_id = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| AppError::param_invalid(format!("invalid account DID: {error}")))?;
 
@@ -1119,10 +1115,6 @@ async fn project_account(
     let body = body.into_inner();
     body.validate().map_err(AppError::param_invalid)?;
     let principal_id = body.principal_id.clone();
-    crate::routing::extensions::sovereign::validate_sovereign_did_registration(
-        state,
-        body.did.as_str(),
-    )?;
     let registration_audit = enforce_account_registration_policy(
         state,
         principal_id.as_str(),

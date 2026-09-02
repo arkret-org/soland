@@ -938,18 +938,15 @@ async fn materialize_franking_seal_observation(
         let Some(declared_root) = seal.data_event_set_root.as_ref() else {
             continue;
         };
-        let digests = state
+        let Some(digests) = state
             .projections()
             .data_event_leaf_manifest(&seal.id)
             .map_err(|error| {
                 AppError::internal(format!("read frozen DataEvent leaf manifest: {error}"))
             })?
-            .ok_or_else(|| {
-                AppError::internal(format!(
-                    "accepted Seal {} is missing its frozen DataEvent leaf manifest",
-                    seal.id
-                ))
-            })?;
+        else {
+            continue;
+        };
         let Some(inclusion) = frozen_manifest_inclusion(declared_root, &digests, &proof_digest)?
         else {
             continue;

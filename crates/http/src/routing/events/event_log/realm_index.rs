@@ -387,8 +387,19 @@ pub(super) async fn bootstrap_realm_member_index(
         created_at: super::now(),
         updated_at: super::now(),
     };
-    if let Err(error) = state.realms().store_realm_metadata(realm_id, meta).await {
-        tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
+    // The canonical bootstrap batch can project later policy facets before
+    // this Realm-create index hook runs. Never replace that richer durable
+    // metadata with the create envelope's intentionally sparse defaults.
+    match state.realms().realm_metadata(realm_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => {
+            if let Err(error) = state.realms().store_realm_metadata(realm_id, meta).await {
+                tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
+            }
+        }
+        Err(error) => {
+            tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to read existing Realm meta record");
+        }
     }
 }
 
@@ -417,6 +428,59 @@ mod tests {
         .as_object()
         .expect("event object")
         .clone()
+    }
+
+    #[tokio::test]
+    async fn realm_create_index_does_not_erase_later_bootstrap_policy_projection() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K";
+        let service_id = "ak:did_core:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x";
+        let timestamp = now();
+        state
+            .realms()
+            .store_realm_metadata(
+                realm_id,
+                soland_services::events::RealmMetadata {
+                    owner: ALICE.to_owned(),
+                    deleted: false,
+                    discoverability: "invite_only".to_owned(),
+                    history_access: "since_join".to_owned(),
+                    preview_policy: None,
+                    preview_policy_digest: None,
+                    asset_privacy_policy: None,
+                    asset_privacy_policy_digest: None,
+                    encryption_profile: Some("none".to_owned()),
+                    plaintext_visible_services: std::collections::BTreeSet::from([
+                        service_id.to_owned()
+                    ]),
+                    plaintext_visible_service_classes: Default::default(),
+                    minimal_metadata_realm: false,
+                    created_at: timestamp,
+                    updated_at: timestamp,
+                },
+            )
+            .await
+            .unwrap();
+        let envelope = json!({
+            "event_id": "ak:event:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD",
+            "payload": {"object": {"purpose": "collaboration"}}
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        bootstrap_realm_member_index(&state, realm_id, ALICE, &envelope).await;
+
+        let persisted = state
+            .realms()
+            .realm_metadata(realm_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(persisted.plaintext_visible_services.contains(service_id));
     }
 
     /// A self-authored knock names the exact member ActorId, including Station.

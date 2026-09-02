@@ -460,11 +460,15 @@ fn excerpt(body: &str) -> String {
     }
 }
 
-fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static str> {
+fn peer_event_application_failure(
+    endpoint: &str,
+    request_body: &str,
+    response_body: &str,
+) -> Option<&'static str> {
     if endpoint == "/_arkret/peer/account-status" {
         return match serde_json::from_str::<
             arkret_models_collaboration::account_lifecycle::AccountStatusPublicationOutcome,
-        >(body)
+        >(response_body)
         .ok()
         .map(|outcome| outcome.status)
         {
@@ -479,7 +483,7 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
         };
     }
     if endpoint == "/_soland/peer/federation/operations" {
-        return match serde_json::from_str::<serde_json::Value>(body)
+        return match serde_json::from_str::<serde_json::Value>(response_body)
             .ok()
             .and_then(|value| {
                 value
@@ -500,7 +504,7 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
         // `invite_delivery_outcome` at all is an application failure.
         return match serde_json::from_str::<
             arkret_models_collaboration::governance::invite_addressing::InviteDeliveryOutcome,
-        >(body)
+        >(response_body)
         {
             Ok(_) => None,
             Err(_) => Some("invalid_peer_invite_outcome"),
@@ -509,21 +513,62 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
     if endpoint != "/_arkret/peer/events" {
         return None;
     }
-    match serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("status")
-                .and_then(|status| status.as_str())
+    let Some(requested) = peer_event_ids(request_body) else {
+        return Some("invalid_peer_event_request");
+    };
+    let Ok(outcome) = serde_json::from_str::<
+        arkret_models_collaboration::http_bodies::EventsSubmitOutcome,
+    >(response_body) else {
+        return Some("invalid_peer_event_outcome");
+    };
+    if outcome.validate_delivery_invariants().is_err() {
+        return Some("invalid_peer_event_outcome");
+    }
+    match outcome.status {
+        arkret_models_collaboration::http_bodies::EventsSubmitStatus::Accepted
+        | arkret_models_collaboration::http_bodies::EventsSubmitStatus::Duplicate => {
+            let confirmed = outcome
+                .accepted
+                .iter()
+                .chain(&outcome.duplicate)
+                .map(ToString::to_string)
+                .collect::<std::collections::BTreeSet<_>>();
+            if confirmed == requested
+                && confirmed.len() == outcome.accepted.len() + outcome.duplicate.len()
+                && outcome.rejections.is_empty()
+                && outcome.quarantine.is_empty()
+            {
+                None
+            } else {
+                Some("incomplete_peer_event_outcome")
+            }
+        }
+        arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial => {
+            Some("partial_peer_event_outcome")
+        }
+        arkret_models_collaboration::http_bodies::EventsSubmitStatus::HistoricalOnly => {
+            Some("historical_only_peer_event_outcome")
+        }
+    }
+}
+
+fn peer_event_ids(request_body: &str) -> Option<std::collections::BTreeSet<String>> {
+    let request = serde_json::from_str::<serde_json::Value>(request_body).ok()?;
+    let events = request.get("events")?.as_array()?;
+    if events.is_empty() {
+        return None;
+    }
+    let ids = events
+        .iter()
+        .map(|submission| {
+            submission
+                .get("event")?
+                .get("event_id")?
+                .as_str()
                 .map(str::to_owned)
         })
-        .as_deref()
-    {
-        Some("accepted" | "duplicate") => None,
-        Some("partial") => Some("partial_peer_event_outcome"),
-        Some("historical_only") => Some("historical_only_peer_event_outcome"),
-        _ => Some("invalid_peer_event_outcome"),
-    }
+        .collect::<Option<std::collections::BTreeSet<_>>>()?;
+    (ids.len() == events.len()).then_some(ids)
 }
 
 /// A rebuilt request that replaces a finished transport identity.
@@ -1921,7 +1966,13 @@ impl FederationDispatcher {
         // to look like an `EventsSubmitOutcome` must not be mistaken for an
         // application-level rejection and skip the retry classification below.
         let application_failure = transport_succeeded
-            .then(|| peer_event_application_failure(&row.delivery.endpoint, body_text))
+            .then(|| {
+                peer_event_application_failure(
+                    &row.delivery.endpoint,
+                    &row.delivery.payload_json,
+                    body_text,
+                )
+            })
             .flatten();
         if transport_succeeded && application_failure.is_none() {
             crate::metrics::record_federation_retry_state("delivered");
@@ -2511,27 +2562,36 @@ mod tests {
 
     #[test]
     fn peer_event_partial_outcome_is_not_transport_success() {
+        let event_id = "ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ";
+        let request = format!(r#"{{"events":[{{"event":{{"event_id":"{event_id}"}}}}]}}"#);
         assert_eq!(
             peer_event_application_failure(
                 "/_arkret/peer/events",
-                r#"{"status":"partial","accepted":[],"rejected":[{"id":"ak:event:test"}]}"#
+                &request,
+                r#"{"status":"partial","accepted":[],"pending_delivery_count":0,"rejections":[{"id":"ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ","reason_code":"dependency_missing","missing_event_refs":[],"missing_seal_refs":[],"missing_auth_refs":[],"missing_policy_refs":[]}]}"#
             ),
             Some("partial_peer_event_outcome")
         );
         assert_eq!(
             peer_event_application_failure(
                 "/_arkret/peer/events",
-                r#"{"status":"accepted","accepted":["ak:event:test"]}"#
+                &request,
+                r#"{"status":"accepted","accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0}"#
             ),
             None
         );
         assert_eq!(
-            peer_event_application_failure("/_arkret/peer/contacts", r#"{"status":"partial"}"#),
+            peer_event_application_failure(
+                "/_arkret/peer/contacts",
+                "{}",
+                r#"{"status":"partial"}"#,
+            ),
             None
         );
         assert_eq!(
             peer_event_application_failure(
                 "/_soland/peer/federation/operations",
+                "{}",
                 r#"{"accepted":[],"rejected":[{"id":"ak:operation:test","reason_code":"capability_denied"}]}"#
             ),
             Some("partial_peer_operation_outcome")
@@ -2539,9 +2599,26 @@ mod tests {
         assert_eq!(
             peer_event_application_failure(
                 "/_soland/peer/federation/operations",
+                "{}",
                 r#"{"accepted":["ak:operation:test"],"rejected":[]}"#
             ),
             None
+        );
+        assert_eq!(
+            peer_event_application_failure(
+                "/_arkret/peer/events",
+                &request,
+                r#"{"status":"accepted","accepted":[],"pending_delivery_count":0}"#,
+            ),
+            Some("incomplete_peer_event_outcome")
+        );
+        assert_eq!(
+            peer_event_application_failure(
+                "/_arkret/peer/events",
+                &request,
+                r#"{"status":"historical_only","accepted":[],"pending_delivery_count":0,"original_outcome":{"status":"accepted","accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0}}"#,
+            ),
+            Some("historical_only_peer_event_outcome")
         );
     }
 

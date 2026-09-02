@@ -367,11 +367,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     );
     // Partition conformance claims while the response remains the SDK's
     // closed ServiceDescribe type.
-    apply_claim_level_partition(
-        &mut description,
-        state.verified_profiles(),
-        state.config().sovereign_enclave_enabled,
-    );
+    apply_claim_level_partition(&mut description, state.verified_profiles());
 
     // Validate the Arkret v1 invariants. development_mode=true MUST
     // forbid non-empty verified_profiles; protocol_version MUST equal the
@@ -410,7 +406,6 @@ async fn build_server_description_resolved(
 pub(crate) fn apply_claim_level_partition(
     description: &mut arkret_models_discovery::ServiceDescribe,
     loaded_verified: &[crate::verified_profiles::VerifiedProfileArtifactEntry],
-    sovereign_enclave_enabled: bool,
 ) {
     let advertised_profile_ids = description
         .supported_profiles
@@ -487,33 +482,6 @@ pub(crate) fn apply_claim_level_partition(
             arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
                 ProfileId::BINDING_WEBSOCKET_V1,
             ),
-        );
-    }
-    // G3.S9 — when the sovereign enclave profile is enabled, claim it
-    // alongside the baseline profiles. The enclave invariants
-    // (outbound federation off, DID method allow-list non-empty,
-    // outbound-call audit log) MUST already be satisfied — assertion
-    // happens at `main.rs` startup via
-    // `routing::extensions::sovereign::assert_enclave_invariants`.
-    //
-    // The flag arrives as a value from `AppConfig`. It used to be re-read
-    // here from the environment with a third, stricter parser: that one was
-    // case-sensitive, did not trim, and did not accept `on`, so
-    // `SOLAND_SOVEREIGN_ENCLAVE=on` enforced the enclave posture while
-    // `/describe` silently declined to claim the profile.
-    if sovereign_enclave_enabled {
-        claimed_profiles.push(
-            arkret_models_discovery::service_description::ClaimedProfileEntry {
-                notes: Some(
-                    "Sovereign enclave profile: outbound federation disabled, \
-                 outbound HTTP allow-list enforced. See \
-                 zh/sync/sovereign-deployment.md §2–§6."
-                        .to_owned(),
-                ),
-                ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                    ProfileId::SOVEREIGN_ENCLAVE_V1,
-                )
-            },
         );
     }
     // Snapshot the claimed-profile id set BEFORE serialising (which moves
@@ -710,14 +678,6 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
                 todo: "runtime_attestation verifier and controller approval ledger are not wired; requests carrying runtime_attestation are rejected.".to_owned(),
             },
             IntegrationSurfaceDescriptor {
-                name: "extensions_sovereign".to_owned(),
-                method: "POST/GET".to_owned(),
-                path: "/_soland/admin/deployment/*".to_owned(),
-                contract: arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1.to_owned(),
-                stability: "stub_contract".to_owned(),
-                todo: "local sovereign deployment scenario scaffold; outbound guard is not yet wired into every egress call site.".to_owned(),
-            },
-            IntegrationSurfaceDescriptor {
                 name: "blob_presign".to_owned(),
                 method: "POST".to_owned(),
                 path: "/_arkret/self/blob/presign".to_owned(),
@@ -764,7 +724,7 @@ mod tests {
         description
             .supported_profiles
             .push("ak.profile.chat_mvp.v1".to_owned());
-        apply_claim_level_partition(&mut description, &[], false);
+        apply_claim_level_partition(&mut description, &[]);
         for feature in [
             "discussion_history_access",
             "supported_event_kinds",
@@ -777,5 +737,36 @@ mod tests {
                     .any(|supported| supported == feature)
             );
         }
+    }
+
+    #[test]
+    fn sovereign_security_posture_is_not_a_conformance_claim() {
+        let mut description = ServiceDescribe::development(
+            Did::new("did:web:soland.example".to_owned()).unwrap(),
+            TrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+            ServiceKind::Station,
+            vec![
+                "ak.operation_bundle.station.describe.v1".to_owned(),
+                "ak.operation_bundle.station.http_core.v1".to_owned(),
+            ],
+            vec![arkret_models_discovery::TransportBinding::HttpJson {
+                base_url: "https://soland.example/".to_owned(),
+                extension_profile_required: (),
+            }],
+        );
+        apply_claim_level_partition(&mut description, &[]);
+
+        assert!(
+            !description
+                .supported_profiles
+                .iter()
+                .any(|profile| { profile == arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1 })
+        );
+        assert!(
+            !description
+                .claimed_profiles
+                .iter()
+                .any(|claim| { claim.profile_id == arkret_wire::ProfileId::SOVEREIGN_ENCLAVE_V1 })
+        );
     }
 }

@@ -910,7 +910,7 @@ impl NotaryWorker {
             &leaves,
             &new_ops,
             &covered,
-            &data_event_digests,
+            Some(&data_event_digests),
             &availability_dependency_writes,
         ) {
             Ok(true) => {}

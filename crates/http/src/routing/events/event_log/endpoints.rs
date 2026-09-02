@@ -772,7 +772,6 @@ async fn events_describe(
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),
-        state.config().sovereign_enclave_enabled,
     );
     // Advertise the live rate-limit ceilings (see the canonical describe
     // handler) so wire and enforcement stay in lock-step after a hot-swap.

@@ -97,7 +97,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
             arkret_state::lattice::ordered_log::IssuedOp,
         )],
         covered: &BTreeSet<arkret_wire::Hash>,
-        data_event_leaf_manifest: &BTreeSet<arkret_wire::Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<arkret_wire::Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> arkret_state::state::StoreResult<bool> {
         self.0.commit_if_frontier(

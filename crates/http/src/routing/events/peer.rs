@@ -15,7 +15,7 @@ use arkret_models_collaboration::event_sync::{
 };
 use arkret_models_collaboration::history_key::DirectorySourceRefAccess;
 use arkret_models_collaboration::http_bodies::{
-    EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
+    PeerEventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
 };
 use arkret_models_collaboration::principal_operations::{
     PcrGenesisSubmitOutcome, PcrGenesisSubmitRequestBody,
@@ -834,7 +834,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
 async fn peer_events_read_body(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventsQueryOutcome> {
+) -> JsonResult<PeerEventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
     let request = parse_json_body::<EventsQueryPostRequestBody>(
@@ -1985,7 +1985,7 @@ async fn peer_events_query_response(
     state: &AppState,
     source_id: String,
     parts: PeerEventsQueryParts,
-) -> JsonResult<EventsQueryOutcome> {
+) -> JsonResult<PeerEventsQueryOutcome> {
     let realms_set = parts
         .realms
         .iter()
@@ -2012,13 +2012,11 @@ async fn peer_events_query_response(
         parts.realms.clone()
     };
     if query_realms.is_empty() {
-        return json_ok(EventsQueryOutcome {
+        return json_ok(PeerEventsQueryOutcome {
             events: Vec::new(),
-            snapshot_bootstrap: None,
             next_cursor: None,
             prev_cursor: None,
             has_more: false,
-            range_completeness: None,
         });
     }
     let candidate_limit = peer_events_candidate_limit(parts.limit);
@@ -2084,13 +2082,11 @@ async fn peer_events_query_response(
         .map(|record| super::event_log::sdk_event_for_state(state, record))
         .map(|event| event.map(Into::into))
         .collect::<Result<Vec<_>, _>>()?;
-    json_ok(EventsQueryOutcome {
+    json_ok(PeerEventsQueryOutcome {
         events,
-        snapshot_bootstrap: None,
         next_cursor,
         prev_cursor,
         has_more,
-        range_completeness: None,
     })
 }
 

@@ -385,9 +385,10 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
-    /// Proactive federation frontier exchange cadence in seconds. The
-    /// high-assurance profile requires a value no greater than one hour.
-    /// Env: `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` (default `3600`).
+    /// Operator-triggered federation frontier diagnostic cadence in seconds.
+    /// Zero disables the legacy full-history worker, which is the production
+    /// default until its probe and fallback paths are incrementally bounded.
+    /// Env: `SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS` (default `0`).
     pub federation_frontier_interval_seconds: u64,
     /// Default page size for `GET /_soland/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
@@ -520,16 +521,15 @@ pub struct AppConfig {
     /// `test_config()` to keep their fixture IDs stable.
     /// Env: `SOLAND_SEED_DEMO_DATA` (default false).
     pub seed_demo_data: bool,
-    /// G3.S9 — when true, soland claims `ak.profile.sovereign_enclave.v1`
-    /// on `/server/describe` and enforces the enclave invariants
-    /// (`routing::extensions::sovereign::assert_enclave_invariants`):
+    /// Enables the sovereign-enclave startup and egress security posture.
+    /// Startup validates it through [`crate::security::assert_enclave_invariants`]:
     /// outbound federation OFF, DID resolver method allow-list
     /// non-empty, every outbound HTTP call gated through the shared
     /// [`crate::security`] egress validation layer.
     /// Env: `SOLAND_SOVEREIGN_ENCLAVE` (default false).
     pub sovereign_enclave_enabled: bool,
-    /// G3.S9 — host allow-list for outbound HTTP when the enclave
-    /// profile is enabled. Hosts are matched case-insensitively.
+    /// Host allow-list for outbound HTTP when the enclave security posture
+    /// is enabled. Hosts are matched case-insensitively.
     /// Comma-separated env var
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
     ///
@@ -897,7 +897,7 @@ impl AppConfig {
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
             federation_outbound_enabled: false,
-            federation_frontier_interval_seconds: 3_600,
+            federation_frontier_interval_seconds: 0,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_ids: Vec::new(),
@@ -1081,8 +1081,8 @@ impl AppConfig {
             lookup(values, "SOLAND_FEDERATION_FRONTIER_INTERVAL_SECONDS")
                 .ok()
                 .and_then(|value| value.trim().parse::<u64>().ok())
-                .filter(|seconds| (1..=3_600).contains(seconds))
-                .unwrap_or(3_600);
+                .filter(|seconds| *seconds <= 3_600)
+                .unwrap_or(0);
         let admin_default_page_limit = lookup(values, "SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())

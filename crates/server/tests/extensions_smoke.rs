@@ -1,4 +1,4 @@
-//! G3.S9 — integration smoke for the four new extensions routes.
+//! Integration smoke for supported extension routes and retired-route boundaries.
 //!
 //! Per `cotest/e2e/scenarios/extensions/applet-bridge.md`,
 //! `cotest/e2e/scenarios/identity/tsp-bootstrap.md`, and the existing
@@ -3538,43 +3538,54 @@ fn safe_did_token(value: &str) -> String {
         .collect()
 }
 
-// S-00 regression: the sovereign deployment surface
-// (`/_soland/admin/deployment/*`, `/_soland/self/account/*`, etc.) MUST
-// reject unauthenticated callers. Before the fix the whole `self` segment
-// mounted `sovereign::router()` with no auth hoop and no per-handler
-// `authenticated_session`, exposing every read/write handler to anonymous
-// access. These negatives assert the fail-closed 401 on both a management
-// write and an operator read.
-
 #[tokio::test]
-async fn sovereign_deployment_configure_rejects_unauthenticated() {
+async fn retired_sovereign_shadow_routes_are_unrecognized() {
     let state = soland_test_support::app_state(test_config());
     state.hydrate().await.unwrap();
     let app = service(state);
 
-    let response = TestClient::post("http://server/_soland/admin/deployment/configure")
-        .json(&json!({ "upstream_available": true }))
-        .send(&app)
-        .await;
-    assert_eq!(
-        response.status_code.unwrap(),
-        StatusCode::UNAUTHORIZED,
-        "deployment.configure must reject an unauthenticated caller"
-    );
-}
+    for path in [
+        "/_soland/admin/deployment/audit",
+        "/_soland/admin/deployment/enclave-frontier?realm_id=ak:realm:retired",
+        "/_soland/admin/deployment/info",
+        "/_soland/self/account/did:web:retired.example",
+        "/_soland/self/directory/realms",
+        "/_soland/self/realm/ak:realm:retired",
+        "/_soland/self/realm/ak:realm:retired/access",
+    ] {
+        let mut response = TestClient::get(format!("http://server{path}"))
+            .send(&app)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
+        let problem: Value = response.take_json().await.unwrap();
+        assert_eq!(
+            problem["type"],
+            json!("https://arkret.org/problems/unrecognized_endpoint"),
+            "{path}"
+        );
+    }
 
-#[tokio::test]
-async fn sovereign_deployment_audit_rejects_unauthenticated() {
-    let state = soland_test_support::app_state(test_config());
-    state.hydrate().await.unwrap();
-    let app = service(state);
-
-    let response = TestClient::get("http://server/_soland/admin/deployment/audit")
-        .send(&app)
-        .await;
-    assert_eq!(
-        response.status_code.unwrap(),
-        StatusCode::UNAUTHORIZED,
-        "deployment.audit must reject an unauthenticated caller"
-    );
+    for path in [
+        "/_soland/admin/deployment/configure",
+        "/_soland/admin/deployment/external-invite",
+        "/_soland/admin/deployment/network/link",
+        "/_soland/admin/deployment/realm.create",
+        "/_soland/admin/deployment/register-enclave",
+        "/_soland/admin/deployment/store-and-forward/messages",
+        "/_soland/admin/deployment/store-and-forward/drain",
+        "/_soland/admin/deployment/store-and-forward/ingest",
+        "/_soland/self/account/accept-external-invite",
+        "/_soland/self/deployment/enclave-proxy",
+    ] {
+        let mut response = TestClient::post(format!("http://server{path}"))
+            .send(&app)
+            .await;
+        assert_eq!(response.status_code, Some(StatusCode::NOT_FOUND), "{path}");
+        let problem: Value = response.take_json().await.unwrap();
+        assert_eq!(
+            problem["type"],
+            json!("https://arkret.org/problems/unrecognized_endpoint"),
+            "{path}"
+        );
+    }
 }

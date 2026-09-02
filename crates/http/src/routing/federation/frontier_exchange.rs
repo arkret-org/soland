@@ -3,9 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState;
-use arkret_models_collaboration::events_payloads::{
-    ForkResolutionSubject,
-};
+use arkret_models_collaboration::events_payloads::ForkResolutionSubject;
 use base64::Engine;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::AcceptedEvent;
@@ -20,7 +18,9 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CHECKPOINT_SCAN_PAGES: usize = 4;
 
 pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
-    if !state.config().federation_outbound_enabled {
+    if !state.config().federation_outbound_enabled
+        || state.config().federation_frontier_interval_seconds == 0
+    {
         return None;
     }
     Some(FrontierExchangeWorker::new(state).spawn())
@@ -256,7 +256,7 @@ impl FrontierExchangeWorker {
     ) -> Result<BTreeSet<String>, String> {
         use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
         use arkret_models_collaboration::http_bodies::{
-            EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
+            PeerEventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
         };
         let remote_snapshot_digest = arkret_canonical::canonical_sha256(remote)
             .map_err(|error| format!("schema_violation:{error}"))?;
@@ -342,7 +342,7 @@ impl FrontierExchangeWorker {
                     limit: Some(256),
                     ..Default::default()
                 };
-                let (page, domain, size): (EventsQueryOutcome, _, _) = self
+                let (page, domain, size): (PeerEventsQueryOutcome, _, _) = self
                     .peer_query(peer_id, "/_arkret/peer/events", &request)
                     .await?;
                 trust_domain = domain;

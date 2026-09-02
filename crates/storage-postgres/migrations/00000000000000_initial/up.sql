@@ -696,9 +696,9 @@ CREATE TRIGGER state_seals_immutable
     BEFORE UPDATE ON public.state_seals
     FOR EACH ROW EXECUTE FUNCTION public.reject_state_seal_identity_mutation();
 
--- Frozen canonical DataEvent leaf set used to derive each Seal's optional
--- data_event_set_root. A row is mandatory for every locally accepted Seal,
--- including an empty manifest, so absence can be treated as corruption.
+-- Frozen canonical DataEvent leaf set used to derive a locally authored Seal's
+-- optional data_event_set_root. Receiver-verified transported Seals can omit
+-- this row because CBA dependency transport does not carry observational leaves.
 CREATE TABLE public.state_seal_data_event_manifests (
     seal_id text PRIMARY KEY,
     realm_id text NOT NULL,
