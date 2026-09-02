@@ -107,10 +107,16 @@ jobs:
       # Keep test binaries separate from `target/dev`, matching the local
       # `just test` gate and preventing Windows dev-server file locks. This
       # command includes the full `-p soland --test http_api` suite.
+      #
+      # `soland-storage-postgres` is excluded here because its contract tests
+      # require a real database and now fail rather than skip without one.
+      # Service containers only run on Linux, so those tests get their own job
+      # (`postgres-storage-contracts`) instead of being silently skipped on
+      # three platforms.
       - name: Test (includes HTTP API suite)
         env:
           CARGO_TARGET_DIR: target/test
-        run: cargo +1.98 test --locked
+        run: cargo +1.98 test --locked --workspace --exclude soland-storage-postgres
         working-directory: soland
 
   migration-cycle:
@@ -186,6 +192,60 @@ jobs:
             echo "::error::Each migration's down.sql must exactly invert its up.sql."
             exit 1
           fi
+
+  postgres-storage-contracts:
+    name: Postgres storage contract tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soland
+          POSTGRES_PASSWORD: soland
+          POSTGRES_DB: soland_contracts
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U soland"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://soland:soland@localhost:5432/soland_contracts
+    steps:
+      - name: Checkout soland
+        uses: actions/checkout@v6
+        with:
+          path: soland
+
+      - name: Checkout Arkret Rust SDK
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-rust-sdk
+          path: arkret-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soland -> target
+
+      - name: Wait for postgres
+        run: |
+          for i in {1..30}; do
+            pg_isready -h localhost -p 5432 -U soland && break
+            sleep 1
+          done
+
+      # These are the only proof the Postgres adapters honour the storage
+      # contracts. They fail without `DATABASE_URL`, so a missing database
+      # breaks the build instead of emptying the suite.
+      - name: Storage contract and durable-plane tests
+        run: cargo test --locked -p soland-storage-postgres
+        working-directory: soland
 
   postgres-http-api:
     name: Postgres HTTP API cursor tests

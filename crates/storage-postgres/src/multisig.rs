@@ -391,7 +391,7 @@ mod tests {
 
     use super::{PgMultisigPendingStore, PgPool};
 
-    async fn test_pool() -> Option<PgPool> {
+    async fn test_pool() -> PgPool {
         crate::Db::connect(
             std::env::var("DATABASE_URL").ok().as_deref(),
             Default::default(),
@@ -399,6 +399,9 @@ mod tests {
         .await
         .expect("initialize test database")
         .pool
+        .expect(
+            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
+        )
     }
 
     fn unique_namespace() -> String {
@@ -410,10 +413,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn postgres_adapter_satisfies_shared_multisig_lease_contract_when_configured() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+    async fn postgres_adapter_satisfies_shared_multisig_lease_contract() {
+        let pool = test_pool().await;
         assert_multisig_lease_contract(&PgMultisigPendingStore { pool }, &unique_namespace()).await;
     }
 }

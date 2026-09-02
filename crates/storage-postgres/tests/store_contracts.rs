@@ -31,10 +31,8 @@ use soland_storage_postgres::{
 };
 
 #[tokio::test]
-async fn postgres_audit_regression_satisfies_account_localpart_remove_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_audit_regression_satisfies_account_localpart_remove_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let accounts = PgAccountStore { pool: pool.clone() };
     let localparts = PgAccountLocalpartStore { pool };
@@ -47,10 +45,8 @@ async fn postgres_audit_regression_satisfies_account_localpart_remove_contract_w
 }
 
 #[tokio::test]
-async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_guards_repair_device_snapshots_atomically() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let inventory = PgDeviceInventoryStore { pool: pool.clone() };
     let messages = PgDeviceMessageStore { pool };
@@ -58,15 +54,13 @@ async fn postgres_adapter_guards_repair_device_snapshots_atomically_when_configu
     assert_device_message_snapshot_guard_contract(&inventory, &messages, &namespace).await;
 }
 
-static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
+static TEST_POOL: tokio::sync::OnceCell<PgPool> = tokio::sync::OnceCell::const_new();
 
 #[tokio::test]
 async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     use soland_storage::FederationFrontierExchangeStore;
     use soland_storage_postgres::PgFederationFrontierExchangeStore;
-    let pool = test_pool()
-        .await
-        .expect("frontier regression requires a real temporary PostgreSQL database");
+    let pool = test_pool().await;
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
         [0x93; 32],
@@ -295,15 +289,13 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
 }
 
 #[tokio::test]
-async fn postgres_structured_projection_and_invite_identities_round_trip_when_configured() {
+async fn postgres_structured_projection_and_invite_identities_round_trip() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{
         CircleProjectionStore, MorphProjectionStore, RealmInviteStore,
         SpaceContainerProjectionStore, StrandProjectionStore,
     };
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let principal = DidCoreId::new("ak:did_core:web:projection-alice.example").unwrap();
     let account = AccountId::new(
@@ -483,13 +475,11 @@ async fn postgres_structured_projection_and_invite_identities_round_trip_when_co
 }
 
 #[tokio::test]
-async fn postgres_key_backup_identity_and_series_round_trip_when_configured() {
+async fn postgres_key_backup_identity_and_series_round_trip() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{KeyBackupStore, PersistenceError};
     use soland_storage_postgres::PgKeyBackupStore;
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let principal = DidCoreId::new("ak:did_core:web:backup-alice.example").unwrap();
     let actor = |station| {
@@ -566,7 +556,7 @@ struct LedgerCountRow {
     value: i64,
 }
 
-async fn test_pool() -> Option<PgPool> {
+async fn test_pool() -> PgPool {
     TEST_POOL
         .get_or_init(|| async {
             Db::connect(
@@ -576,6 +566,9 @@ async fn test_pool() -> Option<PgPool> {
             .await
             .expect("initialize test database")
             .pool
+            .expect(
+                "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
+            )
         })
         .await
         .clone()
@@ -638,7 +631,7 @@ fn franking_event_request(
 }
 
 #[tokio::test]
-async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_when_configured() {
+async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     use diesel::sql_types::{BigInt, Text, Timestamptz};
     use diesel_async::RunQueryDsl;
     use soland_storage::{
@@ -646,9 +639,7 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
         PersistenceError,
     };
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
         format!("franking-ledger:{}", uuid::Uuid::now_v7()).as_bytes(),
@@ -855,14 +846,12 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable_whe
 }
 
 #[tokio::test]
-async fn postgres_franking_target_proof_fault_and_restart_contract_when_configured() {
+async fn postgres_franking_target_proof_fault_and_restart_contract() {
     use soland_storage::{
         EventBatchCommitRequest, EventCommitUnitOfWork, EventStore, PersistenceError,
     };
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
         format!("franking-target-proof:{}", uuid::Uuid::now_v7()).as_bytes(),
@@ -954,10 +943,8 @@ async fn postgres_franking_target_proof_fault_and_restart_contract_when_configur
 }
 
 #[tokio::test]
-async fn postgres_agent_store_accepts_spec_agent_binding_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_agent_store_accepts_spec_agent_binding() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAgentStore { pool: pool.clone() };
     let suffix = uuid::Uuid::now_v7().simple().to_string();
@@ -992,10 +979,8 @@ async fn postgres_agent_store_accepts_spec_agent_binding_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_agent_table_rejects_mismatched_did_and_core_agent_ids_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_agent_table_rejects_mismatched_did_and_core_agent_ids() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let agent_id = format!("ak:did_core:webvh:zLeft{suffix}");
@@ -1114,15 +1099,13 @@ async fn cleanup_control_schedule_test_actor(pool: &PgPool, actor_id: &str) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair_when_configured() {
+async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
     use arkret_state::state::store::{AcklessSelfPrincipalIngress, ControlProposalIngress};
     use arkret_state::state::{ControlSealAttemptCompletion, ControlSealAttemptOutcome};
     use diesel::sql_types::Text;
     use diesel_async::RunQueryDsl;
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let realm_id = arkret_identifiers::RealmId::new(event_derived_realm_id(
         format!("control-seal-schedule:{}", uuid::Uuid::now_v7()).as_bytes(),
@@ -1497,7 +1480,7 @@ async fn seal_dependency_atomic_counts(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_boundary_when_configured()
+async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_boundary()
  {
     use arkret_models_collaboration::governance_dependencies::{
         GovernanceDependency, GovernanceDependencySelector,
@@ -1507,9 +1490,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         GovernanceDependencySource, GovernanceDependencyStore, GovernanceDependencyWrite,
     };
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
         soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
@@ -1894,10 +1875,8 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_shared_idempotency_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
@@ -1905,7 +1884,7 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
 }
 
 #[tokio::test]
-async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_when_configured() {
+async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas() {
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
 
@@ -1919,9 +1898,7 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
         projection_data: Option<serde_json::Value>,
     }
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgNotificationStore { pool: pool.clone() };
     let run_id = uuid::Uuid::now_v7();
@@ -2069,10 +2046,8 @@ async fn postgres_account_notification_upsert_and_remove_stream_as_typed_deltas_
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgGovernanceDependencyStore { pool };
     let namespace = format!("postgres-unscoped-signer-{}", uuid::Uuid::now_v7());
@@ -2080,10 +2055,8 @@ async fn postgres_adapter_satisfies_unscoped_signer_evidence_contract_when_confi
 }
 
 #[tokio::test]
-async fn postgres_adapter_retains_seal_dependencies_before_seal_publication_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_retains_seal_dependencies_before_seal_publication() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgGovernanceDependencyStore { pool };
     let namespace = format!(
@@ -2118,11 +2091,9 @@ async fn postgres_adapter_retains_seal_dependencies_before_seal_publication_when
 }
 
 #[tokio::test]
-async fn postgres_adapter_commits_control_event_governance_dependencies_and_control_seal_schedule_atomically_when_configured()
+async fn postgres_adapter_commits_control_event_governance_dependencies_and_control_seal_schedule_atomically()
  {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let events = PgEventStore { pool: pool.clone() };
     let dependencies = PgGovernanceDependencyStore { pool: pool.clone() };
@@ -2140,10 +2111,8 @@ async fn postgres_adapter_commits_control_event_governance_dependencies_and_cont
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_mimi_consent_correlation_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_mimi_consent_correlation_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgMimiConsentCorrelationStore { pool };
     let namespace = format!("postgres-mimi-consent-{}", uuid::Uuid::now_v7());
@@ -2151,10 +2120,8 @@ async fn postgres_adapter_satisfies_mimi_consent_correlation_contract_when_confi
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_control_proposal_authority_ack_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_control_proposal_authority_ack_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgControlProposalAuthorityAckStore { pool };
     let namespace = format!("postgres-control-proposal-ack-{}", uuid::Uuid::now_v7());
@@ -2162,10 +2129,8 @@ async fn postgres_adapter_satisfies_control_proposal_authority_ack_contract_when
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_shared_event_commit_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let events = PgEventStore { pool: pool.clone() };
@@ -2193,10 +2158,8 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let events = PgEventStore { pool: pool.clone() };
@@ -2214,10 +2177,8 @@ async fn postgres_adapter_satisfies_formal_applet_commit_transaction_contract_wh
 }
 
 #[tokio::test]
-async fn postgres_applet_authoring_preview_has_one_durable_exact_winner_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_applet_authoring_preview_has_one_durable_exact_winner() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAppletStore { pool };
     let subject_key = format!("applet-preview:{}", uuid::Uuid::now_v7());
@@ -2289,10 +2250,8 @@ async fn postgres_applet_authoring_preview_has_one_durable_exact_winner_when_con
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let events = PgEventStore { pool: pool.clone() };
@@ -2312,10 +2271,8 @@ async fn postgres_adapter_satisfies_shared_consent_projection_commit_contract_wh
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_settles_sealed_device_revocations() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let cell_registry: std::sync::Arc<dyn arkret_state::state::CellRegistry> = std::sync::Arc::new(
         soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()
@@ -2338,7 +2295,7 @@ async fn postgres_adapter_settles_sealed_device_revocations_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_seal_schedule_when_configured()
+async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_seal_schedule()
  {
     use diesel::sql_types::Text;
     use diesel::{QueryableByName, sql_query};
@@ -2353,9 +2310,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_sea
         value: i64,
     }
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let actor_did = arkret_identifiers::Did::new(format!(
@@ -2520,9 +2475,7 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         value: i64,
     }
 
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     // The colliding event, its realm row and the quarantine evidence all stay
     // in the database by design, so every run needs its own identities or a
@@ -2776,10 +2729,8 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
 }
 
 #[tokio::test]
-async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let events = PgEventStore { pool: pool.clone() };
     let outbox = PgFederationOutboxStore { pool };
@@ -2788,10 +2739,8 @@ async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox_when_confi
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_shared_federation_outbox_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_shared_federation_outbox_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgFederationOutboxStore { pool };
     let namespace = format!("postgres-federation-outbox-{}", uuid::Uuid::now_v7());
@@ -2799,10 +2748,8 @@ async fn postgres_adapter_satisfies_shared_federation_outbox_contract_when_confi
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
@@ -2820,10 +2767,8 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract_when_conf
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
@@ -2950,10 +2895,8 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_organization_registration_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_organization_registration_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgOrganizationRegistrationStore::new(pool);
     let namespace = format!(
@@ -2964,10 +2907,8 @@ async fn postgres_adapter_satisfies_organization_registration_contract_when_conf
 }
 
 #[tokio::test]
-async fn postgres_account_data_cas_treats_an_absent_key_as_revision_zero_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_account_data_cas_treats_an_absent_key_as_revision_zero() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let store = PgAccountDataStore { pool };
     let key = format!("client.postgres-cas.{}", uuid::Uuid::now_v7());
@@ -3181,10 +3122,8 @@ mod control_move_ingress_negatives {
     /// Event-only: a Control Move presented without its durable ingress
     /// classification commits nothing at all.
     #[tokio::test]
-    async fn postgres_control_move_without_ingress_commits_nothing_when_configured() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+    async fn postgres_control_move_without_ingress_commits_nothing() {
+        let pool = test_pool().await;
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("event-only");
 
@@ -3205,10 +3144,8 @@ mod control_move_ingress_negatives {
     /// Ack-only: an Ack that does not bind the Control Move's digest commits
     /// nothing at all.
     #[tokio::test]
-    async fn postgres_control_move_with_unbound_ack_commits_nothing_when_configured() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+    async fn postgres_control_move_with_unbound_ack_commits_nothing() {
+        let pool = test_pool().await;
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("ack-only");
         let mut ack = fixture.ack.clone();
@@ -3235,10 +3172,8 @@ mod control_move_ingress_negatives {
     /// durable row for the same digest), the accepted-Event leg rolls back
     /// with it; the pre-existing row is left untouched.
     #[tokio::test]
-    async fn postgres_control_move_pending_conflict_rolls_back_the_event_when_configured() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+    async fn postgres_control_move_pending_conflict_rolls_back_the_event() {
+        let pool = test_pool().await;
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("pending-only");
         {
@@ -3293,15 +3228,13 @@ mod control_move_ingress_negatives {
     /// durable basis; replaying the same digest under the other class is a
     /// Conflict, while a byte-identical replay stays idempotent.
     #[tokio::test(flavor = "multi_thread")]
-    async fn postgres_control_move_ingress_class_mismatch_and_control_seal_schedule_when_configured()
+    async fn postgres_control_move_ingress_class_mismatch_and_control_seal_schedule()
      {
         use arkret_state::state::store::{
             AcklessSelfPrincipalIngress, ControlProposalIngress, StoreError,
         };
 
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+        let pool = test_pool().await;
         let _db_guard = DB_GUARD.lock().await;
         let fixture = control_anchor_fixture("class-mismatch");
         let stores = soland_storage_postgres::build_state_resolution_stores(
@@ -3365,9 +3298,7 @@ async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
     use arkret_wire::{AccountId, ActorId, DidCoreId};
     use soland_storage::{RetentionPolicyRecord, RetentionPolicyStore};
     use soland_storage_postgres::PgRetentionPolicyStore;
-    let pool = test_pool()
-        .await
-        .expect("retention regression requires real PostgreSQL");
+    let pool = test_pool().await;
     let _guard = DB_GUARD.lock().await;
     let store = PgRetentionPolicyStore { pool: pool.clone() };
     let principal = DidCoreId::new("ak:did_core:web:retention-author.example").unwrap();
@@ -3404,10 +3335,8 @@ async fn postgres_retention_policy_preserves_full_actor_after_reopen() {
 }
 
 #[tokio::test]
-async fn postgres_adapter_satisfies_invite_new_source_ledger_contract_when_configured() {
-    let Some(pool) = test_pool().await else {
-        return;
-    };
+async fn postgres_adapter_satisfies_invite_new_source_ledger_contract() {
+    let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
     let ledger = PgInviteNewSourceLedgerStore { pool: pool.clone() };
     let accounts = PgAccountStore { pool };

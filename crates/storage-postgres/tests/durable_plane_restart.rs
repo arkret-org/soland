@@ -4,7 +4,8 @@
 //! pool, drops it, reconnects with a fresh pool (equivalent to a process
 //! restart) and verifies the rows survive.
 //!
-//! All cases skip silently when `DATABASE_URL` is unset.
+//! Every case requires `DATABASE_URL`; without one they fail rather than skip,
+//! because a silent skip here would leave the durable planes unverified.
 
 use soland_storage::contract_tests::{
     assert_device_key_store_contract, assert_member_identity_store_contract,
@@ -24,14 +25,18 @@ use soland_storage_postgres::{
 /// Build a fresh pool against the configured database. Migrations are
 /// idempotent, so a second `Db::connect` behaves like a restarted process
 /// attaching to the same database.
-async fn fresh_pool() -> Option<PgPool> {
+async fn fresh_pool() -> PgPool {
     let url = std::env::var("DATABASE_URL")
         .ok()
-        .filter(|url| !url.trim().is_empty())?;
+        .filter(|url| !url.trim().is_empty())
+        .expect(
+            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
+        );
     Db::connect(Some(&url), Default::default())
         .await
         .expect("initialize test database")
         .pool
+        .expect("configured DATABASE_URL yields a pool")
 }
 
 /// `Db::connect` re-runs the embedded migrations on every call; two
@@ -48,11 +53,9 @@ fn database_now() -> chrono::DateTime<chrono::Utc> {
 }
 
 #[tokio::test]
-async fn postgres_realm_meta_survives_restart_when_configured() {
+async fn postgres_realm_meta_survives_restart() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let store = PgRealmMetaStore { pool: pool.clone() };
     let namespace = format!("postgres-realm-meta-{}", uuid::Uuid::now_v7());
     assert_realm_meta_store_contract(&store, &namespace).await;
@@ -84,9 +87,7 @@ async fn postgres_realm_meta_survives_restart_when_configured() {
     // After a restart the Realm owner must still resolve; this is the read
     // startup hydration performs before lawful controller-issued Agent grants
     // can pass the `grant_exceeds_issuer_authority` check.
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgRealmMetaStore {
         pool: restarted_pool,
     };
@@ -101,11 +102,9 @@ async fn postgres_realm_meta_survives_restart_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_messages_survive_restart_and_dedup_when_configured() {
+async fn postgres_messages_survive_restart_and_dedup() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let store = PgMessageStore { pool: pool.clone() };
     let namespace = format!("postgres-messages-{}", uuid::Uuid::now_v7());
     assert_message_store_contract(&store, &namespace).await;
@@ -114,9 +113,7 @@ async fn postgres_messages_survive_restart_and_dedup_when_configured() {
     // The contract leaves `second` in place; after a restart the snapshot
     // projection (`messages_for_realm`) must still see it, and replaying the
     // same Event id must dedup instead of double-storing.
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgMessageStore {
         pool: restarted_pool,
     };
@@ -146,19 +143,15 @@ async fn postgres_messages_survive_restart_and_dedup_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_device_keys_survive_restart_when_configured() {
+async fn postgres_device_keys_survive_restart() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let store = PgDeviceKeyStore { pool: pool.clone() };
     let namespace = format!("postgres-device-keys-{}", uuid::Uuid::now_v7());
     assert_device_key_store_contract(&store, &namespace).await;
     drop(pool);
 
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgDeviceKeyStore {
         pool: restarted_pool,
     };
@@ -173,11 +166,9 @@ async fn postgres_device_keys_survive_restart_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_one_time_keys_claim_survives_restart_when_configured() {
+async fn postgres_one_time_keys_claim_survives_restart() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let store = PgOneTimeKeyStore { pool: pool.clone() };
     let namespace = format!("postgres-one-time-keys-{}", uuid::Uuid::now_v7());
     assert_one_time_key_store_contract(&store, &namespace).await;
@@ -192,9 +183,7 @@ async fn postgres_one_time_keys_claim_survives_restart_when_configured() {
         .expect("pool one-time key before restart");
     drop(pool);
 
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgOneTimeKeyStore {
         pool: restarted_pool,
     };
@@ -216,11 +205,9 @@ async fn postgres_one_time_keys_claim_survives_restart_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_member_identity_survives_restart_when_configured() {
+async fn postgres_member_identity_survives_restart() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let store = PgMemberIdentityStore { pool: pool.clone() };
     let namespace = format!("postgres-member-identity-{}", uuid::Uuid::now_v7());
     assert_member_identity_store_contract(&store, &namespace).await;
@@ -244,9 +231,7 @@ async fn postgres_member_identity_survives_restart_when_configured() {
         .expect("write member identity event before restart");
     drop(pool);
 
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgMemberIdentityStore {
         pool: restarted_pool,
     };
@@ -261,11 +246,9 @@ async fn postgres_member_identity_survives_restart_when_configured() {
 }
 
 #[tokio::test]
-async fn postgres_unscoped_signer_evidence_survives_restart_when_configured() {
+async fn postgres_unscoped_signer_evidence_survives_restart() {
     let _db_guard = DB_GUARD.lock().await;
-    let Some(pool) = fresh_pool().await else {
-        return;
-    };
+    let pool = fresh_pool().await;
     let namespace = format!("postgres-signer-evidence-{}", uuid::Uuid::now_v7());
     let item = minimal_history_signer_evidence(&namespace);
     let selector = item.selector().clone();
@@ -277,9 +260,7 @@ async fn postgres_unscoped_signer_evidence_survives_restart_when_configured() {
     drop(store);
     drop(pool);
 
-    let Some(restarted_pool) = fresh_pool().await else {
-        return;
-    };
+    let restarted_pool = fresh_pool().await;
     let restarted = PgGovernanceDependencyStore {
         pool: restarted_pool,
     };

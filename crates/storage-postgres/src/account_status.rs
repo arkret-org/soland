@@ -216,7 +216,7 @@ mod tests {
     /// Follows the gating convention of `tests/store_contracts.rs`: the
     /// PostgreSQL contracts run only when `DATABASE_URL` points at a migrated
     /// database and are skipped otherwise.
-    async fn test_pool() -> Option<PgPool> {
+    async fn test_pool() -> PgPool {
         crate::Db::connect(
             std::env::var("DATABASE_URL").ok().as_deref(),
             Default::default(),
@@ -224,6 +224,9 @@ mod tests {
         .await
         .expect("initialize test database")
         .pool
+        .expect(
+            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
+        )
     }
 
     /// Each run claims a fresh account so the shared database cannot leak a
@@ -237,10 +240,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn postgres_adapter_satisfies_account_status_decision_table_when_configured() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
+    async fn postgres_adapter_satisfies_account_status_decision_table() {
+        let pool = test_pool().await;
         let store = PgAccountStatusReplicaStore { pool };
         assert_account_status_replica_decision_table_contract(&store, &unique_namespace()).await;
     }
