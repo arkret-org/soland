@@ -1855,6 +1855,33 @@ impl ProjectionService {
         self.state.lock().clone()
     }
 
+    /// Install the moderation cells produced by a durable-log rebuild and a
+    /// successfully validated formal aggregate.
+    ///
+    /// Moderation verdict batches are serialized per Realm by the HTTP
+    /// admission lane. Replacing only the registered moderation cell families
+    /// keeps unrelated live projections intact while making the post-commit
+    /// view identical to the ordered aggregate that admission verified.
+    pub fn install_verified_moderation_projection(&self, verified: ProjectionState) {
+        let _authority_guard = self.history_authority_view_cas_guard();
+        let mut live = self.state.lock();
+        live.moderation_decisions
+            .extend(verified.moderation_decisions);
+        live.moderation_appeal_submissions
+            .extend(verified.moderation_appeal_submissions);
+        for (cell_ref, cell_state) in verified.cells {
+            if cell_ref
+                .as_str()
+                .starts_with("ak:cell:ak.component.moderation_state.v1:")
+                || cell_ref
+                    .as_str()
+                    .starts_with("ak:cell:ak.component.moderation.appeal.v1:")
+            {
+                live.cells.insert(cell_ref, cell_state);
+            }
+        }
+    }
+
     pub fn invite_claim_proof_context(
         &self,
         operation: &arkret_event_draft::ProjectedEventOperation,
@@ -3711,6 +3738,52 @@ mod control_governance_health_tests {
                 .realm_states
                 .contains_key("ak:realm:concurrent-update"),
             "installing a staged bootstrap discarded a concurrent Realm projection"
+        );
+    }
+
+    #[test]
+    fn verified_moderation_install_replaces_only_moderation_cells() {
+        let service = service();
+        let moderation_cell =
+            CellRef::new("ak:cell:ak.component.moderation_state.v1:ak:event:target".to_owned())
+                .unwrap();
+        let unrelated_cell =
+            CellRef::new("ak:cell:ak.component.realm.profile.v1:null".to_owned()).unwrap();
+        {
+            let mut live = service.state.lock();
+            live.cells.insert(
+                moderation_cell.clone(),
+                arkret_state::lattice::CellState::Value(serde_json::json!(["stale"])),
+            );
+            live.cells.insert(
+                unrelated_cell.clone(),
+                arkret_state::lattice::CellState::Value(serde_json::json!({"title": "live"})),
+            );
+        }
+        let mut verified = ProjectionState::new();
+        verified.cells.insert(
+            moderation_cell.clone(),
+            arkret_state::lattice::CellState::Value(serde_json::json!(["verified"])),
+        );
+        verified.cells.insert(
+            unrelated_cell.clone(),
+            arkret_state::lattice::CellState::Value(serde_json::json!({"title": "rebuilt"})),
+        );
+
+        service.install_verified_moderation_projection(verified);
+
+        let snapshot = service.snapshot();
+        assert_eq!(
+            snapshot.cells.get(&moderation_cell),
+            Some(&arkret_state::lattice::CellState::Value(serde_json::json!(
+                ["verified"]
+            )))
+        );
+        assert_eq!(
+            snapshot.cells.get(&unrelated_cell),
+            Some(&arkret_state::lattice::CellState::Value(
+                serde_json::json!({"title": "live"})
+            ))
         );
     }
 

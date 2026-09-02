@@ -228,6 +228,30 @@ async fn verify_inbound_applet_service_signature(
     }
     let scope_selector = signed_applet_scope_selector(&request_body, scope_carrier)?;
 
+    // The freshness window is a self-contained property of Signature-Input.
+    // Evaluate it before registration lookup so an expired signed delivery is
+    // always the spec-pinned 401 `signature_window_invalid`, rather than
+    // leaking whether this edge currently has an effective Applet install.
+    let signature_input =
+        http_signature::parse_signature_input_header(req).map_err(applet_verification_error)?;
+    let policy = SignatureVerificationPolicy::new(vec![
+        Component::Method,
+        Component::TargetUri,
+        Component::Authority,
+        Component::Header("content-digest".to_owned()),
+        Component::Header("source-service-id".to_owned()),
+        Component::Header("destination-service-id".to_owned()),
+        Component::Header("idempotency-key".to_owned()),
+    ]);
+    let content_digest_header = applet_required_header(req, "content-digest")?;
+    policy
+        .validate(
+            &signature_input,
+            Some(&content_digest_header),
+            chrono::Utc::now().timestamp(),
+        )
+        .map_err(|error| applet_verification_error(HttpMessageVerificationError::Policy(error)))?;
+
     // §7.3.1 anchor: the signing key comes only from an active installed
     // registration. Without one there is no authenticated key source to try;
     // reject at the registration gate instead of manufacturing a method URL
@@ -245,19 +269,8 @@ async fn verify_inbound_applet_service_signature(
 
     let target_uri = crate::routing::federation::signature_target_uri(req, state);
     let authority = crate::routing::federation::signature_authority(req, state);
-    let signature_input =
-        http_signature::parse_signature_input_header(req).map_err(applet_verification_error)?;
     applet_validate_signature_input(&signature_input, &verification_method)?;
     let verifying_key = applet_resolve_verifying_key(state, &verification_method)?;
-    let policy = SignatureVerificationPolicy::new(vec![
-        Component::Method,
-        Component::TargetUri,
-        Component::Authority,
-        Component::Header("content-digest".to_owned()),
-        Component::Header("source-service-id".to_owned()),
-        Component::Header("destination-service-id".to_owned()),
-        Component::Header("idempotency-key".to_owned()),
-    ]);
     let verified = http_signature::verify_signed_canonical_json_request(
         req,
         &target_uri,

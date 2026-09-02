@@ -86,8 +86,7 @@ impl ModerationStore for PgModerationStore {
         let id_token =
             ids::event_token_part_or_schema_violation(id, "moderation_queue_item")?.to_vec();
         let report_event_id_token =
-            ids::event_token_part_or_schema_violation(report_event_id, "moderation_report")?
-                .to_vec();
+            ids::event_token_part_or_schema_violation(report_event_id, "event")?.to_vec();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -140,8 +139,7 @@ impl ModerationStore for PgModerationStore {
         report_event_id: &str,
     ) -> PersistenceResult<Option<Value>> {
         let report_event_id_token =
-            ids::event_token_part_or_schema_violation(report_event_id, "moderation_report")?
-                .to_vec();
+            ids::event_token_part_or_schema_violation(report_event_id, "event")?.to_vec();
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;

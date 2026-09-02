@@ -4,7 +4,6 @@ use std::time::Duration;
 
 use arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState;
 use arkret_models_collaboration::events_payloads::ForkResolutionSubject;
-use base64::Engine;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use soland_services::events::AcceptedEvent;
 use soland_services::federation::FEDERATION_FRONTIER_STATUS_PEER_STALE;

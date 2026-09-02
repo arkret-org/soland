@@ -266,6 +266,19 @@ pub struct RealmBasisOutcome {
 }
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct SignalMlsBasisRequest {
+    genesis_event: Value,
+    creator_device_id: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct SignalMlsBasisOutcome {
+    group_state_ref: String,
+    mls_group_id: String,
+    epoch: u64,
+}
+
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct DeviceSigningKeyRequest {
     actor_id: String,
     device_id: String,
@@ -469,6 +482,174 @@ pub async fn realm_basis(
         seal_id: basis.seal.id.to_string(),
         control_event_set_root: basis.seal.control_event_set_root.to_string(),
         state_root: basis.seal.state_root.to_string(),
+    })
+}
+
+/// Install one spec-shaped epoch-0 MLS state for Signal rail fixtures.
+///
+/// This is deliberately an internal-state injection rather than a production
+/// authoring shortcut. `service-http-binding.md` section 2.1.3 assigns such
+/// deterministic fixture setup to the development-only `_conformance`
+/// namespace. Production still accepts MLS Genesis only through the ordinary
+/// signed Event, governance-proof, lease and Seal pipeline.
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.signal_mls_basis",
+    tags("conformance")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.conformance.signal_mls_basis")
+)]
+pub async fn signal_mls_basis(
+    depot: &mut Depot,
+    body: JsonBody<SignalMlsBasisRequest>,
+) -> JsonResult<SignalMlsBasisOutcome> {
+    super::ensure_enabled()?;
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    let event: arkret_wire::Event = serde_json::from_value(body.genesis_event)
+        .map_err(|error| AppError::param_invalid(format!("invalid MLS Genesis Event: {error}")))?;
+    if event.kind.as_str() != arkret_wire::EventKind::MlsGenesis.as_str() {
+        return Err(AppError::param_invalid(
+            "genesis_event must be an ak.mls.genesis Event",
+        ));
+    }
+    if event
+        .derive_event_id_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| AppError::param_invalid(format!("derive MLS Genesis id: {error}")))?
+        != event.event_id
+    {
+        return Err(AppError::param_invalid(
+            "genesis_event event_id is not content-derived",
+        ));
+    }
+    let creator_device_id = arkret_wire::DeviceId::new(body.creator_device_id)
+        .map_err(|_| AppError::param_invalid("creator_device_id must be canonical"))?;
+    let effective_scope_value = event
+        .payload
+        .get("effective_scope")
+        .cloned()
+        .ok_or_else(|| AppError::param_invalid("MLS Genesis omits effective_scope"))?;
+    let effective_scope: arkret_wire::ScopeRef =
+        serde_json::from_value(effective_scope_value.clone())
+            .map_err(|_| AppError::param_invalid("MLS Genesis effective_scope is invalid"))?;
+    if effective_scope.realm_id_opt() != Some(&event.realm_id) {
+        return Err(AppError::param_invalid(
+            "MLS Genesis effective_scope does not match Event realm_id",
+        ));
+    }
+    let mls_group_id = effective_scope
+        .canonical_mls_group_id()
+        .map_err(|error| AppError::param_invalid(format!("MLS Genesis scope: {error}")))?;
+    if event.payload.get("mls_group_id").and_then(Value::as_str) != Some(mls_group_id.as_str())
+        || event.payload.get("epoch").and_then(Value::as_u64) != Some(0)
+    {
+        return Err(AppError::param_invalid(
+            "MLS Genesis group id or epoch is not canonical",
+        ));
+    }
+    let governance_binding_value = event
+        .payload
+        .get("governance_binding")
+        .cloned()
+        .ok_or_else(|| AppError::param_invalid("MLS Genesis omits governance_binding"))?;
+    let governance_binding: arkret_models_crypto::MlsGovernanceBindingPayload =
+        serde_json::from_value(governance_binding_value).map_err(|error| {
+            AppError::param_invalid(format!("invalid governance binding: {error}"))
+        })?;
+
+    // Signal has no plaintext fallback: only a Realm that was canonically
+    // created with the MLS capability axis may receive this epoch fixture.
+    let canonical_events = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| AppError::internal(format!("read Realm genesis: {error}")))?;
+    let is_mls_realm = canonical_events.iter().any(|record| {
+        record.kind == arkret_wire::EventKind::RealmCreate.as_str()
+            && record.realm_id.as_deref() == Some(event.realm_id.as_str())
+            && record
+                .envelope
+                .pointer("/payload/object/encryption_profile")
+                .and_then(Value::as_str)
+                == Some("mls_rfc9420")
+    });
+    if !is_mls_realm {
+        return Err(AppError::conflict(
+            "Signal MLS fixture requires an mls_rfc9420 Realm",
+        ));
+    }
+
+    if let Some(current) = state
+        .mls_commits()
+        .commit(&effective_scope, &mls_group_id)
+        .await
+        .map_err(|error| AppError::internal(format!("read Signal MLS basis: {error}")))?
+    {
+        return json_ok(SignalMlsBasisOutcome {
+            group_state_ref: current
+                .accepted_commit_ref
+                .unwrap_or(current.genesis_event_ref),
+            mls_group_id,
+            epoch: current.epoch,
+        });
+    }
+
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().map_err(|error| {
+            AppError::param_invalid(format!("MLS Genesis digest payload: {error}"))
+        })?)
+        .map_err(|error| AppError::param_invalid(format!("canonicalize MLS Genesis: {error}")))?;
+    let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
+    let event_id = event.event_id.to_string();
+    state
+        .event_queries()
+        .store_canonical_event(AcceptedEvent {
+            event_id: event_id.clone(),
+            actor_id: event.actor_id.to_string(),
+            actor_seq: event.actor_seq,
+            realm_id: Some(event.realm_id.to_string()),
+            kind: event.kind.to_string(),
+            schema_id: arkret_wire::SchemaId::EVENT_V1.to_owned(),
+            digest_suite: arkret_canonical::DigestSuite::Sha256,
+            canonical_digest,
+            canonical_bytes,
+            envelope: serde_json::to_value(&event)
+                .map_err(|error| AppError::internal(format!("serialize MLS Genesis: {error}")))?,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("store Signal MLS Genesis: {error}")))?;
+    let initialized = state
+        .mls_commits()
+        .initialize_group(soland_services::events::InitializeMlsGroupCommand {
+            effective_scope: effective_scope.clone(),
+            group_id: mls_group_id.clone(),
+            leader_actor_id: event.actor_id.to_string(),
+            creator_device_id: creator_device_id.to_string(),
+            genesis_event_ref: event_id.clone(),
+            governance_binding,
+            committed_at: event.created_at.timestamp(),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("install Signal MLS epoch: {error}")))?;
+    let current = match initialized {
+        Some(current) => current,
+        None => state
+            .mls_commits()
+            .commit(&effective_scope, &mls_group_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("read installed Signal MLS epoch: {error}"))
+            })?
+            .ok_or_else(|| AppError::internal("Signal MLS epoch lost during concurrent install"))?,
+    };
+    json_ok(SignalMlsBasisOutcome {
+        group_state_ref: current
+            .accepted_commit_ref
+            .unwrap_or(current.genesis_event_ref),
+        mls_group_id,
+        epoch: current.epoch,
     })
 }
 

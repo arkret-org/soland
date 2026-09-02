@@ -16,9 +16,6 @@ pub(super) struct PreparedAgentMembershipEvent {
 pub(super) struct PreparedModerationAtomicEvent {
     pub(super) command: soland_services::events::CommitAcceptedEventCommand,
     pub(super) operation: Option<arkret_event_draft::ProjectedEventOperation>,
-    pub(super) projected_cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
-    pub(super) actor_id: String,
-    pub(super) device_id: String,
 }
 
 /// The named admission context of one Event submit.
@@ -2739,9 +2736,6 @@ pub(super) async fn submit_event_value_with_context(
         *slot = Some(PreparedModerationAtomicEvent {
             command,
             operation: projection_operation,
-            projected_cell_writes,
-            actor_id: actor_key,
-            device_id: parsed.device_id_str().to_owned(),
         });
         return Ok(accepted_response);
     }

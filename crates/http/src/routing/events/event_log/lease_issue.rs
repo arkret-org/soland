@@ -156,6 +156,8 @@ async fn issue_event_leases(
         .as_ref()
         .map(|value| vec![value.bootstrap_context.clone()])
         .unwrap_or_default();
+    let mut projected_operations = Vec::with_capacity(events.len());
+    let mut projected_cell_writes = Vec::with_capacity(events.len());
     for event in events {
         let envelope = serde_json::to_value(event).map_err(|error| {
             AppError::new(
@@ -164,9 +166,82 @@ async fn issue_event_leases(
             )
             .with_status(StatusCode::BAD_REQUEST)
         })?;
-        validate_event_envelope_with_context(state, session, &envelope, &bootstrap_contexts, None)
-            .await
-            .map_err(event_validation_app_error)?;
+        let parsed = validate_event_envelope_with_context(
+            state,
+            session,
+            &envelope,
+            &bootstrap_contexts,
+            None,
+        )
+        .await
+        .map_err(event_validation_app_error)?;
+        let operation = projection_operation_from_event(&parsed, &envelope).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                "authorization lease Event cannot be projected",
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+        projected_operations.push(operation);
+        projected_cell_writes.push(state.projections().project_cell_writes(event).map_err(
+            |error| {
+                AppError::new(
+                    ErrorCode::SchemaViolation,
+                    format!("authorization lease Event cell projection failed: {error}"),
+                )
+                .with_status(StatusCode::BAD_REQUEST)
+            },
+        )?);
+    }
+    crate::routing::events::operations::validate_operation_semantics(state, &projected_operations)
+        .map_err(|reason| {
+            AppError::new(ErrorCode::SchemaViolation, reason)
+                .with_status(StatusCode::BAD_REQUEST)
+                .with_reason_code(reason)
+        })?;
+    for operation in &projected_operations {
+        crate::routing::events::operations::validate_single_operation_policy_in_batch(
+            state,
+            operation,
+            &projected_operations,
+            false,
+        )
+        .await
+        .map_err(|reason| {
+            let (status, wire_code) =
+                crate::routing::events::operations::operation_policy_reason_code(reason);
+            let code = match status {
+                StatusCode::PRECONDITION_FAILED | StatusCode::UNPROCESSABLE_ENTITY => {
+                    ErrorCode::FailedPrecondition
+                }
+                StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
+                StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
+                StatusCode::CONFLICT => ErrorCode::Conflict,
+                _ => ErrorCode::PolicyViolation,
+            };
+            AppError::new(code, reason)
+                .with_status(status)
+                .with_reason_code(wire_code)
+        })?;
+    }
+    // Lease issuance performs the same reducer admission as a later submit,
+    // but against an isolated projection clone. This catches current-state
+    // preconditions (for example a same-state membership transition) without
+    // storing Events or advancing the accepted frontier.
+    let mut staged = state.projections().snapshot();
+    let hlc = soland_domain::hlc::ServerHlc::new("authorization-lease-preflight");
+    let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+    for (operation, cell_writes) in projected_operations
+        .iter()
+        .zip(projected_cell_writes.iter())
+    {
+        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
+            staged.apply_via_lattice_registry(operation, cell_writes, &hlc, &registry)
+        {
+            return Err(AppError::new(ErrorCode::FailedPrecondition, reason.clone())
+                .with_status(StatusCode::UNPROCESSABLE_ENTITY)
+                .with_reason_code(reason));
+        }
     }
     let anchor_basis = context.map(|value| value.basis);
     let mut leases = Vec::with_capacity(events.len());

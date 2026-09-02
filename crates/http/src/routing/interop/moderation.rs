@@ -1187,7 +1187,15 @@ async fn moderation_routing_visible_to_actor(
         .ok()
         .flatten()
         .map(|meta| meta.owner);
-    if owner.as_deref() == Some(actor) {
+    // Realm metadata stores the normative complete ActorId, while authenticated
+    // sessions identify the signing principal. Resolve the same identity facet
+    // used by authorization before comparing or passing the owner onward.
+    let owner_principal = owner.as_deref().and_then(|owner| {
+        serde_json::from_str::<arkret_wire::ActorId>(owner)
+            .ok()
+            .map(|actor_id| actor_id.signing_principal_id().as_str().to_owned())
+    });
+    if owner_principal.as_deref() == Some(actor) {
         return true;
     }
     let Ok(principal_id) = arkret_wire::DidCoreId::new(actor.to_owned()) else {
@@ -1224,7 +1232,7 @@ async fn moderation_routing_visible_to_actor(
                 action,
                 resource: realm_id,
                 realm_id,
-                owner: owner.as_deref(),
+                owner: owner_principal.as_deref(),
                 members: &members,
                 resource_facets: &[],
             })

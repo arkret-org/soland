@@ -306,9 +306,9 @@ async fn verify_subject_proof_signature_for_state(
         return Err("subject_proof_transcript_mismatch");
     }
 
-    let public_key = resolve_current_ed25519_key_for_state(
+    let public_key = resolve_current_subject_ed25519_key_for_state(
         state,
-        verification.subject_account_id.principal_id.as_str(),
+        &verification.subject_account_id,
         subject_proof.verification_method.as_str(),
     )
     .await
@@ -377,6 +377,39 @@ async fn resolve_current_ed25519_key_for_state(
     let document = crate::jws_verify::resolve_did_document_async(state, &did).await?;
     crate::jws_verify::require_verification_method_in_document(&document, verification_method)?;
     crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method).await
+}
+
+/// Resolve the claimant's current proof key from the authority that owns it.
+///
+/// A device is not a DID actor and therefore does not appear as an independent
+/// DID Document verification method. Its current authority is the accepted
+/// device authorization in the subject Account's PCR. Non-device DID methods
+/// remain resolved from the current DID Document.
+async fn resolve_current_subject_ed25519_key_for_state(
+    state: &AppState,
+    subject_account_id: &arkret_wire::AccountId,
+    verification_method: &str,
+) -> Result<VerifyingKey, String> {
+    let fragment = verification_method
+        .rsplit_once('#')
+        .map(|(_, fragment)| fragment)
+        .ok_or_else(|| "verification method has no fragment".to_owned())?;
+    if let Ok(device_id) = arkret_identifiers::DeviceId::new(fragment.to_owned()) {
+        return crate::jws_verify::resolve_principal_authorized_device_key_with_account_authority_async(
+            verification_method,
+            subject_account_id,
+            &device_id,
+            state,
+        )
+        .await
+        .map_err(|error| error.to_string());
+    }
+    resolve_current_ed25519_key_for_state(
+        state,
+        subject_account_id.principal_id.as_str(),
+        verification_method,
+    )
+    .await
 }
 
 fn decode_ed25519_multibase_key(value: &str) -> Result<VerifyingKey, String> {

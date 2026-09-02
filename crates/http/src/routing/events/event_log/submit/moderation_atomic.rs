@@ -151,7 +151,7 @@ fn preflight_candidate_moderation_batch(
     projection: &mut soland_domain::reducer::ProjectionState,
     envelopes: &[Value],
     operations: &[arkret_event_draft::ProjectedEventOperation],
-) -> Result<(), SubmitOneError> {
+) -> Result<Vec<soland_services::projection::ProjectionEffectView>, SubmitOneError> {
     if operations.len() != envelopes.len() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -165,6 +165,7 @@ fn preflight_candidate_moderation_batch(
 
     let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
     let hlc = soland_domain::hlc::ServerHlc::new("soland:moderation-atomic-preflight");
+    let mut effects = Vec::with_capacity(operations.len());
     for (envelope, operation) in envelopes.iter().zip(operations) {
         let event =
             serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
@@ -180,17 +181,17 @@ fn preflight_candidate_moderation_batch(
             .map_err(|error| {
                 SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", error)
             })?;
-        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
-            projection.apply_via_lattice_registry(operation, &writes, &hlc, &registry)
-        {
+        let effect = projection.apply_via_lattice_registry(operation, &writes, &hlc, &registry);
+        if let soland_domain::reducer::ProjectionEffect::Rejected { reason } = &effect {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 reason.clone(),
-                reason,
+                reason.clone(),
             ));
         }
+        effects.push(effect.into());
     }
-    Ok(())
+    Ok(effects)
 }
 
 fn map_atomic_commit_error(error: soland_services::ServiceError) -> SubmitOneError {
@@ -238,14 +239,6 @@ async fn finalize_moderation_atomic_event(
         }
     }
     if let Some(operation) = prepared.operation.as_ref() {
-        crate::routing::events::projection::project_accepted_canonical_event_from_device(
-            state,
-            &prepared.actor_id,
-            &prepared.device_id,
-            operation,
-            &prepared.projected_cell_writes,
-        )
-        .await;
         resolve_moderation_dismiss_queue_item(state, operation, &prepared.command.event.event_id)
             .await;
     }
@@ -364,7 +357,12 @@ pub(super) async fn submit_moderation_atomic_batch(
     }
 
     let mut accepted_projection = rebuild_accepted_moderation_projection(state, &realm_id).await?;
-    preflight_candidate_moderation_batch(state, &mut accepted_projection, &envelopes, &operations)?;
+    let moderation_effects = preflight_candidate_moderation_batch(
+        state,
+        &mut accepted_projection,
+        &envelopes,
+        &operations,
+    )?;
 
     state
         .events()
@@ -378,6 +376,25 @@ pub(super) async fn submit_moderation_atomic_batch(
         })
         .await
         .map_err(map_atomic_commit_error)?;
+
+    // `accepted_projection` is the exact ordered aggregate that was rebuilt
+    // from durable accepted facts and passed the normative moderation pairing
+    // and reducer checks above. Install that verified slice atomically instead
+    // of replaying its members one-by-one against a potentially incomplete
+    // process-local cache (which can reject a valid overturn after its lift).
+    state
+        .projections()
+        .install_verified_moderation_projection(accepted_projection);
+    // The atomic path deliberately does not re-run the live reducer after the
+    // durable commit. Mirror the effects produced by the exact ordered
+    // preflight instead, so the read-only appeal history observes precisely
+    // the same committed facts as the installed moderation projection.
+    for (operation, effect) in operations.iter().zip(&moderation_effects) {
+        crate::routing::events::projection::mirror_moderation_effect_to_persistence(
+            state, operation, effect,
+        )
+        .await;
+    }
 
     let mut accepted = Vec::with_capacity(responses.len());
     let mut ingress_receipts = Vec::new();

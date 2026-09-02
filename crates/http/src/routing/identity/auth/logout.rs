@@ -71,11 +71,20 @@ pub(super) async fn logout(
             "account logout requires a standard session grant",
         ));
     }
-    super::super::auth_grant_dpop::verify_grant_dpop_request(
-        state,
+    // The public Account Authority base is the sole client-visible origin for
+    // every `gate/account` operation. A deployment gateway may route this
+    // exact operation to the Principal service for its local cleanup step,
+    // but the holder proof remains bound to that advertised external origin.
+    let logout_public_base = state
+        .config()
+        .account_authority_url
+        .as_deref()
+        .unwrap_or(&state.config().public_base_url);
+    super::super::auth_grant_dpop::verify_grant_dpop_request_at_base(
         req,
         &grant_jwt,
         Some(&grant.cnf_jkt),
+        logout_public_base,
     )
     .map_err(auth_error_to_app_error)?;
     let session = super::super::auth_grant_dpop::session_record_from_introspected_grant_for_logout(

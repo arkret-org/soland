@@ -937,9 +937,9 @@ async fn invites(
                 .invitee_id
                 .as_deref()
                 .is_some_and(|stored| stored_invite_account_matches(stored, &subject))
-            || holder_delivery_ids
-                .as_ref()
-                .is_some_and(|ids| !ids.contains(&invite.invite_id))
+            || holder_delivery_ids.as_ref().is_some_and(|ids| {
+                invite.third_party_invite.is_none() && !ids.contains(&invite.invite_id)
+            })
             || (!subject_is_self
                 && !session_actor.as_account_id().is_some_and(|account| {
                     stored_invite_account_matches(&invite.inviter_id, account)

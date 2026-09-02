@@ -581,13 +581,22 @@ pub(crate) fn verify_grant_dpop_request(
     grant_jwt: &str,
     cnf_jkt: Option<&str>,
 ) -> Result<(), AuthError> {
+    verify_grant_dpop_request_at_base(req, grant_jwt, cnf_jkt, &state.config().public_base_url)
+}
+
+pub(crate) fn verify_grant_dpop_request_at_base(
+    req: &Request,
+    grant_jwt: &str,
+    cnf_jkt: Option<&str>,
+    public_base_url: &str,
+) -> Result<(), AuthError> {
     let dpop = dpop_header(req).ok_or_else(|| unauthenticated("missing DPoP proof"))?;
     let cnf_jkt = cnf_jkt.filter(|jkt| !jkt.is_empty()).ok_or_else(|| {
         unauthenticated("session grant introspection omitted cnf_jkt; cannot bind DPoP")
     })?;
     let expected_htu = format!(
         "{}{}",
-        state.config().public_base_url.trim_end_matches('/'),
+        public_base_url.trim_end_matches('/'),
         req.uri().path()
     );
     let now = crate::wire::now();
