@@ -142,13 +142,21 @@ pub(crate) async fn verified_availability_dependency_writes(
         .collect()
 }
 
-/// Verify every `ak.fork.resolution` an accepted Seal covers, then record the
-/// local normalization it produces.
+/// Verify every `ak.fork.resolution` an accepted Seal covers and record the
+/// scope-bound resolution it settles.
 ///
 /// This is the first of the two phases that clear confirmed fork evidence
-/// (`sync/federation.md` §4.5.3). It normalizes local state and nothing else:
-/// no peer leaves `peer_stale` here, because an accepted verdict says nothing
-/// about whether any particular replica has aligned its sibling set with it.
+/// (`sync/federation.md` §4.5.3), and it clears nothing: no peer leaves
+/// `peer_stale` here, because an accepted verdict says nothing about whether
+/// any particular replica has aligned its sibling set with it.
+///
+/// What it does not yet do is recompute the local disputed scope — the losing
+/// siblings stay in the accepted view. That is a gap, not a design choice: it
+/// keeps this node fail closed rather than unsafe, but it also means a peer
+/// running this same code can never answer an alignment challenge with the
+/// verdict, so the second phase has a path that will not fire. Closing it needs
+/// a per-position sibling exclusion surface, which the Event store does not
+/// have yet (`collision_variants` covers only full-hash collisions).
 pub(crate) async fn validate_accepted_fork_resolution_records(
     state: &AppState,
     seal: &Seal,
@@ -1784,6 +1792,23 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         return Err(AppError::new(
             ErrorCode::DirectoryGovernanceProofSignatureInvalid,
             "Seal signatures do not satisfy the frozen notary quorum".to_owned(),
+        ));
+    }
+    // A recovery-signed Seal that adjudicates a fork adjudicates nothing else.
+    // Without this, the narrow section 6.3.2 exception would let a recovery
+    // signer attach an ordinary membership, capability or policy Move to the
+    // same Seal and become a general signing authority.
+    let delta_kinds = seal
+        .delta
+        .iter()
+        .filter_map(|digest| state.projections().control_event(digest).ok().flatten())
+        .map(|event| event.kind)
+        .collect::<Vec<_>>();
+    if !notary.authorizes_seal_delta(&methods, &delta_kinds) {
+        return Err(AppError::new(
+            ErrorCode::SealSignerUnauthorized,
+            "a recovery-signed fork-resolution Seal must cover only ak.fork.resolution Moves"
+                .to_owned(),
         ));
     }
     for signature in signatures {
