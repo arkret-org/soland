@@ -191,14 +191,12 @@ async fn run() -> anyhow::Result<()> {
     state.hydrate().await?;
     spawn_federation_peer_discovery(state.clone());
 
-    // G3.S9 — sovereign enclave profile invariants. When
+    // Sovereign enclave security invariants. When
     // `SOLAND_SOVEREIGN_ENCLAVE=1` the configured posture MUST satisfy:
     //   * federation_outbound_enabled = false
     //   * did_resolver_allow_methods non-empty
-    // Fail fast at startup if either invariant is violated; the enclave
-    // profile claim on `/server/describe` would otherwise be a lie.
-    let enclave_assertion =
-        soland_http::routing::extensions::sovereign::assert_enclave_invariants(state.config());
+    // Fail fast at startup if either invariant is violated.
+    let enclave_assertion = soland_http::security::assert_enclave_invariants(state.config());
     if !enclave_assertion.is_compliant() {
         anyhow::bail!(
             "SOLAND_SOVEREIGN_ENCLAVE=1 but enclave invariants are not satisfied: {}",
@@ -209,7 +207,7 @@ async fn run() -> anyhow::Result<()> {
         tracing::info!(
             target: "sovereign_boundary_audit",
             allowed_outbound_hosts = ?state.config().sovereign_enclave_allowed_outbound_hosts,
-            "sovereign enclave profile enabled; outbound federation is disabled \
+            "sovereign enclave security posture enabled; outbound federation is disabled \
              and outbound HTTP must be on the allow-list",
         );
     }

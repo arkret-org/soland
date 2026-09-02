@@ -10,7 +10,7 @@ mod governance_history;
 pub(crate) mod circles;
 pub(crate) mod conformance;
 pub(crate) mod events;
-// Protocol Applet bridge plus deployment-local sovereign-enclave administration.
+// Protocol Applet bridge.
 pub mod extensions;
 pub mod federation;
 pub(crate) mod identity;

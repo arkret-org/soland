@@ -807,32 +807,40 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: &BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
-        let computed_root = (!data_event_leaf_manifest.is_empty())
-            .then(|| arkret_state::event_digest_set_root(data_event_leaf_manifest, digest_suite))
-            .transpose()
-            .map_err(|error| StoreError::Backend(error.to_string()))?;
-        if computed_root != seal.data_event_set_root {
-            return Err(StoreError::Conflict(
-                "Event Seal data_event_set_root does not match its frozen leaf manifest".to_owned(),
-            ));
+        if let Some(manifest) = data_event_leaf_manifest {
+            let computed_root = (!manifest.is_empty())
+                .then(|| arkret_state::event_digest_set_root(manifest, digest_suite))
+                .transpose()
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
+            if computed_root != seal.data_event_set_root {
+                return Err(StoreError::Conflict(
+                    "Event Seal data_event_set_root does not match its frozen leaf manifest"
+                        .to_owned(),
+                ));
+            }
         }
         if let Some(existing) = self.seal_store.get(&seal.id)? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
             let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
-            if existing_bytes != retry_bytes
-                || self.data_event_leaf_manifests.lock().get(&seal.id)
-                    != Some(data_event_leaf_manifest)
-            {
+            if existing_bytes != retry_bytes {
                 return Err(StoreError::Conflict(
-                    "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
+                    "duplicate_conflict: exact Seal id replay has different accepted bytes"
                         .to_owned(),
                 ));
+            }
+            if let Some(manifest) = data_event_leaf_manifest {
+                if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest) {
+                    return Err(StoreError::Conflict(
+                        "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
+                            .to_owned(),
+                    ));
+                }
             }
             return Ok(true);
         }
@@ -870,9 +878,11 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
             Ok(true) => {
-                self.data_event_leaf_manifests
-                    .lock()
-                    .insert(seal.id.clone(), data_event_leaf_manifest.clone());
+                if let Some(manifest) = data_event_leaf_manifest {
+                    self.data_event_leaf_manifests
+                        .lock()
+                        .insert(seal.id.clone(), manifest.clone());
+                }
                 // Match the production memory commit boundary: a sealed Move
                 // must leave the pending queue before another signing pass.
                 for digest in &seal.delta {

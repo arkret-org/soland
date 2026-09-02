@@ -7,6 +7,8 @@ use std::time::Duration;
 use arkret_egress_reqwest::{EgressGuard, LockedEgressUrl};
 use reqwest::Url;
 
+use crate::config::AppConfig;
+
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFAULT_HTTPS_PORT: u16 = 443;
 
@@ -69,6 +71,51 @@ pub fn sovereign_enclave_allowed_outbound_hosts() -> Vec<String> {
 /// Whether the sovereign enclave profile is enabled for this process.
 pub fn sovereign_enclave_enabled() -> bool {
     egress_policy().sovereign_enclave_enabled
+}
+
+/// Result of validating the immutable startup posture for a sovereign enclave.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EnclaveAssertionResult {
+    pub enabled: bool,
+    pub federation_outbound_disabled: bool,
+    pub resolver_method_allowlist_present: bool,
+    pub violations: Vec<String>,
+}
+
+impl EnclaveAssertionResult {
+    pub fn is_compliant(&self) -> bool {
+        !self.enabled || self.violations.is_empty()
+    }
+}
+
+/// Validate the typed startup configuration before enabling the sovereign
+/// enclave security posture. This guard does not create Realm, membership,
+/// invitation, account, routing, or frontier state.
+pub fn assert_enclave_invariants(config: &AppConfig) -> EnclaveAssertionResult {
+    let enabled = config.sovereign_enclave_enabled;
+    let mut violations = Vec::new();
+    let federation_outbound_disabled = !config.federation_outbound_enabled;
+    let resolver_method_allowlist_present = !config.did_resolver_allow_methods.is_empty();
+    if enabled {
+        if config.federation_outbound_enabled {
+            violations.push(
+                "sovereign_enclave_enabled=true requires federation_outbound_enabled=false"
+                    .to_owned(),
+            );
+        }
+        if !resolver_method_allowlist_present {
+            violations.push(
+                "sovereign_enclave_enabled=true requires a non-empty did_resolver_allow_methods"
+                    .to_owned(),
+            );
+        }
+    }
+    EnclaveAssertionResult {
+        enabled,
+        federation_outbound_disabled,
+        resolver_method_allowlist_present,
+        violations,
+    }
 }
 
 /// `sync/sovereign-deployment.md` §8 (normative) — before a federation request
@@ -671,6 +718,57 @@ mod tests {
     use parking_lot::Mutex;
 
     use super::*;
+    use crate::config::ObjectStorageConfig;
+
+    fn base_config() -> AppConfig {
+        AppConfig {
+            object_storage: ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-enclave-tests"),
+            ),
+            development_mode: true,
+            did_resolver_allow_methods: vec!["web".to_owned()],
+            jws_replay_window_seconds: 0,
+            jws_replay_window_per_family: std::collections::BTreeMap::new(),
+            ..AppConfig::test_default()
+        }
+    }
+
+    #[test]
+    fn sovereign_enclave_disabled_has_no_startup_violations() {
+        let result = assert_enclave_invariants(&base_config());
+        assert!(result.is_compliant());
+        assert!(result.violations.is_empty());
+    }
+
+    #[test]
+    fn sovereign_enclave_requires_outbound_federation_off() {
+        let mut config = base_config();
+        config.sovereign_enclave_enabled = true;
+        config.federation_outbound_enabled = true;
+        let result = assert_enclave_invariants(&config);
+        assert!(!result.is_compliant());
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|violation| violation.contains("federation_outbound_enabled"))
+        );
+    }
+
+    #[test]
+    fn sovereign_enclave_requires_did_method_allowlist() {
+        let mut config = base_config();
+        config.sovereign_enclave_enabled = true;
+        config.did_resolver_allow_methods.clear();
+        let result = assert_enclave_invariants(&config);
+        assert!(!result.is_compliant());
+        assert!(
+            result
+                .violations
+                .iter()
+                .any(|violation| violation.contains("did_resolver_allow_methods"))
+        );
+    }
 
     fn env_lock() -> &'static Mutex<()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();

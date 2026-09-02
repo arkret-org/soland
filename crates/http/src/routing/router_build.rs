@@ -281,7 +281,6 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
                 .push(admin::admin_router())
                 .push(admin::router())
         .push(federation::admin_seal_sign_router())
-                .push(Router::with_path("admin").push(extensions::admin_router()))
                 .push(soland_local_router()),
         )
         .push(arkret_protocol_router(conformance_harness_enabled))
@@ -427,7 +426,6 @@ fn soland_local_router() -> Router {
         // protocol tree (see `arkret_protocol_router`).
         .push(Router::with_path("peer").push(federation::router()))
         .push(interop::local_router())
-        .push(extensions::local_router())
         // Catch-all for the `/_soland/...` tree, mirroring the `/_arkret/`
         // one: unmatched paths/methods get the canonical Arkret JSON error
         // envelope (404 `unrecognized_endpoint` / 405 `method_not_allowed`

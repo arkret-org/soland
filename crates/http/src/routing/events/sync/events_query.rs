@@ -792,7 +792,6 @@ struct EventsQueryParts {
     order: String,
     limit: usize,
     filters: Option<Value>,
-    include_completeness: bool,
 }
 
 fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::AppError> {
@@ -954,7 +953,6 @@ pub(crate) async fn events_read_body(
         filters: body
             .filters
             .map(|filters| Value::Object(filters.into_iter().collect())),
-        include_completeness: body.include_completeness.unwrap_or(false),
     };
     events_query_impl(state, req, parts).await
 }
@@ -1041,8 +1039,6 @@ async fn events_query_impl(
         .await?;
         return soland_http::result::json_ok(response);
     }
-    let range_completeness =
-        range_completeness_for_query(state, session.as_ref(), &parts, &realms).await?;
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     let mut agent_control_realms: std::collections::BTreeSet<String> =
         std::collections::BTreeSet::new();
@@ -1260,7 +1256,6 @@ async fn events_query_impl(
         prev_cursor,
         next_cursor,
         has_more,
-        range_completeness,
     })
 }
 
@@ -1300,201 +1295,6 @@ fn canonical_query_page(
         .map_or(after.is_some() && start > 1, |index| *index > 0);
     Ok((indices, has_more))
 }
-async fn range_completeness_for_query(
-    state: &AppState,
-    session: Option<&SessionIdentityState>,
-    parts: &EventsQueryParts,
-    realms: &[String],
-) -> Result<
-    Option<arkret_models_collaboration::http_bodies::EventsRangeCompleteness>,
-    soland_http::error::AppError,
-> {
-    use arkret_models_collaboration::sync_frames::snapshot::{
-        RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
-        RangeCompletenessAttestationEventRangeFromFrontier,
-        RangeCompletenessAttestationEventRangeToFrontier,
-        RangeCompletenessAttestationWitnessAttestation,
-        RangeCompletenessAttestationWitnessAttestationWitnessesItem,
-    };
-    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event};
-    use arkret_wire::{Hash, PayloadProofPurpose, PayloadSigner, proof_kind};
-
-    if !parts.include_completeness
-        || realms.len() != 1
-        || !parts.actors.is_empty()
-        || parts.filters.is_some()
-    {
-        return Ok(None);
-    }
-    let Some(session) = session else {
-        return Ok(None);
-    };
-    let realm_id = RealmId::new(realms[0].clone())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let actor =
-        crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
-    if !state
-        .projections()
-        .snapshot()
-        .realm_is_principal_control_for_actor(realm_id.as_str(), &actor.to_string())
-    {
-        return Ok(None);
-    }
-
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let mut accepted_events = records
-        .iter()
-        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
-        .map(|record| super::super::event_log::sdk_event_for_state(state, record))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    accepted_events.sort_by(|left, right| {
-        left.created_at
-            .cmp(&right.created_at)
-            .then_with(|| left.event_id.as_str().cmp(right.event_id.as_str()))
-    });
-    if accepted_events.len() < 2 {
-        return Ok(None);
-    }
-    let (from_frontier, to_frontier) =
-        arkret_state::full_realm_range_frontiers(&accepted_events)
-            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let range_events = arkret_state::full_realm_range_events(&accepted_events)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let actor_seq_ranges = arkret_state::range_completeness_actor_seq_ranges(&range_events)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    if actor_seq_ranges.is_empty() {
-        return Ok(None);
-    }
-    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
-    let (root, covered_event_ids) =
-        arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
-            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-
-    let issuer = state.service_resolution_commitment().did.clone();
-    let issuer_actor = arkret_wire::project_did_to_core_id(&issuer)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let verification_method =
-        arkret_wire::DidUrl::new(format!("{issuer}#notary-key")).map_err(|error| {
-            soland_http::error::AppError::internal(format!(
-                "service notary verification method is invalid: {error}"
-            ))
-        })?;
-    let observed_at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
-    // The attestation is a service-signed object, not an Event: it gets its own
-    // minted id rather than one retyped from a fabricated `ak:event:` value.
-    let attestation_id = ids::generate("attestation");
-    let signer = Ed25519PayloadSigner::new(
-        state.notary_signing_key().as_ref().clone(),
-        issuer.clone(),
-        verification_method.clone(),
-    );
-    let mut payload = RangeCompletenessAttestation {
-        attestation_id,
-        schema: arkret_wire::SchemaId::RANGE_COMPLETENESS_ATTESTATION_V1.to_owned(),
-        issuer_id: issuer_actor.clone(),
-        issuer_role: "events_api".to_owned(),
-        realm_id: realm_id.clone(),
-        event_range: RangeCompletenessAttestationEventRange {
-            from_frontier: RangeCompletenessAttestationEventRangeFromFrontier {
-                realm_frontier: from_frontier,
-                extra: BTreeMap::new(),
-            },
-            to_frontier: RangeCompletenessAttestationEventRangeToFrontier {
-                realm_frontier: to_frontier.clone(),
-                extra: BTreeMap::new(),
-            },
-            actor_seq_ranges,
-        },
-        root,
-        count: covered_event_ids.len() as u64,
-        observed_at,
-        witness_attestation: RangeCompletenessAttestationWitnessAttestation {
-            witnesses: vec![
-                RangeCompletenessAttestationWitnessAttestationWitnessesItem {
-                    witness_id: issuer_actor.clone(),
-                    verification_method: verification_method.clone(),
-                    controlling_organization_id: issuer_actor.clone(),
-                    attested_at: Some(observed_at),
-                    extra: BTreeMap::new(),
-                },
-            ],
-        },
-        proofs: Vec::new(),
-    };
-    let mut unsigned_payload = serde_json::to_value(&payload)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    unsigned_payload
-        .as_object_mut()
-        .expect("typed completeness payload serializes as an object")
-        .remove("proofs");
-    let canonical_payload = arkret_canonical::canonical_json_bytes(&unsigned_payload)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let unsigned_proof = arkret_wire::UnsignedPayloadProof {
-        kind: proof_kind::DETACHED_JWS.to_owned(),
-        verification_method: verification_method.clone(),
-        payload_digest: Hash::new(arkret_canonical::canonical::sha256_digest(
-            &canonical_payload,
-        ))
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
-        created_at: observed_at,
-        domain: None,
-        audience: None,
-        proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
-    };
-    let proof_binding = payload
-        .proof_signing_bytes(&unsigned_proof)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let signature = signer
-        .sign_payload(&proof_binding)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let payload_proof = unsigned_proof
-        .finalize(signature.jws)
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    payload.proofs.push(payload_proof);
-
-    let actor_seq = accepted_events
-        .iter()
-        .filter(|event| event.actor_id == arkret_wire::ActorId::service(issuer_actor.clone()))
-        .map(|event| event.actor_seq)
-        .max()
-        .map_or(0, |sequence| sequence.saturating_add(1));
-    let attestation_hlc = arkret_identifiers::Hlc::new(state.hlc().now())
-        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let mut attestation_event = arkret_event_draft::TypedEventDraft::<
-        arkret_wire::event_spec::AttestationRangeCompleteness,
-    >::new(
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm_id.clone(),
-        },
-        arkret_wire::ActorId::service(issuer_actor.clone()),
-        payload,
-    )
-    .map(|draft| draft.with_prev_refs(to_frontier))
-    .and_then(|draft| {
-        draft.author_with_digest_suite(actor_seq, attestation_hlc, observed_at, digest_suite)
-    })
-    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let event_id = attestation_event.event_id().clone();
-    sign_event(
-        &mut attestation_event,
-        &signer,
-        &verification_method,
-        SignEventOptions::new().with_created_at(observed_at),
-    )
-    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    Ok(Some(
-        arkret_models_collaboration::http_bodies::EventsRangeCompleteness {
-            attestation_refs: vec![event_id],
-            attestations: vec![attestation_event.into_event()],
-        },
-    ))
-}
-
 #[cfg(test)]
 
 async fn projection_matches_actor_selectors(
@@ -1911,7 +1711,6 @@ mod tests {
             order: "default".to_owned(),
             limit: 100,
             filters: None,
-            include_completeness: false,
         };
         assert!(events_query_direction(&parts));
 
@@ -2585,7 +2384,6 @@ async fn durable_events_query_from_parts(
         next_cursor,
         prev_cursor,
         has_more,
-        range_completeness: None,
     })
 }
 

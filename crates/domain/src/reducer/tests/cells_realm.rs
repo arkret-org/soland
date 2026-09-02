@@ -1750,9 +1750,9 @@ fn the_bundle_projects_every_registered_component() {
             "applies_to": ["seal_include"]
         },
         "audit_policy": {
-            "range_completeness_witness_ids": ["ak:did_core:web:witness.example"],
-            "witnessed_min_attestations": 1,
-            "witness_independence": "distinct_did"
+            "seal_transparency_auditor_ids": ["ak:did_core:web:witness.example"],
+            "seal_transparency_min_attestations": 1,
+            "seal_transparency_auditor_independence": "distinct_did"
         },
         "preauth": {"consent_required": true}
     });

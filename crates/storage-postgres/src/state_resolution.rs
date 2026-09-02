@@ -53,7 +53,7 @@ pub trait EventSealCommitStore: Send + Sync {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: &BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 
@@ -1936,12 +1936,14 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: &BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
-        validate_data_event_leaf_manifest(seal, digest_suite, data_event_leaf_manifest)?;
+        if let Some(manifest) = data_event_leaf_manifest {
+            validate_data_event_leaf_manifest(seal, digest_suite, manifest)?;
+        }
         for (edge_index, dependency) in governance_dependencies.iter().enumerate() {
             if dependency.realm_id != seal.realm_id
                 || dependency.source
@@ -1996,10 +1998,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
             .iter()
             .map(|digest| digest.as_str().to_owned())
             .collect::<BTreeSet<_>>();
-        let data_event_leaf_manifest = data_event_leaf_manifest
-            .iter()
-            .map(|digest| digest.as_str().to_owned())
-            .collect::<Vec<_>>();
+        let data_event_leaf_manifest = data_event_leaf_manifest.map(|manifest| {
+            manifest
+                .iter()
+                .map(|digest| digest.as_str().to_owned())
+                .collect::<Vec<_>>()
+        });
         let data_event_set_root = seal
             .data_event_set_root
             .as_ref()
@@ -2041,14 +2045,14 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .get_result::<DataEventLeafManifestRow>(&mut *conn)
                     .await
                     .optional()?;
-                    if stored_manifest.map(|row| row.leaf_digests)
-                        != Some(data_event_leaf_manifest.clone())
-                    {
-                        return Err(StoreError::Conflict(
-                            "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
-                                .to_owned(),
-                        )
-                        .into());
+                    if let Some(manifest) = &data_event_leaf_manifest {
+                        if stored_manifest.map(|row| row.leaf_digests) != Some(manifest.clone()) {
+                            return Err(StoreError::Conflict(
+                                "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                                    .to_owned(),
+                            )
+                            .into());
+                        }
                     }
                     let exact_dependencies =
                         crate::governance_dependencies_match_in_transaction(
@@ -2288,18 +2292,20 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .bind::<Jsonb, _>(&checkpoint_state_json)
                 .execute(&mut *conn)
                 .await?;
-                sql_query(
-                    "INSERT INTO state_seal_data_event_manifests \
-                     (seal_id, realm_id, digest_suite, leaf_digests, data_event_set_root) \
-                     VALUES ($1, $2, $3, $4, $5)",
-                )
-                .bind::<Text, _>(&seal_id)
-                .bind::<Text, _>(&realm_id)
-                .bind::<Text, _>(&manifest_digest_suite)
-                .bind::<Array<Text>, _>(&data_event_leaf_manifest)
-                .bind::<Nullable<Text>, _>(&data_event_set_root)
-                .execute(&mut *conn)
-                .await?;
+                if let Some(manifest) = &data_event_leaf_manifest {
+                    sql_query(
+                        "INSERT INTO state_seal_data_event_manifests \
+                         (seal_id, realm_id, digest_suite, leaf_digests, data_event_set_root) \
+                         VALUES ($1, $2, $3, $4, $5)",
+                    )
+                    .bind::<Text, _>(&seal_id)
+                    .bind::<Text, _>(&realm_id)
+                    .bind::<Text, _>(&manifest_digest_suite)
+                    .bind::<Array<Text>, _>(manifest)
+                    .bind::<Nullable<Text>, _>(&data_event_set_root)
+                    .execute(&mut *conn)
+                    .await?;
+                }
                 for dependency in &governance_dependencies {
                     crate::put_governance_dependency_exact_in_transaction(conn, dependency)
                         .await
@@ -2410,11 +2416,13 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<Hash>,
-        data_event_leaf_manifest: &BTreeSet<Hash>,
+        data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
-        validate_data_event_leaf_manifest(seal, digest_suite, data_event_leaf_manifest)?;
+        if let Some(manifest) = data_event_leaf_manifest {
+            validate_data_event_leaf_manifest(seal, digest_suite, manifest)?;
+        }
         if let Some(existing) = self.seal_store.get(&seal.id)? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -2426,12 +2434,13 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                         .to_owned(),
                 ));
             }
-            if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(data_event_leaf_manifest)
-            {
-                return Err(StoreError::Conflict(
-                    "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
-                    .to_owned(),
-                ));
+            if let Some(manifest) = data_event_leaf_manifest {
+                if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest) {
+                    return Err(StoreError::Conflict(
+                        "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                            .to_owned(),
+                    ));
+                }
             }
             let checkpoints = self.effective_state_checkpoints.lock();
             let checkpoint = checkpoints.get(&seal.id).ok_or_else(|| {
@@ -2504,9 +2513,11 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
         {
             Ok(true) => {
-                self.data_event_leaf_manifests
-                    .lock()
-                    .insert(seal.id.clone(), data_event_leaf_manifest.clone());
+                if let Some(manifest) = data_event_leaf_manifest {
+                    self.data_event_leaf_manifests
+                        .lock()
+                        .insert(seal.id.clone(), manifest.clone());
+                }
                 self.effective_state_checkpoints.lock().insert(
                     seal.id.clone(),
                     SealEffectiveStateCheckpoint {
@@ -3100,7 +3111,7 @@ mod event_seal_commit_tests {
                         &[],
                         &candidate.1,
                         &candidate.2,
-                        &BTreeSet::new(),
+                        Some(&BTreeSet::new()),
                         &[],
                     )
                     .unwrap();
@@ -3191,7 +3202,7 @@ mod event_seal_commit_tests {
                 &[],
                 &winner.1,
                 &std::iter::once(winner.1[0].1.op.move_id.clone()).collect(),
-                &BTreeSet::new(),
+                Some(&BTreeSet::new()),
                 &[],
             )
             .unwrap_err();
@@ -3211,7 +3222,7 @@ mod event_seal_commit_tests {
                 &[],
                 &loser.1,
                 &std::iter::once(loser.1[0].1.op.move_id.clone()).collect(),
-                &mismatched_manifest,
+                Some(&mismatched_manifest),
                 &[],
             )
             .unwrap_err();
@@ -3220,5 +3231,63 @@ mod event_seal_commit_tests {
                 .to_string()
                 .contains("data_event_set_root mismatch")
         );
+    }
+
+    #[test]
+    fn memory_transport_commit_accepts_observational_root_without_manifest() {
+        let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
+        let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
+        let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
+        let registry: Arc<dyn CellRegistry> = Arc::new(
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        );
+        let committer = MemoryEventSealCommitStore {
+            lock: parking_lot::Mutex::new(()),
+            data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
+            effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
+            control_event_store: control_event_store.clone(),
+            seal_store,
+            cell_store: cell_store.clone(),
+            cell_registry: registry.clone(),
+        };
+        let realm =
+            RealmId::new("ak:realm:AbyyZrF7pGSKY_6LDT13wAQKxoSWNXKFknfWSmLtjw3U".to_owned())
+                .unwrap();
+        let (mut seal, ops, covered, event) =
+            competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'c', 3);
+        let observed = [Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap()]
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        seal.data_event_set_root = Some(
+            arkret_state::event_digest_set_root(&observed, arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        );
+        seal.id = seal
+            .derive_id(arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+        let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
+            device_id: "ak:device:fixture".to_owned(),
+            device_authorize_event_id: "ak:event:fixture".to_owned(),
+            device_generation_ref: 1,
+            seal_basis_digest: "sha256:fixture".to_owned(),
+        });
+        control_event_store
+            .put_pending_with_ingress(&event, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+
+        assert!(
+            committer
+                .commit_if_frontier(
+                    &seal,
+                    arkret_canonical::DigestSuite::Sha256,
+                    &[],
+                    &ops,
+                    &covered,
+                    None,
+                    &[],
+                )
+                .unwrap()
+        );
+        assert_eq!(committer.data_event_leaf_manifest(&seal.id).unwrap(), None);
     }
 }

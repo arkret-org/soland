@@ -1152,7 +1152,7 @@ async fn try_apply_device_generation_event_seal(
         &context.cas_frontier_refs,
         &new_ops,
         &target,
-        &BTreeSet::new(),
+        None,
         &availability_dependency_writes,
     ) {
         Ok(true) => {}
@@ -1518,7 +1518,7 @@ pub(crate) async fn apply_agent_event_seal(
         &leaves,
         &new_ops,
         &target,
-        &BTreeSet::new(),
+        None,
         &availability_dependency_writes,
     ) {
         Ok(true) => {}
@@ -1621,7 +1621,7 @@ pub(crate) async fn apply_inbound_seal(
         &expected_store_frontier,
         &prepared.new_ops,
         &prepared.covered_event_digests,
-        &BTreeSet::new(),
+        None,
         &governance_dependencies,
     ) {
         Ok(true) => {

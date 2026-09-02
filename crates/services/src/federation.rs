@@ -1,96 +1,14 @@
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use parking_lot::{Mutex, MutexGuard};
-use serde_json::Value;
 pub use soland_storage::{
     FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
     FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
 };
 
-use crate::{ServiceError, ServiceResult};
-
-#[derive(Clone, Debug, Default)]
-pub struct SovereignDeploymentState {
-    pub profile_override: Option<String>,
-    pub upstream_main: Option<String>,
-    pub trust_roots: Vec<String>,
-    pub allow_external_via_enclave: bool,
-    pub trusted_enclaves: BTreeMap<String, SovereignEnclaveRecord>,
-    pub enclave_realms: BTreeMap<String, SovereignRealmRecord>,
-    pub external_invites: BTreeMap<String, SovereignExternalInviteRecord>,
-    pub external_accounts: BTreeMap<String, SovereignExternalAccountRecord>,
-    pub audit_log: Vec<SovereignAuditRecord>,
-    pub upstream_available: bool,
-    pub store_forward_queue: Vec<SovereignStoreForwardRecord>,
-    pub received_store_forward: Vec<SovereignStoreForwardRecord>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignEnclaveRecord {
-    pub server_id: String,
-    pub base_url: String,
-    pub trust_chain: Vec<String>,
-    pub registered_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignRealmRecord {
-    pub realm_id: String,
-    pub deployment_profile: String,
-    pub hosted_on: String,
-    pub external_invite_policy: String,
-    pub created_by: String,
-    pub created_at: DateTime<Utc>,
-    pub enclave_frontier: i64,
-    pub main_frontier: i64,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignExternalInviteRecord {
-    pub invite_token: String,
-    pub target_realm: String,
-    pub target_host: String,
-    pub invitee_id: String,
-    pub inviter_id: String,
-    pub accepted: bool,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignExternalAccountRecord {
-    pub did: String,
-    pub realm_id: String,
-    pub bound_node: String,
-    pub trust_chain_profile: String,
-    pub active: bool,
-    pub joined_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignAuditRecord {
-    pub subject: String,
-    pub action: String,
-    pub realm_id: Option<String>,
-    pub status: String,
-    pub detail: Value,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug)]
-pub struct SovereignStoreForwardRecord {
-    pub id: String,
-    pub realm_id: String,
-    pub actor: String,
-    pub content: Value,
-    pub state: String,
-    pub created_at: DateTime<Utc>,
-    pub forwarded_at: Option<DateTime<Utc>>,
-}
+use crate::ServiceResult;
 
 /// Identity and payload of one outbound delivery intent. This is the shape the
 /// admission path builds *before* the Event transaction commits; the durable
@@ -313,24 +231,11 @@ pub trait FederationStatePort: Send + Sync {
 pub struct FederationService {
     outbox: Arc<dyn FederationOutboxPort>,
     state: Arc<dyn FederationStatePort>,
-    sovereign: Arc<Mutex<SovereignDeploymentState>>,
 }
 
 impl FederationService {
     pub fn new(outbox: Arc<dyn FederationOutboxPort>, state: Arc<dyn FederationStatePort>) -> Self {
-        Self {
-            outbox,
-            state,
-            sovereign: Arc::new(Mutex::new(SovereignDeploymentState::default())),
-        }
-    }
-
-    pub fn install_sovereign_state(&self, state: SovereignDeploymentState) {
-        *self.sovereign.lock() = state;
-    }
-
-    pub fn sovereign_state(&self) -> MutexGuard<'_, SovereignDeploymentState> {
-        self.sovereign.lock()
+        Self { outbox, state }
     }
 
     pub async fn enqueue_delivery(
@@ -542,27 +447,6 @@ impl FederationService {
                 resolved_at,
             )
             .await
-    }
-
-    pub async fn resolve_verified_witness_reagreement(
-        &self,
-        resolution: &arkret_models_collaboration::sync_frames::snapshot::WitnessReagreementResolutionRecord,
-        resolved_at: i64,
-    ) -> ServiceResult<Vec<DidCoreId>> {
-        let scope_key = resolution
-            .evidence_scope_key()
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        let resolution_digest = resolution
-            .resolution_digest()
-            .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-        self.resolve_frontier_confirmed_evidence(
-            resolution.realm_id.as_str(),
-            scope_key.as_str(),
-            "witness_reagreement",
-            resolution_digest.as_str(),
-            resolved_at,
-        )
-        .await
     }
 }
 

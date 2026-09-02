@@ -86,9 +86,6 @@ use crate::artifacts;
 //   scope. Required to verify `Actor Profile.accountable_principal_ids[]`;
 //   reducer rejects the complete profile Event with
 //   `accountability_grant_missing`; field stripping is not a v1 behavior.
-// `ak.attestation.range_completeness` (audit / non-reducer): range-bound
-//   completeness attestation; backs cross-issuer fork detection.
-//   zh/sync/operations-sync.md §4.2.
 // Round C46 (2026-05-19; later simplified) — per-device push route binding.
 //
 // `ak.device.push_route` (device / actor_private_event / reducer_input):
