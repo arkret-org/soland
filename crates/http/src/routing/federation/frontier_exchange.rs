@@ -807,7 +807,7 @@ impl FrontierExchangeWorker {
                 limit: Some(256),
                 ..Default::default()
             };
-            let (page, _, _): (PeerEventsQueryOutcome, _, _) = self
+            let (page, ..): (PeerEventsQueryOutcome, _, _) = self
                 .peer_query(peer_id, "/_arkret/peer/events", &request)
                 .await?;
             let has_more = page.has_more;
@@ -865,7 +865,7 @@ impl FrontierExchangeWorker {
             history_traversal_access: None,
             directory_source_ref_access: None,
         };
-        let (outcome, _, _): (PeerEventsResolveOutcome, _, _) = self
+        let (outcome, ..): (PeerEventsResolveOutcome, _, _) = self
             .peer_query(peer_id, "/_arkret/peer/events/resolve", &request)
             .await?;
         let Some(submission) = outcome.events.into_iter().next() else {

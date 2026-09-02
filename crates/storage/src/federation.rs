@@ -3,9 +3,8 @@ use arkret_wire::DidCoreId;
 use super::{
     FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
     FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
-    FederationOutboxDeadLetterRecord,
-    FederationOutboxRecord, FederationOutboxState, PersistenceError, PersistenceResult,
-    ProjectedEventOperation, async_trait,
+    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxState,
+    PersistenceError, PersistenceResult, ProjectedEventOperation, async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.

@@ -185,7 +185,8 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     // A second peer holding the same disputed scope is untouched: alignment is
     // proved one peer at a time, so clearing this one says nothing about that
     // one.
-    let other_peer = arkret_wire::DidCoreId::new("ak:did_core:web:frontier-peer-b.example").unwrap();
+    let other_peer =
+        arkret_wire::DidCoreId::new("ak:did_core:web:frontier-peer-b.example").unwrap();
     restarted
         .record_confirmed_evidence(&soland_storage::FederationFrontierConfirmedEvidenceRecord {
             peer_id: other_peer.clone(),

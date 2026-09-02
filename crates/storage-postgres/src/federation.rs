@@ -5,14 +5,15 @@ use super::{
     AsyncConnection, AsyncPgConnection, BigInt, ExistsRow,
     FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
     FederationFrontierExchangeStore, FederationFrontierReductionCheckpoint,
-    FederationFrontierResolutionRecord, FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
-    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
-    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
-    FederationOutboxStore, FederationOutboxTransition, Integer, JsonPayloadRow, Jsonb, Nullable,
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
-    ProjectedEventOperation, QueryableByName, RunQueryDsl, Text, Timestamptz, async_trait,
-    classify_federation_outbox_completion, frontier_exchange_failure_record,
-    frontier_exchange_success_record, ids, pg_conn, sql_query, sql_types,
+    FederationFrontierResolutionRecord, FederationOperationsStore, FederationOutboxClaim,
+    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
+    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
+    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
+    JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
+    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, Text,
+    Timestamptz, async_trait, classify_federation_outbox_completion,
+    frontier_exchange_failure_record, frontier_exchange_success_record, ids, pg_conn, sql_query,
+    sql_types,
 };
 
 /// Every column of `federation_outbox`, aliased to the record field names.
