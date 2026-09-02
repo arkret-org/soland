@@ -288,18 +288,20 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             return;
         }
     }
+    // `models/content-types.md`: the attachment's content-addressed `blob_ref`
+    // is the sole wire commitment to the stored ciphertext, so the envelope
+    // carries no sibling `ciphertext_digest`. When the caller states a
+    // `blob_ref`, the digest embedded in it is what must match the bytes.
     if let Some(encryption) = encryption.as_ref()
-        && encryption
-            .get("ciphertext_digest")
-            .and_then(Value::as_str)
-            .is_some_and(|digest| digest != content_digest)
+        && let Some(stated_ref) = encryption.get("blob_ref").and_then(Value::as_str)
+        && stated_ref != format!("ak:blob:{content_digest}")
     {
-        crate::metrics::record_digest_mismatch("blob_upload_ciphertext_digest");
+        crate::metrics::record_digest_mismatch("blob_upload_attachment_blob_ref");
         render_error(
             res,
             StatusCode::CONFLICT,
             "digest_mismatch",
-            "attachment ciphertext_digest does not match blob content",
+            "attachment blob_ref does not address the uploaded blob content",
         );
         return;
     }
@@ -1189,6 +1191,19 @@ pub(super) fn plaintext_blob_data_class(
 /// discriminator. The server stores the envelope as opaque JSON and never
 /// decrypts, so this is a light-touch shape check (which fields are required),
 /// not any cryptographic interpretation.
+/// `ak:blob:<suite>:<64 lowercase hex>` — the content-addressed form only.
+fn is_valid_content_addressed_blob_ref(value: &str) -> bool {
+    let Some(rest) = value.strip_prefix("ak:blob:") else {
+        return false;
+    };
+    let Some((suite, hex)) = rest.split_once(':') else {
+        return false;
+    };
+    matches!(suite, "sha256" | "blake3")
+        && hex.len() == 64
+        && hex.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn validate_encrypted_attachment_metadata(
     metadata: &serde_json::Value,
 ) -> Result<(), &'static str> {
@@ -1211,15 +1226,20 @@ fn validate_encrypted_attachment_metadata(
         return Err("attachment envelope requires key_ref");
     }
 
-    // `ciphertext_digest` is mandatory in both schemes; it is a sha256 of the
-    // entire opaque ciphertext (true for whole-file AND stream form), so the
-    // server's existing SHA256-of-uploaded-bytes check covers both naturally.
+    // The content commitment is the content-addressed `blob_ref` itself
+    // (`models/content-types.md`: "attachment 不携 sibling `ciphertext_digest`").
+    // It covers whole-file and stream form alike, because the ref addresses the
+    // concatenated stored ciphertext including every segment's AEAD tag, and the
+    // upload path already compares it against the SHA-256 of the received bytes.
     if !envelope
-        .get("ciphertext_digest")
+        .get("blob_ref")
         .and_then(|value| value.as_str())
-        .is_some_and(is_valid_sha256_digest)
+        .is_some_and(is_valid_content_addressed_blob_ref)
     {
-        return Err("attachment ciphertext_digest must be sha256:<64 lowercase hex>");
+        return Err("attachment envelope requires a content-addressed blob_ref");
+    }
+    if envelope.contains_key("ciphertext_digest") {
+        return Err("attachment envelope must not mirror blob_ref as ciphertext_digest");
     }
 
     // `scheme` is optional; per spec a missing scheme is treated as
@@ -1797,14 +1817,14 @@ mod tests {
 
     #[test]
     fn attachment_envelope_whole_file_default_scheme_requires_nonce() {
-        let digest = format!("sha256:{}", "0".repeat(64));
+        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
         // No scheme → treated as whole_file; nonce present → valid.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
                 "key_ref": "ak:mls:exporter",
                 "nonce": "AAAAAAAAAAAAAAAA",
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_ok()
         );
@@ -1813,7 +1833,7 @@ mod tests {
             validate_encrypted_attachment_metadata(&json!({
                 "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
                 "key_ref": "ak:mls:exporter",
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_err()
         );
@@ -1821,7 +1841,7 @@ mod tests {
 
     #[test]
     fn attachment_envelope_stream_scheme_requires_stream_descriptor() {
-        let digest = format!("sha256:{}", "0".repeat(64));
+        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
         // Valid stream envelope: nonce_prefix + segment_bytes/count, no nonce.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
@@ -1831,7 +1851,7 @@ mod tests {
                 "nonce_prefix": "AAAAAAAA",
                 "segment_bytes": 65536,
                 "segment_count": 4,
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_ok()
         );
@@ -1843,7 +1863,7 @@ mod tests {
                 "key_ref": "ak:mls:exporter",
                 "segment_bytes": 65536,
                 "segment_count": 4,
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_err()
         );
@@ -1856,7 +1876,7 @@ mod tests {
                 "nonce_prefix": "AAAAAAAA",
                 "segment_bytes": "65536",
                 "segment_count": 4,
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_err()
         );
@@ -1864,7 +1884,7 @@ mod tests {
 
     #[test]
     fn attachment_envelope_unknown_scheme_passes_through_without_nonce() {
-        let digest = format!("sha256:{}", "0".repeat(64));
+        let blob_ref = format!("ak:blob:sha256:{}", "0".repeat(64));
         // An unregistered scheme is accepted opaquely and is NOT forced to
         // carry a whole-file `nonce`.
         assert!(
@@ -1872,7 +1892,7 @@ mod tests {
                 "scheme": "ak.blob.unregistered_scheme.v1",
                 "encryption_algorithm": "something-new",
                 "key_ref": "ak:mls:exporter",
-                "ciphertext_digest": digest,
+                "blob_ref": blob_ref.as_str(),
             }))
             .is_ok()
         );
