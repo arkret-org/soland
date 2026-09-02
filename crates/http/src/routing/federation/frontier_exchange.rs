@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use arkret_models_collaboration::event_sync::EventsFrontierFederationPeerState;
 use arkret_models_collaboration::events_payloads::{
-    ForkResolutionCollisionVariant, ForkResolutionSubject,
+    ForkResolutionSubject,
 };
 use base64::Engine;
 use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -663,8 +663,15 @@ impl FrontierExchangeWorker {
         existing: Option<&AcceptedEvent>,
         reason: &str,
     ) -> Result<ForkResolutionSubject, String> {
+        // The subject is the disputed scope alone. It is deliberately not the
+        // evidence: a later `ak.fork.resolution` clears this row by matching
+        // the same cell subject, and single-bucket versus cross-bucket
+        // over-fork at one position must resolve into one row rather than two
+        // that could be cleared independently.
         match reason {
             "witness_disagreement" => {
+                // A collision needs both preimages to have actually been seen
+                // locally; a single variant is a mismatch report, not evidence.
                 let existing = existing.ok_or_else(|| {
                     "schema_violation:collision_evidence_missing_original_variant".to_owned()
                 })?;
@@ -672,71 +679,19 @@ impl FrontierExchangeWorker {
                     &event.digest_payload().map_err(|error| error.to_string())?,
                 )
                 .map_err(|error| format!("schema_violation:{error}"))?;
-                let mut variants = [existing.canonical_bytes.clone(), incoming]
-                    .into_iter()
-                    .map(|bytes| {
-                        arkret_wire::Base64UrlString::new(
-                            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
-                        )
-                        .map(
-                            |canonical_event_bytes_b64u| ForkResolutionCollisionVariant {
-                                canonical_event_bytes_b64u,
-                            },
-                        )
-                        .map_err(|error| format!("schema_violation:{error}"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                variants.sort_by(|left, right| {
-                    left.canonical_event_bytes_b64u
-                        .cmp(&right.canonical_event_bytes_b64u)
-                });
-                variants.dedup();
-                if variants.len() != 2 {
+                if existing.canonical_bytes == incoming {
                     return Err(
                         "schema_violation:collision_evidence_variants_not_distinct".to_owned()
                     );
                 }
                 Ok(ForkResolutionSubject::EventIdCollision {
                     event_id: event.event_id.clone(),
-                    variants,
                 })
             }
-            "fork_quarantine" => {
-                let mut sibling_event_digests = self
-                    .state
-                    .event_queries()
-                    .canonical_events()
-                    .await
-                    .map_err(|error| error.to_string())?
-                    .into_iter()
-                    .filter(|record| {
-                        record.realm_id.as_deref() == Some(event.realm_id.as_str())
-                            && record.actor_id == event.actor_id.to_string()
-                            && record.actor_seq == event.actor_seq
-                    })
-                    .map(|record| {
-                        arkret_identifiers::Hash::new(record.canonical_digest)
-                            .map_err(|error| format!("schema_violation:{error}"))
-                    })
-                    .collect::<Result<Vec<_>, _>>()?;
-                sibling_event_digests.push(
-                    arkret::signed_event_digest_claim(event)
-                        .map_err(|error| format!("schema_violation:{error}"))?,
-                );
-                sibling_event_digests.sort();
-                sibling_event_digests.dedup();
-                if !(2..=64).contains(&sibling_event_digests.len()) {
-                    return Err(
-                        "schema_violation:fork_evidence_sibling_set_out_of_range".to_owned()
-                    );
-                }
-                Ok(ForkResolutionSubject::EventSiblingBucket {
-                    actor_id: event.actor_id.clone(),
-                    actor_seq: event.actor_seq,
-                    prev_frontier_digest: None,
-                    sibling_event_digests,
-                })
-            }
+            "fork_quarantine" => Ok(ForkResolutionSubject::EventSiblingPosition {
+                actor_id: event.actor_id.clone(),
+                actor_seq: event.actor_seq,
+            }),
             _ => Err(format!(
                 "schema_violation:unregistered_confirmed_evidence_reason:{reason}"
             )),
@@ -751,7 +706,7 @@ impl FrontierExchangeWorker {
         subject: ForkResolutionSubject,
     ) -> Result<(), String> {
         let evidence_scope_key = subject
-            .evidence_scope_key()
+            .cell_subject_key()
             .map_err(|error| format!("schema_violation:{error}"))?;
         let evidence_scope =
             serde_json::to_value(subject).map_err(|error| format!("schema_violation:{error}"))?;
@@ -1164,16 +1119,11 @@ mod tests {
                 .await
                 .unwrap()
         );
-        let subject = ForkResolutionSubject::EventSiblingBucket {
+        let subject = ForkResolutionSubject::EventSiblingPosition {
             actor_id: arkret_wire::ActorId::service(peer.clone()),
             actor_seq: 7,
-            prev_frontier_digest: None,
-            sibling_event_digests: vec![
-                arkret_identifiers::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
-                arkret_identifiers::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
-            ],
         };
-        let scope_key = subject.evidence_scope_key().unwrap();
+        let scope_key = subject.cell_subject_key().unwrap();
         state
             .federation()
             .record_frontier_confirmed_evidence(

@@ -109,17 +109,14 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .status,
         "healthy"
     );
+    // The cell subject is the disputed position alone, so both overflow
+    // evidence shapes at one position key the same confirmed-evidence row.
     let subject =
-        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingBucket {
+        arkret_models_collaboration::events_payloads::ForkResolutionSubject::EventSiblingPosition {
             actor_id: arkret_wire::ActorId::service(peer.clone()),
             actor_seq: 9,
-            prev_frontier_digest: None,
-            sibling_event_digests: vec![
-                arkret_wire::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
-                arkret_wire::Hash::new(format!("sha256:{}", "2".repeat(64))).unwrap(),
-            ],
         };
-    let evidence_scope_key = subject.evidence_scope_key().unwrap();
+    let evidence_scope_key = subject.cell_subject_key().unwrap();
     let evidence_record = soland_storage::FederationFrontierConfirmedEvidenceRecord {
         realm_id: realm.to_string(),
         peer_id: peer.clone(),
