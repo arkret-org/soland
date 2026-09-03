@@ -99,13 +99,8 @@ async fn signal_peer_roles_body() {
         seed_signal_sender_device(&destination, "did:web:bob.example", BOB_DEVICE, "Bob").await;
     // The shared Realm has one genesis identity, authored at destination.
     // Changing Station does not authorize re-creating that Realm at source.
-    let seal_ref = seed_signal_basis_seal(&destination, demo_realm_id(), ALICE).await;
-    source
-        .test_put_seal(
-            &destination.test_seal(&seal_ref).unwrap().unwrap(),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
+    let seal_ref =
+        seed_shared_signal_basis_seal(&destination, &[&source], demo_realm_id(), ALICE).await;
     for event in destination
         .test_persistence()
         .events()
@@ -118,7 +113,6 @@ async fn signal_peer_roles_body() {
     let scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(demo_realm_id()).unwrap(),
     };
-    seed_signal_mls_basis(&source, &scope).await;
     let mut envelope = signed_signal_envelope(
         demo_realm_id(),
         scope.clone(),
@@ -344,9 +338,8 @@ async fn signal_peer_roles_body() {
         source
             .test_admit_outbound_signal(destination.service_id(), &envelope)
             .await
-            .unwrap_err()
-            .message
-            .contains("current member")
+            .is_ok(),
+        "an unsealed projection-cache mutation cannot override the signed current Seal view"
     );
     source
         .test_projection()

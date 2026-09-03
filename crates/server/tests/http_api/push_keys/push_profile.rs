@@ -190,8 +190,9 @@ async fn signal_requires_active_authorized_device_signature_body() {
     let unauthorized_body: Value = unauthorized.take_json().await.unwrap();
     assert_eq!(unauthorized_body["reason_code"], "proof_invalid");
 
-    // Full revocation fails even earlier: the session itself no longer
-    // authenticates, so a revoked device never reaches the Signal admission set.
+    // Full revocation leaves no current device proof authority. The Signal
+    // surface reports the same non-enumerating proof failure as an inactive
+    // directory entry rather than disclosing the device lifecycle state.
     device.verification_state = "verified".to_owned();
     device.revoked_at = Some(chrono::Utc::now());
     state
@@ -200,13 +201,17 @@ async fn signal_requires_active_authorized_device_signature_body() {
         .put(&device)
         .await
         .unwrap();
-    let revoked = post_signal(
+    let mut revoked = post_signal(
         state.clone(),
         &token,
         &alice_signal(&seal_ref, "after-revocation", &signing_key),
     )
     .await;
-    assert_eq!(revoked.status_code, Some(StatusCode::UNAUTHORIZED));
+    assert_eq!(revoked.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(
+        revoked.take_json::<Value>().await.unwrap()["reason_code"],
+        "proof_invalid"
+    );
 }
 
 #[test]
@@ -255,7 +260,10 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign_bo
         .unwrap();
 
     assert_eq!(file_transfer_blob["media_type"], "application/octet-stream");
-    assert_eq!(file_transfer_blob["content_digest"], file_transfer_digest);
+    assert_eq!(
+        file_transfer_blob["blob_ref"],
+        format!("ak:blob:{file_transfer_digest}")
+    );
     assert!(
         file_transfer_blob["upload_receipt"]
             .get("filename")
@@ -267,8 +275,8 @@ async fn file_transfer_blob_upload_uses_encrypted_metadata_and_blocks_presign_bo
             .is_none()
     );
     assert_eq!(
-        file_transfer_blob["upload_receipt"]["content_digest"],
-        file_transfer_digest
+        file_transfer_blob["upload_receipt"]["blob_ref"],
+        file_transfer_blob["blob_ref"]
     );
     assert!(
         file_transfer_blob["upload_receipt"]
@@ -738,10 +746,10 @@ fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
 
 async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined_body() {
     let state = soland_test_support::app_state(test_config());
-    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let circle_id = "ak:circle:AbKyOtwLpbgxFjQKemj8jLsHIcHewEJYmageMo-mkx7R";
     // The Circle exists in the parent Realm but Alice is not a member of it.
     seed_test_circle(&state, demo_realm_id(), circle_id, &["did:web:bob.example"]);
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     seed_signal_mls_basis(
         &state,
         &arkret_wire::ScopeRef::Circle {
@@ -1036,14 +1044,17 @@ async fn signal_moderation_class_requires_the_moderation_action_body() {
         fixture_actor_core_id(bob),
         state.service_core_id(),
     ));
+    // A mutable runtime index is not signed authority. Without a grant in the
+    // declared and current Seal views, even an otherwise matching entry must
+    // not authorize a moderation Signal.
     state.test_authz().upsert_projected_grant(grant);
-    let granted = post_signal(
+    let live_index_only = post_signal(
         state.clone(),
         &token,
         &moderation(arkret_wire::SignalClass::Moderation),
     )
     .await;
-    assert_eq!(granted.status_code, Some(StatusCode::OK));
+    assert_eq!(live_index_only.status_code, Some(StatusCode::FORBIDDEN));
 }
 
 #[test]
@@ -1060,7 +1071,6 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
     let carol = "did:web:carol.example";
     add_test_realm_member(&state, demo_realm_id(), bob);
     add_test_realm_member(&state, demo_realm_id(), carol);
-    let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
     // Bob and Carol only receive here, so they need a session and Realm
     // membership but no Signal signing key of their own.
     let bob_token = verified_dev_token_for_device(
@@ -1121,6 +1131,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only_body() {
         },
     )
     .await;
+    let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
     let accepted = post_signal(
         state.clone(),
         &alice_token,

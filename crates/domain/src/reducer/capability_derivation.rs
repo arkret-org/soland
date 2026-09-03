@@ -30,7 +30,6 @@ pub(crate) struct CapabilityGrantSnapshot {
 pub(crate) struct DerivedCapabilityEvaluation {
     pub(crate) effective_actions: Vec<String>,
     pub(crate) effective_resources: Vec<Value>,
-    pub(crate) effective_capability_bundles: Vec<String>,
 }
 
 pub(crate) fn is_capability_bearing_realm_link_kind(link_kind: &str) -> bool {
@@ -76,42 +75,6 @@ pub(crate) fn has_active_realm_link_to_source(
             rows.iter()
                 .any(|row| row.target_realm_id == source_realm_id && row.status == "active")
         })
-        .unwrap_or(false)
-}
-
-pub(crate) fn inheritance_policy_cell_ref(realm_id: &str) -> Option<CellRef> {
-    CellRef::new(format!(
-        "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
-    ))
-    .ok()
-}
-
-pub(crate) fn inheritance_policy_ref_matches(
-    state: &ProjectionState,
-    realm_id: &str,
-    policy_ref: &str,
-) -> bool {
-    let cell_ref_string = format!("ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}");
-    if policy_ref == cell_ref_string {
-        return true;
-    }
-    if state
-        .realm_inheritance_policy(realm_id)
-        .map(|policy| policy.operation_id == policy_ref)
-        .unwrap_or(false)
-    {
-        return true;
-    }
-    let Some(cell_ref) = inheritance_policy_cell_ref(realm_id) else {
-        return false;
-    };
-    let Some(value) = state.cell_value(&cell_ref) else {
-        return false;
-    };
-    value
-        .get("operation_id")
-        .and_then(Value::as_str)
-        .map(|id| id == policy_ref)
         .unwrap_or(false)
 }
 
@@ -432,20 +395,9 @@ pub(crate) fn validate_derived_capability(
     } else {
         requested_resources
     };
-    let effective_capability_bundles = if requested_bundles.is_empty() {
-        grant
-            .capability_bundles
-            .intersection(&allowed_bundles)
-            .cloned()
-            .collect()
-    } else {
-        requested_bundles.into_iter().collect()
-    };
-
     Ok(DerivedCapabilityEvaluation {
         effective_actions,
         effective_resources,
-        effective_capability_bundles,
     })
 }
 

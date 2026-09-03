@@ -525,7 +525,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet discovery",
             kind: arkret_wire::EventKind::AppletDiscovery,
             payload: json!({
-                "resource_id": "applet.example",
+                "resource_id": "ak:applet:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 "value": {
                     "resource_kind": "applet",
                     "discoverability": "listed",

@@ -199,10 +199,10 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(
-        claims[0]["subject_account_id"],
+        claims[0]["claim"]["subject_account_id"],
         serde_json::json!(alice_account)
     );
-    assert_eq!(claims[0]["handle"], "alice:server.test");
+    assert_eq!(claims[0]["claim"]["handle"], "alice:server.test");
 
     let invalid = TestClient::post("http://server/_arkret/find/directory/search-users")
         .json(&serde_json::json!({"limit": 0}))
@@ -265,11 +265,11 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
         .await
         .unwrap();
     assert_eq!(
-        viewer["primary_handle_claim"]["handle"],
+        viewer["primary_handle_claim"]["claim"]["handle"],
         "registered-handle:local.host"
     );
     assert_eq!(
-        viewer["primary_handle_claim"]["subject_account_id"],
+        viewer["primary_handle_claim"]["claim"]["subject_account_id"],
         serde_json::json!(subject_account)
     );
 
@@ -296,10 +296,10 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     let claims = subject_handles["claims"].as_array().unwrap();
     assert_eq!(claims.len(), 1);
     assert_eq!(
-        claims[0]["subject_account_id"],
+        claims[0]["claim"]["subject_account_id"],
         serde_json::json!(subject_account)
     );
-    assert_eq!(claims[0]["handle"], "registered-handle:local.host");
+    assert_eq!(claims[0]["claim"]["handle"], "registered-handle:local.host");
 
     let foreign_account = directory_account(
         did,
@@ -473,7 +473,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
         ))
     );
     assert_eq!(body["handle"], "bob-example:local.host");
-    assert_eq!(body["claims"][0]["audience"], realm_id);
+    assert_eq!(body["claims"][0]["status_proof"]["audience"], realm_id);
 
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",

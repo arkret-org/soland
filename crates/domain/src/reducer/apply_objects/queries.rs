@@ -768,8 +768,8 @@ impl ProjectionState {
 
     /// R3.2 — read the most-recent `ak.capability.derived` projection
     /// for a capability id, if any.
-    pub fn capability_derived_state(&self, capability_id: &str) -> Option<&CapabilityDerivedState> {
-        self.capability_derived.get(capability_id)
+    pub fn capability_derived_state(&self, grant_id: &str) -> Option<&CapabilityDerivedState> {
+        self.capability_derived.get(grant_id)
     }
 
     /// Read the create-locked Realm encryption profile from genesis.

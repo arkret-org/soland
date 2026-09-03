@@ -2253,7 +2253,9 @@ pub(crate) async fn seed_signal_basis_seal(
     realm_id: &str,
     subject: &str,
 ) -> arkret_wire::SealId {
-    let seal = seed_test_realm_basis_seal(state, realm_id, subject).await;
+    seed_realm_genesis_event(state, realm_id, subject).await;
+    let (seal, ops) = signal_basis_with_joined_members(state, realm_id, subject);
+    install_signal_basis(state, &seal, &ops);
     seed_signal_mls_basis(
         state,
         &arkret_wire::ScopeRef::Realm {
@@ -2261,7 +2263,199 @@ pub(crate) async fn seed_signal_basis_seal(
         },
     )
     .await;
-    seal
+    seal.id
+}
+
+pub(crate) async fn seed_shared_signal_basis_seal(
+    authority: &AppState,
+    replicas: &[&AppState],
+    realm_id: &str,
+    subject: &str,
+) -> arkret_wire::SealId {
+    seed_realm_genesis_event(authority, realm_id, subject).await;
+    let (seal, ops) = signal_basis_with_joined_members(authority, realm_id, subject);
+    install_signal_basis(authority, &seal, &ops);
+    for replica in replicas {
+        install_signal_basis(replica, &seal, &ops);
+    }
+    let scope = arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new(realm_id).unwrap(),
+    };
+    seed_signal_mls_basis(authority, &scope).await;
+    for replica in replicas {
+        seed_signal_mls_basis(replica, &scope).await;
+    }
+    seal.id
+}
+
+type SignalBasisOp = (
+    arkret_identifiers::CellRef,
+    arkret_state::lattice::ordered_log::IssuedOp,
+);
+
+fn signal_basis_with_joined_members(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+) -> (arkret_wire::Seal, Vec<SignalBasisOp>) {
+    let basis = test_realm_basis(state, realm_id, subject);
+    let mut ops = basis.ops;
+    let mut delta = basis.seal.delta;
+    let mut listed = basis.listed_control_events;
+    let (realm_members, circle_members) = {
+        let projection = state.test_projection();
+        let projection = projection.lock();
+        let realm_members = projection
+            .members
+            .iter()
+            .filter(|((candidate_realm, _), member)| {
+                candidate_realm == realm_id && member.state == "join"
+            })
+            .map(|((_, actor), _)| actor.clone())
+            .collect::<Vec<_>>();
+        let circle_members = projection
+            .circle_memberships
+            .values()
+            .filter(|membership| {
+                membership.state == "join"
+                    && projection
+                        .circles
+                        .get(&membership.circle_id)
+                        .is_some_and(|circle| circle.realm_id == realm_id)
+            })
+            .map(|membership| (membership.circle_id.clone(), membership.member.clone()))
+            .collect::<Vec<_>>();
+        (realm_members, circle_members)
+    };
+    for actor in realm_members {
+        append_signal_membership_op(
+            &mut ops,
+            &mut delta,
+            &mut listed,
+            arkret_wire::CellFamilyId::MEMBER_STATE_V1,
+            &[actor],
+        );
+    }
+    for (circle_id, actor) in circle_members {
+        append_signal_membership_op(
+            &mut ops,
+            &mut delta,
+            &mut listed,
+            arkret_wire::CellFamilyId::CIRCLE_MEMBER_V1,
+            &[circle_id, actor],
+        );
+    }
+    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let covered = delta
+        .iter()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    let control_event_set_root =
+        arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
+            .unwrap();
+    let completeness_root = arkret_state::control_event_completeness_root_from_listed(
+        &listed,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
+    let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
+        state.notary_signing_key().to_bytes(),
+        state.service_did(),
+        state.service_verification_method("notary-key").unwrap(),
+    );
+    let realm = RealmId::new(realm_id).unwrap();
+    let seal = arkret_wire::Seal::sign_single_with_roots(
+        realm.clone(),
+        Vec::new(),
+        delta,
+        control_event_set_root,
+        completeness_root,
+        fixture_sealed_state_root(&realm, &ops),
+        arkret_identifiers::Hlc::new("0196419b0001-0000-51c0a1ed").unwrap(),
+        arkret_canonical::DigestSuite::Sha256,
+        &signer,
+    )
+    .unwrap();
+    (seal, ops)
+}
+
+fn append_signal_membership_op(
+    ops: &mut Vec<SignalBasisOp>,
+    delta: &mut Vec<arkret_identifiers::Hash>,
+    listed: &mut Vec<arkret_state::ListedControlEvent>,
+    family: &str,
+    subject_parts: &[String],
+) {
+    let actor_value = subject_parts.last().expect("membership actor");
+    let actor: arkret_wire::ActorId = serde_json::from_str(actor_value)
+        .expect("projection membership key is a canonical ActorId");
+    let subject = arkret_wire::cell::composite_subject(
+        &subject_parts
+            .iter()
+            .cloned()
+            .map(Value::String)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap();
+    let cell = arkret_identifiers::CellRef::new(arkret_wire::cell::subject_cell(family, &subject))
+        .unwrap();
+    if ops.iter().any(|(existing, _)| existing == &cell) {
+        return;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:http-api:signal-membership:");
+    hasher.update(cell.as_str().as_bytes());
+    let move_id =
+        arkret_identifiers::Hash::new(format!("sha256:{}", hex::encode(hasher.finalize())))
+            .unwrap();
+    let actor_seq = listed
+        .iter()
+        .filter(|event| event.actor_id == actor)
+        .map(|event| event.actor_seq)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    listed.push(arkret_state::ListedControlEvent {
+        actor_id: actor.clone(),
+        actor_seq,
+        event_digest: move_id.clone(),
+    });
+    delta.push(move_id.clone());
+    ops.push((
+        cell,
+        arkret_state::lattice::ordered_log::IssuedOp {
+            issuer_id: actor,
+            op: arkret_state::lattice::SealedOp::new(
+                move_id,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Transition,
+                    tag: None,
+                    value: None,
+                    from: Some(Value::String("leave".to_owned())),
+                    to: Some(Value::String("join".to_owned())),
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        },
+    ));
+}
+
+fn install_signal_basis(state: &AppState, seal: &arkret_wire::Seal, ops: &[SignalBasisOp]) {
+    state
+        .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
+        .unwrap();
+    state
+        .test_append_sealed_effects(&seal.realm_id, &seal.id, ops)
+        .unwrap();
+    for (cell, _) in ops {
+        let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell) else {
+            continue;
+        };
+        if cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1 {
+            state.test_refresh_grant_from_sealed_cells(&seal.realm_id, cell_id.subject());
+        }
+    }
 }
 
 /// Accepted outer MLS state for transport tests; no server-side leaf tracker.

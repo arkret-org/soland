@@ -81,6 +81,14 @@ fn cursor_binding_subject(account_id: Option<&arkret_wire::AccountId>) -> String
     )
 }
 
+pub(crate) fn cursor_binding_subject_for_session(
+    state: &AppState,
+    session: &SessionIdentityState,
+) -> String {
+    let (account_id, _) = cursor_account_device(state, Some(session));
+    cursor_binding_subject(account_id.as_ref())
+}
+
 pub async fn sync_token_for_client_sync(
     state: &AppState,
     session: Option<&SessionIdentityState>,

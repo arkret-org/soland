@@ -1019,54 +1019,55 @@ impl ProjectionState {
         }
     }
 
-    /// R3.2 — project a `ak.capability.derived` event.
+    /// R3.2 — project an `ak.capability.derived` event.
     ///
-    /// Cell family: `ak.component.capability.derived.v1` (cas-register,
-    /// keyed by `capability_id`). Schema-level required fields:
-    /// `capability_id`, `source_grant_ref`, `source_realm_inheritance_policy_ref`,
-    /// `causal_frontier`. The reducer verifies the current inheritance
-    /// policy, the capability-bearing Realm link, the parent grant, and
-    /// the narrow-only derived actions / resources / bundles before writing
-    /// the projected effective capability set.
+    /// The wire payload is the complete derived grant plus its `grant_id`.
+    /// Its single grant authority reference identifies the source grant;
+    /// the current child-Realm inheritance policy and active capability-bearing
+    /// Realm link provide the local opt-in. The derived grant is accepted only
+    /// when its actions, resources, constraints, and expiry narrow the source.
     pub(crate) fn apply_capability_derived(
         &mut self,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let Some(capability_id) = operation
-            .payload
-            .get("capability_id")
-            .and_then(Value::as_str)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_derived_id_missing".to_owned(),
-            };
-        };
-        let source_grant_ref = match extract_event_ref_id(&operation.payload, "source_grant_ref") {
-            Some(s) => s,
-            None => {
-                return ProjectionEffect::Rejected {
-                    reason: "capability_derived_source_grant_ref_missing".to_owned(),
-                };
-            }
-        };
-        let source_realm_inheritance_policy_ref =
-            match extract_event_ref_id(&operation.payload, "source_realm_inheritance_policy_ref") {
-                Some(s) => s,
-                None => {
+        let derived: arkret_models_collaboration::governance::realm_governance::CapabilityDerived =
+            match serde_json::from_value(operation.payload.clone()) {
+                Ok(derived) => derived,
+                Err(_) => {
                     return ProjectionEffect::Rejected {
-                        reason: "capability_derived_inheritance_ref_missing".to_owned(),
+                        reason: "capability_derived_payload_invalid".to_owned(),
                     };
                 }
             };
-        let Some(causal_frontier) = operation
-            .payload
-            .get("causal_frontier")
-            .and_then(Value::as_str)
-        else {
+        let grant_id = derived.grant_id.to_string();
+        if derived.grant.id != derived.grant_id {
             return ProjectionEffect::Rejected {
-                reason: "capability_derived_causal_frontier_missing".to_owned(),
+                reason: "capability_derived_grant_id_mismatch".to_owned(),
+            };
+        }
+        if derived.grant.realm_id.as_ref() != Some(&operation.realm_id) {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_target_realm_mismatch".to_owned(),
+            };
+        }
+        let source_grant_ids = derived
+            .grant
+            .issuer_authority_refs
+            .iter()
+            .filter_map(|authority_ref| match authority_ref {
+                arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant {
+                    grant_id,
+                } => Some(grant_id.to_string()),
+                arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
+                    ..
+                } => None,
+            })
+            .collect::<Vec<_>>();
+        let [source_grant_id] = source_grant_ids.as_slice() else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_source_grant_ref_invalid".to_owned(),
             };
         };
 
@@ -1075,17 +1076,12 @@ impl ProjectionState {
                 reason: "capability_derived_inheritance_policy_missing".to_owned(),
             };
         };
-        if !inheritance_policy_ref_matches(self, &realm_id, &source_realm_inheritance_policy_ref) {
-            return ProjectionEffect::Rejected {
-                reason: "capability_derived_inheritance_ref_stale".to_owned(),
-            };
-        }
-        let source_link_kind = match active_capability_inheritance_link_kind(
+        match active_capability_inheritance_link_kind(
             self,
             &realm_id,
             &inheritance_policy.source_realm_id,
         ) {
-            Ok(kind) => kind.map(ToOwned::to_owned),
+            Ok(_) => {}
             Err("realm_inheritance_parent_link_missing") => {
                 return ProjectionEffect::Rejected {
                     reason: "capability_derived_parent_link_missing".to_owned(),
@@ -1101,110 +1097,56 @@ impl ProjectionState {
                     reason: reason.to_owned(),
                 };
             }
-        };
-        let Some(source_grant) = find_capability_grant(self, &source_grant_ref) else {
+        }
+        let Some(source_grant) = find_capability_grant(self, source_grant_id) else {
             return ProjectionEffect::Rejected {
                 reason: "capability_derived_source_grant_missing".to_owned(),
             };
         };
-        let evaluation = match validate_derived_capability(
-            &source_grant,
-            &inheritance_policy,
-            &operation.payload,
-            now,
-        ) {
-            Ok(evaluation) => evaluation,
-            Err(reason) => {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
-        };
+        let grant = serde_json::to_value(&derived.grant)
+            .expect("typed CapabilityGrant always serializes to JSON");
+        let evaluation =
+            match validate_derived_capability(&source_grant, &inheritance_policy, &grant, now) {
+                Ok(evaluation) => evaluation,
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            };
 
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.capability.derived.v1:{capability_id}"
-        )) {
-            let mut value = serde_json::Map::new();
-            value.insert(
-                "capability_id".to_owned(),
-                Value::String(capability_id.to_owned()),
-            );
-            value.insert("realm_id".to_owned(), Value::String(realm_id.clone()));
-            value.insert(
-                "source_grant_ref".to_owned(),
-                Value::String(source_grant_ref.clone()),
-            );
-            value.insert(
-                "source_realm_inheritance_policy_ref".to_owned(),
-                Value::String(source_realm_inheritance_policy_ref.clone()),
-            );
-            value.insert(
-                "causal_frontier".to_owned(),
-                Value::String(causal_frontier.to_owned()),
-            );
-            value.insert(
-                "source_realm_id".to_owned(),
-                Value::String(inheritance_policy.source_realm_id.clone()),
-            );
-            if let Some(kind) = source_link_kind.as_deref() {
-                value.insert(
-                    "source_link_kind".to_owned(),
-                    Value::String(kind.to_owned()),
-                );
-            }
-            value.insert(
-                "effective_actions".to_owned(),
-                Value::Array(
-                    evaluation
-                        .effective_actions
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-            value.insert(
-                "effective_resources".to_owned(),
-                Value::Array(evaluation.effective_resources.clone()),
-            );
-            value.insert(
-                "effective_capability_bundles".to_owned(),
-                Value::Array(
-                    evaluation
-                        .effective_capability_bundles
-                        .iter()
-                        .cloned()
-                        .map(Value::String)
-                        .collect(),
-                ),
-            );
-            value.insert(
-                "updated_at".to_owned(),
-                Value::String(arkret_canonical::format_timestamp_canonical(now)),
-            );
-            self.cells
-                .insert(cell_id, CellState::Value(Value::Object(value)));
-        }
+        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.capability.derived.v1:{grant_id}"
+        )) else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_derived_cell_ref_invalid".to_owned(),
+            };
+        };
+        let mut items = match self.cells.get(&cell_id) {
+            Some(CellState::Value(Value::Array(items))) => items.clone(),
+            _ => Vec::new(),
+        };
+        items.push(serde_json::json!({
+            "tag": arkret_schema::or_set_dot(operation.context.event_id.as_str(), 0),
+            "value": operation.payload.clone(),
+        }));
+        self.cells
+            .insert(cell_id, CellState::Value(Value::Array(items)));
 
         self.capability_derived.insert(
-            capability_id.to_owned(),
+            grant_id.clone(),
             CapabilityDerivedState {
-                capability_id: capability_id.to_owned(),
+                grant_id: grant_id.clone(),
                 realm_id: realm_id.clone(),
-                source_grant_ref,
-                source_realm_inheritance_policy_ref,
-                causal_frontier: causal_frontier.to_owned(),
+                source_grant_id: source_grant_id.clone(),
+                grant,
                 effective_actions: evaluation.effective_actions,
                 effective_resources: evaluation.effective_resources,
-                effective_capability_bundles: evaluation.effective_capability_bundles,
                 updated_at: now,
             },
         );
 
-        ProjectionEffect::CapabilityDerivedProjected {
-            capability_id: capability_id.to_owned(),
-            realm_id,
-        }
+        ProjectionEffect::CapabilityDerivedProjected { grant_id, realm_id }
     }
 }
 

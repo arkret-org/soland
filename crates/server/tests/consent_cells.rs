@@ -95,7 +95,6 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
     let app = service(state.clone());
     let alice_did = "did:web:opaque-consent-request-alice.example";
     let bob_did = "did:web:opaque-consent-request-bob.example";
-    let bob = "ak:did_core:web:opaque-consent-request-bob.example";
     let alice_token = dev_token(&state, &app, alice_did).await;
     let bob_token = dev_token(&state, &app, bob_did).await;
 
@@ -107,7 +106,9 @@ async fn opaque_consent_request_does_not_create_a_pending_cell() {
             true,
         )
         .json(&serde_json::json!({
-            "holder_id": bob,
+            "holder_account_id": fixture_account_actor(&state, bob_did)
+                .as_account_id()
+                .expect("fixture account actor"),
             "consent_scope": "direct_message",
         }))
         .send(&app)

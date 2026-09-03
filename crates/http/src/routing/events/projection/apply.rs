@@ -798,8 +798,17 @@ async fn project_mls_welcome_to_device(
         );
         return;
     }
+    let Some(sender_account_id) = operation.context.sender.as_account_id().cloned() else {
+        tracing::warn!(
+            %welcome_id,
+            operation_id = %operation.operation_id,
+            "cannot enqueue an ordinary MLS Welcome device message without an account sender"
+        );
+        return;
+    };
 
     let content = match serde_json::to_value(MlsWelcomeProjectedDeviceMessage {
+        sender_account_id,
         sender_device_id: sender_device_id.to_owned(),
         expires_at: welcome.expires_at.to_owned(),
         content: welcome,
@@ -1093,6 +1102,7 @@ mod tests {
             0,
             arkret_wire::EventKind::DeviceAuthorize,
             json!({
+                "device_id": device, "device_public_key_did": key,
                 "hpke_key": "z6LSDeviceHpkeKey", "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
                 "device_key_algorithm": "Ed25519", "authorized_by": principal,
                 "not_before": "2026-08-31T00:00:00.000Z", "authorization_binding_kind": "registration_anchor",

@@ -2927,31 +2927,18 @@ pub(super) async fn preflight_account_data_cas(
     if operation.event_kind != arkret_wire::EventKind::AccountDataSet {
         return Ok(());
     }
-    let payload = operation.payload.as_object().ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "account_data payload must be an object",
-        )
-    })?;
-    let owner = operation.context.sender.to_string();
-    let key = payload.get("key").and_then(Value::as_str).ok_or_else(|| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "account_data payload is missing key",
-        )
-    })?;
-    let expected_revision = payload
-        .get("expected_revision")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
+    let payload = operation
+        .typed_payload::<arkret_wire::event_spec::AccountDataSet>()
+        .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                "account_data payload is missing expected_revision",
+                format!("account_data payload violates its typed SDK contract: {error}"),
             )
         })?;
+    let owner = operation.context.sender.to_string();
+    let key = payload.key.as_str();
+    let expected_revision = payload.expected_revision;
     let current = state
         .account_data()
         .entry(&owner, key)

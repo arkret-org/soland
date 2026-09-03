@@ -16,6 +16,24 @@ pub(super) fn make_state(development_mode: bool) -> AppState {
     AppState::new(config, Db { pool: None })
 }
 
+fn typed_event_envelope(kind: &str, payload: Value) -> Value {
+    let event = crate::test_event::raw_event(
+        kind,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
+            )
+            .unwrap(),
+        },
+        crate::test_actor_id_str("did:webvh:z6mkfixture:alice.example"),
+        7,
+        arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+        payload,
+    )
+    .unwrap();
+    serde_json::to_value(event).unwrap()
+}
+
 // Match the SDK raw projected-operation fixture's explicit self-Station account.
 fn projected_fixture_actor(principal: &str) -> arkret_wire::ActorId {
     let principal = arkret_wire::DidCoreId::new(principal).unwrap();
@@ -868,11 +886,12 @@ fn event_canonical_bytes_reject_fractional_numbers() {
 #[test]
 fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let state = make_state(true);
-    let envelope = json!({
-        "payload": {
+    let envelope = typed_event_envelope(
+        "ak.strand.move",
+        json!({
             "strand_id": "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC"
-        }
-    });
+        }),
+    );
     let object = envelope.as_object().unwrap();
     let err = validate_event_schema_and_payload(
         &state,
@@ -888,15 +907,16 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
 #[test]
 fn schema_define_admission_executes_the_registered_definition_validator_profile() {
     let state = make_state(true);
-    let valid = json!({
-        "payload": {
+    let valid = typed_event_envelope(
+        arkret_wire::EventKind::SchemaDefine.as_str(),
+        json!({
             "value": {
                 "$schema": "https://json-schema.org/draft/2020-12/schema",
                 "$id": "ak.schema.example.v1",
                 "type": "string"
             }
-        }
-    });
+        }),
+    );
     validate_event_schema_and_payload(
         &state,
         arkret_wire::EventKind::SchemaDefine.as_str(),
@@ -906,25 +926,25 @@ fn schema_define_admission_executes_the_registered_definition_validator_profile(
     )
     .expect("valid Draft 2020-12 schema definition must pass admission");
 
-    for invalid in [
+    for invalid_payload in [
         json!({
-            "payload": {
-                "value": {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "type": "string"
-                }
+            "value": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "string"
             }
         }),
         json!({
-            "payload": {
-                "value": {
-                    "$schema": "https://json-schema.org/draft/2020-12/schema",
-                    "$id": "ak.schema.example.v1",
-                    "type": "not_a_json_schema_type"
-                }
+            "value": {
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "$id": "ak.schema.example.v1",
+                "type": "not_a_json_schema_type"
             }
         }),
     ] {
+        let invalid = typed_event_envelope(
+            arkret_wire::EventKind::SchemaDefine.as_str(),
+            invalid_payload,
+        );
         let error = validate_event_schema_and_payload(
             &state,
             arkret_wire::EventKind::SchemaDefine.as_str(),
@@ -940,15 +960,16 @@ fn schema_define_admission_executes_the_registered_definition_validator_profile(
 #[test]
 fn member_state_join_schema_allows_contextual_invite_ref() {
     let state = make_state(true);
-    let valid = json!({
-        "payload": {
+    let valid = typed_event_envelope(
+        "ak.member.state",
+        json!({
             "member_id": data_event_account("ak:did_core:web:bob.example"),
             "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
             "membership": "join",
             "reason": "invite_accept",
             "invite_ref": "ak:invite:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19"
-        }
-    });
+        }),
+    );
     validate_event_schema_and_payload(
         &state,
         "ak.member.state",
@@ -963,8 +984,9 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
 fn event_payload_validator_enforces_strand_update_patch_schema() {
     let state = make_state(true);
     let strand_id = "ak:strand:AR3ud0srmtpodQ47XfsVC4uD75mQDAGaKLEww6VGMZZC";
-    let valid = json!({
-        "payload": {
+    let valid = typed_event_envelope(
+        "ak.strand.update",
+        json!({
             "target_ref": strand_id,
             "patch": {
                 "fields.document": {
@@ -972,8 +994,8 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
                     "value": { "blocks": [] }
                 }
             }
-        }
-    });
+        }),
+    );
     validate_event_schema_and_payload(
         &state,
         "ak.strand.update",
@@ -983,8 +1005,9 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
     )
     .expect("canonical ak.strand.update strand_patch_payload should validate");
 
-    let invalid_patch_op = json!({
-        "payload": {
+    let invalid_patch_op = typed_event_envelope(
+        "ak.strand.update",
+        json!({
             "target_ref": strand_id,
             "patch": {
                 "fields.document": {
@@ -992,8 +1015,8 @@ fn event_payload_validator_enforces_strand_update_patch_schema() {
                     "value": { "blocks": [] }
                 }
             }
-        }
-    });
+        }),
+    );
     let err = validate_event_schema_and_payload(
         &state,
         "ak.strand.update",

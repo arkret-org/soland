@@ -430,6 +430,7 @@ mod tests {
         assert_eq!(
             keys,
             [
+                "account_id",
                 "audience",
                 "backup_id",
                 "challenge",
@@ -439,7 +440,6 @@ mod tests {
                 "issued_at",
                 "nonce",
                 "operation",
-                "principal_id",
                 "reason",
                 "request_id",
                 "service_id",

@@ -217,14 +217,12 @@ impl RealmOrganizationStatementState {
 /// R3.2 — structured cache row for `ak.capability.derived`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityDerivedState {
-    pub capability_id: String,
+    pub grant_id: String,
     pub realm_id: String,
-    pub source_grant_ref: String,
-    pub source_realm_inheritance_policy_ref: String,
-    pub causal_frontier: String,
+    pub source_grant_id: String,
+    pub grant: Value,
     pub effective_actions: Vec<String>,
     pub effective_resources: Vec<Value>,
-    pub effective_capability_bundles: Vec<String>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 

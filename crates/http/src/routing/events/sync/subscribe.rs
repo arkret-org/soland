@@ -188,10 +188,11 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // superseded and can go. Keeps the durable table at ~2 rows per active
     // (principal, device, filter) stream. Best-effort.
     if let Some(presented_issued_at_ms) = after_cursor.issued_at_ms {
+        let binding_subject = cursor_binding_subject_for_session(&state, &session);
         let _ = state
             .sync()
             .prune_superseded_cursors(
-                &session.actor,
+                &binding_subject,
                 &session.device_id,
                 &sync_filter_digest(filter_value.as_ref()),
                 presented_issued_at_ms,

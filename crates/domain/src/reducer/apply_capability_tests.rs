@@ -1559,7 +1559,12 @@ mod realm_owner_authority_tests {
             }]);
             operation.payload["grant"]["constraints"] = serde_json::json!([{
                 "constraint_kind": "authority_control",
-                "max_authority_depth": 0
+                "max_authority_depth": 0,
+                "effect": "allow"
+            }, {
+                "constraint_kind": "temporal",
+                "effect": "allow",
+                "expires_at": "2027-01-01T00:00:00.000Z"
             }]);
         }
         state.apply_capability_grant(&operation, chrono::Utc::now())
@@ -1874,16 +1879,24 @@ mod realm_owner_authority_tests {
         );
         let mut state = realm(Some(OWNER), None);
         let id = grant_id("f1");
-        let effect = issue(
-            &mut state,
-            &grant_op(
-                "f1",
-                &id,
-                OWNER,
-                STRANGER,
-                json!(["ak.agent.sidecar.write"]),
-            ),
+        let mut operation = grant_op(
+            "f1",
+            &id,
+            OWNER,
+            STRANGER,
+            json!(["ak.agent.sidecar.write"]),
         );
+        operation.payload["grant"]["constraints"]
+            .as_array_mut()
+            .expect("fixture constraints")
+            .push(json!({
+                "constraint_kind": "scope_limitation",
+                "effect": "allow",
+                "allowed_strand_ids": [
+                    "ak:strand:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd"
+                ]
+            }));
+        let effect = issue(&mut state, &operation);
         assert_eq!(
             rejected_reason(&effect),
             Some("grant_exceeds_issuer_authority"),

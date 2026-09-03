@@ -637,10 +637,14 @@ async fn get_device_messages(
                 // strictly-older handle rows for this stream are superseded.
                 // Best-effort.
                 if let Some(presented_issued_at_ms) = cursor.issued_at_ms {
+                    let binding_subject =
+                        crate::routing::events::sync::cursor_binding_subject_for_session(
+                            state, &session,
+                        );
                     let _ = state
                         .sync()
                         .prune_superseded_cursors(
-                            &session.actor,
+                            &binding_subject,
                             &session.device_id,
                             &crate::routing::events::sync::sync_filter_digest(None),
                             presented_issued_at_ms,

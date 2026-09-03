@@ -200,10 +200,10 @@ async fn resumable_chunked_upload_matches_canonical_blob_ref_body() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(outcome["content_digest"], expected_digest);
+    assert_eq!(outcome["blob_ref"], format!("ak:blob:{expected_digest}"));
     assert_eq!(outcome["media_type"], "application/octet-stream");
     assert_eq!(outcome["size_bytes"], payload.len());
-    assert_eq!(outcome["upload_receipt"]["content_digest"], expected_digest);
+    assert_eq!(outcome["upload_receipt"]["blob_ref"], outcome["blob_ref"]);
     assert!(outcome["upload_receipt"].get("purpose").is_none());
     assert!(outcome["upload_receipt"].get("upload_binding").is_none());
     assert!(

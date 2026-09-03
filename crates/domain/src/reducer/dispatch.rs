@@ -9,7 +9,7 @@
 //! `apply_*` methods on `ProjectionState`.
 //!
 //! Split out of the `reducer` mod file; the registry, the `ApplyFn`
-//! type, and the realm-link / event-ref helpers are re-exported there so
+//! type, and the realm-link helpers are re-exported there so
 //! the `crate::reducer::*` paths and sibling `super::*` access stay
 //! unchanged.
 
@@ -39,18 +39,6 @@ pub(crate) fn upsert_realm_link(vec: &mut Vec<RealmLinkState>, row: &RealmLinkSt
     } else {
         vec.push(row.clone());
     }
-}
-
-/// R3.2 — extract a string EventRef id from an `EventRef`-shaped
-/// payload field. Accepts both the canonical object shape
-/// `{"id": "ak:event:...", "role": "..."}` and a bare string form
-/// (older client tolerance).
-pub(crate) fn extract_event_ref_id(payload: &Value, field: &str) -> Option<String> {
-    let v = payload.get(field)?;
-    if let Some(s) = v.as_str() {
-        return Some(s.to_owned());
-    }
-    v.get("id").and_then(Value::as_str).map(ToOwned::to_owned)
 }
 
 // ────────────────────────── apply() dispatch registry ──────────────────────────
@@ -737,8 +725,8 @@ fn apply_realm_inheritance_policy_dispatch(
     s.apply_realm_inheritance_policy(op, op.created_at)
 }
 
-/// R3.2 — dispatch for `ak.capability.derived`. Projects the cas-
-/// register cell + structured cache after reducer-side derive evaluation.
+/// R3.2 — dispatch for `ak.capability.derived`. Projects the OR-set cell
+/// and structured cache after reducer-side derive evaluation.
 fn apply_capability_derived_dispatch(
     s: &mut ProjectionState,
     op: &Operation,

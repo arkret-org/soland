@@ -3,10 +3,15 @@ const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const AGENT: &str = "ak:did_core:web:agent.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
+fn agent_operation(kind: arkret_wire::EventKind, payload: serde_json::Value) -> Operation {
+    let mut operation = make_operation(kind, REALM, payload);
+    operation.context.sender = account_actor(AGENT);
+    operation
+}
+
 fn action_request(request_id: &str) -> Operation {
-    make_operation(
+    agent_operation(
         arkret_wire::EventKind::AgentActionRequest,
-        REALM,
         serde_json::json!({
             "agent_id": AGENT,
             "request_id": request_id
@@ -15,9 +20,8 @@ fn action_request(request_id: &str) -> Operation {
 }
 
 fn action_approve(request_id: &str) -> Operation {
-    make_operation(
+    agent_operation(
         arkret_wire::EventKind::AgentActionApprove,
-        REALM,
         serde_json::json!({
             "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
             "request_id": request_id,
@@ -34,9 +38,8 @@ fn action_approve(request_id: &str) -> Operation {
 }
 
 fn pause_agent() -> Operation {
-    make_operation(
+    agent_operation(
         arkret_wire::EventKind::SelfAgentPause,
-        REALM,
         serde_json::json!({
             "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:00:00.000Z"
@@ -45,9 +48,8 @@ fn pause_agent() -> Operation {
 }
 
 fn resume_agent() -> Operation {
-    make_operation(
+    agent_operation(
         arkret_wire::EventKind::SelfAgentResume,
-        REALM,
         serde_json::json!({
             "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:01:00.000Z"
@@ -56,9 +58,8 @@ fn resume_agent() -> Operation {
 }
 
 fn deactivate_agent() -> Operation {
-    make_operation(
+    agent_operation(
         arkret_wire::EventKind::SelfAgentDeactivate,
-        REALM,
         serde_json::json!({
             "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:02:00.000Z"

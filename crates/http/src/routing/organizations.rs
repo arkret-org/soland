@@ -348,13 +348,13 @@ pub(crate) async fn record_realm_organizations_from_event(
     state: &AppState,
     realm_id: &str,
     envelope: &Value,
-) {
+) -> soland_services::ServiceResult<()> {
     let Some(actor) = envelope
         .get("actor_id")
         .and_then(|actor| serde_json::from_value::<ActorId>(actor.clone()).ok())
     else {
         tracing::warn!(%realm_id, "Realm organization projection lacks a valid actor_id");
-        return;
+        return Ok(());
     };
     // This placeholder's created_by is a display/discovery principal, not
     // policy authority. Decode the complete Event Actor before projecting it.
@@ -363,25 +363,21 @@ pub(crate) async fn record_realm_organizations_from_event(
         .pointer("/payload/object")
         .and_then(Value::as_object)
     else {
-        return;
+        return Ok(());
     };
     let organization_ids = match declared_organization_ids(object) {
         Ok(organization_ids) => organization_ids,
         Err(error) => {
             tracing::warn!(%realm_id, %error, "Realm organization projection contains invalid owning_organization_ids");
-            return;
+            return Ok(());
         }
     };
     for organization_id in organization_ids {
         let org_id = organization_id.to_string();
-        if let Err(error) = ensure_organization_placeholder(state, &org_id, created_by).await {
-            tracing::warn!(%error, organization_id = %org_id, "failed to persist organization placeholder from Realm event");
-            continue;
-        }
-        if let Err(error) = link_realm_to_organization(state, realm_id, &organization_id).await {
-            tracing::warn!(%error, %realm_id, organization_id = %org_id, "failed to persist Realm organization link");
-        }
+        ensure_organization_placeholder(state, &org_id, created_by).await?;
+        link_realm_to_organization(state, realm_id, &organization_id).await?;
     }
+    Ok(())
 }
 
 fn declared_organization_ids(
@@ -743,7 +739,8 @@ mod tests {
                 "payload": {"object": {"owning_organization_ids": [organization_id]}}
             }),
         )
-        .await;
+        .await
+        .unwrap();
         let record = state
             .governance()
             .organization(organization_id)
@@ -761,7 +758,8 @@ mod tests {
                 "payload": {"object": {"owning_organization_ids": [rejected_id]}}
             }),
         )
-        .await;
+        .await
+        .unwrap();
         assert!(
             state
                 .governance()

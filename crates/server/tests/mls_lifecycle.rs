@@ -1100,6 +1100,17 @@ async fn mls_lifecycle_end_to_end_body() {
             .len(),
         1
     );
+    let queued_welcomes = state
+        .test_persistence()
+        .device_messages()
+        .list_after(bob_core.as_str(), bob_device, 0)
+        .await
+        .expect("Welcome to-device queue query");
+    assert_eq!(
+        queued_welcomes.len(),
+        1,
+        "accepted Welcome must project to Bob's durable to-device queue"
+    );
 
     // ── 3c. Canonical commit event advances the durable epoch row ─
     let commit_binding = json!({
@@ -1135,14 +1146,18 @@ async fn mls_lifecycle_end_to_end_body() {
         Some(realm_seal_basis),
     );
     advance_event_to_actor_frontier(&state, &mut commit).await;
-    let commit_resp = TestClient::post("http://server/_arkret/self/events")
+    let mut commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("Arkret-Operation", "ak.self.events.command.submit.v1", true)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .add_header("content-type", "application/json", true)
         .body(arkret_canonical::canonical_json_bytes(&commit).unwrap())
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(commit_resp.status_code, Some(StatusCode::OK));
+    let commit_status = commit_resp.status_code;
+    if commit_status != Some(StatusCode::OK) {
+        let error: Value = commit_resp.take_json().await.unwrap_or(Value::Null);
+        panic!("expected commit status 200, got {commit_status:?}: {error}");
+    }
     assert_eq!(
         state
             .test_persistence()

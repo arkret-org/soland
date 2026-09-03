@@ -650,15 +650,23 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": {
-                        "title": "Review PR",
-                        "fields": {
-                            "board_space_id": board_id,
-                            "list_space_id": list_id,
-                            "rank": "r007"
-                        }
+                        "title": "Review PR"
                     },
                     "created_by": "ak:did_core:web:alice.example"
                 }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::StrandMove,
+            realm_id,
+            serde_json::json!({
+                "strand_id": strand_id,
+                "board_space_id": board_id,
+                "target_space_id": list_id,
+                "rank": "r007"
             }),
         ),
         &hlc,
@@ -765,15 +773,23 @@ fn board_archive_cascades_child_lists_and_cards() {
                     "id": strand_id,
                     "realm_id": realm_id,
                     "metadata": {
-                        "title": "Review PR",
-                        "fields": {
-                            "board_space_id": board_id,
-                            "list_space_id": list_id,
-                            "rank": "r007"
-                        }
+                        "title": "Review PR"
                     },
                     "created_by": "ak:did_core:web:alice.example"
                 }
+            }),
+        ),
+        &hlc,
+    );
+    state.apply(
+        &make_operation(
+            arkret_wire::EventKind::StrandMove,
+            realm_id,
+            serde_json::json!({
+                "strand_id": strand_id,
+                "board_space_id": board_id,
+                "target_space_id": list_id,
+                "rank": "r007"
             }),
         ),
         &hlc,
@@ -900,12 +916,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                 "schema": "ak.schema.strand.v1",
                 "realm_id": realm_id,
                 "metadata": {
-                    "title": "Public task",
-                    "fields": {
-                        "board_space_id": list_id,
-                        "list_space_id": list_id,
-                        "rank": "r001"
-                    }
+                    "title": "Public task"
                 },
                 "stage": "draft",
                 "tracks": {
@@ -921,18 +932,39 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
     let public_effect = state.apply(&public_create, &hlc);
     assert!(
+        matches!(public_effect, ProjectionEffect::StrandLifecycle { .. }),
+        "public Strand creation failed before placement: {public_effect:?}"
+    );
+    let public_move = make_operation(
+        arkret_wire::EventKind::StrandMove,
+        realm_id,
+        serde_json::json!({
+            "strand_id": public_strand_id,
+            "board_space_id": list_id,
+            "target_space_id": list_id,
+            "rank": "r001"
+        }),
+    );
+    let public_effect = state.apply(&public_move, &hlc);
+    assert!(
         matches!(
             public_effect,
             ProjectionEffect::Rejected { ref reason }
                 if reason == arkret_wire::ErrorCode::POLICY_VIOLATION
         ),
-        "public strand fixture unexpectedly applied: {public_effect:?}"
+        "public Strand placement unexpectedly applied: {public_effect:?}"
     );
     assert_eq!(
-        state.check_child_scope_policy_transition(&public_create),
+        state.check_child_scope_policy_transition(&public_move),
         Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
     );
-    assert!(!state.strands.contains_key(public_strand_id));
+    assert!(state.strands.contains_key(public_strand_id));
+    assert!(
+        state
+            .relations
+            .values()
+            .all(|relation| relation.to_object_ref() != Some(public_strand_id))
+    );
 
     let scoped_create = make_operation(
         arkret_wire::EventKind::StrandCreate,
@@ -944,12 +976,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                 "realm_id": realm_id,
                 "scope_circle_id": circle_id,
                 "metadata": {
-                    "title": "Private task",
-                    "fields": {
-                        "board_space_id": list_id,
-                        "list_space_id": list_id,
-                        "rank": "r002"
-                    }
+                    "title": "Private task"
                 },
                 "stage": "draft",
                 "tracks": {
@@ -971,6 +998,20 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
         state.strands[scoped_strand_id].scope_circle_id.as_deref(),
         Some(circle_id)
     );
+    let scoped_move = make_operation(
+        arkret_wire::EventKind::StrandMove,
+        realm_id,
+        serde_json::json!({
+            "strand_id": scoped_strand_id,
+            "board_space_id": list_id,
+            "target_space_id": list_id,
+            "rank": "r002"
+        }),
+    );
+    assert!(matches!(
+        state.apply(&scoped_move, &hlc),
+        ProjectionEffect::StrandLifecycle { .. }
+    ));
 }
 
 #[test]

@@ -224,7 +224,6 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
     let carol_token =
         verified_dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
     set_demo_realm_visibility(&state, "invite_only", "all_history_for_current_members").await;
 
     let target_event_id =
@@ -236,6 +235,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     let circle_id = "ak:circle:Aa5c9aKm3eqBBuZdfIQ4ORPvt45gtDefEZ3--7YrRKva";
     seed_test_circle(&state, demo_realm_id(), circle_id, &[ALICE, BOB]);
     seed_signal_mls_basis(&state, &circle_scope(circle_id)).await;
+    let seal_ref = seed_signal_basis_seal(&state, demo_realm_id(), ALICE).await;
     let sent_at = chrono::Utc::now();
     let plaintext = read_receipt_plaintext(&state, BOB, &target_event_id, 1);
     let receipt = bob_receipt_signal(

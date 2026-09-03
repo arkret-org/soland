@@ -392,6 +392,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
 
     let encrypted_bytes = b"encrypted-bytes";
     let ciphertext_digest = format!("sha256:{}", hex::encode(Sha256::digest(encrypted_bytes)));
+    let ciphertext_blob_ref = format!("ak:blob:{ciphertext_digest}");
     let (encrypted_content_type, encrypted_body) =
         multipart_blob_upload_body(encrypted_bytes, "text/plain");
     let blob: Value = TestClient::post("http://server/_arkret/self/blob/upload")
@@ -409,6 +410,8 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             "x-arkret-attachment-envelope",
             serde_json::json!({
                 "scheme": "ak.blob.whole_file_aead.v1",
+                "blob_ref": ciphertext_blob_ref,
+                "encrypted": true,
                 "encryption_algorithm":
                     arkret_models_crypto::WholeFileEncryptionAlgorithm::MlsExporterAeadXchacha20poly1305,
                 "nonce": "nonce0123456789ab",
@@ -416,8 +419,8 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
                     "algorithm": "MLS",
                     "group_state_ref": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 },
-                "epoch": 1,
-                "ciphertext_digest": ciphertext_digest
+                "size_bytes": encrypted_bytes.len(),
+                "media_type": "application/octet-stream"
             })
             .to_string(),
             true,
@@ -440,7 +443,8 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             .unwrap()
             .starts_with("ak:blob:sha256:")
     );
-    assert_eq!(blob["upload_receipt"]["content_digest"], ciphertext_digest);
+    assert_eq!(blob["blob_ref"], ciphertext_blob_ref);
+    assert_eq!(blob["upload_receipt"]["blob_ref"], blob["blob_ref"]);
     assert!(blob["upload_receipt"].get("encrypted_attachment").is_none());
     let stored_blob = state
         .test_persistence()
@@ -459,7 +463,7 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
             arkret_models_crypto::WholeFileEncryptionAlgorithm::MlsExporterAeadXchacha20poly1305
         )
     );
-    assert_eq!(encrypted_attachment["ciphertext_digest"], ciphertext_digest);
+    assert_eq!(encrypted_attachment["blob_ref"], ciphertext_blob_ref);
     let anonymous_blob = TestClient::get(format!(
         "http://server/_arkret/self/blob/get?blob_ref={}&purpose=message_attachment",
         blob["blob_ref"].as_str().unwrap()
@@ -634,10 +638,10 @@ async fn auth_keys_device_messages_and_blobs_work_body() {
     assert_eq!(bob_body.as_bytes(), encrypted_bytes);
     assert_eq!(
         format!(
-            "sha256:{}",
+            "ak:blob:sha256:{}",
             hex::encode(Sha256::digest(bob_body.as_bytes()))
         ),
-        encrypted_attachment["ciphertext_digest"].as_str().unwrap()
+        encrypted_attachment["blob_ref"].as_str().unwrap()
     );
 
     let mut range = TestClient::get(format!(
@@ -1542,12 +1546,14 @@ async fn revoked_device_blocks_encrypted_writes_body() {
         .await
         .unwrap();
 
-    let blocked_send = TestClient::post("http://server/_arkret/self/events")
+    let mut blocked_send = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {stale_session}"), true)
         .json(&blocked_event)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(blocked_send.status_code.unwrap().as_u16(), 401);
+    assert_eq!(blocked_send.status_code.unwrap().as_u16(), 400);
+    let blocked_send_body: Value = blocked_send.take_json().await.unwrap();
+    assert_eq!(problem_code(&blocked_send_body), "invalid_proof");
 
     let mut blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)

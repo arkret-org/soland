@@ -261,8 +261,6 @@ async fn projection_strands_endpoint_reports_lifecycle_state_body() {
     // before the first submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state).await;
     let realm_id = demo_realm_id();
-    let board_space_id = "ak:space:AVGlCsZA7qED4Oetfq2bCHssiEOshSrFXp7N2ozFnGNE";
-    let list_space_id = "ak:space:ARLoPxFc4GPO50Iyec6Jgmc44pLU7zoS5J_ON1ilo5TL";
 
     let create_event = signed_strand_event(
         "ak:event:AVq4vwCqZOh70AyqBd46bxUJMSJrBe8BWv8V2T0cBAjW",
@@ -273,11 +271,6 @@ async fn projection_strands_endpoint_reports_lifecycle_state_body() {
                 "realm_id": realm_id,
                 "metadata": {
                     "title": "Hydration strand",
-                    "fields": {
-                        "board_space_id": board_space_id,
-                        "list_space_id": list_space_id,
-                        "rank": "r007",
-                    },
                 },
                 "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
@@ -329,9 +322,6 @@ async fn projection_strands_endpoint_reports_lifecycle_state_body() {
         .find(|f| f["strand_id"] == strand_id)
         .expect("strand not in projection response");
     assert_eq!(row["state"], "archived");
-    assert_eq!(row["board_space_id"], board_space_id);
-    assert_eq!(row["list_space_id"], list_space_id);
-    assert_eq!(row["rank"], "r007");
 }
 
 #[test]

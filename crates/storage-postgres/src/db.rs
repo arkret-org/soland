@@ -100,11 +100,16 @@ impl Db {
 async fn run_migrations(database_url: &str) -> anyhow::Result<()> {
     let url = database_url.to_owned();
     tokio::task::spawn_blocking(move || {
-        use diesel::Connection;
+        use diesel::{Connection, RunQueryDsl};
         let mut wrapper =
             AsyncConnectionWrapper::<AsyncPgConnection>::establish(&url).map_err(|error| {
                 anyhow::anyhow!("failed to establish migration connection: {error}")
             })?;
+        diesel::sql_query(
+            "SELECT pg_advisory_lock(hashtextextended('soland-schema-migrations', 0))",
+        )
+        .execute(&mut wrapper)
+        .map_err(|error| anyhow::anyhow!("failed to lock database migrations: {error}"))?;
         wrapper
             .run_pending_migrations(MIGRATIONS)
             .map_err(|error| anyhow::anyhow!("failed to run database migrations: {error}"))?;

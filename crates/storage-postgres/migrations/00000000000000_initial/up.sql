@@ -124,7 +124,7 @@ CREATE TABLE public.account_lifecycle (
     reason text,
     changed_by jsonb,
     changed_at timestamp with time zone NOT NULL,
-    CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
+    CONSTRAINT account_lifecycle_state_check CHECK ((state = ANY (ARRAY['active'::text, 'soft_logged_out'::text, 'locked'::text, 'suspended'::text, 'deactivated'::text, 'erasure_pending'::text])))
 );
 
 CREATE INDEX account_lifecycle_state_idx ON public.account_lifecycle USING btree (state, changed_at);
@@ -2258,7 +2258,7 @@ DECLARE
     notification_id uuid;
     account_pk bigint;
     service_id text;
-    recipient_id text;
+    controller_id text;
     artifact_id text;
     notification_data jsonb;
 BEGIN
@@ -2270,7 +2270,7 @@ BEGIN
         notification_id := NEW.approval_notification_id;
         account_pk := NEW.controller_account_pk;
         service_id := NEW.recipient_id;
-        recipient_id := NEW.controller_id;
+        controller_id := NEW.controller_id;
         artifact_id := NEW.approval_request_id;
         notification_data := jsonb_build_object(
             'approval_request_id', NEW.approval_request_id,
@@ -2294,7 +2294,7 @@ BEGIN
         notification_id := OLD.approval_notification_id;
         account_pk := OLD.controller_account_pk;
         service_id := OLD.recipient_id;
-        recipient_id := OLD.controller_id;
+        controller_id := OLD.controller_id;
         artifact_id := OLD.approval_request_id;
         notification_data := jsonb_build_object(
             'reason', terminal_reason
@@ -2309,7 +2309,7 @@ BEGIN
         priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
-        notification_id, recipient_id, account_pk, service_id,
+        notification_id, controller_id, account_pk, service_id,
         'agent_runtime_approval', artifact_id,
         'normal', 'unread', delta_action,
         notification_data, now(), now()

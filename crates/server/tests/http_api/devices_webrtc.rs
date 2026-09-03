@@ -208,8 +208,22 @@ fn account_device_pair_body(new_device_id: &str) -> Value {
     })
 }
 
-fn bind_pair_authorize_predecessor(body: &mut Value, predecessor: &str) {
+async fn bind_pair_authorize_predecessor(
+    state: &AppState,
+    actor: &str,
+    body: &mut Value,
+    predecessor: &str,
+) {
+    let realm_id = arkret_identifiers::RealmId::new(
+        soland_test_support::fixture_principal_control_realm(actor),
+    )
+    .expect("fixture principal control Realm");
+    let leaves = state
+        .test_projections()
+        .realm_seal_leaves(&realm_id)
+        .expect("fixture principal control Realm frontier");
     body["authorize_event"]["event"]["prev_refs"] = serde_json::json!([predecessor]);
+    body["authorize_event"]["event"]["seal_basis"] = serde_json::json!({"leaves": leaves});
     resign_canonical_event(&mut body["authorize_event"]["event"]);
 }
 
@@ -221,7 +235,7 @@ async fn post_account_device_pair(
     predecessor: &str,
 ) -> (StatusCode, Value) {
     let mut body = account_device_pair_body(new_device_id);
-    bind_pair_authorize_predecessor(&mut body, predecessor);
+    bind_pair_authorize_predecessor(&state, "did:web:alice.example", &mut body, predecessor).await;
     if challenge_signature == "!" {
         body["challenge_proof"]["signature"] = Value::String("!".to_owned());
     }
@@ -256,7 +270,13 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route_body() {
     .await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
     let mut sibling_pair_body = account_device_pair_body(sibling);
-    bind_pair_authorize_predecessor(&mut sibling_pair_body, &predecessor);
+    bind_pair_authorize_predecessor(
+        &state,
+        "did:web:alice.example",
+        &mut sibling_pair_body,
+        &predecessor,
+    )
+    .await;
 
     let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("content-type", "application/json", true)
@@ -398,7 +418,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     )
     .await;
     let mut pair_body = account_device_pair_body(new_device);
-    bind_pair_authorize_predecessor(&mut pair_body, &predecessor);
+    bind_pair_authorize_predecessor(&state, actor, &mut pair_body, &predecessor).await;
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
         "from_device_id": new_device,

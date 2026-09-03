@@ -85,7 +85,7 @@ pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relati
 pub use apply_capability::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
 pub use capability_derivation::inheritance_allowed_policies;
 pub(crate) use capability_derivation::*;
-pub(crate) use dispatch::{APPLY_REGISTRY, extract_event_ref_id, upsert_realm_link};
+pub(crate) use dispatch::{APPLY_REGISTRY, upsert_realm_link};
 // Dispatch registry — `ApplyFn` + `default_apply_registry` are `pub`
 // (out-of-crate tests assert registry coverage). The realm-link / event-ref
 // helpers are `pub(crate)` for sibling `apply_*` access.

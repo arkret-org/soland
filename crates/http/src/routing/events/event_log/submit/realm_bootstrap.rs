@@ -621,7 +621,14 @@ pub(super) async fn submit_realm_bootstrap_batch(
         unit.realm_id.as_str(),
         &envelopes[0],
     )
-    .await;
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("Realm organization projection persistence failed: {error}"),
+        )
+    })?;
     for parsed in &validated {
         append_audit_log(
             state,

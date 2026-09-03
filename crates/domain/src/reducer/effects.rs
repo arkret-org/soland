@@ -195,9 +195,9 @@ pub enum ProjectionEffect {
         source_realm_id: String,
     },
     /// R3.2 — `ak.capability.derived` event was projected into the
-    /// `ak.component.capability.derived.v1` cas-register cell.
+    /// `ak.component.capability.derived.v1` OR-set cell.
     CapabilityDerivedProjected {
-        capability_id: String,
+        grant_id: String,
         realm_id: String,
     },
     /// SOL-ORG-02 — `ak.realm.organization` relationship statement projected

@@ -455,27 +455,33 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
 }
 
 #[test]
-fn manual_review_gate_is_not_satisfied_by_automatic_join() {
+fn manual_review_gate_is_rejected_as_non_v1_policy() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     apply_join_rule(&mut state, "restricted");
 
-    apply_policy(
-        &mut state,
+    let effect = state.apply(
+        &op(
+            arkret_wire::EventKind::RealmPolicyBundle,
+            REALM_A,
+            json!({
+                "policy_revision": 1,
+                "join_policy": {
+                    "gates": [{
+                        "gate_id": "review",
+                        "kind": "manual_review",
+                        "auto_resolve": false
+                    }],
+                    "combinator": "any",
+                    "review_capability": "ak.realm.admin"
+                }
+            }),
+        ),
         &hlc,
-        json!({
-            "gates": [{
-                "gate_id": "review",
-                "kind": "manual_review",
-                "auto_resolve": false
-            }],
-            "combinator": "any",
-            "review_capability": "ak.realm.admin"
-        }),
     );
-
-    match state.apply(&join_op(BOB), &hlc) {
-        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
-        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
-    }
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == "schema_violation"
+    ));
+    assert!(state.realm_policy_bundle_cell_value(REALM_A).is_none());
 }

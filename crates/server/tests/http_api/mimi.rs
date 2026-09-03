@@ -835,21 +835,25 @@ fn mimi_report_event_binding_rejection_has_no_event_or_rate_side_effect() {
                 expired.reporter_authority.proof.created_at + chrono::Duration::minutes(4);
             resign_human_mimi_report_authority(&mut expired);
 
-            // Opaque evidence is content only. Even when it is cross-bound
-            // into the caller Event and holder transcript, it cannot replace
-            // the exact current membership generation.
+            // Encrypted evidence content cannot replace the exact current
+            // membership generation even when it is cross-bound into the
+            // caller Event and holder transcript.
             let mut opaque_only = stale_membership.clone();
-            let opaque: arkret_models_collaboration::objects::mimi::MimiOpaquePayload =
-                serde_json::from_value(json!({
-                    "content_type": "application/json",
-                    "payload_digest": format!("sha256:{}", "1".repeat(64)),
-                    "payload": "e30"
-                }))
-                .unwrap();
-            opaque_only.report_event.event.payload.insert(
-                "evidence_package".to_owned(),
-                serde_json::to_value(opaque).unwrap(),
-            );
+            let target_ref = opaque_only.report_event.event.payload["target_ref"].clone();
+            let opaque = json!({
+                "target_refs": [target_ref],
+                "encryption": "HPKE-Base-X25519-SHA256-AES128GCM",
+                "recipient_public_key_ref": "did:web:moderator.example#key-1",
+                "encrypted_to_kid": "did:web:moderator.example#key-1",
+                "ciphertext": "e30",
+                "ciphertext_digest": format!("sha256:{}", "1".repeat(64)),
+                "reporter_signature": "c2ln"
+            });
+            opaque_only
+                .report_event
+                .event
+                .payload
+                .insert("evidence_package".to_owned(), opaque);
             resign_human_mimi_report_authority(&mut opaque_only);
             let service = app_from_state(state.clone());
 

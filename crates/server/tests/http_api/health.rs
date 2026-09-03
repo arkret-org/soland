@@ -127,7 +127,7 @@ async fn health_and_describe_work_body() {
     );
     assert_eq!(
         describe["limits"]["registries"]["source"],
-        "arkret-spec/spec/v1/artifacts"
+        "arkret-spec generated Rust descriptors"
     );
     assert_eq!(
         describe["limits"]["registries"]["versions"]["event_kind"],

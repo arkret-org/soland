@@ -132,6 +132,7 @@ async fn create_and_dispatch_local_realm_invite(
     receive_policy
         .holder_allowed_introduction_kinds
         .push("same_station".to_owned());
+    receive_policy.explicit_address_behavior = arkret_wire::InviteReceiveAction::Notify;
     let receive_policy_response =
         TestClient::put("http://server/_arkret/self/invite-receive-policy")
             .add_header("authorization", format!("Bearer {bob_token}"), true)

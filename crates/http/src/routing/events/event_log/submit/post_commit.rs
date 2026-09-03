@@ -144,7 +144,14 @@ pub(super) async fn apply_accepted_event_post_commit(
             parsed.realm_id.as_str(),
             envelope,
         )
-        .await;
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("Realm organization projection persistence failed: {error}"),
+            )
+        })?;
     }
     append_audit_log(
         state,

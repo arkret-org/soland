@@ -124,13 +124,7 @@ mod tests {
             requester_device_authorize_event_id: authorize,
         };
         welcome.claim_receipt.source_id = state.service_core_id();
-        welcome
-            .claim_receipt
-            .request
-            .requester_account_id
-            .as_mut()
-            .expect("device requester has an exact account")
-            .principal_id = principal.clone();
+        welcome.claim_receipt.request.requester_account_id = account.as_account_id().cloned();
         welcome.claim_envelope.signature.kid =
             arkret_wire::NonEmptyString::new("did:web:alice.example#device").unwrap();
         welcome.claim_envelope.signature.sig = arkret_wire::Base64UrlString::new(

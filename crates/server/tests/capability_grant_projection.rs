@@ -90,6 +90,11 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                 "subject": actor(SUBJECT),
                 "actions": actions,
                 "resources": resources,
+                "constraints": [{
+                    "constraint_kind": "temporal",
+                    "effect": "allow",
+                    "expires_at": "2027-01-01T00:00:00.000Z"
+                }],
             }
         }),
     )

@@ -47,7 +47,7 @@ const DENIED_PEER_SERVICE_DID: &str = "did:web:denied-peer.example";
 const DENIED_PEER_SERVICE_ID: &str = "ak:did_core:web:denied-peer.example";
 const FEDERATION_ENDPOINT: &str = "/_arkret/peer/events";
 const IDEMPOTENCY_KEY: &str = "ak:outbox:test-idem-key-0001";
-const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[],"service_binding_ref":{"destination_kind":"station","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
+const PAYLOAD_JSON: &str = r#"{"cba_proof_bundles":[],"events":[{"event":{"actor_id":{"kind":"service","service_id":"ak:did_core:web:sender.example"},"actor_seq":0,"created_at":"2026-09-03T00:00:00.000Z","event_id":"ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ","kind":"ak.message.create","payload":{},"prev_refs":[],"proofs":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","scope_ref":{"kind":"realm","realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV"}},"ingress_receipts":[]}],"service_binding_ref":{"destination_kind":"station","membership_frontier":[],"realm_id":"ak:realm:AVskUaiQaIarVzFGmnDkUKlp-Z9EHZgindrzWbihOyvV","realm_policy_digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}}"#;
 
 #[derive(Clone)]
 struct VerifiedPeerRoute {
@@ -254,7 +254,7 @@ impl MockResponse {
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
     spawn_mock_peer_with_status(
         "200 OK",
-        br#"{"pending_delivery_count":0,"status":"accepted"}"#,
+        br#"{"accepted":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0,"status":"accepted"}"#,
     )
 }
 
@@ -1094,7 +1094,7 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     // Idempotency-Key (`federation.md` §8.5).
     let (peer_url, request_rx) = spawn_mock_peer_with_status(
         "200 OK",
-        br#"{"pending_delivery_count":0,"status":"duplicate"}"#,
+        br#"{"duplicate":["ak:event:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ"],"pending_delivery_count":0,"status":"duplicate"}"#,
     );
     let route = unique_peer_route("restart-inflight", &peer_url);
     let key = unique_key("restart-inflight");

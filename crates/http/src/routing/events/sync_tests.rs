@@ -1422,8 +1422,10 @@ fn roster_discloses_handle_claim_for_visible_trusted_issuer() {
         json!(roster_actor(ROSTER_SUBJECT).as_account_id())
     );
     assert_eq!(row["handle_claim_digests"], json!([digest]));
+    let inline_claim: arkret_models_identity::HandleClaim =
+        serde_json::from_value(row["handle_claims"][0].clone()).unwrap();
     assert_eq!(
-        row["handle_claims"][0]["claim_digest"],
+        inline_claim.claim_digest().unwrap().to_string(),
         row["handle_claim_digests"][0].as_str().unwrap()
     );
     assert!(row.get("handle_claims_limited").is_none());
@@ -1520,7 +1522,7 @@ fn roster_disclosure_depends_on_realm_policy() {
         handle_claim(
             &state,
             state.service_id(),
-            state.service_id(),
+            "",
             now() + chrono::Duration::hours(1),
             "verified",
             None,
@@ -2579,7 +2581,7 @@ async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
     let pruned = state
         .sync()
         .prune_superseded_cursors(
-            &session.actor,
+            &cursor_binding_subject_for_session(&state, &session),
             &session.device_id,
             &sync_filter_digest(None),
             presented

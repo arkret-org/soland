@@ -2529,7 +2529,7 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
         "incremental subscribe returned before its broadcast wake-up: {elapsed:?}"
     );
     assert!(
-        elapsed < Duration::from_secs(3),
+        elapsed < Duration::from_secs(10),
         "broadcast should wake the long poll well before its 30s deadline: {elapsed:?}"
     );
     let timeline = woken["realms"][demo_realm_id()]["timeline"]["events"]

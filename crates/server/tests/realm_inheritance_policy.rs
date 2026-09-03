@@ -66,12 +66,38 @@ fn seed_source_grant(
                     "grant_id": "ak:grant:ATqrupSFYozzL7O90hPaSlvHmLnxxSRiRUZA4RgeuZpD",
                     "realm_id": realm_id,
                     "actions": actions,
-                    "resources": [{"kind": "realm", "id": realm_id}],
+                    "resources": [{"kind": "realm", "realm_id": realm_id}],
                     "capability_bundles": bundles,
                 }
             }
         ])),
     );
+}
+
+fn derived_payload(grant_id: &str, source_grant_id: &str, actions: &[&str]) -> Value {
+    json!({
+        "grant": {
+            "id": grant_id,
+            "schema": "ak.schema.capability.v1",
+            "realm_id": REALM_CHILD,
+            "issuer_id": {
+                "kind": "service",
+                "service_id": "ak:did_core:web:reducer.example"
+            },
+            "subject": {
+                "kind": "service",
+                "service_id": "ak:did_core:web:subject.example"
+            },
+            "actions": actions,
+            "resources": [{"kind": "realm", "realm_id": REALM_PARENT}],
+            "issuer_authority_refs": [{
+                "kind": "grant",
+                "grant_id": source_grant_id
+            }],
+            "issued_at": "2026-09-03T00:00:00.000Z"
+        },
+        "grant_id": grant_id
+    })
 }
 
 #[test]
@@ -187,18 +213,17 @@ fn inheritance_policy_rejects_missing_source_realm() {
 fn capability_derived_projects_cell_and_cache() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let capability_id = "ak:capability:01904100-0000-7000-8000-dddddddddddd";
-    let source_grant_ref = "ak:event:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
+    let grant_id = "ak:grant:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ";
+    let source_grant_id = "ak:grant:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
     state.apply(&link_op(REALM_CHILD, REALM_PARENT, "governed_by"), &hlc);
     seed_source_grant(
         &mut state,
-        source_grant_ref,
+        source_grant_id,
         REALM_PARENT,
-        &["read"],
+        &["ak.event.read"],
         &["bundle.read.v1"],
     );
     let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
-    let inheritance_ref = inheritance.operation_id.to_string();
     assert!(matches!(
         state.apply(&inheritance, &hlc),
         ProjectionEffect::RealmInheritancePolicyProjected { .. }
@@ -208,71 +233,49 @@ fn capability_derived_projects_cell_and_cache() {
         &op(
             arkret_wire::EventKind::CapabilityDerived,
             REALM_CHILD,
-            json!({
-                "capability_id": capability_id,
-                "source_grant_ref": {
-                    "id": source_grant_ref,
-                    "role": "authorized_by",
-                },
-                "source_realm_inheritance_policy_ref": {
-                    "id": inheritance_ref,
-                    "role": "inherits_from",
-                },
-                "causal_frontier": "ak:frontier:02000000",
-                "bundle": {
-                    "capability_bundles": ["bundle.read.v1"],
-                    "capabilities": ["read"],
-                    "resources": [{"kind": "realm", "id": REALM_PARENT}],
-                },
-            }),
+            derived_payload(grant_id, source_grant_id, &["ak.event.read"]),
         ),
         &hlc,
     );
     match effect {
         ProjectionEffect::CapabilityDerivedProjected {
-            capability_id: cid,
+            grant_id: projected_grant_id,
             realm_id,
         } => {
-            assert_eq!(cid, capability_id);
+            assert_eq!(projected_grant_id, grant_id);
             assert_eq!(realm_id, REALM_CHILD);
         }
         other => panic!("expected CapabilityDerivedProjected, got {other:?}"),
     }
-    let cached = state
-        .capability_derived_state(capability_id)
-        .expect("cached");
-    assert_eq!(cached.source_grant_ref, source_grant_ref);
-    assert_eq!(cached.source_realm_inheritance_policy_ref, inheritance_ref);
-    assert_eq!(cached.causal_frontier, "ak:frontier:02000000");
-    assert_eq!(cached.effective_actions, vec!["read".to_owned()]);
-    assert_eq!(
-        cached.effective_capability_bundles,
-        vec!["bundle.read.v1".to_owned()]
-    );
+    let cached = state.capability_derived_state(grant_id).expect("cached");
+    assert_eq!(cached.source_grant_id, source_grant_id);
+    assert_eq!(cached.effective_actions, vec!["ak.event.read".to_owned()]);
 }
 
 #[test]
 fn capability_derived_rejects_missing_source_grant() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    state.apply(&link_op(REALM_CHILD, REALM_PARENT, "governed_by"), &hlc);
+    state.apply(
+        &inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]),
+        &hlc,
+    );
     let bad = op(
         arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
-        json!({
-            "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
-            "source_realm_inheritance_policy_ref": {
-                "id": "ak:event:AQZU3LOaSy4GhEHnYFmJaYYvDYn2WVDsPLSUYwGHDZ7Q",
-                "role": "inherits_from",
-            },
-            "causal_frontier": "ak:frontier:02000000",
-        }),
+        derived_payload(
+            "ak:grant:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ",
+            "ak:grant:AQZU3LOaSy4GhEHnYFmJaYYvDYn2WVDsPLSUYwGHDZ7Q",
+            &["ak.event.read"],
+        ),
     );
     match state.apply(&bad, &hlc) {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "capability_derived_source_grant_ref_missing");
+            assert_eq!(reason, "capability_derived_source_grant_missing");
         }
         other => {
-            panic!("expected Rejected(capability_derived_source_grant_ref_missing), got {other:?}")
+            panic!("expected Rejected(capability_derived_source_grant_missing), got {other:?}")
         }
     }
 }
@@ -281,35 +284,29 @@ fn capability_derived_rejects_missing_source_grant() {
 fn capability_derived_rejects_action_widening() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let source_grant_ref = "ak:event:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
+    let source_grant_id = "ak:grant:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
     state.apply(
         &link_op(REALM_CHILD, REALM_PARENT, "inherits_policy_from"),
         &hlc,
     );
     seed_source_grant(
         &mut state,
-        source_grant_ref,
+        source_grant_id,
         REALM_PARENT,
-        &["read"],
+        &["ak.event.read"],
         &["bundle.read.v1"],
     );
     let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
-    let inheritance_ref = inheritance.operation_id.to_string();
     state.apply(&inheritance, &hlc);
 
     let bad = op(
         arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
-        json!({
-            "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
-            "source_grant_ref": {"id": source_grant_ref, "role": "authorized_by"},
-            "source_realm_inheritance_policy_ref": {"id": inheritance_ref, "role": "inherits_from"},
-            "causal_frontier": "ak:frontier:02000000",
-            "bundle": {
-                "capability_bundles": ["bundle.read.v1"],
-                "capabilities": ["write"],
-            },
-        }),
+        derived_payload(
+            "ak:grant:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ",
+            source_grant_id,
+            &["ak.event.write"],
+        ),
     );
 
     match state.apply(&bad, &hlc) {
@@ -324,32 +321,26 @@ fn capability_derived_rejects_action_widening() {
 fn capability_derived_rejects_non_capability_bearing_link_kind() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let source_grant_ref = "ak:event:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
+    let source_grant_id = "ak:grant:AZCc-CJRr_EnSA1hXfjiVtD6nI1eIW9UxyXlBM3kKnfd";
     seed_source_grant(
         &mut state,
-        source_grant_ref,
+        source_grant_id,
         REALM_PARENT,
-        &["read"],
+        &["ak.event.read"],
         &["bundle.read.v1"],
     );
     let inheritance = inheritance_op(REALM_CHILD, REALM_PARENT, &["bundle.read.v1"]);
-    let inheritance_ref = inheritance.operation_id.to_string();
     state.apply(&inheritance, &hlc);
     state.apply(&link_op(REALM_CHILD, REALM_PARENT, "join_gate_from"), &hlc);
 
     let bad = op(
         arkret_wire::EventKind::CapabilityDerived,
         REALM_CHILD,
-        json!({
-            "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
-            "source_grant_ref": {"id": source_grant_ref, "role": "authorized_by"},
-            "source_realm_inheritance_policy_ref": {"id": inheritance_ref, "role": "inherits_from"},
-            "causal_frontier": "ak:frontier:02000000",
-            "bundle": {
-                "capability_bundles": ["bundle.read.v1"],
-                "capabilities": ["read"],
-            },
-        }),
+        derived_payload(
+            "ak:grant:AY4rjZ5eX4tirzUMKIQZ0K26SIcvduWsg-p90KQ2PMVZ",
+            source_grant_id,
+            &["ak.event.read"],
+        ),
     );
 
     match state.apply(&bad, &hlc) {

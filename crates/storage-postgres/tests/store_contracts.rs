@@ -61,6 +61,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     use soland_storage::FederationFrontierExchangeStore;
     use soland_storage_postgres::PgFederationFrontierExchangeStore;
     let pool = test_pool().await;
+    let _db_guard = DB_GUARD.lock().await;
     let realm = arkret_wire::RealmId::from_event_id(&arkret_wire::EventId::from_digest(
         arkret_canonical::DigestSuite::Sha256,
         [0x93; 32],
@@ -181,12 +182,27 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
     // A second peer holding the same disputed scope is untouched: alignment is
     // proved one peer at a time, so clearing this one says nothing about that
     // one.
-    let other_peer =
-        arkret_wire::DidCoreId::new("ak:did_core:web:frontier-peer-b.example").unwrap();
+    let other_peer = arkret_wire::DidCoreId::new(format!(
+        "ak:did_core:web:frontier-peer-b-{}.example",
+        uuid::Uuid::new_v4()
+    ))
+    .unwrap();
     restarted
         .record_confirmed_evidence(&soland_storage::FederationFrontierConfirmedEvidenceRecord {
             peer_id: other_peer.clone(),
             ..evidence_record.clone()
+        })
+        .await
+        .unwrap();
+    restarted
+        .record_local_normalization(&soland_storage::FederationFrontierResolutionRecord {
+            realm_id: realm.to_string(),
+            cell_subject_key: evidence_scope_key.to_string(),
+            subject: serde_json::to_value(&subject).unwrap(),
+            verdict: serde_json::json!({"kind": "void_all"}),
+            conflict_evidence_digest: format!("sha256:{}", "2".repeat(64)),
+            resolution_event_digest: format!("sha256:{}", "3".repeat(64)),
+            normalized_at: 9,
         })
         .await
         .unwrap();
@@ -233,7 +249,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .unwrap()
             .unwrap()
             .status,
-        "peer_stale"
+        "healthy"
     );
     assert!(
         !restarted
@@ -248,7 +264,7 @@ async fn postgres_frontier_evidence_survives_restart_and_concurrent_success() {
             .unwrap()
     );
     assert!(
-        restarted
+        !restarted
             .record_peer_alignment(
                 realm.as_str(),
                 &peer,
