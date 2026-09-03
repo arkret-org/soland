@@ -2271,7 +2271,7 @@ pub(crate) fn validate_first_generation_event_seal(
     Ok(true)
 }
 
-fn materialized_event_seal_view(
+pub(crate) fn materialized_event_seal_view(
     state: &AppState,
     accepted_seal: Seal,
 ) -> Result<MaterializedEventSealView, NotaryError> {

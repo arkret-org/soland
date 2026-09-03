@@ -593,14 +593,15 @@ fn events_epoch_rotation_frame(realm_id: &str, new_epoch: Value) -> EventsSubscr
     }
 }
 
-/// Serialize a JSON frame to a length-prefixed
-/// NDJSON line. Each line ends with `\n` per the NDJSON / JSON-Lines
+/// Serialize a JSON frame to a canonical NDJSON line. Each line ends with `\n`
+/// per the NDJSON / JSON-Lines
 /// convention so streaming clients can split-on-newline incrementally
 /// without parsing the whole buffer.
 pub(crate) fn ndjson_line(value: &impl serde::Serialize) -> Bytes {
-    let mut s = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_owned());
-    s.push('\n');
-    Bytes::from(s)
+    let mut bytes = arkret_canonical::canonical_json_bytes(value)
+        .expect("account and Event stream frames must be canonically serializable");
+    bytes.push(b'\n');
+    Bytes::from(bytes)
 }
 
 pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionIdentityState>) -> String {
@@ -1431,6 +1432,23 @@ mod tests {
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_ACTOR_CORE: &str = "ak:did_core:web:alice.example";
+
+    #[test]
+    fn ndjson_frames_are_byte_for_byte_canonical_json() {
+        let line = ndjson_line(&json!({
+            "z": 1,
+            "a": {"second": true, "first": false},
+        }));
+        assert_eq!(line.last(), Some(&b'\n'));
+        assert_eq!(
+            &line[..line.len() - 1],
+            arkret_canonical::canonical_json_bytes(&json!({
+                "z": 1,
+                "a": {"second": true, "first": false},
+            }))
+            .unwrap()
+        );
+    }
 
     #[test]
     fn canonical_page_bounds_are_independent_of_presentation_direction() {

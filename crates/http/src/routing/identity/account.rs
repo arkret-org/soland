@@ -1318,6 +1318,10 @@ async fn accepted_account_profile_in_realm(
     pcr_realm_id: &RealmId,
 ) -> Result<Option<AcceptedAccountProfile>, AppError> {
     require_current_profile_authority(state, principal_id, pcr_realm_id).await?;
+    let expected_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        principal_id.clone(),
+        state.service_core_id().clone(),
+    ));
     let projected = state
         .event_queries()
         .projected_events_for_realm(pcr_realm_id.as_str())
@@ -1327,7 +1331,7 @@ async fn accepted_account_profile_in_realm(
         .iter()
         .filter(|event| {
             event.event_kind == arkret_wire::EventKind::ProfileCreate
-                && event.sender.as_deref() == Some(principal_id.as_str())
+                && projected_sender_matches_actor(event.sender.as_deref(), &expected_actor)
         })
         .filter_map(|event| {
             let payload =
@@ -1353,8 +1357,33 @@ async fn accepted_account_profile_in_realm(
         arkret_wire::CellFamilyId::PROFILE_CREATE_V1
     ))
     .map_err(|error| AppError::internal(format!("profile cell id is invalid: {error}")))?;
-    let snapshot = state.projections().snapshot();
-    let cell_value = match snapshot.realm_cell(pcr_realm_id.as_str(), &cell) {
+    // Profile is an mv-register updated across successor Seals. The generic
+    // projection snapshot keeps a flattened diagnostic cell cache, which
+    // cannot express that successor batches replace earlier heads. Resolve the
+    // value at the accepted Seal leaves so ordered profile updates do not
+    // surface as a synthetic concurrent Bottom.
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(pcr_realm_id)
+        .map_err(|error| {
+            profile_frontier_unavailable(format!(
+                "accepted profile Seal frontier is unavailable: {error}"
+            ))
+        })?;
+    if leaves.is_empty() {
+        return Err(profile_frontier_unavailable(
+            "accepted profile create has no settled Seal frontier",
+        ));
+    }
+    let effective_state = state
+        .projections()
+        .effective_state_at(&leaves, pcr_realm_id)
+        .map_err(|error| {
+            profile_frontier_unavailable(format!(
+                "accepted profile effective state is unavailable: {error}"
+            ))
+        })?;
+    let cell_value = match effective_state.get(&cell) {
         Some(CellState::Value(value)) => value.clone(),
         Some(CellState::Bottom(_)) => {
             return Err(AppError::new(
@@ -1370,7 +1399,6 @@ async fn accepted_account_profile_in_realm(
             ));
         }
     };
-    drop(snapshot);
     let mut profile: ActorProfile = serde_json::from_value(cell_value).map_err(|error| {
         profile_projection_precondition(format!("settled account profile cell is invalid: {error}"))
     })?;
@@ -1403,6 +1431,12 @@ async fn accepted_account_profile_in_realm(
         },
         profile,
     }))
+}
+
+fn projected_sender_matches_actor(sender: Option<&str>, expected: &arkret_wire::ActorId) -> bool {
+    sender
+        .and_then(|sender| serde_json::from_str::<arkret_wire::ActorId>(sender).ok())
+        .is_some_and(|sender| sender == *expected)
 }
 
 async fn resolved_actor_profile_evidence(
@@ -2412,6 +2446,35 @@ mod tests {
         assert_eq!(error.code, ErrorCode::FrontierUnavailable);
         assert_eq!(error.status, Some(StatusCode::PRECONDITION_FAILED));
         assert!(error.wire_code_override.is_none());
+    }
+
+    #[test]
+    fn profile_projection_matches_the_exact_account_actor_wire_identity() {
+        let principal = DidCoreId::new("ak:did_core:web:alice.example".to_owned()).unwrap();
+        let station = DidCoreId::new("ak:did_core:web:station.example".to_owned()).unwrap();
+        let expected = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            principal.clone(),
+            station.clone(),
+        ));
+        let encoded = serde_json::to_string(&expected).unwrap();
+
+        assert!(projected_sender_matches_actor(Some(&encoded), &expected));
+        assert!(!projected_sender_matches_actor(
+            Some(principal.as_str()),
+            &expected
+        ));
+        assert!(!projected_sender_matches_actor(
+            Some(
+                &serde_json::to_string(&arkret_wire::ActorId::account(
+                    arkret_wire::AccountId::new(
+                        principal,
+                        DidCoreId::new("ak:did_core:web:other.example".to_owned()).unwrap(),
+                    ),
+                ))
+                .unwrap()
+            ),
+            &expected,
+        ));
     }
 
     #[test]

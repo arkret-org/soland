@@ -475,8 +475,33 @@ async fn materialize_realm_control_with_transported_seals(
         );
     }
     let mut events = Vec::new();
+    // Candidate Events are replayed on top of the accepted predecessor Seal
+    // state. The Event query only supplies envelopes; the Cell store is the
+    // authoritative source for the already sealed effects.
     let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
     let mut event_ops = Vec::new();
+    let mut sealed_move_ids = BTreeSet::new();
+    for cell in state.projections().realm_cells(realm_id).map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("read sealed Realm cells for governance replay: {error}"),
+        )
+    })? {
+        let ops = state
+            .projections()
+            .sealed_ops_for_cell(realm_id, &cell)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("read sealed governance pre-state for {cell}: {error}"),
+                )
+            })?;
+        if !ops.is_empty() {
+            sealed_move_ids.extend(ops.iter().map(|issued| issued.op.move_id.clone()));
+            event_ops.extend(ops.iter().cloned().map(|issued| (cell.clone(), issued)));
+            ops_by_cell.insert(cell, ops);
+        }
+    }
     let mut covered = BTreeSet::new();
     let mut identity_anchor_event_ids = realm_records
         .iter()
@@ -606,6 +631,17 @@ async fn materialize_realm_control_with_transported_seals(
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
+        // The canonical Event envelope is immutable, so `seal_ref` is not
+        // retroactively stamped after finalization. The Cell store is the
+        // authoritative record of which control Moves are already sealed.
+        // They remain part of cumulative Seal coverage and state-root
+        // verification, but must not be projected into the successor's
+        // candidate batch: doing so destroys the predecessor/candidate
+        // boundary used by mv-register resolution and can manufacture a
+        // conflict from one historical write.
+        if sealed_move_ids.contains(&move_id) {
+            continue;
+        }
         let invite_accept_from = if requires_invite_membership_validation {
             let member_cell = CellRef::new(format!(
                 "ak:cell:ak.component.member.state.v1:{}",
@@ -676,6 +712,23 @@ async fn materialize_realm_control_with_transported_seals(
         }
     }
     if covered.is_empty() {
+        if let Some(head) =
+            crate::notary::ensure_realm_seal_head(state, realm_id).map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("accepted Realm Seal frontier is unavailable: {error}"),
+                )
+            })?
+        {
+            let seal_view =
+                crate::notary::materialized_event_seal_view(state, head).map_err(|error| {
+                    AppError::new(
+                        ErrorCode::FrontierUnavailable,
+                        format!("accepted Realm Seal path is unavailable: {error}"),
+                    )
+                })?;
+            return Ok(MaterializedRealmControl { seal_view });
+        }
         return Err(AppError::new(
             ErrorCode::FrontierUnavailable,
             "Realm has no accepted Control Event material",
@@ -1721,6 +1774,43 @@ pub(crate) fn canonical_event_ops(
         event,
         move_id,
         accumulated,
+        None,
+        invite_accept_from,
+        digest_suite,
+    )?
+    .into_iter()
+    .map(|(cell, op)| {
+        (
+            cell,
+            IssuedOp {
+                issuer_id: event.actor_id.clone(),
+                op,
+            },
+        )
+    })
+    .collect())
+}
+
+/// Canonical sealed effects for a verifier that already resolved the exact
+/// predecessor Seal frontier. This keeps B-model Seal admission on the same
+/// projection implementation without flattening predecessor Seal batches back
+/// into an `mv_register` history.
+pub(crate) fn canonical_event_ops_with_frozen_pre_state(
+    state: &AppState,
+    realm_id: &RealmId,
+    event: &Event,
+    move_id: &Hash,
+    frozen_pre_state: &BTreeMap<CellRef, CellState>,
+    invite_accept_from: Option<&str>,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
+    Ok(canonical_event_sealed_ops(
+        state,
+        realm_id,
+        event,
+        move_id,
+        &BTreeMap::new(),
+        Some(frozen_pre_state),
         invite_accept_from,
         digest_suite,
     )?
@@ -1778,6 +1868,7 @@ fn canonical_event_sealed_ops(
     event: &Event,
     move_id: &Hash,
     accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
+    supplied_pre_state: Option<&BTreeMap<CellRef, CellState>>,
     invite_accept_from: Option<&str>,
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
@@ -1796,7 +1887,13 @@ fn canonical_event_sealed_ops(
             )
         })?;
 
-    let pre_state = frozen_governance_pre_state(state, realm_id, accumulated)?;
+    let computed_pre_state;
+    let pre_state = if let Some(pre_state) = supplied_pre_state {
+        pre_state
+    } else {
+        computed_pre_state = frozen_governance_pre_state(state, realm_id, accumulated)?;
+        &computed_pre_state
+    };
     let mut resolved: Vec<(CellRef, SealedOp)> = Vec::with_capacity(projected.len());
     for write in &projected {
         // The pre-state-dependent grammars are resolved by the one shared

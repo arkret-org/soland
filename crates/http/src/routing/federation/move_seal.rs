@@ -1096,6 +1096,18 @@ async fn try_apply_device_generation_event_seal(
         arkret_identifiers::CellRef,
         arkret_state::lattice::ordered_log::IssuedOp,
     )> = Vec::new();
+    // Every Event in one Seal delta resolves against the exact, frozen
+    // predecessor frontier. `effective_state_at` preserves Seal batches for
+    // mv-register cells; rebuilding this map from only `new_ops` would make the
+    // first patch after a predecessor Seal observe `null`.
+    let predecessor_state = state
+        .projections()
+        .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+        .map_err(|error| {
+            seal_admission_error(format!(
+                "resolve B-model Event Seal predecessor state: {error}"
+            ))
+        })?;
     for digest in &seal.delta {
         if quarantined.contains(digest.as_str()) {
             return Err(device_generation_fenced(
@@ -1211,12 +1223,12 @@ async fn try_apply_device_generation_event_seal(
             .map(str::to_owned)
             .or_else(|| Some("leave".to_owned()));
         new_ops.extend(
-            crate::routing::events::event_log::governance_proof::canonical_event_ops(
+            crate::routing::events::event_log::governance_proof::canonical_event_ops_with_frozen_pre_state(
                 state,
                 &seal.realm_id,
                 &event,
                 digest,
-                &accumulated,
+                &predecessor_state,
                 invite_accept_from.as_deref(),
                 event_digest_suite,
             )?,

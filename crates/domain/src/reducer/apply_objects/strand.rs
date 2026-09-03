@@ -549,7 +549,7 @@ fn apply_strand_narrative_patch(
         serde_json::from_value::<arkret_wire::patch::Patch>(Value::Object(patch.clone()))
             .map_err(|_| "strand_patch_invalid")?;
     let post = typed_patch
-        .apply(&Value::Object(pre))
+        .apply_for_typed_target(&Value::Object(pre), &strand.strand_id)
         .map_err(|_| "strand_patch_invalid")?;
     let post_object = post.as_object().ok_or("strand_projection_invalid")?;
     let content = post_object.get("content").cloned();
