@@ -1571,7 +1571,7 @@ async fn plan_contact_commit(
             let verified_mirror = same_service_target
                 .then(|| {
                     Ok::<_, AppError>(soland_storage::ContactVerifiedMirrorRecord {
-                        target_holder_principal_id: peer.to_string(),
+                        target_holder_principal_id: contact_mirror_target_holder_key(&peer),
                         request_event_id: event.event_id.to_string(),
                         request_digest: request_receipt.core.request_digest().to_string(),
                         canonical_event_bytes: arkret_canonical::canonical_json_bytes(event)
@@ -2633,13 +2633,17 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
     Ok(Some(normalized))
 }
 
+fn contact_mirror_target_holder_key(holder: &arkret_wire::ActorId) -> String {
+    holder.signing_principal_id().to_string()
+}
+
 #[cfg(test)]
 mod device_authorization_account_tests {
     use arkret_wire::{AccountId, ActorId, DidCoreId, Hash};
 
     use super::{
-        accept_request_slot_transition, device_authorization_matches_contact_account,
-        next_request_slot_coordinates,
+        accept_request_slot_transition, contact_mirror_target_holder_key,
+        device_authorization_matches_contact_account, next_request_slot_coordinates,
     };
 
     fn account(principal: &str, station: &str) -> ActorId {
@@ -2651,6 +2655,22 @@ mod device_authorization_account_tests {
 
     fn hash(marker: char) -> Hash {
         Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap()
+    }
+
+    #[test]
+    fn same_service_contact_mirror_uses_the_session_principal_lookup_key() {
+        let holder = account(
+            "ak:did_core:web:bob.example",
+            "ak:did_core:web:station.example",
+        );
+        assert_eq!(
+            contact_mirror_target_holder_key(&holder),
+            "ak:did_core:web:bob.example"
+        );
+        assert_ne!(
+            contact_mirror_target_holder_key(&holder),
+            holder.to_string()
+        );
     }
 
     #[test]
