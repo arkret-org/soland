@@ -320,6 +320,13 @@ pub struct AccountDataRecord {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One durable cursor-addressable change to an Account Data register.
+#[derive(Clone, Debug)]
+pub struct AccountDataChangeRecord {
+    pub position: u64,
+    pub record: AccountDataRecord,
+}
+
 #[derive(Clone, Debug)]
 pub enum AccountDataCasResult {
     Applied(AccountDataRecord),

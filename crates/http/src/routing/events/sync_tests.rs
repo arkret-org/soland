@@ -105,6 +105,7 @@ fn stream_cursor_handle_binding(
         device_list_positions,
         to_device_position,
         0,
+        0,
     )
 }
 
@@ -124,6 +125,7 @@ fn account_cursor_binding_separates_same_core_at_different_stations() {
             &positions,
             &positions,
             &positions,
+            0,
             0,
             0,
         )

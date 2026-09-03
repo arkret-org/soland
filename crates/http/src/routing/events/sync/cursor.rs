@@ -21,6 +21,8 @@ pub struct SyncCursor {
     pub to_device_position: i64,
     /// Account-private notification projection high-water position.
     pub notification_position: i64,
+    /// Station-CAS Account Data projection high-water position.
+    pub account_data_position: i64,
     /// `ctx.issued_at_ms` from the stateful handle. Used for forward-progress
     /// pruning of older handles after a client proves it persisted a cursor.
     /// Per-Realm account projection freshness lives in `account_positions`,
@@ -97,6 +99,7 @@ pub async fn sync_token_for_client_sync(
         device_list_positions,
         to_device_position,
         0,
+        0,
     )
     .await
 }
@@ -110,6 +113,7 @@ pub async fn sync_token_for_client_sync_frontiers(
     device_list_positions: BTreeMap<String, i64>,
     to_device_position: i64,
     notification_position: i64,
+    account_data_position: i64,
 ) -> String {
     let issued_at = chrono::Utc::now();
     let (account_id, device_id) = cursor_account_device(state, session);
@@ -122,7 +126,8 @@ pub async fn sync_token_for_client_sync_frontiers(
         "device_lists": device_list_positions,
         "devices": device_positions,
         "to_device": to_device_position,
-        "notifications": notification_position
+        "notifications": notification_position,
+        "account_data": account_data_position
     });
     // Deterministic handle: HMAC over the binding content (positions
     // included, per-mint `devices` wall-clock stamp excluded), so an
@@ -137,6 +142,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         &device_list_positions,
         to_device_position,
         notification_position,
+        account_data_position,
     );
     let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
@@ -319,6 +325,7 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
     device_list_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
     notification_position: i64,
+    account_data_position: i64,
 ) -> Vec<u8> {
     let binding = json!({
         "account_id": account_id,
@@ -330,6 +337,7 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
         "device_lists": device_list_positions,
         "to_device": to_device_position,
         "notifications": notification_position,
+        "account_data": account_data_position,
     });
     arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
@@ -641,6 +649,10 @@ pub async fn parse_and_validate_sync_cursor(
         .get("notifications")
         .and_then(|position| position.as_i64())
         .unwrap_or_default();
+    let account_data_position = positions_value
+        .get("account_data")
+        .and_then(|position| position.as_i64())
+        .unwrap_or_default();
     let issued_at_ms = ctx.get("issued_at_ms").and_then(|value| value.as_i64());
     Ok(SyncCursor {
         positions,
@@ -648,6 +660,7 @@ pub async fn parse_and_validate_sync_cursor(
         device_list_positions,
         to_device_position,
         notification_position,
+        account_data_position,
         issued_at_ms,
     })
 }

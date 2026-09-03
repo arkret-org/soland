@@ -1,8 +1,8 @@
 use arkret_wire::AccountId;
 
 use super::{
-    AccountDataCasResult, AccountDataRecord, AccountLifecycleRecord, AccountLocalpartRecord,
-    AccountPk, AccountRecord, PersistenceResult, async_trait,
+    AccountDataCasResult, AccountDataChangeRecord, AccountDataRecord, AccountLifecycleRecord,
+    AccountLocalpartRecord, AccountPk, AccountRecord, PersistenceResult, async_trait,
 };
 /// Trait for account storage operations.
 #[async_trait]
@@ -69,6 +69,16 @@ pub trait AccountDataStore: Send + Sync {
         expected_revision: u64,
     ) -> PersistenceResult<AccountDataCasResult>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
+    async fn changes_after(
+        &self,
+        actor: &str,
+        position: u64,
+    ) -> PersistenceResult<Vec<AccountDataChangeRecord>>;
+    async fn snapshot_for_actor(
+        &self,
+        actor: &str,
+    ) -> PersistenceResult<(Vec<AccountDataRecord>, u64)>;
+    async fn latest_change_position(&self, actor: &str) -> PersistenceResult<u64>;
 }
 #[doc(hidden)]
 pub fn account_with_primary_localpart_select(where_clause: &str) -> String {

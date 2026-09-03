@@ -1,11 +1,12 @@
 use soland_storage::AccountPk;
 
 use super::{
-    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
-    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
-    AccountStore, BigInt, BlobRef, Bool, Jsonb, Nullable, OptionalExtension, PersistenceError,
-    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz, Uuid, Value,
-    account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query, sql_types,
+    AccountDataCasResult, AccountDataChangeRecord, AccountDataRecord, AccountDataStore,
+    AccountLifecycleRecord, AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore,
+    AccountRecord, AccountStore, BigInt, BlobRef, Bool, Jsonb, Nullable, OptionalExtension,
+    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, Text, Timestamptz,
+    Uuid, Value, account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query,
+    sql_types,
 };
 pub struct PgAccountStore {
     pub pool: PgPool,
@@ -456,8 +457,17 @@ impl AccountDataStore for PgAccountDataStore {
                  ) \
                  ON CONFLICT (actor_id, account_data_key) DO NOTHING \
                  RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             ), applied AS ( \
+                 SELECT * FROM updated UNION ALL SELECT * FROM inserted \
+             ), changed AS ( \
+                 INSERT INTO account_data_changes \
+                    (actor_id, account_data_key, revision, payload, tombstone, updated_at) \
+                 SELECT actor, account_data_key, revision, payload, tombstone, updated_at \
+                 FROM applied \
+                 RETURNING position \
              ) \
-             SELECT * FROM updated UNION ALL SELECT * FROM inserted",
+             SELECT applied.* FROM applied \
+             CROSS JOIN (SELECT count(*) FROM changed) AS change_count",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
@@ -492,6 +502,174 @@ impl AccountDataStore for PgAccountDataStore {
         .await
         .map(|rows| rows.into_iter().map(AccountDataRecord::from).collect())
         .map_err(PersistenceError::database)
+    }
+
+    async fn changes_after(
+        &self,
+        actor: &str,
+        position: u64,
+    ) -> PersistenceResult<Vec<AccountDataChangeRecord>> {
+        let position = i64::try_from(position).map_err(|_| {
+            PersistenceError::Conflict(
+                "account_data change position exceeds i64 storage range".to_owned(),
+            )
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT position, actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             FROM account_data_changes WHERE actor_id = $1 AND position > $2 ORDER BY position",
+        )
+        .bind::<Text, _>(actor)
+        .bind::<BigInt, _>(position)
+        .load::<AccountDataChangeRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(AccountDataChangeRecord::try_from)
+        .collect()
+    }
+
+    async fn latest_change_position(&self, actor: &str) -> PersistenceResult<u64> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let row = sql_query(
+            "SELECT COALESCE(MAX(position), 0) AS position FROM account_data_changes WHERE actor_id = $1",
+        )
+        .bind::<Text, _>(actor)
+        .get_result::<AccountDataPositionRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        u64::try_from(row.position).map_err(|_| {
+            PersistenceError::Internal("negative account_data change position".to_owned())
+        })
+    }
+
+    async fn snapshot_for_actor(
+        &self,
+        actor: &str,
+    ) -> PersistenceResult<(Vec<AccountDataRecord>, u64)> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let rows = sql_query(
+            "WITH current_position AS ( \
+                 SELECT COALESCE(MAX(position), 0) AS position \
+                 FROM account_data_changes WHERE actor_id = $1 \
+             ), live_rows AS ( \
+                 SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+                 FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE \
+             ) \
+             SELECT current_position.position, live_rows.actor, live_rows.account_data_key, \
+                    live_rows.revision, live_rows.payload, live_rows.tombstone, live_rows.updated_at \
+             FROM current_position LEFT JOIN live_rows ON TRUE \
+             ORDER BY live_rows.account_data_key",
+        )
+        .bind::<Text, _>(actor)
+        .load::<AccountDataSnapshotRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        let position = rows.as_slice().first().map_or(0, |row| row.position);
+        let position = u64::try_from(position).map_err(|_| {
+            PersistenceError::Internal("negative account_data change position".to_owned())
+        })?;
+        let entries = rows
+            .into_iter()
+            .filter_map(AccountDataSnapshotRow::into_record)
+            .collect::<PersistenceResult<Vec<_>>>()?;
+        Ok((entries, position))
+    }
+}
+
+#[derive(QueryableByName)]
+struct AccountDataChangeRow {
+    #[diesel(sql_type = BigInt)]
+    position: i64,
+    #[diesel(sql_type = Text)]
+    actor: String,
+    #[diesel(sql_type = Text)]
+    account_data_key: String,
+    #[diesel(sql_type = BigInt)]
+    revision: i64,
+    #[diesel(sql_type = Jsonb)]
+    payload: Value,
+    #[diesel(sql_type = Bool)]
+    tombstone: bool,
+    #[diesel(sql_type = Timestamptz)]
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TryFrom<AccountDataChangeRow> for AccountDataChangeRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: AccountDataChangeRow) -> Result<Self, Self::Error> {
+        let position = u64::try_from(row.position).map_err(|_| {
+            PersistenceError::Internal("negative account_data change position".to_owned())
+        })?;
+        let revision = u64::try_from(row.revision)
+            .map_err(|_| PersistenceError::Internal("negative account_data revision".to_owned()))?;
+        Ok(Self {
+            position,
+            record: AccountDataRecord {
+                actor: row.actor,
+                account_data_key: row.account_data_key,
+                revision,
+                payload: row.payload,
+                tombstone: row.tombstone,
+                updated_at: row.updated_at,
+            },
+        })
+    }
+}
+
+#[derive(QueryableByName)]
+struct AccountDataPositionRow {
+    #[diesel(sql_type = BigInt)]
+    position: i64,
+}
+
+#[derive(QueryableByName)]
+struct AccountDataSnapshotRow {
+    #[diesel(sql_type = BigInt)]
+    position: i64,
+    #[diesel(sql_type = Nullable<Text>)]
+    actor: Option<String>,
+    #[diesel(sql_type = Nullable<Text>)]
+    account_data_key: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    revision: Option<i64>,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    payload: Option<Value>,
+    #[diesel(sql_type = Nullable<Bool>)]
+    tombstone: Option<bool>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl AccountDataSnapshotRow {
+    fn into_record(self) -> Option<PersistenceResult<AccountDataRecord>> {
+        let actor = self.actor?;
+        let account_data_key = self.account_data_key?;
+        let revision = self.revision?;
+        let payload = self.payload?;
+        let tombstone = self.tombstone?;
+        let updated_at = self.updated_at?;
+        Some(
+            u64::try_from(revision)
+                .map(|revision| AccountDataRecord {
+                    actor,
+                    account_data_key,
+                    revision,
+                    payload,
+                    tombstone,
+                    updated_at,
+                })
+                .map_err(|_| {
+                    PersistenceError::Internal("negative account_data revision".to_owned())
+                }),
+        )
     }
 }
 #[derive(QueryableByName)]

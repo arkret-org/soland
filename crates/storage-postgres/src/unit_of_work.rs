@@ -503,6 +503,20 @@ async fn commit_consent_projection(
     if affected == 0 {
         return Err(PersistenceError::Conflict(cas.conflict_code));
     }
+    sql_query(
+        "INSERT INTO account_data_changes \
+         (actor_id, account_data_key, payload, revision, tombstone, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
+    )
+    .bind::<Text, _>(&record.actor)
+    .bind::<Text, _>(&record.account_data_key)
+    .bind::<Jsonb, _>(&record.payload)
+    .bind::<BigInt, _>(record.revision as i64)
+    .bind::<Bool, _>(record.tombstone)
+    .bind::<Timestamptz, _>(record.updated_at)
+    .execute(conn)
+    .await
+    .map_err(PersistenceError::database)?;
     Ok(())
 }
 

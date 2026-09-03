@@ -289,6 +289,7 @@ pub(crate) async fn build_sync_snapshot(
                         BTreeMap::new(),
                         to_device_position,
                         after_cursor.notification_position,
+                        after_cursor.account_data_position,
                     )
                     .await,
                 );
@@ -299,18 +300,9 @@ pub(crate) async fn build_sync_snapshot(
         Vec::new()
     };
 
-    // Actor-private account data: rebuilt exclusively from canonical
-    // `ak.account_data.set` Events authored by (or for) the session actor —
-    // NOT from `AccountDataStore` rows. CAS-only cells written directly
-    // through `AccountDataStore::compare_and_set` (e.g.
-    // `ak.account.invite_delivery` / `ak.account.invite_quarantine`) never
-    // appear in this stream; today they are readable only via the
-    // `GET /_arkret/self/account_data` list endpoint. Whether the subscribe
-    // stream must also carry them is tracked in
-    // arkret-work work/active 2026-08-19-2035 (consent-model.md §6.1.1).
-    // Spec for the Event-backed part: discovery/client-preferences.md
-    // §2 (storage model) / §3.7 (Realm remarks).
-    let account_data = account_data_events(state, session).await;
+    let account_data_events = account_data_events(state, session).await;
+    let (station_cas, account_data_position) =
+        station_cas_account_data_delta(state, session, after_cursor, is_incremental).await;
     let agent_signer_evidence_bundle =
         agent_signer_evidence_bundle_for_sync(state, &sync_realms).await;
 
@@ -323,6 +315,7 @@ pub(crate) async fn build_sync_snapshot(
         device_list_positions,
         to_device_position,
         notification_position,
+        account_data_position,
     )
     .await;
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -340,18 +333,114 @@ pub(crate) async fn build_sync_snapshot(
             extra: BTreeMap::new(),
         }),
         device_lists: Some(device_lists),
-        account_data: Some(
-            arkret_models_collaboration::sync_frames::account_sync::EventContainer {
-                events: account_data,
-                extra: BTreeMap::new(),
-            },
-        ),
+        account_data: Some(arkret_models_collaboration::sync_frames::account_subscribe::AccountDataContainer {
+            events: account_data_events,
+            station_cas,
+        }),
         notifications: Some(account_notifications),
         agent_signer_evidence_bundle,
         partial: None,
         priority: None,
         reconnect_after_ms: None,
     }
+}
+
+async fn station_cas_account_data_delta(
+    state: &AppState,
+    session: Option<&SessionIdentityState>,
+    after_cursor: &SyncCursor,
+    is_incremental: bool,
+) -> (
+    Option<
+        arkret_models_collaboration::sync_frames::account_subscribe::StationCasAccountDataContainer,
+    >,
+    i64,
+) {
+    use arkret_models_collaboration::sync_frames::account_subscribe::{
+        StationCasAccountDataContainer, StationCasAccountDataRemoval,
+    };
+
+    let Some(session) = session else {
+        return (None, after_cursor.account_data_position);
+    };
+    let Some(actor) = session_actor(state, session) else {
+        return (None, after_cursor.account_data_position);
+    };
+    let actor = actor.to_string();
+
+    if !is_incremental {
+        let Ok((entries, position)) = state.account_data().snapshot_for_actor(&actor).await else {
+            tracing::error!(%actor, "failed to read Station-CAS account-data baseline");
+            return (None, after_cursor.account_data_position);
+        };
+        let upserts = entries
+            .into_iter()
+            .filter(|entry| {
+                crate::routing::identity::account_data::is_station_cas_account_data_key(
+                    &entry.account_data_key,
+                )
+            })
+            .map(|entry| arkret_models_identity::account::AccountDataRow {
+                account_data_key: entry.account_data_key,
+                revision: entry.revision,
+                content: entry.payload,
+                updated_at: entry.updated_at,
+            })
+            .collect();
+        return (
+            Some(StationCasAccountDataContainer {
+                complete: true,
+                upserts,
+                removals: Vec::new(),
+            }),
+            i64::try_from(position).unwrap_or(i64::MAX),
+        );
+    }
+
+    let after_position = u64::try_from(after_cursor.account_data_position).unwrap_or_default();
+    let Ok(changes) = state
+        .account_data()
+        .changes_after(&actor, after_position)
+        .await
+    else {
+        tracing::error!(%actor, "failed to read Station-CAS account-data changes");
+        return (None, after_cursor.account_data_position);
+    };
+    let mut position = after_position;
+    let mut latest_by_key = BTreeMap::new();
+    for change in changes {
+        position = position.max(change.position);
+        if crate::routing::identity::account_data::is_station_cas_account_data_key(
+            &change.entry.account_data_key,
+        ) {
+            latest_by_key.insert(change.entry.account_data_key.clone(), change.entry);
+        }
+    }
+    let mut upserts = Vec::new();
+    let mut removals = Vec::new();
+    for (_, entry) in latest_by_key {
+        if entry.tombstone {
+            removals.push(StationCasAccountDataRemoval {
+                account_data_key: entry.account_data_key,
+                revision: entry.revision,
+                updated_at: entry.updated_at,
+            });
+        } else {
+            upserts.push(arkret_models_identity::account::AccountDataRow {
+                account_data_key: entry.account_data_key,
+                revision: entry.revision,
+                content: entry.payload,
+                updated_at: entry.updated_at,
+            });
+        }
+    }
+    let container =
+        (!upserts.is_empty() || !removals.is_empty()).then_some(StationCasAccountDataContainer {
+            complete: false,
+            upserts,
+            removals,
+        });
+    (container, i64::try_from(position).unwrap_or(i64::MAX))
 }
 
 async fn agent_signer_evidence_bundle_for_sync(

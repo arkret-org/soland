@@ -144,17 +144,20 @@ fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), Ap
 /// gain PUT/DELETE authority over a `station_cas` cell merely because
 /// it is readable through the actor-private account-data resource.
 fn validate_readable_account_data_key(account_data_key: &str) -> Result<(), AppError> {
-    let is_plaintext_service_cas = arkret_schema::account_data_pattern(account_data_key)
-        .is_some_and(|descriptor| {
-            descriptor.storage == "plaintext_account_data"
-                && descriptor.writer_authorities == ["station_cas"]
-                && descriptor.holder_self_operations.is_empty()
-                && descriptor.write_event_kinds.is_empty()
-        });
+    let is_plaintext_service_cas = is_station_cas_account_data_key(account_data_key);
     if is_plaintext_service_cas {
         return Ok(());
     }
     validate_registered_account_data_key(account_data_key)
+}
+
+pub(crate) fn is_station_cas_account_data_key(account_data_key: &str) -> bool {
+    arkret_schema::account_data_pattern(account_data_key).is_some_and(|descriptor| {
+        descriptor.storage == "plaintext_account_data"
+            && descriptor.writer_authorities.contains(&"station_cas")
+            && descriptor.holder_self_operations.is_empty()
+            && descriptor.write_event_kinds.is_empty()
+    })
 }
 
 fn validate_private_account_data_content_for_actor(

@@ -898,6 +898,13 @@ pub trait EventReadPort: Send + Sync {
         realm_id: &str,
         actor_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn canonical_events_at_realm_actor_position(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+        actor_seq: u64,
+        limit: usize,
+    ) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,
@@ -1284,6 +1291,17 @@ impl EventQueryService {
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events
             .canonical_events_for_realm_actor(realm_id, actor_id)
+            .await
+    }
+    pub async fn canonical_events_at_realm_actor_position(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+        actor_seq: u64,
+        limit: usize,
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
+        self.events
+            .canonical_events_at_realm_actor_position(realm_id, actor_id, actor_seq, limit)
             .await
     }
     pub async fn franking_proofs_for_target(

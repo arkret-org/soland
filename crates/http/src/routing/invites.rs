@@ -1981,14 +1981,13 @@ fn cap_receive_action(
 /// The per-kind behavior fields do not carry two of the section's constraints
 /// on their own:
 ///
-/// - `holder_allowed_introduction_kinds` is an allowlist, and §5 states that an
-///   evidence kind outside it MUST NOT reach a user notification. A holder who
-///   sets `handle_claim_behavior` / `explicit_address_behavior` to `notify`
-///   without also allowlisting the kind therefore lands on the next strictest
-///   behavior instead of notifying.
-/// - `unknown_invites` governs deliveries with no evidence or non-conforming
-///   evidence. `same_station` is receiver-derived but conforming, so it stays on
-///   the low-trust `explicit_address_behavior` even when it is not allowlisted.
+/// - `holder_allowed_introduction_kinds` is an allowlist, and §5 states that an evidence kind
+///   outside it MUST NOT reach a user notification. A holder who sets `handle_claim_behavior` /
+///   `explicit_address_behavior` to `notify` without also allowlisting the kind therefore lands on
+///   the next strictest behavior instead of notifying.
+/// - `unknown_invites` governs deliveries with no evidence or non-conforming evidence.
+///   `same_station` is receiver-derived but conforming, so it stays on the low-trust
+///   `explicit_address_behavior` even when it is not allowlisted.
 fn receive_action_for_kind(
     policy: &InviteReceivePolicy,
     constraints: Option<&ReceivePolicyConstraints>,

@@ -79,35 +79,10 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        let position = match strand_position_from_create_payload(object) {
-            Ok(position) => position,
-            Err(reason) => {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
-        };
-        if let Some((_, list_space_id, _)) = position.as_ref() {
-            let child_scope = object
-                .get("scope_circle_id")
-                .and_then(Value::as_str)
-                .filter(|value| !value.trim().is_empty());
-            let child_realm_id = object
-                .get("realm_id")
-                .and_then(Value::as_str)
-                .unwrap_or(operation.realm_id.as_ref());
-            let child_has_plaintext_metadata =
-                object.get("metadata").is_some() && object.get("encrypted_metadata").is_none();
-            if let Err(reason) = self.check_space_child_scope_policy(
-                list_space_id,
-                child_scope,
-                child_realm_id,
-                child_has_plaintext_metadata,
-            ) {
-                return ProjectionEffect::Rejected {
-                    reason: reason.to_owned(),
-                };
-            }
+        if let Err(reason) = strand_position_from_create_payload(object) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
         }
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
@@ -150,17 +125,6 @@ impl ProjectionState {
             },
         };
         self.strands.insert(strand_id.clone(), projection);
-        if let Some((board_space_id, list_space_id, rank)) = position {
-            self.store_strand_position_relation(
-                &strand_id,
-                operation.realm_id.as_ref(),
-                &board_space_id,
-                &list_space_id,
-                Some(&rank),
-                now,
-            );
-        }
-
         ProjectionEffect::StrandLifecycle {
             strand_id,
             new_state: ObjectLifecycleState::Active,

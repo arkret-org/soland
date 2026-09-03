@@ -270,6 +270,43 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
             .collect())
     }
 
+    async fn changes_after(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> crate::ServiceResult<Vec<crate::identity::AccountDataChangeState>> {
+        Ok(self
+            .0
+            .account_data()
+            .changes_after(actor_id, position)
+            .await?
+            .into_iter()
+            .map(|change| crate::identity::AccountDataChangeState {
+                position: change.position,
+                entry: application_account_data(change.record),
+            })
+            .collect())
+    }
+
+    async fn latest_change_position(&self, actor_id: &str) -> crate::ServiceResult<u64> {
+        Ok(self
+            .0
+            .account_data()
+            .latest_change_position(actor_id)
+            .await?)
+    }
+
+    async fn snapshot_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> crate::ServiceResult<(Vec<crate::identity::AccountDataState>, u64)> {
+        let (entries, position) = self.0.account_data().snapshot_for_actor(actor_id).await?;
+        Ok((
+            entries.into_iter().map(application_account_data).collect(),
+            position,
+        ))
+    }
+
     async fn compare_and_set(
         &self,
         entry: crate::identity::AccountDataState,

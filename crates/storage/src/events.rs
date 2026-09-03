@@ -318,6 +318,16 @@ pub trait EventStore: Send + Sync {
         realm_id: &str,
         actor_id: &str,
     ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
+    /// Accepted siblings at one exact Realm/actor sequence position. The
+    /// caller supplies a small hard ceiling so over-fork detection never
+    /// degenerates into an actor-history scan.
+    async fn list_at_realm_actor_position(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+        actor_seq: u64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>>;
     /// Indexed lookup for durable franking proof Events that bind one target.
     /// Callers still compare the complete typed payload before trusting a row.
     async fn franking_proofs_for_target(

@@ -1093,11 +1093,8 @@ fn child_scope_policy_gates_space_parent_edges() {
     );
 }
 
-/// realm-and-space.md §3.6 — the position cell value shape is
-/// `{ "list_space_id": id:space, "rank": string }`. A create-time placement
-/// naming a List by a client-local handle instead of an `id:space` is rejected
-/// at admission, and never materializes a position edge that the projection
-/// readers cannot parse back.
+/// realm-and-space.md §3.6 — every create-time placement carrier is rejected;
+/// the first legal placement is a separate `ak.strand.move`.
 #[test]
 fn create_time_placement_rejects_a_list_reference_that_is_not_a_space_id() {
     let mut state = ProjectionState::new();
@@ -1156,13 +1153,13 @@ fn create_time_placement_rejects_a_list_reference_that_is_not_a_space_id() {
     );
     assert_eq!(
         state.check_strand_position_typing(&untyped_create),
-        Err("strand_position_space_id_untyped"),
-        "an untyped List reference must not pass admission"
+        Err("schema_violation"),
+        "a create-time placement must not pass admission"
     );
 
     assert!(matches!(
         state.apply(&untyped_create, &hlc),
-        ProjectionEffect::Rejected { reason } if reason == "strand_position_space_id_untyped"
+        ProjectionEffect::Rejected { reason } if reason == "schema_violation"
     ));
     assert!(
         !state.strands.contains_key(strand_id),
@@ -1195,17 +1192,15 @@ fn create_time_placement_rejects_a_list_reference_that_is_not_a_space_id() {
             }
         }),
     );
-    assert_eq!(state.check_strand_position_typing(&typed_create), Ok(()));
-    state.apply(&typed_create, &hlc);
     assert_eq!(
-        state
-            .relations
-            .values()
-            .filter(|relation| relation.to_object_ref() == Some(strand_id))
-            .count(),
-        1,
-        "a typed placement still materializes exactly one position edge"
+        state.check_strand_position_typing(&typed_create),
+        Err("schema_violation")
     );
+    assert!(matches!(
+        state.apply(&typed_create, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "schema_violation"
+    ));
+    assert!(state.relations.is_empty());
 }
 
 #[test]

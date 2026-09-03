@@ -71,6 +71,20 @@ CREATE TABLE public.account_datas (
 ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
+CREATE TABLE public.account_data_changes (
+    position bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    actor_id text NOT NULL,
+    account_data_key text NOT NULL,
+    payload jsonb NOT NULL,
+    revision bigint NOT NULL,
+    tombstone boolean NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    CONSTRAINT account_data_changes_revision_positive CHECK (revision >= 1)
+);
+
+CREATE INDEX account_data_changes_actor_position_idx
+    ON public.account_data_changes (actor_id, position);
+
 CREATE TABLE public.accounts (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     principal_id text NOT NULL CHECK (principal_id LIKE 'ak:did_core:%'),
@@ -570,6 +584,10 @@ CREATE INDEX canonical_events_realm_pk_idx
     ON public.canonical_events USING btree (realm_pk, received_at, pk);
 
 CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (actor_id, actor_seq DESC);
+
+CREATE INDEX canonical_events_realm_actor_position_idx
+    ON public.canonical_events USING btree (realm_pk, actor_id, actor_seq, id)
+    WHERE state = 'accepted';
 
 CREATE INDEX canonical_events_actor_received_idx ON public.canonical_events USING btree (actor_id, received_at, id);
 

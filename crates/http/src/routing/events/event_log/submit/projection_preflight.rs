@@ -346,9 +346,9 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
-            // realm-and-space.md §3.6 — a create-time placement whose Board /
-            // List references are not `id:space` names a position that cannot
-            // exist; it is a wire-shape violation, not a state precondition.
+            // realm-and-space.md §3.6 — Strand creation carries no position;
+            // any legacy placement metadata is a wire-shape violation. A
+            // separate Move establishes the first board/list position.
             if let Err(reason) = proj.check_strand_position_typing(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::BAD_REQUEST,

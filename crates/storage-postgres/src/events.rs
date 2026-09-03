@@ -1634,6 +1634,39 @@ impl EventStore for PgEventStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn list_at_realm_actor_position(
+        &self,
+        realm_id: &str,
+        actor_id: &str,
+        actor_seq: u64,
+        limit: usize,
+    ) -> PersistenceResult<Vec<CanonicalEventRecord>> {
+        let actor_seq = i64::try_from(actor_seq).map_err(|_| {
+            PersistenceError::Conflict("actor_seq exceeds i64 storage range".to_owned())
+        })?;
+        let limit = i64::try_from(limit).map_err(|_| {
+            PersistenceError::Conflict("exact-position limit exceeds i64 range".to_owned())
+        })?;
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
+             FROM canonical_events WHERE state = 'accepted' \
+               AND realm_pk = (SELECT pk FROM canonical_realms WHERE wire_id = $1) \
+               AND actor_id = $2 AND actor_seq = $3 \
+             ORDER BY id ASC LIMIT $4",
+        )
+        .bind::<Text, _>(realm_id)
+        .bind::<Text, _>(actor_id)
+        .bind::<BigInt, _>(actor_seq)
+        .bind::<BigInt, _>(limit)
+        .load::<CanonicalEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
     async fn franking_proofs_for_target(
         &self,
         realm_id: &str,

@@ -1,6 +1,18 @@
 // @generated automatically by Diesel CLI.
 
 diesel::table! {
+    account_data_changes (position) {
+        position -> Int8,
+        actor_id -> Text,
+        account_data_key -> Text,
+        payload -> Jsonb,
+        revision -> Int8,
+        tombstone -> Bool,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_datas (id) {
         id -> Uuid,
         actor_id -> Text,
@@ -1876,6 +1888,7 @@ diesel::joinable!(event_batch_receipt_events -> event_batch_receipts (receipt_pk
 diesel::joinable!(projection_circle_members -> projection_circles (circle_pk));
 diesel::joinable!(projection_strand_watches -> projection_strands (strand_pk));
 diesel::allow_tables_to_appear_in_same_query!(
+    account_data_changes,
     account_datas,
     account_lifecycle,
     account_localparts,

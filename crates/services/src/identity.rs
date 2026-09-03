@@ -347,11 +347,27 @@ pub trait AccountDataPort: Send + Sync {
         account_data_key: &str,
     ) -> ServiceResult<Option<AccountDataState>>;
     async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>>;
+    async fn changes_after(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> ServiceResult<Vec<AccountDataChangeState>>;
+    async fn latest_change_position(&self, actor_id: &str) -> ServiceResult<u64>;
+    async fn snapshot_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ServiceResult<(Vec<AccountDataState>, u64)>;
     async fn compare_and_set(
         &self,
         entry: AccountDataState,
         expected_revision: u64,
     ) -> ServiceResult<AccountDataCasOutcome>;
+}
+
+#[derive(Clone, Debug)]
+pub struct AccountDataChangeState {
+    pub position: u64,
+    pub entry: AccountDataState,
 }
 
 #[derive(Clone)]
@@ -756,6 +772,25 @@ impl AccountDataService {
 
     pub async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>> {
         self.account_data.entries_for_actor(actor_id).await
+    }
+
+    pub async fn changes_after(
+        &self,
+        actor_id: &str,
+        position: u64,
+    ) -> ServiceResult<Vec<AccountDataChangeState>> {
+        self.account_data.changes_after(actor_id, position).await
+    }
+
+    pub async fn latest_change_position(&self, actor_id: &str) -> ServiceResult<u64> {
+        self.account_data.latest_change_position(actor_id).await
+    }
+
+    pub async fn snapshot_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ServiceResult<(Vec<AccountDataState>, u64)> {
+        self.account_data.snapshot_for_actor(actor_id).await
     }
 
     pub async fn compare_and_set(

@@ -175,6 +175,7 @@ async fn peer_events_sibling_positions(
 ) -> JsonResult<PeerEventsSiblingPositionsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
+    let source_id = source_id_from_request(req)?;
     let request = parse_json_body::<PeerEventsSiblingPositionsRequestBody>(
         req,
         "invalid ak.peer.events.read.sibling_positions.v1 request body",
@@ -184,7 +185,7 @@ async fn peer_events_sibling_positions(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
 
-    let realm_visible = !is_realm_deleted(state, request.realm_id.as_str()).await;
+    let realm_visible = peer_realm_visibility(state, &source_id, request.realm_id.as_str()).await?;
     let mut disclosed_positions = Vec::new();
     let mut undisclosed_positions = Vec::new();
     for challenge in &request.positions {
@@ -206,23 +207,45 @@ async fn peer_events_sibling_positions(
             None => undisclosed_positions.push(position),
         }
     }
-    let outcome = PeerEventsSiblingPositionsOutcome {
+    let mut outcome = PeerEventsSiblingPositionsOutcome {
         disclosed_positions,
         undisclosed_positions,
     };
-    outcome
-        .validate_for_request(&request)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
-        .map_err(|error| AppError::internal(format!("peer sibling-position response: {error}")))?;
     let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
-    if response_bytes.len() > budget {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::LimitExceeded,
-            "peer sibling-position response exceeds max_response_bytes",
-        ));
-    }
+    outcome = fit_sibling_positions_outcome_to_budget(&request, outcome, budget)?;
     json_ok(outcome)
+}
+
+fn fit_sibling_positions_outcome_to_budget(
+    request: &PeerEventsSiblingPositionsRequestBody,
+    mut outcome: PeerEventsSiblingPositionsOutcome,
+    budget: usize,
+) -> Result<PeerEventsSiblingPositionsOutcome, AppError> {
+    loop {
+        outcome
+            .validate_for_request(&request)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        let response_bytes = arkret_canonical::canonical_json_bytes(&outcome).map_err(|error| {
+            AppError::internal(format!("peer sibling-position response: {error}"))
+        })?;
+        if response_bytes.len() <= budget {
+            return Ok(outcome);
+        }
+        let Some(disclosure) = outcome.disclosed_positions.pop() else {
+            return Err(AppError::new(
+                soland_http::error::ErrorCode::LimitExceeded,
+                "peer sibling-position accounting exceeds max_response_bytes",
+            ));
+        };
+        // Budget pressure is deliberately indistinguishable from every other
+        // non-disclosure reason. Never return a truncated sibling set.
+        outcome
+            .undisclosed_positions
+            .push(PeerEventsSiblingPosition {
+                actor_id: disclosure.actor_id,
+                actor_seq: disclosure.actor_seq,
+            });
+    }
 }
 
 /// The complete local sibling set at one position, or `None` when this Station
@@ -272,14 +295,24 @@ async fn adjudicated_position_siblings(
 
     let records = state
         .event_queries()
-        .canonical_events_for_realm_actor(realm_id.as_str(), &challenge.actor_id.to_string())
+        .canonical_events_at_realm_actor_position(
+            realm_id.as_str(),
+            &challenge.actor_id.to_string(),
+            challenge.actor_seq,
+            arkret_models_collaboration::http_bodies::MAX_PEER_SIBLING_POSITION_DISCLOSED_SIBLINGS
+                + 1,
+        )
         .await
         .map_err(|error| AppError::internal(format!("sibling position lookup: {error}")))?;
+    if records.len()
+        > arkret_models_collaboration::http_bodies::MAX_PEER_SIBLING_POSITION_DISCLOSED_SIBLINGS
+    {
+        // The 65th row is a sentinel: it proves the position cannot be
+        // exhaustively disclosed within the protocol ceiling.
+        return Ok(None);
+    }
     let mut siblings = Vec::new();
     for record in records {
-        if record.actor_seq != challenge.actor_seq {
-            continue;
-        }
         let event: arkret_wire::Event = serde_json::from_value(record.envelope.clone())
             .map_err(|error| AppError::internal(format!("stored Event decode: {error}")))?;
         let event_digest = arkret_wire::Hash::new(record.canonical_digest.clone())
@@ -296,13 +329,6 @@ async fn adjudicated_position_siblings(
             .as_str()
             .cmp(right.event.event_id.as_str())
     });
-    if siblings.len()
-        > arkret_models_collaboration::http_bodies::MAX_PEER_SIBLING_POSITION_DISCLOSED_SIBLINGS
-    {
-        // An over-fork past the cross-bucket ceiling has no in-bounds
-        // disclosure, and a truncated set would read as a smaller complete one.
-        return Ok(None);
-    }
     Ok(Some(siblings))
 }
 
@@ -2502,7 +2528,7 @@ pub(in crate::routing) async fn peer_realm_visibility(
 ) -> Result<bool, AppError> {
     let records = state
         .event_queries()
-        .canonical_events()
+        .peer_authz_state_records()
         .await
         .map_err(|error| AppError::internal(format!("peer Realm visibility: {error}")))?;
     let authz = PeerReadAuthz::build(state, source_id, &records).await?;
@@ -2776,12 +2802,62 @@ mod membership_identity_tests {
         );
         assert!(record_requires_private_plaintext_visibility(&data));
     }
+
+    #[test]
+    fn sibling_position_budget_demotes_whole_disclosure_before_limit_error() {
+        let actor = arkret_wire::ActorId::account(account("ak:did_core:web:source.example"));
+        let request = PeerEventsSiblingPositionsRequestBody {
+            realm_id: arkret_wire::RealmId::new(
+                "ak:realm:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD",
+            )
+            .unwrap(),
+            positions: vec![
+                arkret_models_collaboration::http_bodies::PeerEventsSiblingPositionChallenge {
+                    actor_id: actor.clone(),
+                    actor_seq: 7,
+                    fork_resolution_event_id: arkret_wire::EventId::new(
+                        "ak:event:AYqyX_pkT3hbwKscye0o3wq75G7axNkEMZADE88iy_gD",
+                    )
+                    .unwrap(),
+                },
+            ],
+            max_response_bytes: None,
+        };
+        let disclosure = PeerEventsSiblingPositionsOutcome {
+            disclosed_positions: vec![PeerEventsSiblingPositionDisclosure {
+                actor_id: actor.clone(),
+                actor_seq: 7,
+                siblings: Vec::new(),
+            }],
+            undisclosed_positions: Vec::new(),
+        };
+        let undisclosed = PeerEventsSiblingPositionsOutcome {
+            disclosed_positions: Vec::new(),
+            undisclosed_positions: vec![PeerEventsSiblingPosition {
+                actor_id: actor,
+                actor_seq: 7,
+            }],
+        };
+        let undisclosed_size = arkret_canonical::canonical_json_bytes(&undisclosed)
+            .unwrap()
+            .len();
+
+        let fitted =
+            fit_sibling_positions_outcome_to_budget(&request, disclosure.clone(), undisclosed_size)
+                .unwrap();
+        assert_eq!(fitted, undisclosed);
+        assert!(
+            fit_sibling_positions_outcome_to_budget(&request, disclosure, undisclosed_size - 1,)
+                .is_err()
+        );
+    }
 }
 
 #[cfg(test)]
 mod account_authority_identity_tests {
-    use super::*;
     use soland_storage_postgres::Db;
+
+    use super::*;
 
     fn state_with(configured: Option<&str>) -> AppState {
         let config = crate::config::AppConfig {

@@ -15,13 +15,10 @@ pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     arkret_canonical::format_timestamp_canonical(now)
 }
 
-/// realm-and-space.md §3.6 freezes the position cell value shape as
-/// `{ "list_space_id": id:space, "rank": string }`, so both Space references a
-/// create-time placement carries MUST be `id:space`, and `rank` MUST be a
-/// canonical non-empty rank. The three fields form one atomic shape: if any is
-/// present, all three must validate. This keeps direct reducer replay and every
-/// admission rail from silently downgrading a malformed placement to "no
-/// placement" or materializing an unreadable edge.
+/// Strand placement is owned exclusively by `ak.strand.move` / reorder and the
+/// `ak.component.strand.position.v1` cell. A create payload carrying any of the
+/// old metadata aliases is rejected, even on reducer replay paths that bypass
+/// schema validation.
 pub(crate) fn strand_position_from_create_payload(
     object: &serde_json::Map<String, Value>,
 ) -> Result<Option<(String, String, String)>, &'static str> {
@@ -33,42 +30,13 @@ pub(crate) fn strand_position_from_create_payload(
     else {
         return Ok(None);
     };
-    if !["board_space_id", "list_space_id", "rank"]
+    if ["board_space_id", "list_space_id", "rank"]
         .iter()
         .any(|field| fields.contains_key(*field))
     {
-        return Ok(None);
+        return Err("schema_violation");
     }
-
-    let board_space_id = required_space_id_field(fields, "board_space_id")?;
-    let list_space_id = required_space_id_field(fields, "list_space_id")?;
-    let rank = fields
-        .get("rank")
-        .and_then(Value::as_str)
-        .filter(|value| is_canonical_rank(value))
-        .ok_or("strand_position_rank_invalid")?
-        .to_owned();
-    Ok(Some((board_space_id, list_space_id, rank)))
-}
-
-fn required_space_id_field(
-    fields: &serde_json::Map<String, Value>,
-    field_name: &str,
-) -> Result<String, &'static str> {
-    let value = fields
-        .get(field_name)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or("strand_position_space_id_untyped")?;
-    arkret_identifiers::SpaceId::new(value)
-        .map(|id| id.to_string())
-        .map_err(|_| "strand_position_space_id_untyped")
-}
-
-fn is_canonical_rank(value: &str) -> bool {
-    !value.is_empty()
-        && value.len() <= 128
-        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    Ok(None)
 }
 
 pub(crate) fn strand_position_from_lifecycle_payload(

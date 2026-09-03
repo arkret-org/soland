@@ -506,12 +506,8 @@ impl ProjectionState {
         }
     }
 
-    /// realm-and-space.md §3.6 freezes the Strand position cell value shape as
-    /// `{ "list_space_id": id:space, "rank": string }`. A create-time placement
-    /// whose Board / List references are not `id:space` therefore names a
-    /// position that cannot exist. Accepting it stores an unreadable edge that
-    /// only surfaces later, on an unrelated projection read, as `internal_error`
-    /// for the whole Realm; the typing has to be enforced at admission.
+    /// Create-time Strand placement is forbidden. Placement starts with a
+    /// separate `ak.strand.move` after the event-derived Strand id is known.
     pub fn check_strand_position_typing(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(arkret_wire::EventKind::StrandCreate)
@@ -537,36 +533,7 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            arkret_wire::EventKind::StrandCreate => {
-                let Ok(payload) =
-                    operation.typed_payload::<arkret_wire::event_spec::StrandCreate>()
-                else {
-                    return Ok(());
-                };
-                let child_scope = payload
-                    .object
-                    .scope_circle_id
-                    .as_ref()
-                    .map(ToString::to_string);
-                let child_realm_id = payload.object.realm_id.to_string();
-                let child_has_plaintext_metadata = payload.object.metadata.is_some()
-                    && payload.object.encrypted_metadata.is_none();
-                let Ok(object_value) = serde_json::to_value(&payload.object) else {
-                    return Ok(());
-                };
-                let Some(object) = object_value.as_object() else {
-                    return Ok(());
-                };
-                if let Some((_, list_space_id, _)) = strand_position_from_create_payload(object)? {
-                    self.check_space_child_scope_policy(
-                        &list_space_id,
-                        child_scope.as_deref(),
-                        &child_realm_id,
-                        child_has_plaintext_metadata,
-                    )?;
-                }
-                Ok(())
-            }
+            arkret_wire::EventKind::StrandCreate => Ok(()),
             arkret_wire::EventKind::StrandMove | arkret_wire::EventKind::StrandReorder => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
