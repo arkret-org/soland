@@ -121,6 +121,7 @@ pub async fn retry_service_identity(
             &provider,
             &registration_key,
             false,
+            None,
         )?
         .signing_seed
     } else {
@@ -162,6 +163,8 @@ async fn resolve_service_identity(
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
 
     let stored = if let Some(stored) = existing {
+        let stored =
+            reconcile_pending_local_rotation(persistence, config, key_store, stored).await?;
         // Detect drift BEFORE validating. The stored identity's signing and
         // control keys are bound to the registration key it was minted under,
         // so a deployment pointed at a database from a different public base
@@ -234,7 +237,7 @@ async fn resolve_service_identity(
     let stored =
         ensure_account_authority_authorization(persistence, config, key_store, stored).await?;
 
-    ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
+    ensure_identity_bundle(persistence, config, key_store, bundle_backend, &stored).await?;
 
     if stored.identity.registration_key != configured_key {
         return Ok(DidCoreIdentityState::RegistrationKeyDrift {
@@ -266,12 +269,18 @@ async fn resolve_external_service_identity(
         .stored_service_identity()
         .await
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
+    let account_authority_key = if existing.is_none() {
+        account_authority_assertion_key(config).await?
+    } else {
+        None
+    };
     let material = external_identity_material(
         config,
         key_store,
         &provider,
         &registration_key,
         existing.is_none(),
+        account_authority_key.as_deref(),
     )?;
 
     if let Some(stored) = existing.as_ref() {
@@ -290,6 +299,7 @@ async fn resolve_external_service_identity(
         Ok(outcome) => {
             accept_external_outcome(
                 persistence,
+                config,
                 &provider,
                 &registration_key,
                 &material,
@@ -314,6 +324,7 @@ async fn resolve_external_service_identity(
                 Ok(outcome) => {
                     accept_external_outcome(
                         persistence,
+                        config,
                         &provider,
                         &registration_key,
                         &material,
@@ -330,6 +341,7 @@ async fn resolve_external_service_identity(
                     Ok(outcome) => {
                         accept_external_outcome(
                             persistence,
+                            config,
                             &provider,
                             &registration_key,
                             &material,
@@ -351,11 +363,14 @@ async fn resolve_external_service_identity(
             }
         }
         Err(error) if provider_unavailable(&error) => match existing {
-            Some(stored) => Ok(DidCoreIdentityState::DegradedStored {
-                identity: stored.identity,
-                retry_at: service_identity_retry_at(),
-                last_error: error.to_string(),
-            }),
+            Some(stored) => {
+                validate_external_account_authority_authorization(config, &stored)?;
+                Ok(DidCoreIdentityState::DegradedStored {
+                    identity: stored.identity,
+                    retry_at: service_identity_retry_at(),
+                    last_error: error.to_string(),
+                })
+            }
             None => Ok(waiting_provider(registration_key)),
         },
         Err(error) => Ok(DidCoreIdentityState::Faulted {
@@ -369,6 +384,7 @@ async fn resolve_external_service_identity(
 
 async fn accept_external_outcome(
     persistence: &PersistenceHandle,
+    config: &AppConfig,
     provider: &DidCoreIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     material: &ExternalIdentityMaterial,
@@ -385,6 +401,7 @@ async fn accept_external_outcome(
     }
     let stored =
         stored_external_identity_from_outcome(provider, registration_key, material, outcome)?;
+    validate_external_account_authority_authorization(config, &stored)?;
     persist_stored_identity(persistence, stored.clone()).await?;
     Ok(DidCoreIdentityState::Ready {
         identity: stored.identity,
@@ -425,6 +442,7 @@ fn external_identity_material(
     provider: &DidCoreIdentityProviderRef,
     registration_key: &ServiceRegistrationKey,
     allow_create: bool,
+    account_authority_key: Option<&str>,
 ) -> anyhow::Result<ExternalIdentityMaterial> {
     let key_store = required_key_store(key_store)?;
     let suffix = registration_key_ref_suffix(registration_key)?;
@@ -445,8 +463,11 @@ fn external_identity_material(
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let inception_seed = load_or_create_seed(key_store, &inception_seed_ref, allow_create)?;
     let mut rng = rand_chacha::ChaCha20Rng::from_seed(inception_seed);
+    let assertion_keys = account_authority_key
+        .map(|key| vec![(ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT, key)])
+        .unwrap_or_default();
     let prepared =
-        arkret_signatures::webvh::prepare_service_registration_inception_with_did_key_seed(
+        arkret_signatures::webvh::prepare_service_registration_inception_with_assertion_keys(
             &mut rng,
             &arkret_signatures::webvh::ServiceRegistrationInceptionInput {
                 provider_endpoint: &provider.endpoint.as_url(),
@@ -456,6 +477,7 @@ fn external_identity_material(
                 did_key_fragment: Some("notary-key"),
             },
             &signing_seed,
+            &assertion_keys,
         )
         .map_err(|error| anyhow::anyhow!("service DID inception failed: {error}"))?;
     let control_key_ref =
@@ -554,6 +576,39 @@ fn validate_external_stored_identity(
     Ok(())
 }
 
+fn validate_external_account_authority_authorization(
+    config: &AppConfig,
+    stored: &StoredDidCoreIdentity,
+) -> anyhow::Result<()> {
+    if config.account_authority_url.is_none() {
+        return Ok(());
+    }
+    let method_id = format!(
+        "{}#{ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT}",
+        stored.identity.did
+    );
+    let authorized = stored
+        .did_document
+        .verification_method
+        .iter()
+        .find(|method| method.id == method_id)
+        .filter(|_| stored.did_document.assertion_method.contains(&method_id));
+    match (
+        authorized,
+        config.account_authority_public_key_multibase.as_deref(),
+    ) {
+        (Some(method), Some(expected)) if method.public_key_multibase != expected => {
+            anyhow::bail!(
+                "service_identity_key_mismatch: external Provider identity authorizes a different Account Authority key"
+            )
+        }
+        (Some(_), _) => Ok(()),
+        (None, _) => anyhow::bail!(
+            "service_identity_key_mismatch: external Provider identity does not authorize {method_id}; rotate the hosted DID and refresh its registration receipt before starting this deployment"
+        ),
+    }
+}
+
 fn registration_key_ref_suffix(key: &ServiceRegistrationKey) -> anyhow::Result<String> {
     let bytes = arkret_canonical::canonical_json_bytes(key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -645,6 +700,8 @@ fn provider_unavailable(error: &arkret_http_client::Error) -> bool {
 
 async fn ensure_identity_bundle(
     persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
     backend: Option<&dyn IdentityBundleBackend>,
     stored: &StoredDidCoreIdentity,
 ) -> anyhow::Result<()> {
@@ -658,40 +715,56 @@ async fn ensure_identity_bundle(
         .webvh_history(stored.identity.did.as_str())
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
-    if history.len() != 1 {
-        // Bundle v1 carries `Vec<ServiceWebvhInceptionOperation>`, and a
-        // successor entry is not one: the type requires a `1-` versionId. The
-        // format was written when a service DID had exactly one entry for its
-        // whole life, which stopped being true once a Station could authorize
-        // an Account Authority key after minting.
-        //
-        // The bundle left in place is the one written at inception. It still
-        // preserves what a bundle exists to preserve - the DID, its SCID, and
-        // the control key generation the log starts from - and a restore from
-        // it re-authorizes the Account Authority key the same way this boot
-        // did. What it cannot do is carry the rotated document, so refuse to
-        // overwrite it with a snapshot whose `identity` claims a version the
-        // stored entries do not head; an inconsistent bundle fails on restore,
-        // which is exactly when it must not.
-        tracing::warn!(
-            did = %stored.identity.did,
-            entries = history.len(),
-            version_id = %stored.identity.version_id,
-            "service identity bundle v1 cannot represent a rotated WebVH log; keeping the \
-             inception bundle and not refreshing it"
-        );
-        return Ok(());
+    let prior_receipts = backend
+        .load(&stored.identity.registration_key)
+        .map_err(|error| anyhow::anyhow!("loading prior service identity bundle failed: {error}"))?
+        .map(|bundle| bundle.receipt_chains)
+        .unwrap_or_default();
+    let signing_seed =
+        load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let mut receipts = Vec::with_capacity(history.len());
+    for entry in &history {
+        let version_id = entry
+            .operation
+            .get("versionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("service WebVH entry has no versionId"))?;
+        if let Some(receipt) = prior_receipts
+            .iter()
+            .find(|receipt| receipt.version_id == version_id)
+        {
+            receipts.push(receipt.clone());
+            continue;
+        }
+        if stored.registration_receipt.version_id == version_id {
+            receipts.push(stored.registration_receipt.clone());
+            continue;
+        }
+        let update_key = entry
+            .operation
+            .pointer("/parameters/updateKeys/0")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("service WebVH entry has no active update key"))?;
+        receipts.push(reissue_registration_receipt(
+            stored,
+            version_id,
+            &entry.event_digest,
+            update_key,
+            &signing_seed,
+            now,
+        )?);
     }
-    let inception = serde_json::from_value(history[0].operation.clone()).map_err(|error| {
-        anyhow::anyhow!("decoding authoritative service WebVH inception failed: {error}")
-    })?;
     let bundle = DidCoreIdentityBundle {
         schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
         identity: stored.clone(),
-        webvh_history_entries: vec![inception],
-        receipt_chains: vec![stored.registration_receipt.clone()],
-        exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        webvh_history_entries: history.into_iter().map(|entry| entry.operation).collect(),
+        receipt_chains: receipts,
+        exported_at: now,
     };
+    bundle.validate().map_err(|error| {
+        anyhow::anyhow!("refusing to store an invalid identity bundle: {error}")
+    })?;
     backend
         .store(&bundle)
         .map_err(|error| anyhow::anyhow!("persisting service identity bundle failed: {error}"))
@@ -725,12 +798,17 @@ async fn restore_identity_bundle(
     if bundle.identity.identity.registration_key != registration_key {
         anyhow::bail!("service identity bundle registration key does not match this deployment");
     }
+    validate_identity_bundle_history(&bundle)?;
+    validate_bundle_receipt_signatures(&bundle)?;
     validate_bundle_key_custody(config, key_store, &bundle.identity)?;
-    let inception = bundle
+    let inception_value = bundle
         .webvh_history_entries
         .first()
         .expect("validated non-empty")
         .clone();
+    let inception: arkret_models_identity::service_identity::ServiceWebvhInceptionOperation =
+        serde_json::from_value(inception_value.clone())
+            .map_err(|error| anyhow::anyhow!("identity bundle inception is malformed: {error}"))?;
     let request = ServiceRegistrationEnsureRequestBody::new(
         registration_key.clone(),
         inception.clone(),
@@ -739,9 +817,15 @@ async fn restore_identity_bundle(
     )
     .map_err(|error| anyhow::anyhow!("identity bundle inception is invalid: {error}"))?;
     validate_signed_service_inception(&request)?;
+    let inception_receipt = bundle
+        .receipt_chains
+        .iter()
+        .find(|receipt| receipt.version_id == inception.version_id)
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("identity bundle has no inception receipt"))?;
     let outcome = ServiceRegistrationOutcome {
-        did_document: bundle.identity.did_document.clone(),
-        registration_receipt: bundle.identity.registration_receipt.clone(),
+        did_document: inception.state.clone(),
+        registration_receipt: inception_receipt,
         created: true,
     };
     outcome
@@ -769,7 +853,7 @@ async fn restore_identity_bundle(
         event_digest,
         did: bundle.identity.identity.did.to_string(),
         seq: 1,
-        operation: serde_json::to_value(inception)?,
+        operation: inception_value,
         created_at: now,
     };
     match persistence
@@ -783,8 +867,90 @@ async fn restore_identity_bundle(
             anyhow::bail!("service_identity_conflict: identity bundle conflicts with local state")
         }
     }
+
+    let mut previous_digest = event_digest_for_restore(&bundle.webvh_history_entries[0])?;
+    for (index, operation) in bundle.webvh_history_entries.iter().enumerate().skip(1) {
+        let seq = u64::try_from(index + 1)
+            .map_err(|_| anyhow::anyhow!("identity bundle WebVH sequence overflow"))?;
+        let event_digest = event_digest_for_restore(operation)?;
+        let version_id = operation
+            .get("versionId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("identity bundle WebVH entry has no versionId"))?;
+        let state = operation.get("state").cloned().ok_or_else(|| {
+            anyhow::anyhow!("identity bundle WebVH entry has no DID document state")
+        })?;
+        let created_at = operation
+            .get("versionTime")
+            .and_then(Value::as_str)
+            .ok_or_else(|| anyhow::anyhow!("identity bundle WebVH entry has no versionTime"))?
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .map_err(|error| anyhow::anyhow!("identity bundle versionTime is invalid: {error}"))?;
+        let document = WebvhDocumentRecord {
+            did: bundle.identity.identity.did.to_string(),
+            did_document: state,
+            key_log_head: Some(event_digest.clone()),
+            seq,
+            method_evidence: json!({
+                "mode": "service_identity_bundle_restore",
+                "version_id": version_id,
+            }),
+            fetched_at: created_at,
+            expires_at: created_at,
+            updated_at: created_at,
+        };
+        let event = WebvhLogRecord {
+            event_digest: event_digest.clone(),
+            did: bundle.identity.identity.did.to_string(),
+            seq,
+            operation: operation.clone(),
+            created_at,
+        };
+        match persistence
+            .commit_webvh_log_operation(Some(previous_digest), document, event)
+            .await
+            .map_err(|error| anyhow::anyhow!("replaying service WebVH history failed: {error}"))?
+        {
+            soland_storage::WebvhLogCommitOutcome::Accepted
+            | soland_storage::WebvhLogCommitOutcome::Duplicate => {}
+            soland_storage::WebvhLogCommitOutcome::Conflict => anyhow::bail!(
+                "service_identity_conflict: identity bundle history conflicts with local state"
+            ),
+        }
+        previous_digest = event_digest;
+    }
     validate_stored_service_identity(persistence, config, key_store, &bundle.identity).await?;
     persist_stored_identity(persistence, bundle.identity).await
+}
+
+fn event_digest_for_restore(operation: &Value) -> anyhow::Result<String> {
+    arkret_canonical::canonical_sha256(operation)
+        .map_err(|error| anyhow::anyhow!("identity bundle WebVH digest failed: {error}"))
+}
+
+fn validate_identity_bundle_history(bundle: &DidCoreIdentityBundle) -> anyhow::Result<()> {
+    let log: Vec<WebvhLogEntry> = bundle
+        .webvh_history_entries
+        .iter()
+        .cloned()
+        .map(WebvhLogEntry::new)
+        .collect();
+    for entry in &log {
+        verify_webvh_log_proof(&entry.payload)
+            .map_err(|error| anyhow::anyhow!("identity bundle WebVH proof is invalid: {error}"))?;
+    }
+    validate_log_chain(&log)
+        .map_err(|error| anyhow::anyhow!("identity bundle WebVH chain is invalid: {error}"))?;
+    verify_scid_against_did(bundle.identity.identity.did.as_str(), &log[0])
+        .map_err(|error| anyhow::anyhow!("identity bundle WebVH SCID is invalid: {error}"))?;
+    verify_log_subject(bundle.identity.identity.did.as_str(), &log)
+        .map_err(|error| anyhow::anyhow!("identity bundle WebVH subject is invalid: {error}"))?;
+    validate_witness_policy_for_log(&log).map_err(|error| {
+        anyhow::anyhow!("identity bundle WebVH witness policy is invalid: {error}")
+    })?;
+    validate_rotation_authorization_for_log(&log).map_err(|error| {
+        anyhow::anyhow!("identity bundle WebVH rotation authorization is invalid: {error}")
+    })
 }
 
 fn validate_bundle_key_custody(
@@ -802,6 +968,33 @@ fn validate_bundle_key_custody(
         key_store,
         &next_control_key_ref(&stored.identity.control_key_ref)?,
     )?;
+    Ok(())
+}
+
+fn validate_bundle_receipt_signatures(bundle: &DidCoreIdentityBundle) -> anyhow::Result<()> {
+    for (entry, receipt) in bundle
+        .webvh_history_entries
+        .iter()
+        .zip(&bundle.receipt_chains)
+    {
+        if receipt.provider_id != bundle.identity.identity.service_id
+            || receipt.proof.verification_method.as_str()
+                != format!("{}#notary-key", bundle.identity.identity.did)
+        {
+            anyhow::bail!("identity bundle receipt was issued by an unexpected Provider method");
+        }
+        let document = entry
+            .get("state")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("identity bundle WebVH entry has no state"))?;
+        let document = serde_json::from_value(document).map_err(|error| {
+            anyhow::anyhow!("identity bundle WebVH entry has an invalid service document: {error}")
+        })?;
+        arkret_signatures::service_identity::verify_registration_receipt_proof(receipt, &document)
+            .map_err(|error| {
+                anyhow::anyhow!("identity bundle receipt signature failed: {error}")
+            })?;
+    }
     Ok(())
 }
 
@@ -1022,6 +1215,173 @@ fn validate_control_key_binding(
         );
     }
     Ok(())
+}
+
+async fn reconcile_pending_local_rotation(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    mut stored: StoredDidCoreIdentity,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    stored
+        .validate()
+        .map_err(|error| anyhow::anyhow!("persisted service identity is invalid: {error}"))?;
+    let signing_seed =
+        load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
+    validate_service_signing_binding(&stored, &signing_seed)?;
+    let history = persistence
+        .webvh_history(stored.identity.did.as_str())
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!("reading persisted service WebVH history failed: {error}")
+        })?;
+    let head = history.last().ok_or_else(|| {
+        anyhow::anyhow!("persisted service identity has no authoritative WebVH history")
+    })?;
+    validate_persisted_webvh_history(stored.identity.did.as_str(), &history)?;
+    let head_version = head
+        .operation
+        .get("versionId")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("service WebVH head has no versionId"))?;
+    if head_version == stored.identity.version_id {
+        return Ok(stored);
+    }
+
+    let stored_version = webvh_version_number(&stored.identity.version_id)?;
+    let head_number = webvh_version_number(head_version)?;
+    if stored_version.checked_add(1) != Some(head_number)
+        || history
+            .get(history.len().saturating_sub(2))
+            .and_then(|entry| entry.operation.get("versionId"))
+            .and_then(Value::as_str)
+            != Some(stored.identity.version_id.as_str())
+    {
+        anyhow::bail!(
+            "persisted service identity version {} does not match WebVH head {head_version}",
+            stored.identity.version_id
+        );
+    }
+
+    let key_store = required_key_store(key_store)?;
+    let previous = &history[history.len() - 2].operation;
+    validate_control_key_binding(Some(key_store), &stored.identity.control_key_ref, previous)?;
+    let active_control_ref = next_control_key_ref(&stored.identity.control_key_ref)?;
+    let active_seed = load_seed(key_store, &active_control_ref)?;
+    let active_public = seed_public_multibase(&active_seed);
+    if head
+        .operation
+        .pointer("/parameters/updateKeys/0")
+        .and_then(Value::as_str)
+        != Some(active_public.as_str())
+    {
+        anyhow::bail!(
+            "service_identity_key_mismatch: retained control key does not match the pending WebVH head"
+        );
+    }
+    let following_control_ref = next_control_key_ref(&active_control_ref)?;
+    promote_matching_control_candidate(key_store, &following_control_ref, &head.operation)?;
+
+    let state = head
+        .operation
+        .get("state")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("service WebVH head has no DID document state"))?;
+    let now = chrono::Utc::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .expect("canonical RFC3339 timestamp parses");
+    stored.registration_receipt = reissue_registration_receipt(
+        &stored,
+        head_version,
+        &head.event_digest,
+        &active_public,
+        &signing_seed,
+        now,
+    )?;
+    stored.identity.control_key_ref = active_control_ref;
+    stored.identity.version_id = head_version.to_owned();
+    stored.identity.last_verified_at = now;
+    stored.did_document = serde_json::from_value(state).map_err(|error| {
+        anyhow::anyhow!("the recovered Station DID document is invalid: {error}")
+    })?;
+    stored.stored_at = now;
+    tracing::warn!(
+        did = %stored.identity.did,
+        version_id = %stored.identity.version_id,
+        "recovered a committed Station DID rotation after an interrupted identity update"
+    );
+    persist_stored_identity(persistence, stored).await
+}
+
+fn candidate_control_key_ref(
+    canonical_ref: &DidCoreIdentityKeyRef,
+    seed: &[u8; 32],
+) -> anyhow::Result<DidCoreIdentityKeyRef> {
+    let digest = Sha256::digest(seed_public_multibase(seed).as_bytes());
+    let suffix: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    DidCoreIdentityKeyRef::new(format!("{}:candidate:{suffix}", canonical_ref.as_str()))
+        .map_err(|error| anyhow::anyhow!(error.to_string()))
+}
+
+fn promote_matching_control_candidate(
+    key_store: &dyn KeyStore,
+    canonical_ref: &DidCoreIdentityKeyRef,
+    head: &Value,
+) -> anyhow::Result<()> {
+    let expected_hash = head
+        .pointer("/parameters/nextKeyHashes/0")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("service WebVH head has no nextKeyHashes"))?;
+    if let Ok(seed) = load_seed(key_store, canonical_ref)
+        && control_seed_hash(&seed)? == expected_hash
+    {
+        return Ok(());
+    }
+    let prefix = format!("{}:candidate:", canonical_ref.as_str());
+    for candidate_id in key_store
+        .list()
+        .map_err(|error| anyhow::anyhow!("listing WebVH control-key candidates failed: {error}"))?
+        .into_iter()
+        .filter(|id| id.starts_with(&prefix))
+    {
+        let candidate_ref = DidCoreIdentityKeyRef::new(candidate_id)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let seed = load_seed(key_store, &candidate_ref)?;
+        if control_seed_hash(&seed)? == expected_hash {
+            return key_store
+                .store(canonical_ref.as_str(), &seed)
+                .map_err(|error| {
+                    anyhow::anyhow!("promoting the next WebVH control key failed: {error}")
+                });
+        }
+    }
+    anyhow::bail!(
+        "service_identity_key_mismatch: no retained candidate matches the WebVH head's next-key commitment"
+    )
+}
+
+fn control_seed_hash(seed: &[u8; 32]) -> anyhow::Result<String> {
+    arkret_signatures::webvh::webvh_next_key_hash(&seed_public_multibase(seed))
+        .map_err(|error| anyhow::anyhow!("deriving next WebVH control-key hash failed: {error}"))
+}
+
+fn next_webvh_version_time(head: &Value) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+    let previous = head
+        .get("versionTime")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("service WebVH head has no versionTime"))?
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .map_err(|error| anyhow::anyhow!("service WebVH head versionTime is invalid: {error}"))?;
+    let now = chrono::Utc::now()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+        .parse::<chrono::DateTime<chrono::Utc>>()
+        .expect("canonical RFC3339 timestamp parses");
+    Ok(if now <= previous {
+        previous + chrono::Duration::seconds(1)
+    } else {
+        now
+    })
 }
 
 /// JWK `kid` under which an Account Authority publishes its S2S signing key.
@@ -1276,9 +1636,11 @@ fn reissue_registration_receipt(
 /// entry, signed by the update key the previous entry pre-committed, publishing
 /// a document that differs only by this method.
 ///
-/// The new pre-commitment is persisted before the entry is published. Losing it
-/// after publication is the spec's `RotationMaterialLost`, which forecloses
-/// every later change to this DID; losing an unpublished key costs nothing.
+/// The new pre-commitment is persisted under a content-addressed candidate
+/// reference before publication, then promoted to the canonical generation
+/// reference only after the log-head CAS succeeds. This keeps concurrent boots
+/// from overwriting the winning key while retaining enough material to recover
+/// if the process stops between the log commit and identity update.
 async fn authorize_account_authority_key(
     persistence: &PersistenceHandle,
     config: &AppConfig,
@@ -1347,10 +1709,12 @@ async fn authorize_account_authority_key(
     let following_control_ref = next_control_key_ref(&signing_control_ref)?;
     let mut following_seed = [0u8; 32];
     soland_http::state::getrandom_seed(&mut following_seed);
+    let following_candidate_ref =
+        candidate_control_key_ref(&following_control_ref, &following_seed)?;
     key_store
-        .store(following_control_ref.as_str(), &following_seed)
+        .store(following_candidate_ref.as_str(), &following_seed)
         .map_err(|error| {
-            anyhow::anyhow!("persisting the next WebVH control key failed: {error}")
+            anyhow::anyhow!("persisting the next WebVH control-key candidate failed: {error}")
         })?;
     let following_public_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
         &SigningKey::from_bytes(&following_seed)
@@ -1369,7 +1733,7 @@ async fn authorize_account_authority_key(
             state: &state,
             current_update_seed: &signing_seed,
             next_update_public_key_multibase: &following_public_key,
-            version_time: chrono::Utc::now(),
+            version_time: next_webvh_version_time(&head.operation)?,
         },
     )
     .map_err(|error| anyhow::anyhow!("building the Station DID successor failed: {error}"))?;
@@ -1433,6 +1797,9 @@ async fn authorize_account_authority_key(
             )
         }
     }
+    key_store
+        .store(following_control_ref.as_str(), &following_seed)
+        .map_err(|error| anyhow::anyhow!("promoting the next WebVH control key failed: {error}"))?;
 
     let mut updated = stored;
     // The receipt states which version this deployment serves, and
@@ -1597,7 +1964,7 @@ async fn mint_local_service_identity(
         let bundle = DidCoreIdentityBundle {
             schema: DidCoreIdentityBundle::SCHEMA.to_owned(),
             identity: stored.clone(),
-            webvh_history_entries: vec![request.inception_operation],
+            webvh_history_entries: vec![serde_json::to_value(&request.inception_operation)?],
             receipt_chains: vec![stored.registration_receipt.clone()],
             exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         };
@@ -1888,6 +2255,72 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn interrupted_rotation_is_recovered_from_its_candidate_key() {
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
+        let key_store = InMemoryKeyStore::new();
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(&key_store),
+            None,
+            true,
+        )
+        .await
+        .expect("first provisioning");
+        let before_rotation = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            &SigningKey::from_bytes(&[0x5b; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let config = AppConfig {
+            account_authority_url: Some("https://auth.example".to_owned()),
+            account_authority_public_key_multibase: Some(authority_key),
+            ..bootstrap_config()
+        };
+        resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect("rotation");
+        let committed = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+
+        // Model a stop after the WebVH CAS but before the canonical next key
+        // and singleton identity update became durable.
+        let canonical_next = next_control_key_ref(&committed.identity.control_key_ref).unwrap();
+        key_store.delete(canonical_next.as_str()).unwrap();
+        persistence
+            .store_service_identity(before_rotation.clone())
+            .await
+            .unwrap();
+
+        resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect("restart recovers the committed rotation");
+        let recovered = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.identity.version_id, committed.identity.version_id);
+        assert_eq!(
+            recovered.identity.control_key_ref,
+            committed.identity.control_key_ref
+        );
+        assert!(key_store.load(canonical_next.as_str()).is_ok());
+    }
+
+    #[tokio::test]
     async fn runtime_bootstrap_rejects_missing_postgres_pool() {
         let error = resolve_and_build_persistence(&bootstrap_config(), &Db { pool: None })
             .await
@@ -2131,6 +2564,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rotated_identity_bundle_replays_the_complete_history() {
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store);
+        let key_store = InMemoryKeyStore::new();
+        let bundle_dir = std::env::temp_dir().join(format!(
+            "soland-rotated-identity-bundle-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let bundle_backend = FileIdentityBundleBackend::new(&bundle_dir);
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(&key_store),
+            Some(&bundle_backend),
+            true,
+        )
+        .await
+        .expect("first provisioning");
+        let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            &SigningKey::from_bytes(&[0x5c; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let config = AppConfig {
+            account_authority_url: Some("https://auth.example".to_owned()),
+            account_authority_public_key_multibase: Some(authority_key),
+            ..bootstrap_config()
+        };
+        let rotated = resolve_service_identity(
+            &persistence,
+            &config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect("rotation updates the bundle");
+
+        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_persistence = PersistenceHandle::new(empty_database);
+        let restored = resolve_service_identity(
+            &empty_persistence,
+            &config,
+            Some(&key_store),
+            Some(&bundle_backend),
+            false,
+        )
+        .await
+        .expect("rotated bundle restores");
+        assert_eq!(state_did(&restored), state_did(&rotated));
+        let identity = restored.identity().unwrap();
+        assert_eq!(
+            empty_persistence
+                .webvh_history(identity.did.as_str())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        std::fs::remove_dir_all(bundle_dir).unwrap();
+    }
+
+    #[tokio::test]
     async fn bundle_restore_rejects_a_forged_provider_receipt() {
         let config = bootstrap_config();
         let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
@@ -2235,6 +2731,51 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn external_provider_inception_authorizes_the_account_authority_key() {
+        let config = AppConfig {
+            external_webvh_provider_url: Some("https://identity.example/".to_owned()),
+            external_webvh_registration_bearer: Some("test-registration-bearer".to_owned()),
+            ..bootstrap_config()
+        };
+        let provider = external_provider(&config).unwrap();
+        let key_store = InMemoryKeyStore::new();
+        let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            &SigningKey::from_bytes(&[0x5d; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let material = external_identity_material(
+            &config,
+            Some(&key_store),
+            &provider,
+            &registration_key(&config).unwrap(),
+            true,
+            Some(&authority_key),
+        )
+        .unwrap();
+        let method_id = format!(
+            "{}#{ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT}",
+            material.prepared.did
+        );
+        let state = &material.prepared.log_entry["state"];
+        assert!(
+            state["verificationMethod"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|method| {
+                    method["id"] == method_id && method["publicKeyMultibase"] == authority_key
+                })
+        );
+        assert!(
+            state["assertionMethod"]
+                .as_array()
+                .unwrap()
+                .contains(&json!(method_id))
         );
     }
 
