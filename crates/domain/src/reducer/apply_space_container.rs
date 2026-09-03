@@ -506,6 +506,28 @@ impl ProjectionState {
         }
     }
 
+    /// realm-and-space.md §3.6 freezes the Strand position cell value shape as
+    /// `{ "list_space_id": id:space, "rank": string }`. A create-time placement
+    /// whose Board / List references are not `id:space` therefore names a
+    /// position that cannot exist. Accepting it stores an unreadable edge that
+    /// only surfaces later, on an unrelated projection read, as `internal_error`
+    /// for the whole Realm; the typing has to be enforced at admission.
+    pub fn check_strand_position_typing(&self, operation: &Operation) -> Result<(), &'static str> {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(arkret_wire::EventKind::StrandCreate)
+        {
+            return Ok(());
+        }
+        // Read the raw create object, the same view `apply_strand_create`
+        // materializes from. Going through the typed payload here would let a
+        // create that fails typed parsing skip this check while still reaching
+        // the reducer, which is exactly the untyped placement this guards.
+        let Some(object) = operation.payload.get("object").and_then(Value::as_object) else {
+            return Ok(());
+        };
+        strand_position_from_create_payload(object).map(|_| ())
+    }
+
     pub fn check_child_scope_policy_transition(
         &self,
         operation: &Operation,
@@ -535,9 +557,7 @@ impl ProjectionState {
                 let Some(object) = object_value.as_object() else {
                     return Ok(());
                 };
-                if let Some((_, list_space_id, _)) =
-                    strand_position_from_create_payload(&operation.payload, object)
-                {
+                if let Some((_, list_space_id, _)) = strand_position_from_create_payload(object)? {
                     self.check_space_child_scope_policy(
                         &list_space_id,
                         child_scope.as_deref(),

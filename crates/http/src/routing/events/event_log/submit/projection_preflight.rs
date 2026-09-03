@@ -346,6 +346,16 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
+            // realm-and-space.md §3.6 — a create-time placement whose Board /
+            // List references are not `id:space` names a position that cannot
+            // exist; it is a wire-shape violation, not a state precondition.
+            if let Err(reason) = proj.check_strand_position_typing(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    reason,
+                ));
+            }
             if let Err(reason) = proj.check_child_scope_policy_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

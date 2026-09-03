@@ -15,72 +15,60 @@ pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     arkret_canonical::format_timestamp_canonical(now)
 }
 
-pub(crate) fn object_field_string(
+/// realm-and-space.md §3.6 freezes the position cell value shape as
+/// `{ "list_space_id": id:space, "rank": string }`, so both Space references a
+/// create-time placement carries MUST be `id:space`, and `rank` MUST be a
+/// canonical non-empty rank. The three fields form one atomic shape: if any is
+/// present, all three must validate. This keeps direct reducer replay and every
+/// admission rail from silently downgrading a malformed placement to "no
+/// placement" or materializing an unreadable edge.
+pub(crate) fn strand_position_from_create_payload(
     object: &serde_json::Map<String, Value>,
-    field_name: &str,
-) -> Option<String> {
-    // spec 9dabf26: Strand profile fields live under `metadata.fields`, not at
-    // the object root. The Strand-position component (board_space_id /
-    // list_space_id / rank) is read from there.
-    object
+) -> Result<Option<(String, String, String)>, &'static str> {
+    let Some(fields) = object
         .get("metadata")
         .and_then(Value::as_object)
         .and_then(|metadata| metadata.get("fields"))
         .and_then(Value::as_object)
-        .and_then(|fields| fields.get(field_name))
+    else {
+        return Ok(None);
+    };
+    if !["board_space_id", "list_space_id", "rank"]
+        .iter()
+        .any(|field| fields.contains_key(*field))
+    {
+        return Ok(None);
+    }
+
+    let board_space_id = required_space_id_field(fields, "board_space_id")?;
+    let list_space_id = required_space_id_field(fields, "list_space_id")?;
+    let rank = fields
+        .get("rank")
         .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
+        .filter(|value| is_canonical_rank(value))
+        .ok_or("strand_position_rank_invalid")?
+        .to_owned();
+    Ok(Some((board_space_id, list_space_id, rank)))
 }
 
-pub(crate) fn component_field_string(
-    payload: &Value,
-    family: &str,
+fn required_space_id_field(
+    fields: &serde_json::Map<String, Value>,
     field_name: &str,
-) -> Option<String> {
-    payload
-        .get("components")
-        .and_then(Value::as_array)
-        .and_then(|components| {
-            components.iter().find(|component| {
-                component
-                    .get("family")
-                    .and_then(Value::as_str)
-                    .is_some_and(|value| value == family)
-            })
-        })
-        .and_then(|component| component.get(field_name))
+) -> Result<String, &'static str> {
+    let value = fields
+        .get(field_name)
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .map(ToOwned::to_owned)
+        .ok_or("strand_position_space_id_untyped")?;
+    arkret_identifiers::SpaceId::new(value)
+        .map(|id| id.to_string())
+        .map_err(|_| "strand_position_space_id_untyped")
 }
 
-pub(crate) fn strand_position_from_create_payload(
-    payload: &Value,
-    object: &serde_json::Map<String, Value>,
-) -> Option<(String, String, Option<String>)> {
-    let board_space_id = object_field_string(object, "board_space_id").or_else(|| {
-        component_field_string(
-            payload,
-            arkret_wire::CellFamilyId::STRAND_POSITION_V1,
-            "board_space_id",
-        )
-    })?;
-    let list_space_id = object_field_string(object, "list_space_id").or_else(|| {
-        component_field_string(
-            payload,
-            arkret_wire::CellFamilyId::STRAND_POSITION_V1,
-            "list_space_id",
-        )
-    })?;
-    let rank = object_field_string(object, "rank").or_else(|| {
-        component_field_string(
-            payload,
-            arkret_wire::CellFamilyId::STRAND_POSITION_V1,
-            "rank",
-        )
-    });
-    Some((board_space_id, list_space_id, rank))
+fn is_canonical_rank(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
 }
 
 pub(crate) fn strand_position_from_lifecycle_payload(

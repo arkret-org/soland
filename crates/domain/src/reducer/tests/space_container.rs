@@ -1092,3 +1092,190 @@ fn child_scope_policy_gates_space_parent_edges() {
         Some(parent_id)
     );
 }
+
+/// realm-and-space.md §3.6 — the position cell value shape is
+/// `{ "list_space_id": id:space, "rank": string }`. A create-time placement
+/// naming a List by a client-local handle instead of an `id:space` is rejected
+/// at admission, and never materializes a position edge that the projection
+/// readers cannot parse back.
+#[test]
+fn create_time_placement_rejects_a_list_reference_that_is_not_a_space_id() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let board_id = "ak:space:AdF-OpLT-7la09L28Pgl41aEHXK3MEZNnwMNhc02Uz19";
+    let list_id = "ak:space:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t";
+    let strand_id = "ak:strand:AUAf2-oZl31wupPqnQLO-zloaqgMoX5xk2tpVSbi8zjD";
+    // The exact shape observed on the wire in the 20260903-121050 joint-e2e
+    // run: a client-local operation handle where the List Space id belongs.
+    let local_handle = "01a06598-b14a-7d51-ad57-27b1510e8c0b";
+
+    for (id, kind, title, parent) in [
+        (board_id, "board", "Sprint", None),
+        (list_id, "list", "Todo", Some(board_id)),
+    ] {
+        let mut object = serde_json::json!({
+            "id": id,
+            "realm_id": realm_id,
+            "kind": kind,
+            "title": title,
+            "created_by": "ak:did_core:web:alice.example"
+        });
+        if let Some(parent) = parent {
+            object["parent_space_id"] = serde_json::Value::String(parent.to_owned());
+            object["rank"] = serde_json::Value::String("r001".to_owned());
+        }
+        state.apply(
+            &make_operation(
+                arkret_wire::EventKind::SpaceCreate,
+                realm_id,
+                serde_json::json!({ "object": object }),
+            ),
+            &hlc,
+        );
+    }
+
+    let untyped_create = make_operation(
+        arkret_wire::EventKind::StrandCreate,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": strand_id,
+                "realm_id": realm_id,
+                "metadata": {
+                    "title": "Card A",
+                    "fields": {
+                        "board_space_id": board_id,
+                        "list_space_id": local_handle,
+                        "rank": "U"
+                    }
+                },
+                "created_by": "ak:did_core:web:alice.example"
+            }
+        }),
+    );
+    assert_eq!(
+        state.check_strand_position_typing(&untyped_create),
+        Err("strand_position_space_id_untyped"),
+        "an untyped List reference must not pass admission"
+    );
+
+    assert!(matches!(
+        state.apply(&untyped_create, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "strand_position_space_id_untyped"
+    ));
+    assert!(
+        !state.strands.contains_key(strand_id),
+        "a malformed create must not materialize the Strand"
+    );
+    assert!(
+        !state
+            .relations
+            .values()
+            .any(|relation| relation.to_object_ref() == Some(strand_id)),
+        "a rejected placement must not leave a position edge behind"
+    );
+
+    let typed_create = make_operation(
+        arkret_wire::EventKind::StrandCreate,
+        realm_id,
+        serde_json::json!({
+            "object": {
+                "id": strand_id,
+                "realm_id": realm_id,
+                "metadata": {
+                    "title": "Card A",
+                    "fields": {
+                        "board_space_id": board_id,
+                        "list_space_id": list_id,
+                        "rank": "U"
+                    }
+                },
+                "created_by": "ak:did_core:web:alice.example"
+            }
+        }),
+    );
+    assert_eq!(state.check_strand_position_typing(&typed_create), Ok(()));
+    state.apply(&typed_create, &hlc);
+    assert_eq!(
+        state
+            .relations
+            .values()
+            .filter(|relation| relation.to_object_ref() == Some(strand_id))
+            .count(),
+        1,
+        "a typed placement still materializes exactly one position edge"
+    );
+}
+
+#[test]
+fn create_time_placement_rejects_incomplete_or_invalid_position_shapes() {
+    let realm_id = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
+    let board_id = "ak:space:AdF-OpLT-7la09L28Pgl41aEHXK3MEZNnwMNhc02Uz19";
+    let list_id = "ak:space:AYqEzQ3jW02EHkMjxFQTlyeowxPQXJE4fI6JGOnzi23t";
+    let cases = [
+        (
+            "missing list reference",
+            serde_json::json!({
+                "board_space_id": board_id,
+                "rank": "U"
+            }),
+        ),
+        (
+            "non-string list reference",
+            serde_json::json!({
+                "board_space_id": board_id,
+                "list_space_id": 7,
+                "rank": "U"
+            }),
+        ),
+        (
+            "missing rank",
+            serde_json::json!({
+                "board_space_id": board_id,
+                "list_space_id": list_id
+            }),
+        ),
+        (
+            "non-canonical rank",
+            serde_json::json!({
+                "board_space_id": board_id,
+                "list_space_id": list_id,
+                "rank": "not-valid"
+            }),
+        ),
+    ];
+
+    for (label, fields) in cases {
+        let operation = make_operation(
+            arkret_wire::EventKind::StrandCreate,
+            realm_id,
+            serde_json::json!({
+                "object": {
+                    "realm_id": realm_id,
+                    "metadata": {
+                        "title": label,
+                        "fields": fields
+                    },
+                    "created_by": "ak:did_core:web:alice.example"
+                }
+            }),
+        );
+        let mut state = ProjectionState::new();
+        assert!(
+            state.check_strand_position_typing(&operation).is_err(),
+            "{label} must fail admission"
+        );
+        assert!(
+            matches!(
+                state.apply(&operation, &ServerHlc::new("test")),
+                ProjectionEffect::Rejected { .. }
+            ),
+            "{label} must also fail closed during direct reducer replay"
+        );
+        assert!(
+            state.strands.is_empty() && state.relations.is_empty(),
+            "{label} must not leave a partial projection"
+        );
+    }
+}
