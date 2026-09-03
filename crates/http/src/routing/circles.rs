@@ -126,8 +126,6 @@ fn circle_view_from(
             .map(|policy| parse_sdk_field("durability_policy", policy))
             .transpose()?,
         state: parse_sdk_field("state", c.state.as_str())?,
-        member_count: include_member_details
-            .then(|| u32::try_from(c.members.len()).unwrap_or(u32::MAX)),
         viewer_membership,
         member_ids: if include_member_details {
             c.members

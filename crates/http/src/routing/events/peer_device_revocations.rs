@@ -104,6 +104,16 @@ fn current_binding_stable(
     before == after
 }
 
+fn accepted_device_proof_requires_verification(
+    origin_current_selector: Option<&soland_storage::DeviceRevocationGateSelector>,
+) -> bool {
+    // Device authorization derivation is a partial function. An unknown,
+    // foreign, or never-authorized device must reach this authenticated peer
+    // surface as the same signed `authority_mismatch` decision, not fail while
+    // resolving the proof key and become an account/device enumeration oracle.
+    origin_current_selector.is_some()
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.peer.device_revocations.command.check",
     tags("events")
@@ -167,14 +177,31 @@ pub(super) async fn check_device_revocation_gate(
         );
     let _generation_guard = generation_lock.lock().await;
 
+    let origin_current_selector = admit_origin_current_selector(
+        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
+            state,
+            request.account_id.principal_id.as_str(),
+            request.device_id.as_str(),
+        )
+        .await,
+    )?;
+
     // A handoff/session DPoP proves possession of the short-lived holder key,
     // not of the durable accepted-device key. Returning issue and human
     // refresh therefore carry one closed proof, verified here against the
     // origin's accepted current device authority before any allow receipt can
     // be minted. Initial registration/recovery issue deliberately has no such
     // proof because its accepted binding comes from its own terminal ledger.
-    let (accepted_device_possession_proof_digest, verified_proof_binding) = if let Some(proof) =
-        request.accepted_device_possession_proof.as_ref()
+    let accepted_device_possession_proof_digest = request
+        .accepted_device_possession_proof
+        .as_ref()
+        .map(AcceptedDevicePossessionProof::proof_digest)
+        .transpose()
+        .map_err(|error| schema_violation(error.to_string()))?;
+    let verified_proof_binding = if let Some(proof) = request
+        .accepted_device_possession_proof
+        .as_ref()
+        .filter(|_| accepted_device_proof_requires_verification(origin_current_selector.as_ref()))
     {
         let (issued_at, expires_at, signature) = match proof {
             AcceptedDevicePossessionProof::Issue(proof) => {
@@ -215,26 +242,10 @@ pub(super) async fn check_device_revocation_gate(
             );
             schema_violation("accepted-device possession proof is invalid")
         })?;
-        (
-            Some(
-                proof
-                    .proof_digest()
-                    .map_err(|error| schema_violation(error.to_string()))?,
-            ),
-            Some(verified_binding),
-        )
+        Some(verified_binding)
     } else {
-        (None, None)
+        None
     };
-
-    let origin_current_selector = admit_origin_current_selector(
-        crate::routing::identity::device_generation::active_device_revocation_gate_selector(
-            state,
-            request.account_id.principal_id.as_str(),
-            request.device_id.as_str(),
-        )
-        .await,
-    )?;
     if let Some(verified_binding) = verified_proof_binding
         && !origin_current_selector.as_ref().is_some_and(|selector| {
             selector.target_device_authorize_event_id
@@ -449,6 +460,9 @@ mod tests {
             projected.derived_binding,
             Some((AUTHORIZE_EVENT.to_owned(), 1))
         );
+        assert!(accepted_device_proof_requires_verification(
+            admitted.as_ref()
+        ));
     }
 
     /// An unknown / never-authorized / foreign device leaves the derivation
@@ -475,6 +489,7 @@ mod tests {
         assert!(projected.derived_binding.is_none());
         assert!(projected.blocking_proposal_digest.is_none());
         assert!(projected.covering_seal_id.is_none());
+        assert!(!accepted_device_proof_requires_verification(None));
     }
 
     /// A projection row that claims verified / current but omits its
