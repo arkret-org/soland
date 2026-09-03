@@ -72,6 +72,27 @@ mod circle_error_mapping_tests {
     }
 }
 
+mod relation_error_mapping_tests {
+    use super::*;
+
+    #[test]
+    fn cross_realm_structural_relation_uses_registered_failed_precondition_binding() {
+        let error = submit_one_error_to_app_error(
+            "relation admission",
+            StatusCode::PRECONDITION_FAILED,
+            arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION.to_owned(),
+            "structural relation endpoints cross Realm boundaries",
+        );
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(error.status, None);
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION)
+        );
+    }
+}
+
 mod applet_formal_admission_tests {
     use super::*;
 

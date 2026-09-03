@@ -1015,6 +1015,13 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
             .with_status(status)
             .with_reason_code(code);
     }
+    // relation.md §4 and the error registry bind this reducer sub-reason to
+    // top-level failed_precondition (HTTP 409). Do not preserve the internal
+    // projection-preflight 412 carrier: 412 is reserved for HTTP/CBA
+    // preconditions and is not the registered wire status for this verdict.
+    if code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
+        return AppError::new(ErrorCode::FailedPrecondition, message).with_reason_code(code);
+    }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
         return AppError::new(mapped, message).with_status(status);
     }
