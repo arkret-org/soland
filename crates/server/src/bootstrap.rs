@@ -150,9 +150,20 @@ async fn resolve_service_identity(
     first_provisioning: bool,
 ) -> anyhow::Result<DidCoreIdentityState> {
     let configured_key = registration_key(config)?;
+    // A configured Account Authority is a hard startup dependency. Resolve
+    // its published signing key before considering any stored identity so a
+    // restart cannot silently serve with stale trust merely because the DID
+    // was provisioned on an earlier boot.
+    let account_authority_key = account_authority_assertion_key(config).await?;
     if config.external_webvh_registration_bearer.is_some() {
-        return resolve_external_service_identity(persistence, config, key_store, configured_key)
-            .await;
+        return resolve_external_service_identity(
+            persistence,
+            config,
+            key_store,
+            configured_key,
+            account_authority_key.as_deref(),
+        )
+        .await;
     }
     let existing = persistence
         .stored_service_identity()
@@ -227,12 +238,19 @@ async fn resolve_service_identity(
             key_store,
             bundle_backend,
             configured_key.clone(),
+            account_authority_key.as_deref(),
         )
         .await?
     };
 
-    let stored =
-        ensure_account_authority_authorization(persistence, config, key_store, stored).await?;
+    let stored = ensure_account_authority_authorization(
+        persistence,
+        config,
+        key_store,
+        stored,
+        account_authority_key.as_deref(),
+    )
+    .await?;
 
     ensure_identity_bundle(persistence, config, key_store, bundle_backend, &stored).await?;
 
@@ -260,24 +278,20 @@ async fn resolve_external_service_identity(
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     registration_key: ServiceRegistrationKey,
+    account_authority_key: Option<&str>,
 ) -> anyhow::Result<DidCoreIdentityState> {
     let provider = external_provider(config)?;
     let existing = persistence
         .stored_service_identity()
         .await
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
-    let account_authority_key = if existing.is_none() {
-        account_authority_assertion_key(config).await?
-    } else {
-        None
-    };
     let material = external_identity_material(
         config,
         key_store,
         &provider,
         &registration_key,
         existing.is_none(),
-        account_authority_key.as_deref(),
+        account_authority_key,
     )?;
 
     if let Some(stored) = existing.as_ref() {
@@ -301,6 +315,7 @@ async fn resolve_external_service_identity(
                 &registration_key,
                 &material,
                 existing.as_ref(),
+                account_authority_key,
                 outcome,
             )
             .await
@@ -326,6 +341,7 @@ async fn resolve_external_service_identity(
                         &registration_key,
                         &material,
                         None,
+                        account_authority_key,
                         outcome,
                     )
                     .await
@@ -343,6 +359,7 @@ async fn resolve_external_service_identity(
                             &registration_key,
                             &material,
                             None,
+                            account_authority_key,
                             outcome,
                         )
                         .await
@@ -361,7 +378,11 @@ async fn resolve_external_service_identity(
         }
         Err(error) if provider_unavailable(&error) => match existing {
             Some(stored) => {
-                validate_external_account_authority_authorization(config, &stored)?;
+                validate_external_account_authority_authorization(
+                    config,
+                    &stored,
+                    account_authority_key,
+                )?;
                 Ok(DidCoreIdentityState::DegradedStored {
                     identity: stored.identity,
                     retry_at: service_identity_retry_at(),
@@ -386,6 +407,7 @@ async fn accept_external_outcome(
     registration_key: &ServiceRegistrationKey,
     material: &ExternalIdentityMaterial,
     prior: Option<&StoredDidCoreIdentity>,
+    account_authority_key: Option<&str>,
     outcome: ServiceRegistrationOutcome,
 ) -> anyhow::Result<DidCoreIdentityState> {
     if let Some(prior) = prior
@@ -398,7 +420,7 @@ async fn accept_external_outcome(
     }
     let stored =
         stored_external_identity_from_outcome(provider, registration_key, material, outcome)?;
-    validate_external_account_authority_authorization(config, &stored)?;
+    validate_external_account_authority_authorization(config, &stored, account_authority_key)?;
     persist_stored_identity(persistence, stored.clone()).await?;
     Ok(DidCoreIdentityState::Ready {
         identity: stored.identity,
@@ -576,6 +598,7 @@ fn validate_external_stored_identity(
 fn validate_external_account_authority_authorization(
     config: &AppConfig,
     stored: &StoredDidCoreIdentity,
+    expected_key: Option<&str>,
 ) -> anyhow::Result<()> {
     if config.account_authority_url.is_none() {
         return Ok(());
@@ -590,16 +613,16 @@ fn validate_external_account_authority_authorization(
         .iter()
         .find(|method| method.id == method_id)
         .filter(|_| stored.did_document.assertion_method.contains(&method_id));
-    match (
-        authorized,
-        config.account_authority_public_key_multibase.as_deref(),
-    ) {
+    match (authorized, expected_key) {
         (Some(method), Some(expected)) if method.public_key_multibase != expected => {
             anyhow::bail!(
                 "service_identity_key_mismatch: external Provider identity authorizes a different Account Authority key"
             )
         }
-        (Some(_), _) => Ok(()),
+        (Some(_), Some(_)) => Ok(()),
+        (Some(_), None) => anyhow::bail!(
+            "service_identity_key_mismatch: Account Authority is configured but published no signing key"
+        ),
         (None, _) => anyhow::bail!(
             "service_identity_key_mismatch: external Provider identity does not authorize {method_id}; rotate the hosted DID and refresh its registration receipt before starting this deployment"
         ),
@@ -1109,10 +1132,9 @@ async fn validate_stored_service_identity(
     validate_service_signing_binding(stored, &signing_seed)?;
 
     // The Account Authority key is deliberately not checked here.
-    // `ensure_account_authority_authorization` owns that comparison and, unlike
-    // a bail, can act on it: a document that is merely behind gets one
-    // successor entry instead of a deployment that refuses to start with no
-    // repair short of re-provisioning its identity.
+    // `ensure_account_authority_authorization` owns that comparison and can
+    // publish a successor entry when the operator explicitly approves a key
+    // rotation. A newly discovered mismatch fails closed instead.
 
     let log = persistence
         .webvh_history(stored.identity.did.as_str())
@@ -1393,26 +1415,20 @@ const ACCOUNT_AUTHORITY_JWK_KID: &str = "coauth-account-authority-v1";
 ///
 /// Two sources, in order:
 ///
-/// 1. `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE`, used verbatim. An
-///    operator who wants to name the exact key still can, and that pin keeps
-///    being enforced against the stored DID history on every later boot.
-/// 2. Otherwise the Account Authority's own published keyset, read once from
-///    the operator-configured `SOLAND_ACCOUNT_AUTHORITY_URL`.
+/// 1. `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE`, used verbatim. An operator who wants to name
+///    the exact key still can, and that pin keeps being enforced against the stored DID history on
+///    every later boot.
+/// 2. Otherwise the Account Authority's own published keyset, read on every startup from the
+///    operator-configured `SOLAND_ACCOUNT_AUTHORITY_URL`.
 ///
-/// The second source exists because this key can only be authorized at DID
-/// inception. `#account-authority` enters the Station DID document when the DID
-/// is minted, and there is no update path for a service DID, so a deployment
-/// that mints without it can never verify a single S2S call from its Account
-/// Authority - and cannot be repaired short of re-provisioning the identity.
-/// Requiring an operator to hand-copy a multibase string before the very first
-/// boot is precisely how that unrecoverable state gets reached. Reading it from
-/// the service that owns the key removes the transcription step; the URL is
-/// operator configuration and TLS authenticates it, which is the same trust the
-/// hand-copied value already carried.
+/// Reading from the service that owns the key removes a transcription step;
+/// the URL is operator configuration and TLS authenticates it. Repeating that
+/// read on every startup also proves that the Account Authority is online and
+/// that its published key still agrees with this Station's durable DID.
 ///
-/// A configured-but-unreachable Account Authority is fatal rather than "mint
-/// without the key": minting is a one-way door, and the deployment an operator
-/// gets from silently skipping it is broken in a way only re-provisioning fixes.
+/// A configured-but-unreachable Account Authority is fatal on every startup.
+/// An explicit public-key pin remains an operator override and therefore does
+/// not require discovery.
 async fn account_authority_assertion_key(config: &AppConfig) -> anyhow::Result<Option<String>> {
     if let Some(pinned) = config.account_authority_public_key_multibase.as_deref() {
         return Ok(Some(pinned.to_owned()));
@@ -1440,9 +1456,8 @@ async fn account_authority_assertion_key(config: &AppConfig) -> anyhow::Result<O
     let unreachable = |what: &str, error: String| {
         anyhow::anyhow!(
             "reading the Account Authority {what} at {authority_url} failed: {error}. The \
-             signing key can only be authorized while this deployment mints its DID, so \
-             provisioning stops here rather than minting a Station that could never verify \
-             its Account Authority. Start the Account Authority first, or set \
+             Account Authority is a required startup dependency, so Soland stops rather than \
+             serving with unverified trust. Start the Account Authority first, or set \
              SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE."
         )
     };
@@ -1523,21 +1538,22 @@ fn account_authority_key_from_keyset(keyset: &serde_json::Value) -> Option<Strin
 ///
 /// Two sources of the key are deliberately not equal in authority:
 ///
-/// - `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` is the operator naming a
-///   key. It authorizes both filling an absent method and replacing one that
-///   names a different key, because editing it is a deliberate act.
-/// - A key read from the Authority's published keyset only ever fills an
-///   *absent* method. Letting a fetched value replace an authorized one would
-///   hand whoever answers at that URL the power to re-point this Station's
-///   trust at itself.
+/// - `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` is the operator naming a key. It authorizes
+///   both filling an absent method and replacing one that names a different key, because editing it
+///   is a deliberate act.
+/// - A key read from the Authority's published keyset only ever fills an *absent* method. Letting a
+///   fetched value replace an authorized one would hand whoever answers at that URL the power to
+///   re-point this Station's trust at itself.
 ///
-/// A deployment with no Account Authority configured, or one whose document is
-/// already correct, does no work and makes no network call.
+/// A deployment with no Account Authority configured does no work. Otherwise
+/// its key was resolved before durable identity handling, even when the stored
+/// document is already correct.
 async fn ensure_account_authority_authorization(
     persistence: &PersistenceHandle,
     config: &AppConfig,
     key_store: Option<&dyn KeyStore>,
     stored: StoredDidCoreIdentity,
+    resolved_key: Option<&str>,
 ) -> anyhow::Result<StoredDidCoreIdentity> {
     if config.account_authority_url.is_none() {
         return Ok(stored);
@@ -1553,32 +1569,20 @@ async fn ensure_account_authority_authorization(
         .find(|method| method.id == method_id)
         .map(|method| method.public_key_multibase.clone());
 
-    let key = match config.account_authority_public_key_multibase.as_deref() {
-        Some(pinned) => pinned.to_owned(),
-        None if authorized.is_some() => return Ok(stored),
-        None => match account_authority_assertion_key(config).await {
-            Ok(Some(fetched)) => fetched,
-            Ok(None) => return Ok(stored),
-            // An unreachable Account Authority is fatal while minting, because
-            // that DID can never be repaired afterwards. Here the identity
-            // already exists and stays verifiable: this Station keeps serving
-            // everything that does not depend on the Authority, its S2S
-            // Authority faces stay closed, and the next boot tries again. That
-            // is the spec's `DegradedStored` posture rather than a Station that
-            // refuses to start because a different process is down.
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    "Account Authority signing key is unavailable; its S2S faces stay closed"
-                );
-                return Ok(stored);
-            }
-        },
+    let Some(key) = resolved_key else {
+        return Ok(stored);
     };
-    if authorized.as_deref() == Some(key.as_str()) {
+    if authorized.as_deref() == Some(key) {
         return Ok(stored);
     }
-    authorize_account_authority_key(persistence, config, key_store, stored, &key).await
+    if authorized.is_some() && config.account_authority_public_key_multibase.is_none() {
+        anyhow::bail!(
+            "Account Authority published key does not match the key authorized by this Station; \
+             refusing automatic replacement. Set \
+             SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE explicitly to approve a key rotation"
+        );
+    }
+    authorize_account_authority_key(persistence, config, key_store, stored, key).await
 }
 
 /// Re-issue this deployment's own registration receipt over a successor entry.
@@ -1840,6 +1844,7 @@ async fn mint_local_service_identity(
     key_store: Option<&dyn KeyStore>,
     bundle_backend: Option<&dyn IdentityBundleBackend>,
     registration_key: ServiceRegistrationKey,
+    account_authority_key: Option<&str>,
 ) -> anyhow::Result<StoredDidCoreIdentity> {
     let key_store = required_key_store(key_store)?;
     let provider_endpoint = url::Url::parse(registration_key.public_base_url().as_str())
@@ -1852,9 +1857,7 @@ async fn mint_local_service_identity(
         soland_http::state::getrandom_seed(&mut seed);
         seed
     });
-    let account_authority_key = account_authority_assertion_key(config).await?;
     let assertion_keys = account_authority_key
-        .as_deref()
         .map(|key| vec![(ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT, key)])
         .unwrap_or_default();
     let prepared =
@@ -2257,6 +2260,40 @@ mod tests {
                 .expect("history")
                 .len(),
             2
+        );
+    }
+
+    #[tokio::test]
+    async fn restart_fails_when_the_configured_account_authority_is_unreachable() {
+        let persistence_store = leased_store().await;
+        let persistence = PersistenceHandle::new(persistence_store);
+        let key_store = InMemoryKeyStore::new();
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(&key_store),
+            None,
+            true,
+        )
+        .await
+        .expect("first provisioning without an Account Authority");
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let unavailable_address = listener.local_addr().unwrap();
+        drop(listener);
+        let config = AppConfig {
+            account_authority_url: Some(format!("http://{unavailable_address}")),
+            ..bootstrap_config()
+        };
+        let error = resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect_err("a stored identity must not bypass Account Authority discovery");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Account Authority is a required startup dependency"),
+            "{error}"
         );
     }
 

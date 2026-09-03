@@ -981,7 +981,7 @@ impl AppConfig {
         // Station under the `#account-authority` method authorized in the
         // Station's own DID document, so the service id is this deployment's
         // own and the signing key is read from the Authority's published keyset
-        // when the DID is minted. `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` and
+        // on every startup. `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` and
         // `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` stay as explicit
         // overrides for a deployment that wants to name both by hand.
         if account_authority_url.is_none() && account_authority_id.is_some() {

@@ -331,7 +331,9 @@ https://local.host      -> 127.0.0.1:8698
 https://auth.local.host -> 127.0.0.1:7080
 ```
 
-Start soland on `127.0.0.1:8698`, start coauth on `127.0.0.1:7080`, then run:
+Start coauth on `127.0.0.1:7080` first so its OIDC discovery and public JWKS
+are available, then start soland on `127.0.0.1:8698`. Coauth keeps its business
+routes unavailable until it has verified the running Station.
 
 ```dotenv
 SOLAND_BIND=127.0.0.1:8698
