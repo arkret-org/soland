@@ -373,7 +373,7 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
             request_id: arkret_identifiers::RequestId::new(format!("ak:request:{request_uuid}"))
                 .unwrap(),
             agent_id: outcome.agent_id.clone(),
-            controller_id: controller_core.clone(),
+            controller_principal_id: controller_core.clone(),
             requested_scope: requested_scope_typed,
             verifier_id: service_core.clone(),
             audience: arkret_wire::NonEmptyString::new(

@@ -184,14 +184,15 @@ pub(crate) async fn agent_pcr_event_matches_accepted_delegation(
     else {
         return Ok(false);
     };
-    let controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
-        .or_else(|_| {
-            arkret_wire::Did::new(record.controller_id.clone())
-                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-        })
-        .map_err(|error| format!("accepted Agent controller is invalid: {error}"))?;
+    let controller_principal_id =
+        arkret_wire::DidCoreId::new(record.controller_principal_id.clone())
+            .or_else(|_| {
+                arkret_wire::Did::new(record.controller_principal_id.clone())
+                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+            })
+            .map_err(|error| format!("accepted Agent controller is invalid: {error}"))?;
     let controller_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        controller_id,
+        controller_principal_id,
         event.actor_id.route_service_id().clone(),
     ));
     Ok(record.principal_control_realm_id == event.realm_id.as_str()
@@ -245,7 +246,7 @@ pub(crate) async fn verify_agent_pcr_ack(
     .map_err(|error| format!("Agent PCR genesis authority is invalid: {error}"))?;
     if *authority.realm_id() != event.realm_id
         || authority.agent_id() != &event.actor_id
-        || event.executed_by.as_ref() != Some(authority.controller_id())
+        || event.executed_by.as_ref() != Some(authority.controller_actor_id())
         || event.authorization_ref.as_deref() != Some(authority.authorization_ref())
         || ack.realm_id != event.realm_id
     {
@@ -260,14 +261,15 @@ pub(crate) async fn verify_agent_pcr_ack(
         .await
         .map_err(|error| format!("accepted Agent delegation is unavailable: {error}"))?
         .ok_or_else(|| "Agent PCR has no accepted Agent delegation".to_owned())?;
-    let record_controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
-        .or_else(|_| {
-            arkret_wire::Did::new(record.controller_id.clone())
-                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-        })
-        .map_err(|error| format!("accepted Agent controller is invalid: {error}"))?;
+    let record_controller_principal_id =
+        arkret_wire::DidCoreId::new(record.controller_principal_id.clone())
+            .or_else(|_| {
+                arkret_wire::Did::new(record.controller_principal_id.clone())
+                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+            })
+            .map_err(|error| format!("accepted Agent controller is invalid: {error}"))?;
     if record.principal_control_realm_id != event.realm_id.as_str()
-        || record_controller_id != *authority.controller_id().signing_principal_id()
+        || record_controller_principal_id != *authority.controller_actor_id().signing_principal_id()
         || record.controller_authorization_ref.as_str() != authority.authorization_ref()
         || record.state == AgentLifecycleState::Deactivated
     {
@@ -288,7 +290,10 @@ pub(crate) async fn verify_agent_pcr_ack(
         .filter(|fragment| fragment.len() > "ak:device:".len())
         .ok_or_else(|| "Agent PCR Ack signer is not a controller device method".to_owned())?;
     if !crate::routing::federation::move_seal::session_device_verification_method_matches(
-        authority.controller_id().signing_principal_id().as_str(),
+        authority
+            .controller_actor_id()
+            .signing_principal_id()
+            .as_str(),
         device_id,
         &member.signature.verification_method,
     ) {
@@ -297,7 +302,7 @@ pub(crate) async fn verify_agent_pcr_ack(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: record.controller_id.clone(),
+            actor_id: record.controller_principal_id.clone(),
             device_id: device_id.to_owned(),
         })
         .await
@@ -305,7 +310,7 @@ pub(crate) async fn verify_agent_pcr_ack(
         .ok_or_else(|| "Agent PCR Ack signer is not a registered controller device".to_owned())?;
     let generation = crate::routing::identity::device_generation::current_device_generation(
         state,
-        &record.controller_id,
+        &record.controller_principal_id,
     )
     .await
     .map_err(|error| format!("controller device generation is unavailable: {error}"))?;

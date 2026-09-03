@@ -413,7 +413,7 @@ async fn validate_direct_binding_event_refs(
                 .ok_or("direct_conversation_binding_invalid")?;
             // controller-to-own-Agent fixes the founder to the controller, so the Realm creator is
             // the controller and the Agent is the peer.
-            if record.controller_id != creator.signing_principal_id().as_str()
+            if record.controller_principal_id != creator.signing_principal_id().as_str()
                 || record.state != AgentLifecycleState::Active
             {
                 return Err("agent_record");
@@ -499,7 +499,7 @@ async fn validate_direct_founder(
         // an Agent runtime key never needs Direct Conversation founding scope.
         DirectConversationAuthorizationKind::AgentController => {
             DirectConversationFoundingAuthority::ControllerOwnedAgent {
-                controller_id: creator.clone(),
+                controller_actor_id: creator.clone(),
             }
         }
         DirectConversationAuthorizationKind::AcceptedContact => {
@@ -735,7 +735,7 @@ pub(crate) async fn direct_founder_for_pair(
             peer
         };
         DirectConversationFoundingAuthority::ControllerOwnedAgent {
-            controller_id: controller.clone(),
+            controller_actor_id: controller.clone(),
         }
     } else {
         let Some(record) = contact else {

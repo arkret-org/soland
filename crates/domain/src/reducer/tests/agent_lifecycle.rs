@@ -1,6 +1,7 @@
 use super::*;
 const REALM: &str = "ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb";
 const AGENT: &str = "ak:did_core:web:agent.example";
+const CONTROLLER: &str = "ak:did_core:web:controller.example";
 const REQUEST: &str = "ak:agent-action-request:01904100-0000-7000-8000-cfc039892037";
 
 fn agent_operation(kind: arkret_wire::EventKind, payload: serde_json::Value) -> Operation {
@@ -14,19 +15,22 @@ fn action_request(request_id: &str) -> Operation {
         arkret_wire::EventKind::AgentActionRequest,
         serde_json::json!({
             "agent_id": AGENT,
+            "controller_account_id": arkret_wire::AccountId::new(
+                arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
+                arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
+            ),
             "request_id": request_id
         }),
     )
 }
 
 fn action_approve(request_id: &str) -> Operation {
-    agent_operation(
+    let mut operation = agent_operation(
         arkret_wire::EventKind::AgentActionApprove,
         serde_json::json!({
             "approval_id": "ak:agent-approval:01904100-0000-7000-8000-cfc039892038",
             "request_id": request_id,
             "agent_id": AGENT,
-            "controller_id": "ak:did_core:web:controller.example",
             "proposed_action": "ak.message.create",
             "target": { "kind": "realm", "realm_id": REALM },
             "approved_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -34,14 +38,15 @@ fn action_approve(request_id: &str) -> Operation {
             "approved_at": "2026-06-19T00:00:10.000Z",
             "expires_at": "2026-06-19T00:10:10.000Z"
         }),
-    )
+    );
+    operation.context.sender = account_actor(CONTROLLER);
+    operation
 }
 
 fn pause_agent() -> Operation {
     agent_operation(
         arkret_wire::EventKind::SelfAgentPause,
         serde_json::json!({
-            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:00:00.000Z"
         }),
     )
@@ -51,7 +56,6 @@ fn resume_agent() -> Operation {
     agent_operation(
         arkret_wire::EventKind::SelfAgentResume,
         serde_json::json!({
-            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:01:00.000Z"
         }),
     )
@@ -61,7 +65,6 @@ fn deactivate_agent() -> Operation {
     agent_operation(
         arkret_wire::EventKind::SelfAgentDeactivate,
         serde_json::json!({
-            "agent_id": AGENT,
             "status_changed_at": "2026-06-19T00:02:00.000Z"
         }),
     )
@@ -135,4 +138,28 @@ fn approved_action_request_is_not_cancelled_by_lifecycle() {
     assert_eq!(approval.approval_nonce, "nonce-01904100");
     assert_eq!(approval.proposed_action, "ak.message.create");
     assert!(request.cancel_reason.is_none());
+}
+
+#[test]
+fn action_resolution_requires_the_complete_controller_account() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+
+    state.apply(&action_request(REQUEST), &hlc);
+    let mut approval = action_approve(REQUEST);
+    approval.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+        arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
+        arkret_identifiers::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+    ));
+    let effect = state.apply(&approval, &hlc);
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason }
+            if reason == "agent_action_resolution_controller_mismatch"
+    ));
+    assert_eq!(
+        state.agent_action_requests[REQUEST].status,
+        AgentActionRequestStatus::Pending
+    );
 }

@@ -1010,7 +1010,7 @@ async fn postgres_agent_table_rejects_mismatched_did_and_core_agent_ids() {
     let mut conn = pool.get().await.unwrap();
     let error = diesel::sql_query(
         "INSERT INTO agent_principals \
-         (id, controller_id, principal_control_realm_id, controller_authorization_ref, \
+         (id, controller_principal_id, principal_control_realm_id, controller_authorization_ref, \
           created_at, updated_at) \
          VALUES ($1, $2, $3, $4, $5, $5)",
     )
@@ -1342,7 +1342,7 @@ fn seal_dependency_contract_availability(
             "seal-dependency-event-bytes:{marker}"
         )))
         .unwrap(),
-        holder_id: event.actor_id.signing_principal_id().clone(),
+        holder_service_id: event.actor_id.route_service_id().clone(),
         retention_expires_at: created_at + chrono::Duration::days(1),
         holder_signer_evidence_ref: arkret_wire::SignerEvidenceRef::new(format!(
             "ak:signer_evidence:{}",

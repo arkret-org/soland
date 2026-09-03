@@ -149,12 +149,12 @@ pub(super) async fn submit_agent_runtime_key_request(
         .with_wire_code("agent_runtime_request_conflict"));
     }
 
-    let controller_id = agent_record.controller_id.clone();
+    let controller_principal_id = agent_record.controller_principal_id.clone();
     let account = state
         .identities()
         .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             account_id: arkret_wire::AccountId::new(
-                arkret_wire::DidCoreId::new(controller_id.clone()).map_err(|error| {
+                arkret_wire::DidCoreId::new(controller_principal_id.clone()).map_err(|error| {
                     AppError::internal(format!("controller account id is invalid: {error}"))
                 })?,
                 state.service_core_id().clone(),
@@ -247,11 +247,13 @@ pub(super) async fn submit_agent_runtime_key_request(
                 record: soland_services::delivery::AccountNotificationDeltaWrite {
                     delta,
                     recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                        arkret_identifiers::DidCoreId::new(controller_id).map_err(|error| {
-                            AppError::internal(format!(
-                                "approval notification recipient is invalid: {error}"
-                            ))
-                        })?,
+                        arkret_identifiers::DidCoreId::new(controller_principal_id).map_err(
+                            |error| {
+                                AppError::internal(format!(
+                                    "approval notification recipient is invalid: {error}"
+                                ))
+                            },
+                        )?,
                         state.service_core_id().clone(),
                     )),
                     controller_account_pk: account.account_pk,
@@ -350,7 +352,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         return Ok(agent_record);
     };
     let agent_id = agent_record.id.clone();
-    let controller_id = agent_record.controller_id.clone();
+    let controller_principal_id = agent_record.controller_principal_id.clone();
     let Some(pairing_request_id) = agent_record.pairing_request_id.clone() else {
         return Ok(agent_record);
     };
@@ -380,13 +382,13 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let expected_authorization_ref = agent_record.controller_authorization_ref.clone();
     let expected_request_digest = pairing_request_binding_digest(
         &agent_record,
-        &controller_id,
+        &controller_principal_id,
         &agent_id,
         &verification_method,
         state.service_id(),
     )?;
     let agent_actor = pairing_account_actor(&agent_id, state.service_id())?;
-    let controller_actor = pairing_account_actor(&controller_id, state.service_id())?;
+    let controller_actor = pairing_account_actor(&controller_principal_id, state.service_id())?;
     let controller_account_pk = agent_record.controller_account_pk.ok_or_else(|| {
         pairing_failed_precondition("pairing controller has no exact Account binding")
     })?;
@@ -430,7 +432,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             && payload
                 .get("accountable_principal_id")
                 .and_then(Value::as_str)
-                == Some(controller_id.as_str())
+                == Some(controller_principal_id.as_str())
             && payload
                 .get("agent_key_scope")
                 .is_some_and(|scope| agent_key_scope_within_requested_scope(&agent_record, scope))
@@ -443,7 +445,8 @@ pub(super) async fn reconcile_accepted_agent_authorization(
                         .any(|entry| entry.as_str() == Some(state.service_id().as_str()))
                 })
             && evidence.get("kind").and_then(Value::as_str) == Some("pairing_request")
-            && evidence.get("approved_by").and_then(Value::as_str) == Some(controller_id.as_str())
+            && evidence.get("approved_by").and_then(Value::as_str)
+                == Some(controller_principal_id.as_str())
             && evidence.get("pairing_request_id").and_then(Value::as_str)
                 == Some(pairing_request_id.as_str())
             && evidence
@@ -469,7 +472,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &authorize_event,
         &typed_agent_id,
         &typed_verification_method,
-        &controller_id,
+        &controller_principal_id,
         &public_key_digest,
         state,
     )
@@ -666,17 +669,17 @@ pub(super) async fn agent_key_pair(
     }
     let service_authorized = agent_projection_service_authorized(state, req);
     let session = if service_authorized {
-        let controller_id = body
-            .authorize_event
-            .event
-            .executed_by
-            .as_ref()
-            .ok_or_else(|| {
-                AppError::capability_denied(
-                    "authorize_event.executed_by is required for delegated pairing",
-                )
-            })?;
-        let controller_principal_id = controller_id.signing_principal_id().as_str();
+        let controller_principal_id =
+            body.authorize_event
+                .event
+                .executed_by
+                .as_ref()
+                .ok_or_else(|| {
+                    AppError::capability_denied(
+                        "authorize_event.executed_by is required for delegated pairing",
+                    )
+                })?;
+        let controller_principal_id = controller_principal_id.signing_principal_id().as_str();
         let controller_device_id =
             service_pairing_controller_device_id(&body, controller_principal_id)?;
         controller_service_session(controller_principal_id, &controller_device_id, state)
@@ -768,7 +771,7 @@ pub(super) async fn agent_key_pair(
     )?;
     validate_agent_signing_key_binding(
         &body,
-        &agent_record.controller_id,
+        &agent_record.controller_principal_id,
         &runtime_public_key_digest,
         state,
     )
@@ -869,7 +872,7 @@ pub(super) async fn agent_key_pair(
 
 pub(super) fn service_pairing_controller_device_id(
     body: &AgentKeyPairRequestBody,
-    controller_id: &str,
+    controller_principal_id: &str,
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
     let agent_core = body.agent_id.clone();
@@ -888,7 +891,7 @@ pub(super) fn service_pairing_controller_device_id(
         .executed_by
         .as_ref()
         .map(|actor| actor.signing_principal_id().as_str())
-        != Some(controller_id)
+        != Some(controller_principal_id)
     {
         return Err(AppError::capability_denied(
             "delegated pairing Event executor must match the controller",
@@ -920,7 +923,7 @@ pub(super) fn service_pairing_controller_device_id(
                     "delegated pairing Event proof must use a controller verification method",
                 )
             })?;
-    if verification_method_controller.as_str() != controller_id {
+    if verification_method_controller.as_str() != controller_principal_id {
         return Err(AppError::capability_denied(
             "delegated pairing Event proof must use a controller verification method",
         ));
@@ -988,7 +991,7 @@ fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<()
 
 async fn validate_agent_signing_key_binding(
     body: &AgentKeyPairRequestBody,
-    controller_id: &str,
+    controller_principal_id: &str,
     runtime_public_key_digest: &str,
     state: &AppState,
 ) -> Result<(), AppError> {
@@ -997,7 +1000,7 @@ async fn validate_agent_signing_key_binding(
         &body.authorize_event.event,
         &body.agent_id,
         &body.verification_method,
-        controller_id,
+        controller_principal_id,
         runtime_public_key_digest,
         state,
     )
@@ -1010,7 +1013,7 @@ async fn validate_agent_signing_key_binding_parts(
     authorize_event: &arkret_wire::Event,
     agent_id: &arkret_wire::DidCoreId,
     verification_method: &arkret_wire::DidUrl,
-    controller_id: &str,
+    controller_principal_id: &str,
     runtime_public_key_digest: &str,
     state: &AppState,
 ) -> Result<(), AppError> {
@@ -1047,8 +1050,8 @@ async fn validate_agent_signing_key_binding_parts(
             "agent_key_authorize_event_id",
         ),
         (
-            binding.controller_id.as_str() == controller_id,
-            "controller_id",
+            binding.controller_principal_id.as_str() == controller_principal_id,
+            "controller_principal_id",
         ),
     ] {
         if !matches {
@@ -1112,7 +1115,7 @@ async fn validate_agent_signing_key_binding_parts(
     // against the controller's explicit local account authority: the pairing
     // endpoint runs on the controller's Station (the session was
     // already bound to the local controller account), so the authority
-    // coordinate is `(controller_id, this service)` and the signer device is
+    // coordinate is `(controller_principal_id, this service)` and the signer device is
     // the fragment of the controller proof's verification method.
     let controller_proof_method = binding.controller_proof.verification_method.as_str();
     let controller_device_id = controller_proof_method
@@ -1128,7 +1131,7 @@ async fn validate_agent_signing_key_binding_parts(
         ))
     })?;
     let authority = arkret_wire::AccountId::new(
-        binding.controller_id.clone(),
+        binding.controller_principal_id.clone(),
         arkret_wire::DidCoreId::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!("configured service_id invalid: {error}"))
         })?,
@@ -1155,7 +1158,7 @@ async fn validate_requested_scope_disclosure(
         AppError::param_invalid(format!("requested_scope_disclosure invalid: {error}"))
     })?;
     if disclosure.agent_id.as_str() != agent_record.id
-        || disclosure.controller_id.as_str() != agent_record.controller_id
+        || disclosure.controller_principal_id.as_str() != agent_record.controller_principal_id
     {
         return Err(AppError::param_invalid(
             "requested_scope_disclosure principal binding does not match the Agent record",
@@ -1198,13 +1201,13 @@ async fn validate_requested_scope_disclosure(
         })?;
     let agent_id = arkret_wire::DidCoreId::new(agent_record.id.clone())
         .map_err(|error| AppError::internal(format!("stored Agent DID is invalid: {error}")))?;
-    let controller_id = arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone())
-        .map_err(|error| {
-            AppError::internal(format!("stored Agent controller DID is invalid: {error}"))
-        })?;
+    let controller_principal_id =
+        arkret_identifiers::DidCoreId::new(agent_record.controller_principal_id.clone()).map_err(
+            |error| AppError::internal(format!("stored Agent controller DID is invalid: {error}")),
+        )?;
     let stored_digest = arkret_signatures::agent::agent_requested_scope_digest(
         &agent_id,
-        &controller_id,
+        &controller_principal_id,
         &stored_scope,
     )
     .map_err(|error| {
@@ -1214,7 +1217,7 @@ async fn validate_requested_scope_disclosure(
     })?;
     let disclosed_digest = arkret_signatures::agent::agent_requested_scope_digest(
         &disclosure.agent_id,
-        &disclosure.controller_id,
+        &disclosure.controller_principal_id,
         &disclosure.requested_scope,
     )
     .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -1230,7 +1233,7 @@ async fn validate_requested_scope_disclosure(
             continue;
         }
         if let Err(error) = crate::jws_verify::validate_verification_method_controller(
-            disclosure.controller_id.as_str(),
+            disclosure.controller_principal_id.as_str(),
             &proof.verification_method,
         ) {
             proof_errors.push(error);
@@ -1248,14 +1251,14 @@ async fn validate_requested_scope_disclosure(
                 &binding_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                disclosure.controller_id.as_str(),
+                disclosure.controller_principal_id.as_str(),
             )
         } else {
             crate::jws_verify::verify_did_controlled_jws_async(
                 &binding_bytes,
                 &proof.jws,
                 &proof.verification_method,
-                disclosure.controller_id.as_str(),
+                disclosure.controller_principal_id.as_str(),
                 state,
             )
             .await
@@ -1326,7 +1329,8 @@ pub(super) fn account_notification_context(
         ))
         .ok()?,
         recipient_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            arkret_identifiers::DidCoreId::new(agent_record.controller_id.clone()).ok()?,
+            arkret_identifiers::DidCoreId::new(agent_record.controller_principal_id.clone())
+                .ok()?,
             arkret_identifiers::DidCoreId::new(agent_record.recipient_id.clone()?).ok()?,
         )),
         controller_account_pk: agent_record.controller_account_pk?,
@@ -1429,7 +1433,8 @@ pub(super) async fn submit_production_key_authorize_event(
     // Event supplied by the caller.
     let controller_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
-    if controller_actor != pairing_account_actor(&agent_record.controller_id, state.service_id())?
+    if controller_actor
+        != pairing_account_actor(&agent_record.controller_principal_id, state.service_id())?
         || agent_record
             .controller_account_pk
             .zip(session.account_pk)

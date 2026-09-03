@@ -347,11 +347,11 @@ async fn validate_request_acceptance_receipt(
 }
 
 async fn holder_peer(state: &AppState, session: &SessionRecord) -> Result<ContactPeer, AppError> {
-    let holder_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
+    let holder_principal_id = arkret_identifiers::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("holder DID invalid: {error}")))?;
     if let Some(_agent) = state
         .agent_pairings()
-        .agent(holder_id.as_str())
+        .agent(holder_principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("holder Agent lookup: {error}")))?
     {
@@ -368,7 +368,8 @@ async fn holder_peer(state: &AppState, session: &SessionRecord) -> Result<Contac
             .map_err(|error| AppError::internal(format!("session audience invalid: {error}")))?;
         return Ok(ContactPeer::Agent {
             actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                holder_id, station_id,
+                holder_principal_id,
+                station_id,
             )),
             controller_account_id: controller_account.account_id,
         });
@@ -1570,7 +1571,7 @@ async fn plan_contact_commit(
             let verified_mirror = same_service_target
                 .then(|| {
                     Ok::<_, AppError>(soland_storage::ContactVerifiedMirrorRecord {
-                        target_holder_id: peer.to_string(),
+                        target_holder_principal_id: peer.to_string(),
                         request_event_id: event.event_id.to_string(),
                         request_digest: request_receipt.core.request_digest().to_string(),
                         canonical_event_bytes: arkret_canonical::canonical_json_bytes(event)

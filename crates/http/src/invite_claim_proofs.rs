@@ -333,7 +333,7 @@ fn parse_binding_proof(value: &Value) -> Result<InviteClaimBindingProof, &'stati
 #[cfg(test)]
 fn resolve_current_ed25519_key(
     resolver: &dyn DidResolver,
-    controller_id: &str,
+    method_controller_principal_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
     let controller = verification_method
@@ -344,7 +344,7 @@ fn resolve_current_ed25519_key(
         .map_err(|error| format!("verification method controller is invalid: {error}"))?;
     let core = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
-    if core.as_str() != controller_id {
+    if core.as_str() != method_controller_principal_id {
         return Err("verification method controller does not match core identity".to_owned());
     }
     let document = resolver
@@ -360,7 +360,7 @@ fn resolve_current_ed25519_key(
 
 async fn resolve_current_ed25519_key_for_state(
     state: &AppState,
-    controller_id: &str,
+    method_controller_principal_id: &str,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
     let controller = verification_method
@@ -371,7 +371,7 @@ async fn resolve_current_ed25519_key_for_state(
         .map_err(|error| format!("verification method controller is invalid: {error}"))?;
     let core = arkret_wire::project_did_to_core_id(&did)
         .map_err(|error| format!("verification method controller cannot be projected: {error}"))?;
-    if core.as_str() != controller_id {
+    if core.as_str() != method_controller_principal_id {
         return Err("verification method controller does not match core identity".to_owned());
     }
     let document = crate::jws_verify::resolve_did_document_async(state, &did).await?;

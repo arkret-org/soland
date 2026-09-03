@@ -1194,8 +1194,8 @@ fn self_principal_pcr_device_id(event: &Event) -> Option<String> {
         .as_str()
         .rsplit_once('#')?;
     let controller = arkret_wire::Did::new(controller.to_owned()).ok()?;
-    let controller_id = arkret_wire::project_did_to_core_id(&controller).ok()?;
-    (controller_id == *event.actor_id.signing_principal_id())
+    let method_controller_principal_id = arkret_wire::project_did_to_core_id(&controller).ok()?;
+    (method_controller_principal_id == *event.actor_id.signing_principal_id())
         .then_some(fragment)
         .filter(|fragment| fragment.starts_with("ak:device:"))
         .filter(|fragment| fragment.len() > "ak:device:".len())
@@ -3162,7 +3162,7 @@ mod account_data_cas_tests {
         preflight_account_data_cas(&state, &operation)
             .await
             .unwrap();
-        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        operation.payload["legacy_holder_field"] = json!("ak:did_core:web:other-holder.example");
         assert_eq!(
             preflight_account_data_cas(&state, &operation)
                 .await

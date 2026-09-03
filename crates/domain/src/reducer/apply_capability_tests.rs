@@ -889,7 +889,7 @@ mod agent_key_tests {
         ));
 
         let mut root = state.realm_authority_root(REALM).unwrap();
-        root.controller_id = actor("ak:did_core:web:bob.example");
+        root.controller_actor_id = actor("ak:did_core:web:bob.example");
         root.controller_epoch += 1;
         state.realm_null_subject_cells.insert(
             (
@@ -1547,7 +1547,7 @@ mod realm_owner_authority_tests {
         let issuer = super::grant_issuer(&operation.payload).expect("fixture grant issuer");
         let current_controller = state
             .realm_authority_root(REALM)
-            .map(|root| root.controller_id);
+            .map(|root| root.controller_actor_id);
         if current_controller.as_ref() != Some(&issuer)
             && let Some(parent) = state
                 .projected_capability_grants()

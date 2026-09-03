@@ -266,9 +266,12 @@ impl AgentStore for FaultAgentStore {
     }
     async fn list_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
-        self.inner.agents().list_for_controller(controller_id).await
+        self.inner
+            .agents()
+            .list_for_controller(controller_principal_id)
+            .await
     }
     async fn set_state(
         &self,
@@ -431,8 +434,8 @@ impl soland_storage::FederationGovernanceStoreRegistry for FaultInjectingStore {
     fn history_traversal_retentions(&self) -> &dyn soland_storage::HistoryTraversalRetentionStore {
         self.inner.history_traversal_retentions()
     }
-    fn pending_rrk_acquisitions(&self) -> &dyn soland_storage::PendingRrkAcquisitionStore {
-        self.inner.pending_rrk_acquisitions()
+    fn pending_rhrk_acquisitions(&self) -> &dyn soland_storage::PendingRhrkAcquisitionStore {
+        self.inner.pending_rhrk_acquisitions()
     }
     fn history_response_streams(&self) -> &dyn soland_storage::HistoryResponseStreamStore {
         self.inner.history_response_streams()

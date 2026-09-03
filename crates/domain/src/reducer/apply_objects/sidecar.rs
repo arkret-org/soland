@@ -25,7 +25,11 @@ impl ProjectionState {
                 reason: "sidecar_create_invalid".to_owned(),
             };
         };
-        let controller_id = &operation.context.sender;
+        let Some(controller_account_id) = operation.context.sender.as_account_id() else {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_create_invalid".to_owned(),
+            };
+        };
         let wire_payload = operation.payload.clone();
         let Some(payload) = wire_payload.as_object() else {
             return ProjectionEffect::Rejected {
@@ -50,7 +54,7 @@ impl ProjectionState {
         }
         if let Some(existing) = self.sidecars.values().find(|existing| {
             existing.realm_id == operation.realm_id.as_str()
-                && existing.controller_id == controller_id.to_string()
+                && existing.controller_account_id == *controller_account_id
                 && existing.state != AgentSidecarState::Tombstoned
         }) {
             return if existing.sidecar_id == sidecar_id {
@@ -66,7 +70,7 @@ impl ProjectionState {
             SidecarProjection {
                 sidecar_id: sidecar_id.clone(),
                 realm_id: operation.realm_id.to_string(),
-                controller_id: controller_id.to_string(),
+                controller_account_id: controller_account_id.clone(),
                 encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
                 state: AgentSidecarState::Active,
                 state_changed_at: None,
@@ -107,7 +111,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.context.sender.to_string() != sidecar.controller_id
+            || operation.context.sender.as_account_id() != Some(&sidecar.controller_account_id)
         {
             return ProjectionEffect::Rejected {
                 reason: "sidecar_context_attach_invalid".to_owned(),
@@ -190,7 +194,7 @@ impl ProjectionState {
             };
         };
         if sidecar.realm_id != operation.realm_id.as_str()
-            || operation.context.sender.to_string() != sidecar.controller_id
+            || operation.context.sender.as_account_id() != Some(&sidecar.controller_account_id)
             || payload.encrypted_payload.validate().is_err()
             || !self.sidecar_contexts.contains_key(&(
                 payload.sidecar_id.to_string(),

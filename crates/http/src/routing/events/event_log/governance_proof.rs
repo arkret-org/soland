@@ -1013,13 +1013,13 @@ pub(crate) async fn load_verified_governance_checkpoint(
             .ok_or_else(|| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,
-                    "trusted RRK base Seal closure is unavailable locally",
+                    "trusted RHRK base Seal closure is unavailable locally",
                 )
             })?;
         if seal.realm_id != *realm_id {
             return Err(AppError::new(
                 ErrorCode::MlsGovernanceAnchorUnreachable,
-                "trusted RRK base Seal closure crosses the Realm boundary",
+                "trusted RHRK base Seal closure crosses the Realm boundary",
             ));
         }
         pending.extend(seal.predecessor_refs.iter().cloned());
@@ -1035,14 +1035,14 @@ pub(crate) async fn load_verified_governance_checkpoint(
                 .ok_or_else(|| {
                     AppError::new(
                         ErrorCode::FrontierUnavailable,
-                        "trusted RRK base checkpoint has a missing local Control Event",
+                        "trusted RHRK base checkpoint has a missing local Control Event",
                     )
                 })?;
             if let Some(previous) = events.insert(digest.clone(), event.clone())
                 && previous != event
             {
                 return Err(proof_state_error(
-                    "one trusted RRK base Event digest resolves to different local bytes",
+                    "one trusted RHRK base Event digest resolves to different local bytes",
                 ));
             }
         }

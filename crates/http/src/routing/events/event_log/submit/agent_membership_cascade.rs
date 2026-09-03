@@ -87,15 +87,17 @@ fn frozen_controller_membership(
     controller: &arkret_wire::Event,
 ) -> Result<FrozenControllerMembership, SubmitOneError> {
     let projection = state.projections().snapshot();
-    let controller_id = controller.actor_id.to_string();
+    let controller_actor_key = controller.actor_id.to_string();
     let realm_id = controller.realm_id.as_str();
-    let member = projection.member(realm_id, &controller_id).ok_or_else(|| {
-        cascade_error(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "controller has no current Realm membership",
-        )
-    })?;
+    let member = projection
+        .member(realm_id, &controller_actor_key)
+        .ok_or_else(|| {
+            cascade_error(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                "controller has no current Realm membership",
+            )
+        })?;
     if member.state != "join" {
         return Err(cascade_error(
             StatusCode::PRECONDITION_FAILED,
@@ -365,7 +367,7 @@ async fn replay_outcome(
         ));
     }
 
-    let controller_id = submission.controller_transition.event.event_id.clone();
+    let controller_transition_event_id = submission.controller_transition.event.event_id.clone();
     let agent_event_ids = submission
         .agent_transitions
         .iter()
@@ -378,7 +380,7 @@ async fn replay_outcome(
         AgentMembershipCascadeMode::EmergencyTerminal => {
             let record = state
                 .persistence()
-                .agent_cleanup_intent_for_terminal_event(&controller_id)
+                .agent_cleanup_intent_for_terminal_event(&controller_transition_event_id)
                 .await
                 .map_err(|error| {
                     cascade_error(
@@ -448,7 +450,7 @@ async fn replay_outcome(
         receipts,
         AgentMembershipCascadeOutcome {
             status,
-            controller_transition_event_id: controller_id,
+            controller_transition_event_id,
             agent_transition_event_ids: agent_event_ids,
             cleanup_intent_digest,
         },
@@ -896,7 +898,7 @@ async fn replay_federation_outcome(
             "federated cascade retry observes a partially committed Event set",
         ));
     }
-    let controller_id = submission.controller_transition.event.event_id.clone();
+    let controller_transition_event_id = submission.controller_transition.event.event_id.clone();
     let agent_event_ids = submission
         .agent_transitions
         .iter()
@@ -909,7 +911,7 @@ async fn replay_federation_outcome(
         AgentMembershipCascadeMode::EmergencyTerminal => {
             let record = state
                 .persistence()
-                .agent_cleanup_intent_for_terminal_event(&controller_id)
+                .agent_cleanup_intent_for_terminal_event(&controller_transition_event_id)
                 .await
                 .map_err(|error| {
                     cascade_error(
@@ -978,7 +980,7 @@ async fn replay_federation_outcome(
         receipts,
         AgentMembershipCascadeOutcome {
             status,
-            controller_transition_event_id: controller_id,
+            controller_transition_event_id,
             agent_transition_event_ids: agent_event_ids,
             cleanup_intent_digest,
         },

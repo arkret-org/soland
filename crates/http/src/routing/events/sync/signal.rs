@@ -373,7 +373,7 @@ fn signal_actor_has_realm_action_in_view(
             .ok(),
             arkret_state::lattice::CellState::Bottom(_) => None,
         })
-        .map(|root| root.controller_id);
+        .map(|root| root.controller_actor_id);
     if root_controller.as_ref() == Some(actor)
         && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
             .is_some_and(|descriptor| {

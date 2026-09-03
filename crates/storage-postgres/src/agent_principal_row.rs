@@ -17,7 +17,7 @@ pub(crate) struct AgentPrincipalRow {
     #[diesel(skip_update)]
     pub id: DidCoreId,
     #[diesel(skip_update)]
-    pub controller_id: DidCoreId,
+    pub controller_principal_id: DidCoreId,
     #[diesel(skip_update)]
     pub principal_control_realm_id: String,
     #[diesel(skip_update)]
@@ -122,11 +122,12 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
         let id = DidCoreId::new(record.id).map_err(|error| {
             PersistenceError::SchemaViolation(format!("Agent id is not a did_core_id: {error}"))
         })?;
-        let controller_id = DidCoreId::new(record.controller_id).map_err(|error| {
-            PersistenceError::SchemaViolation(format!(
-                "Agent controller_id is not a did_core_id: {error}"
-            ))
-        })?;
+        let controller_principal_id =
+            DidCoreId::new(record.controller_principal_id).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "Agent controller_principal_id is not a did_core_id: {error}"
+                ))
+            })?;
         let recipient_id = record
             .recipient_id
             .map(DidCoreId::new)
@@ -139,7 +140,7 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
         validate_agent_identity_binding(&id, &record.controller_authorization_ref)?;
         Ok(Self {
             id,
-            controller_id,
+            controller_principal_id,
             principal_control_realm_id: record.principal_control_realm_id,
             controller_authorization_ref: record.controller_authorization_ref.to_string(),
             display_name: record.display_name,
@@ -244,7 +245,7 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
         let material = unpack_runtime_key_material(row.runtime_key_material)?;
         Ok(Self {
             id: row.id.to_string(),
-            controller_id: row.controller_id.to_string(),
+            controller_principal_id: row.controller_principal_id.to_string(),
             principal_control_realm_id: row.principal_control_realm_id,
             controller_authorization_ref: DidUrl::new(row.controller_authorization_ref).map_err(
                 |error| {

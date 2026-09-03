@@ -675,7 +675,7 @@ async fn agent_direct_authorization_basis(
     else {
         return Ok(None);
     };
-    if record.controller_id != controller {
+    if record.controller_principal_id != controller {
         return Ok(None);
     }
     let unavailable = |detail| {
@@ -1694,7 +1694,9 @@ async fn direct_conversation_resolve(
             .agent(peer.signing_principal_id().as_str())
             .await
             .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?;
-        if record.as_ref().map(|record| record.controller_id.as_str())
+        if record
+            .as_ref()
+            .map(|record| record.controller_principal_id.as_str())
             != Some(controller_account_id.principal_id.as_str())
         {
             return Err(direct_resolve_precondition(

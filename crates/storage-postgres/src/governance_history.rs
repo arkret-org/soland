@@ -15,13 +15,13 @@ use soland_storage::{
     GovernanceDependencyStore, GovernanceDependencyWrite, HistoricalAgentSignerEvidenceKey,
     HistoryTraversalAccess, HistoryTraversalPin, HistoryTraversalRetainedObject,
     HistoryTraversalRetainedObjectRecord, HistoryTraversalRetentionRecord,
-    HistoryTraversalRetentionStore, HistoryTraversalRetentionWrite, PendingRrkAcquisitionInput,
-    PendingRrkAcquisitionRecord, PendingRrkAcquisitionState, PendingRrkAcquisitionStore,
+    HistoryTraversalRetentionStore, HistoryTraversalRetentionWrite, PendingRhrkAcquisitionInput,
+    PendingRhrkAcquisitionRecord, PendingRhrkAcquisitionState, PendingRhrkAcquisitionStore,
     StorageCasOutcome, governance_dependency_canonical, governance_dependency_selector_parts,
     governance_dependency_selector_storage_parts, governance_signer_evidence_canonical,
     historical_agent_signer_evidence_key, history_traversal_canonical,
     history_traversal_retained_object_canonical, history_traversal_retained_object_from_json,
-    rrk_archive_authorization_tuple_digest, validate_rrk_acceptance,
+    rhrk_archive_authorization_tuple_digest, validate_rhrk_acceptance,
 };
 
 use super::{
@@ -1299,7 +1299,7 @@ impl HistoryTraversalRetentionStore for PgHistoryTraversalRetentionStore {
 }
 
 #[derive(QueryableByName)]
-struct PendingRrkRow {
+struct PendingRhrkRow {
     #[diesel(sql_type = Text)]
     acquisition_digest: String,
     #[diesel(sql_type = Text)]
@@ -1313,9 +1313,9 @@ struct PendingRrkRow {
     #[diesel(sql_type = Text)]
     recovery_key_id: String,
     #[diesel(sql_type = Text)]
-    controller_id: arkret_wire::DidCoreId,
+    method_controller_principal_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
-    holder_id: arkret_wire::DidCoreId,
+    holder_service_id: arkret_wire::DidCoreId,
     #[diesel(sql_type = Text)]
     container_event_ref: String,
     #[diesel(sql_type = Text)]
@@ -1356,7 +1356,7 @@ struct PendingRrkRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-fn rrk_realm_id(replica: &OrganizationRecoveryArchiveReplica) -> &RealmId {
+fn rhrk_realm_id(replica: &OrganizationRecoveryArchiveReplica) -> &RealmId {
     match &replica.archive.effective_scope {
         arkret_wire::HistoryEffectiveScope::Realm { realm_id }
         | arkret_wire::HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
@@ -1371,10 +1371,10 @@ fn canonical_value_bytes<T: serde::Serialize>(value: &T) -> PersistenceResult<(V
     Ok((json, bytes))
 }
 
-fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisitionRecord> {
-    let acquisition_digest = stored_hash(row.acquisition_digest, "pending RRK acquisition")?;
+fn decode_pending_rhrk(row: PendingRhrkRow) -> PersistenceResult<PendingRhrkAcquisitionRecord> {
+    let acquisition_digest = stored_hash(row.acquisition_digest, "pending RHRK acquisition")?;
     let archive_replica_digest =
-        stored_hash(row.archive_replica_digest, "pending RRK archive replica")?;
+        stored_hash(row.archive_replica_digest, "pending RHRK archive replica")?;
     let archive_replica = serde_json::from_value::<OrganizationRecoveryArchiveReplica>(
         row.archive_replica_json.clone(),
     )
@@ -1382,19 +1382,20 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
     let (_, expected_replica_bytes) = canonical_value_bytes(&archive_replica)?;
     if expected_replica_bytes != row.archive_replica_bytes {
         return Err(PersistenceError::Internal(
-            "stored pending RRK archive replica bytes differ from JSON".to_owned(),
+            "stored pending RHRK archive replica bytes differ from JSON".to_owned(),
         ));
     }
     let expected_scope = serde_json::to_value(&archive_replica.archive.effective_scope)
         .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-    let expected_tuple_digest = rrk_archive_authorization_tuple_digest(&archive_replica)?;
-    if row.realm_id != rrk_realm_id(&archive_replica).as_str()
+    let expected_tuple_digest = rhrk_archive_authorization_tuple_digest(&archive_replica)?;
+    if row.realm_id != rhrk_realm_id(&archive_replica).as_str()
         || row.effective_scope != expected_scope
         || row.mls_group_id != archive_replica.archive.mls_group_id
-        || i64_to_u64(row.epoch, "pending RRK epoch")? != archive_replica.archive.epoch
+        || i64_to_u64(row.epoch, "pending RHRK epoch")? != archive_replica.archive.epoch
         || row.recovery_key_id != archive_replica.archive.recovery_key_id
-        || row.controller_id != archive_replica.archive.controller_id
-        || row.holder_id != archive_replica.archive.holder_id
+        || row.method_controller_principal_id
+            != archive_replica.archive.method_controller_principal_id
+        || row.holder_service_id != archive_replica.archive.holder_service_id
         || row.container_event_ref != archive_replica.container_event_ref.as_str()
         || row.archive_tuple_digest != expected_tuple_digest.as_str()
         || row.retention_digest
@@ -1404,35 +1405,35 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
                 .as_str()
     {
         return Err(PersistenceError::Internal(
-            "stored pending RRK projection columns differ from the archive replica".to_owned(),
+            "stored pending RHRK projection columns differ from the archive replica".to_owned(),
         ));
     }
-    let input = PendingRrkAcquisitionInput {
+    let input = PendingRhrkAcquisitionInput {
         acquisition_digest,
         archive_replica_digest,
         archive_replica,
         next_attempt_at: row.next_attempt_at,
     };
     input.validate().map_err(|error| {
-        PersistenceError::Internal(format!("stored pending RRK input is invalid: {error}"))
+        PersistenceError::Internal(format!("stored pending RHRK input is invalid: {error}"))
     })?;
     let state = match row.state.as_str() {
-        "pending" => PendingRrkAcquisitionState::Pending,
-        "ready" => PendingRrkAcquisitionState::Ready,
-        "accepted" => PendingRrkAcquisitionState::Accepted,
+        "pending" => PendingRhrkAcquisitionState::Pending,
+        "ready" => PendingRhrkAcquisitionState::Ready,
+        "accepted" => PendingRhrkAcquisitionState::Accepted,
         state => {
             return Err(PersistenceError::Internal(format!(
-                "stored pending RRK state is invalid: {state}"
+                "stored pending RHRK state is invalid: {state}"
             )));
         }
     };
     let archive_sequence = row
         .archive_sequence
-        .map(|sequence| i64_to_u64(sequence, "RRK archive sequence"))
+        .map(|sequence| i64_to_u64(sequence, "RHRK archive sequence"))
         .transpose()?;
-    if (state == PendingRrkAcquisitionState::Pending) == archive_sequence.is_some() {
+    if (state == PendingRhrkAcquisitionState::Pending) == archive_sequence.is_some() {
         return Err(PersistenceError::Internal(
-            "stored pending RRK state and reserved archive sequence differ".to_owned(),
+            "stored pending RHRK state and reserved archive sequence differ".to_owned(),
         ));
     }
     let accepted_outcome = match (row.accepted_outcome_json, row.accepted_outcome_bytes) {
@@ -1447,35 +1448,35 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
                 || row.archive_sequence
                     != Some(u64_to_i64(
                         outcome.archive_sequence,
-                        "RRK archive sequence",
+                        "RHRK archive sequence",
                     )?)
             {
                 return Err(PersistenceError::Internal(
-                    "stored pending RRK accepted outcome projection differs from JSON".to_owned(),
+                    "stored pending RHRK accepted outcome projection differs from JSON".to_owned(),
                 ));
             }
-            validate_rrk_acceptance(&input, &outcome).map_err(|error| {
+            validate_rhrk_acceptance(&input, &outcome).map_err(|error| {
                 PersistenceError::Internal(format!(
-                    "stored pending RRK accepted outcome is invalid: {error}"
+                    "stored pending RHRK accepted outcome is invalid: {error}"
                 ))
             })?;
             Some(outcome)
         }
         _ => {
             return Err(PersistenceError::Internal(
-                "stored pending RRK accepted outcome is incomplete".to_owned(),
+                "stored pending RHRK accepted outcome is incomplete".to_owned(),
             ));
         }
     };
-    if (state == PendingRrkAcquisitionState::Accepted) != accepted_outcome.is_some() {
+    if (state == PendingRhrkAcquisitionState::Accepted) != accepted_outcome.is_some() {
         return Err(PersistenceError::Internal(
-            "stored pending RRK terminal state and outcome differ".to_owned(),
+            "stored pending RHRK terminal state and outcome differ".to_owned(),
         ));
     }
-    Ok(PendingRrkAcquisitionRecord {
+    Ok(PendingRhrkAcquisitionRecord {
         input,
         state,
-        attempt_count: i64_to_u64(row.attempt_count, "pending RRK attempt count")?,
+        attempt_count: i64_to_u64(row.attempt_count, "pending RHRK attempt count")?,
         claim_token: row.claim_token,
         claim_until: row.claim_until,
         ready_at: row.ready_at,
@@ -1487,53 +1488,53 @@ fn decode_pending_rrk(row: PendingRrkRow) -> PersistenceResult<PendingRrkAcquisi
     })
 }
 
-const RRK_SELECT: &str = "acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, recovery_key_id, \
-     controller_id, holder_id, container_event_ref, archive_tuple_digest, \
+const RHRK_SELECT: &str = "acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, recovery_key_id, \
+     method_controller_principal_id, holder_service_id, container_event_ref, archive_tuple_digest, \
      archive_replica_digest, archive_replica_bytes, \
      archive_replica_json, retention_digest, state, attempt_count, next_attempt_at, claim_token, \
      claim_until, ready_at, accepted_at, archive_sequence, accepted_outcome_bytes, \
      accepted_outcome_json, last_error_code, created_at, updated_at";
 
-async fn load_pending_rrk(
+async fn load_pending_rhrk(
     conn: &mut AsyncPgConnection,
     acquisition_digest: &Hash,
-) -> PersistenceResult<Option<PendingRrkAcquisitionRecord>> {
+) -> PersistenceResult<Option<PendingRhrkAcquisitionRecord>> {
     sql_query(format!(
-        "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions WHERE acquisition_digest = $1"
+        "SELECT {RHRK_SELECT} FROM pending_rhrk_acquisitions WHERE acquisition_digest = $1"
     ))
     .bind::<Text, _>(acquisition_digest.as_str())
-    .get_result::<PendingRrkRow>(conn)
+    .get_result::<PendingRhrkRow>(conn)
     .await
     .optional()
     .map_err(PersistenceError::database)?
-    .map(decode_pending_rrk)
+    .map(decode_pending_rhrk)
     .transpose()
 }
 
-pub struct PgPendingRrkAcquisitionStore {
+pub struct PgPendingRhrkAcquisitionStore {
     pub pool: PgPool,
 }
 
 #[async_trait]
-impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
+impl PendingRhrkAcquisitionStore for PgPendingRhrkAcquisitionStore {
     async fn enqueue_exact(
         &self,
-        input: PendingRrkAcquisitionInput,
+        input: PendingRhrkAcquisitionInput,
         now: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<ExactWriteOutcome> {
         input.validate()?;
         let (replica_json, replica_bytes) = canonical_value_bytes(&input.archive_replica)?;
         let effective_scope = serde_json::to_value(&input.archive_replica.archive.effective_scope)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
-        let epoch = u64_to_i64(input.archive_replica.archive.epoch, "pending RRK epoch")?;
-        let realm_id = rrk_realm_id(&input.archive_replica).clone();
-        let archive_tuple_digest = rrk_archive_authorization_tuple_digest(&input.archive_replica)?;
+        let epoch = u64_to_i64(input.archive_replica.archive.epoch, "pending RHRK epoch")?;
+        let realm_id = rhrk_realm_id(&input.archive_replica).clone();
+        let archive_tuple_digest = rhrk_archive_authorization_tuple_digest(&input.archive_replica)?;
         let mut conn = pg_conn(&self.pool).await?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             let inserted = sql_query(
-                "INSERT INTO pending_rrk_acquisitions \
+                "INSERT INTO pending_rhrk_acquisitions \
                     (acquisition_digest, realm_id, effective_scope, mls_group_id, epoch, \
-                     recovery_key_id, controller_id, holder_id, \
+                     recovery_key_id, method_controller_principal_id, holder_service_id, \
                      container_event_ref, archive_tuple_digest, archive_replica_digest, \
                      archive_replica_bytes, archive_replica_json, retention_digest, \
                      next_attempt_at, created_at, updated_at) \
@@ -1546,8 +1547,8 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             .bind::<Text, _>(&input.archive_replica.archive.mls_group_id)
             .bind::<BigInt, _>(epoch)
             .bind::<Text, _>(&input.archive_replica.archive.recovery_key_id)
-            .bind::<Text, _>(input.archive_replica.archive.controller_id.as_str())
-            .bind::<Text, _>(&input.archive_replica.archive.holder_id.to_string())
+            .bind::<Text, _>(input.archive_replica.archive.method_controller_principal_id.as_str())
+            .bind::<Text, _>(&input.archive_replica.archive.holder_service_id.to_string())
             .bind::<Text, _>(input.archive_replica.container_event_ref.as_str())
             .bind::<Text, _>(archive_tuple_digest.as_str())
             .bind::<Text, _>(input.archive_replica_digest.as_str())
@@ -1567,10 +1568,10 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             if inserted != 0 {
                 return Ok(ExactWriteOutcome::Inserted);
             }
-            match load_pending_rrk(&mut *conn, &input.acquisition_digest).await? {
+            match load_pending_rhrk(&mut *conn, &input.acquisition_digest).await? {
                 Some(record) if record.input == input => Ok(ExactWriteOutcome::ExactReplay),
                 _ => Err(PersistenceError::Conflict(
-                    "duplicate_conflict: pending RRK acquisition differs".to_owned(),
+                    "duplicate_conflict: pending RHRK acquisition differs".to_owned(),
                 )
                 .into()),
             }
@@ -1582,23 +1583,23 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     async fn get(
         &self,
         acquisition_digest: &Hash,
-    ) -> PersistenceResult<Option<PendingRrkAcquisitionRecord>> {
+    ) -> PersistenceResult<Option<PendingRhrkAcquisitionRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
-        load_pending_rrk(&mut conn, acquisition_digest).await
+        load_pending_rhrk(&mut conn, acquisition_digest).await
     }
 
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &arkret_wire::HistoryEffectiveScope,
-        controller_id: &arkret_wire::DidCoreId,
-        holder_id: &arkret_wire::DidCoreId,
+        method_controller_principal_id: &arkret_wire::DidCoreId,
+        holder_service_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>> {
         if from_epoch > to_epoch || !(1..=65_537).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
-                "invalid accepted RRK authority query bounds".to_owned(),
+                "invalid accepted RHRK authority query bounds".to_owned(),
             ));
         }
         let effective_scope = serde_json::to_value(effective_scope)
@@ -1607,45 +1608,45 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             return Ok(Vec::new());
         };
         let to_epoch = i64::try_from(to_epoch).unwrap_or(i64::MAX);
-        let limit = usize_to_i64(limit, "accepted RRK authority query limit")?;
+        let limit = usize_to_i64(limit, "accepted RHRK authority query limit")?;
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(format!(
-            "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
+            "SELECT {RHRK_SELECT} FROM pending_rhrk_acquisitions \
              WHERE state = 'accepted' AND effective_scope = $1 \
-               AND controller_id = $2 AND holder_id = $3 \
+               AND method_controller_principal_id = $2 AND holder_service_id = $3 \
                AND epoch BETWEEN $4 AND $5 \
              ORDER BY epoch, container_event_ref, archive_replica_digest LIMIT $6"
         ))
         .bind::<Jsonb, _>(&effective_scope)
-        .bind::<Text, _>(controller_id.as_str())
-        .bind::<Text, _>(holder_id.as_str())
+        .bind::<Text, _>(method_controller_principal_id.as_str())
+        .bind::<Text, _>(holder_service_id.as_str())
         .bind::<BigInt, _>(from_epoch)
         .bind::<BigInt, _>(to_epoch)
         .bind::<BigInt, _>(limit)
-        .load::<PendingRrkRow>(&mut *conn)
+        .load::<PendingRhrkRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        rows.into_iter().map(decode_pending_rrk).collect()
+        rows.into_iter().map(decode_pending_rhrk).collect()
     }
 
     async fn list_accepted_for_archive_query(
         &self,
         query: &arkret_models_collaboration::history_key::OrganizationRecoveryArchiveListQuery,
-        controller_id: &arkret_wire::DidCoreId,
+        method_controller_principal_id: &arkret_wire::DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>> {
         query
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
         if !(1..=4_097).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
-                "invalid accepted RRK archive query limit".to_owned(),
+                "invalid accepted RHRK archive query limit".to_owned(),
             ));
         }
         let after = u64_to_i64(
             after_archive_sequence.unwrap_or_default(),
-            "accepted RRK archive query cursor",
+            "accepted RHRK archive query cursor",
         )?;
         let effective_scope = serde_json::to_value(&query.effective_scope)
             .map_err(|error| PersistenceError::Internal(error.to_string()))?;
@@ -1658,12 +1659,12 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             .to_epoch
             .and_then(|epoch| i64::try_from(epoch).ok())
             .unwrap_or(i64::MAX);
-        let limit = usize_to_i64(limit, "accepted RRK archive query limit")?;
+        let limit = usize_to_i64(limit, "accepted RHRK archive query limit")?;
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(format!(
-            "SELECT {RRK_SELECT} FROM pending_rrk_acquisitions \
+            "SELECT {RHRK_SELECT} FROM pending_rhrk_acquisitions \
              WHERE state = 'accepted' AND archive_sequence > $1 \
-               AND controller_id = $2 AND effective_scope = $3 \
+               AND method_controller_principal_id = $2 AND effective_scope = $3 \
                AND recovery_key_id = $4 \
                AND archive_replica_json #>> '{{archive,key_agreement_ref}}' = $5 \
                AND archive_replica_json #>> '{{archive,accepted_key_evidence_ref}}' = $6 \
@@ -1672,7 +1673,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
              ORDER BY archive_sequence LIMIT $10"
         ))
         .bind::<BigInt, _>(after)
-        .bind::<Text, _>(controller_id.as_str())
+        .bind::<Text, _>(method_controller_principal_id.as_str())
         .bind::<Jsonb, _>(&effective_scope)
         .bind::<Text, _>(&query.recovery_key_id)
         .bind::<Text, _>(query.key_agreement_ref.as_str())
@@ -1681,10 +1682,10 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         .bind::<BigInt, _>(from_epoch)
         .bind::<BigInt, _>(to_epoch)
         .bind::<BigInt, _>(limit)
-        .load::<PendingRrkRow>(&mut *conn)
+        .load::<PendingRhrkRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        rows.into_iter().map(decode_pending_rrk).collect()
+        rows.into_iter().map(decode_pending_rhrk).collect()
     }
 
     async fn claim_due(
@@ -1693,24 +1694,24 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         claim_token: &str,
         claim_until: chrono::DateTime<chrono::Utc>,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>> {
         if claim_token.is_empty() || claim_until <= now || !(1..=4_096).contains(&limit) {
             return Err(PersistenceError::SchemaViolation(
-                "invalid pending RRK claim bounds".to_owned(),
+                "invalid pending RHRK claim bounds".to_owned(),
             ));
         }
-        let limit = usize_to_i64(limit, "pending RRK claim limit")?;
+        let limit = usize_to_i64(limit, "pending RHRK claim limit")?;
         let mut conn = pg_conn(&self.pool).await?;
         let rows = sql_query(
             "WITH candidates AS ( \
-                SELECT acquisition_digest FROM pending_rrk_acquisitions \
+                SELECT acquisition_digest FROM pending_rhrk_acquisitions \
                 WHERE state IN ('pending', 'ready') AND next_attempt_at <= $1 \
                   AND (claim_until IS NULL OR claim_until <= $1) \
                   AND attempt_count < 9223372036854775807 \
                 ORDER BY next_attempt_at, acquisition_digest \
                 FOR UPDATE SKIP LOCKED LIMIT $2 \
              ) \
-             UPDATE pending_rrk_acquisitions pending \
+             UPDATE pending_rhrk_acquisitions pending \
              SET claim_token = $3, claim_until = $4, \
                  attempt_count = pending.attempt_count + 1, updated_at = $1 \
              FROM candidates \
@@ -1722,10 +1723,10 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
         .bind::<BigInt, _>(limit)
         .bind::<Text, _>(claim_token)
         .bind::<Timestamptz, _>(claim_until)
-        .load::<PendingRrkRow>(&mut *conn)
+        .load::<PendingRhrkRow>(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
-        rows.into_iter().map(decode_pending_rrk).collect()
+        rows.into_iter().map(decode_pending_rhrk).collect()
     }
 
     async fn record_retry(
@@ -1739,13 +1740,13 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     ) -> PersistenceResult<StorageCasOutcome> {
         if claim_token.is_empty() || error_code.is_empty() {
             return Err(PersistenceError::SchemaViolation(
-                "pending RRK retry token and error code must be non-empty".to_owned(),
+                "pending RHRK retry token and error code must be non-empty".to_owned(),
             ));
         }
-        let attempt_count = u64_to_i64(expected_attempt_count, "pending RRK attempt count")?;
+        let attempt_count = u64_to_i64(expected_attempt_count, "pending RHRK attempt count")?;
         let mut conn = pg_conn(&self.pool).await?;
         let updated = sql_query(
-            "UPDATE pending_rrk_acquisitions \
+            "UPDATE pending_rhrk_acquisitions \
              SET next_attempt_at = $4, claim_token = NULL, claim_until = NULL, \
                  last_error_code = $5, updated_at = $6 \
              WHERE acquisition_digest = $1 AND state IN ('pending', 'ready') \
@@ -1764,7 +1765,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             return Ok(StorageCasOutcome::Applied);
         }
         Ok(
-            match load_pending_rrk(&mut conn, acquisition_digest).await? {
+            match load_pending_rhrk(&mut conn, acquisition_digest).await? {
                 Some(record)
                     if record.attempt_count == expected_attempt_count
                         && record.claim_token.is_none()
@@ -1787,15 +1788,15 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     ) -> PersistenceResult<StorageCasOutcome> {
         if claim_token.is_empty() {
             return Err(PersistenceError::SchemaViolation(
-                "pending RRK ready claim token must be non-empty".to_owned(),
+                "pending RHRK ready claim token must be non-empty".to_owned(),
             ));
         }
-        let attempt_count = u64_to_i64(expected_attempt_count, "pending RRK attempt count")?;
+        let attempt_count = u64_to_i64(expected_attempt_count, "pending RHRK attempt count")?;
         let mut conn = pg_conn(&self.pool).await?;
         let updated = sql_query(
-            "UPDATE pending_rrk_acquisitions \
+            "UPDATE pending_rhrk_acquisitions \
              SET state = 'ready', ready_at = $4, \
-                 archive_sequence = nextval('history_rrk_archive_sequence'), \
+                 archive_sequence = nextval('history_rhrk_archive_sequence'), \
                  last_error_code = NULL, updated_at = $4 \
              WHERE acquisition_digest = $1 AND state = 'pending' \
                AND claim_token = $2 AND attempt_count = $3",
@@ -1811,9 +1812,9 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             return Ok(StorageCasOutcome::Applied);
         }
         Ok(
-            match load_pending_rrk(&mut conn, acquisition_digest).await? {
+            match load_pending_rhrk(&mut conn, acquisition_digest).await? {
                 Some(record)
-                    if record.state == PendingRrkAcquisitionState::Ready
+                    if record.state == PendingRhrkAcquisitionState::Ready
                         && record.attempt_count == expected_attempt_count
                         && record.ready_at == Some(ready_at) =>
                 {
@@ -1833,17 +1834,17 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
     ) -> PersistenceResult<StorageCasOutcome> {
         if claim_token.is_empty() {
             return Err(PersistenceError::SchemaViolation(
-                "pending RRK acceptance claim token must be non-empty".to_owned(),
+                "pending RHRK acceptance claim token must be non-empty".to_owned(),
             ));
         }
-        let attempt_count = u64_to_i64(expected_attempt_count, "pending RRK attempt count")?;
-        let archive_sequence = u64_to_i64(outcome.archive_sequence, "RRK archive sequence")?;
+        let attempt_count = u64_to_i64(expected_attempt_count, "pending RHRK attempt count")?;
+        let archive_sequence = u64_to_i64(outcome.archive_sequence, "RHRK archive sequence")?;
         let (outcome_json, outcome_bytes) = canonical_value_bytes(&outcome)?;
         let mut conn = pg_conn(&self.pool).await?;
-        let current = load_pending_rrk(&mut conn, acquisition_digest).await?;
+        let current = load_pending_rhrk(&mut conn, acquisition_digest).await?;
         if let Some(record) = &current {
-            validate_rrk_acceptance(&record.input, &outcome)?;
-            if record.state == PendingRrkAcquisitionState::Accepted
+            validate_rhrk_acceptance(&record.input, &outcome)?;
+            if record.state == PendingRhrkAcquisitionState::Accepted
                 && record.attempt_count == expected_attempt_count
                 && record.accepted_outcome.as_ref() == Some(&outcome)
             {
@@ -1851,7 +1852,7 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             }
         }
         let updated = sql_query(
-            "UPDATE pending_rrk_acquisitions \
+            "UPDATE pending_rhrk_acquisitions \
              SET state = 'accepted', accepted_at = $4, archive_sequence = $5, \
                  accepted_outcome_bytes = $6, accepted_outcome_json = $7, \
                  claim_token = NULL, claim_until = NULL, last_error_code = NULL, updated_at = $4 \
@@ -1873,9 +1874,9 @@ impl PendingRrkAcquisitionStore for PgPendingRrkAcquisitionStore {
             return Ok(StorageCasOutcome::Applied);
         }
         Ok(
-            match load_pending_rrk(&mut conn, acquisition_digest).await? {
+            match load_pending_rhrk(&mut conn, acquisition_digest).await? {
                 Some(record)
-                    if record.state == PendingRrkAcquisitionState::Accepted
+                    if record.state == PendingRhrkAcquisitionState::Accepted
                         && record.attempt_count == expected_attempt_count
                         && record.accepted_outcome.as_ref() == Some(&outcome) =>
                 {

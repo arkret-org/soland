@@ -5411,11 +5411,16 @@ pub async fn assert_consent_projection_commit_contract(
         now,
     );
     let grant_event_id = grant_event.event_id.clone();
+    let holder_account_id = serde_json::from_str::<arkret_wire::ActorId>(&grant_event.actor_id)
+        .expect("contract consent actor")
+        .as_account_id()
+        .expect("contract consent account actor")
+        .clone();
     let grant_ack = contract_control_proposal_ack(&grant_event, now);
     let dot = format!("{grant_event_id}:0");
     let granted = ConsentCellRecord {
         cell_id: cell_id.clone(),
-        holder_id: holder.clone(),
+        holder_account_id: holder_account_id.clone(),
         peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
             principal_id: peer.clone(),
         },
@@ -5447,7 +5452,7 @@ pub async fn assert_consent_projection_commit_contract(
     assert_eq!(
         stores
             .consent_cells
-            .get(&holder, &cell_id)
+            .get(&holder_account_id, &cell_id)
             .await
             .expect("read consent cell"),
         Some(granted.clone()),
@@ -5495,7 +5500,7 @@ pub async fn assert_consent_projection_commit_contract(
     assert_eq!(
         stores
             .consent_cells
-            .get(&holder, &cell_id)
+            .get(&holder_account_id, &cell_id)
             .await
             .expect("read consent cell"),
         Some(granted.clone()),
@@ -5570,7 +5575,7 @@ pub async fn assert_consent_projection_commit_contract(
     assert_eq!(
         stores
             .consent_cells
-            .get(&holder, &cell_id)
+            .get(&holder_account_id, &cell_id)
             .await
             .expect("read consent cell")
             .expect("cell still exists")
@@ -5612,7 +5617,7 @@ pub async fn assert_consent_projection_commit_contract(
     assert_eq!(
         stores
             .consent_cells
-            .get(&holder, &cell_id)
+            .get(&holder_account_id, &cell_id)
             .await
             .expect("read consent cell"),
         Some(revoked),

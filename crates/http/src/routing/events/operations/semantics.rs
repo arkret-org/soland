@@ -210,14 +210,34 @@ fn validate_typed_payload_shapes(
             .typed_payload::<arkret_wire::event_spec::OrganizationModerationPolicy>()
             .map(|_| ())
             .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
-        arkret_wire::EventKind::IdentityDisclosurePolicy => operation
-            .typed_payload::<arkret_wire::event_spec::IdentityDisclosurePolicy>()
-            .map(|_| ())
-            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
-        arkret_wire::EventKind::IdentityDisclosureReceipt => operation
-            .typed_payload::<arkret_wire::event_spec::IdentityDisclosureReceipt>()
-            .map(|_| ())
-            .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION),
+        arkret_wire::EventKind::IdentityDisclosurePolicy => {
+            let payload = operation
+                .typed_payload::<arkret_wire::event_spec::IdentityDisclosurePolicy>()
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+            let sender = operation
+                .context
+                .sender
+                .as_account_id()
+                .ok_or(arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+            if payload.value.holder_principal_id != sender.principal_id {
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+            }
+            Ok(())
+        }
+        arkret_wire::EventKind::IdentityDisclosureReceipt => {
+            let payload = operation
+                .typed_payload::<arkret_wire::event_spec::IdentityDisclosureReceipt>()
+                .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+            let sender = operation
+                .context
+                .sender
+                .as_account_id()
+                .ok_or(arkret_wire::ErrorCode::SCHEMA_VIOLATION)?;
+            if payload.holder_principal_id != sender.principal_id {
+                return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+            }
+            Ok(())
+        }
         arkret_wire::EventKind::PolicySet => operation
             .typed_payload::<arkret_wire::event_spec::PolicySet>()
             .map(|_| ())
@@ -522,6 +542,50 @@ mod tests {
             validate_typed_payload_shapes(
                 &arkret_wire::EventKind::RealmDigestSuiteTransition,
                 &noop,
+            ),
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+
+    #[test]
+    fn identity_disclosure_holder_is_cross_bound_to_the_event_account_principal() {
+        let payload = serde_json::json!({
+            "policy_id": "ak:policy:0198f1a2-4c3d-7e56-8a90-1b2c3d4e5f60",
+            "value": {
+                "holder_principal_id": "ak:did_core:web:fixture.example",
+                "audience": {
+                    "represented_organization_id": "ak:did_core:web:organization.example",
+                    "verifier_ids": ["ak:did_core:web:verifier.example"]
+                },
+                "allowed_claims": [],
+                "denied_fields": [],
+                "user_consent_required": true,
+                "expires_at": "2026-10-03T00:00:00.000Z"
+            }
+        });
+        let matching = operation(
+            arkret_wire::EventKind::IdentityDisclosurePolicy,
+            payload.clone(),
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(
+                &arkret_wire::EventKind::IdentityDisclosurePolicy,
+                &matching,
+            ),
+            Ok(())
+        );
+
+        let mut mismatched_payload = payload;
+        mismatched_payload["value"]["holder_principal_id"] =
+            serde_json::json!("ak:did_core:web:other.example");
+        let mismatched = operation(
+            arkret_wire::EventKind::IdentityDisclosurePolicy,
+            mismatched_payload,
+        );
+        assert_eq!(
+            validate_typed_payload_shapes(
+                &arkret_wire::EventKind::IdentityDisclosurePolicy,
+                &mismatched,
             ),
             Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         );

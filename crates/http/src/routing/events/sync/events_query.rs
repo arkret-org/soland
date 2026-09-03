@@ -1155,9 +1155,9 @@ async fn events_query_impl(
                     .sidecars
                     .get(sidecar_id.as_str())
                     .is_some_and(|sidecar| {
-                        holder
-                            .as_ref()
-                            .is_some_and(|actor| sidecar.controller_id == actor.to_string())
+                        holder.as_ref().is_some_and(|actor| {
+                            actor.as_account_id() == Some(&sidecar.controller_account_id)
+                        })
                     })
                 {
                     continue;

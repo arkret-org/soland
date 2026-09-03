@@ -112,25 +112,25 @@ impl PersistenceHandle {
 
     pub async fn contact_verified_mirror(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_event_id: &str,
     ) -> crate::ServiceResult<Option<soland_storage::ContactVerifiedMirrorRecord>> {
         Ok(self
             .persistence
             .contact_verified_mirrors()
-            .get(target_holder_id, request_event_id)
+            .get(target_holder_principal_id, request_event_id)
             .await?)
     }
 
     pub async fn contact_verified_mirror_by_digest(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_digest: &str,
     ) -> crate::ServiceResult<Option<soland_storage::ContactVerifiedMirrorRecord>> {
         Ok(self
             .persistence
             .contact_verified_mirrors()
-            .get_by_digest(target_holder_id, request_digest)
+            .get_by_digest(target_holder_principal_id, request_digest)
             .await?)
     }
 

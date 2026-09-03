@@ -1,5 +1,5 @@
 use arkret_crypto::account_data_crypto::AccountDataEncryptedValue;
-use arkret_identifiers::RealmId;
+use arkret_identifiers::{RealmId, StrandId};
 use arkret_wire::AccountDataKey;
 use serde_json::{Map, Value};
 
@@ -163,11 +163,11 @@ pub(crate) fn validate_encrypted_account_data_key(
         return arkret_models_collaboration::objects::productivity::validate_private_account_data_key(account_data_key)
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
     }
-    if let Some(rest) = account_data_key
-        .strip_prefix(AccountDataKey::AGENT_DRAFT_V1)
-        .or_else(|| account_data_key.strip_prefix(AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1))
-    {
+    if let Some(rest) = account_data_key.strip_prefix(AccountDataKey::AGENT_DRAFT_V1) {
         return validate_agent_private_key_tail(rest);
+    }
+    if let Some(rest) = account_data_key.strip_prefix(AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1) {
+        return validate_sidecar_view_state_key_tail(rest);
     }
     Err(AccountDataEncryptionError::InvalidKeyPattern)
 }
@@ -239,6 +239,30 @@ fn validate_agent_private_key_tail(rest: &str) -> Result<(), AccountDataEncrypti
         arkret_identifiers::DidCoreId::new(actor_id.to_owned())
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern)?;
     }
+    Ok(())
+}
+
+fn validate_sidecar_view_state_key_tail(rest: &str) -> Result<(), AccountDataEncryptionError> {
+    let tail = rest
+        .strip_prefix(':')
+        .filter(|tail| !tail.is_empty())
+        .ok_or(AccountDataEncryptionError::InvalidKeyPattern)?;
+    let (controller_account_key, coordinates) = tail
+        .split_once(':')
+        .ok_or(AccountDataEncryptionError::InvalidKeyPattern)?;
+    if controller_account_key.len() != 43
+        || !controller_account_key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(AccountDataEncryptionError::InvalidKeyPattern);
+    }
+    let (realm_id, strand_suffix) = coordinates
+        .rsplit_once(":ak:strand:")
+        .ok_or(AccountDataEncryptionError::InvalidKeyPattern)?;
+    RealmId::new(realm_id.to_owned()).map_err(|_| AccountDataEncryptionError::InvalidKeyPattern)?;
+    StrandId::new(format!("ak:strand:{strand_suffix}"))
+        .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern)?;
     Ok(())
 }
 
@@ -526,8 +550,15 @@ mod tests {
                 AccountDataEncryptionError::InvalidKeyPattern
             );
         }
-        validate_encrypted_account_data_key("ak.agent.sidecar_view_state.v1:did:web:alice.example")
-            .unwrap();
+        let active = "ak.agent.sidecar_view_state.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1:ak:strand:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-";
+        validate_encrypted_account_data_key(active).unwrap();
+        assert_eq!(
+            validate_encrypted_account_data_key(
+                "ak.agent.sidecar_view_state.v1:did:web:alice.example"
+            )
+            .unwrap_err(),
+            AccountDataEncryptionError::InvalidKeyPattern
+        );
     }
 
     #[test]

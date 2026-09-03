@@ -25,7 +25,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use soland_storage::{
     HistoryTraversalAccess, HistoryTraversalPin, HistoryTraversalRetainedObject,
-    HistoryTraversalRetentionWrite, PendingRrkAcquisitionRecord, PendingRrkAcquisitionState,
+    HistoryTraversalRetentionWrite, PendingRhrkAcquisitionRecord, PendingRhrkAcquisitionState,
     StorageCasOutcome,
 };
 use uuid::Uuid;
@@ -42,15 +42,15 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
     if !state.config().federation_outbound_enabled {
         return None;
     }
-    Some(RrkAcquisitionWorker::new(state).spawn())
+    Some(RhrkAcquisitionWorker::new(state).spawn())
 }
 
-pub struct RrkAcquisitionWorker {
+pub struct RhrkAcquisitionWorker {
     state: AppState,
     worker_id: String,
 }
 
-impl RrkAcquisitionWorker {
+impl RhrkAcquisitionWorker {
     pub fn new(state: AppState) -> Self {
         Self {
             worker_id: format!("{}#{}", state.service_id(), Uuid::new_v4()),
@@ -67,8 +67,8 @@ impl RrkAcquisitionWorker {
                 if let Err(error) = self.run_one_pass().await {
                     tracing::warn!(
                         %error,
-                        worker = "rrk_acquisition",
-                        "RRK acquisition pass failed"
+                        worker = "rhrk_acquisition",
+                        "RHRK acquisition pass failed"
                     );
                 }
             }
@@ -82,7 +82,7 @@ impl RrkAcquisitionWorker {
             .state
             .persistence()
             .governance_history_service()
-            .claim_due_rrk(now, &claim_token, now + CLAIM_TTL, 16)
+            .claim_due_rhrk(now, &claim_token, now + CLAIM_TTL, 16)
             .await
             .map_err(|error| error.to_string())?;
         for record in records {
@@ -92,7 +92,7 @@ impl RrkAcquisitionWorker {
                     .state
                     .persistence()
                     .governance_history_service()
-                    .retry_rrk(
+                    .retry_rhrk(
                         &record.input.acquisition_digest,
                         &claim_token,
                         record.attempt_count,
@@ -105,8 +105,8 @@ impl RrkAcquisitionWorker {
                     acquisition_digest = %record.input.acquisition_digest,
                     source_id = %record.input.archive_replica.source_id,
                     %error,
-                    worker = "rrk_acquisition",
-                    "RRK traversal acquisition will retry"
+                    worker = "rhrk_acquisition",
+                    "RHRK traversal acquisition will retry"
                 );
             }
         }
@@ -115,11 +115,11 @@ impl RrkAcquisitionWorker {
 
     async fn acquire(
         &self,
-        record: &PendingRrkAcquisitionRecord,
+        record: &PendingRhrkAcquisitionRecord,
         claim_token: &str,
     ) -> Result<(), String> {
         let replica = &record.input.archive_replica;
-        if record.state == PendingRrkAcquisitionState::Ready {
+        if record.state == PendingRhrkAcquisitionState::Ready {
             return self.accept_ready(record, claim_token).await;
         }
         let closure = self.fetch_and_verify_closure(replica).await?;
@@ -136,7 +136,7 @@ impl RrkAcquisitionWorker {
             .state
             .persistence()
             .governance_history_service()
-            .mark_rrk_ready(
+            .mark_rhrk_ready(
                 &record.input.acquisition_digest,
                 claim_token,
                 record.attempt_count,
@@ -152,7 +152,7 @@ impl RrkAcquisitionWorker {
             .state
             .persistence()
             .governance_history_service()
-            .rrk_acquisition(&record.input.acquisition_digest)
+            .rhrk_acquisition(&record.input.acquisition_digest)
             .await
             .map_err(|error| format!("ready_read:{error}"))?
             .ok_or_else(|| "ready_record_missing".to_owned())?;
@@ -161,7 +161,7 @@ impl RrkAcquisitionWorker {
 
     async fn accept_ready(
         &self,
-        ready: &PendingRrkAcquisitionRecord,
+        ready: &PendingRhrkAcquisitionRecord,
         claim_token: &str,
     ) -> Result<(), String> {
         let replica = &ready.input.archive_replica;
@@ -178,7 +178,7 @@ impl RrkAcquisitionWorker {
             accepted_at,
             |service_proof| OrganizationRecoveryArchiveReplicaOutcome {
                 archive_replica_digest: ready.input.archive_replica_digest.clone(),
-                holder_id: replica.holder_id.clone(),
+                holder_service_id: replica.holder_service_id.clone(),
                 archive_sequence: sequence,
                 accepted_at,
                 service_proof,
@@ -196,7 +196,7 @@ impl RrkAcquisitionWorker {
             .state
             .persistence()
             .governance_history_service()
-            .accept_rrk(
+            .accept_rhrk(
                 &ready.input.acquisition_digest,
                 claim_token,
                 ready.attempt_count,
@@ -475,7 +475,7 @@ impl RrkAcquisitionWorker {
             .map_err(|error| format!("canonical_request:{error}"))?;
         let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
             &target,
-            "RRK traversal acquisition",
+            "RHRK traversal acquisition",
             self.state.config().development_mode,
             REQUEST_TIMEOUT,
         )
@@ -776,5 +776,5 @@ fn retry_delay(attempt_count: u64) -> chrono::Duration {
 }
 
 fn stable_error_code(error: &str) -> &str {
-    error.split(':').next().unwrap_or("rrk_acquisition_failed")
+    error.split(':').next().unwrap_or("rhrk_acquisition_failed")
 }

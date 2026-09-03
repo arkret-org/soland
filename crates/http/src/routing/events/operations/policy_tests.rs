@@ -1412,6 +1412,12 @@ fn insert_approved_agent_action(
         soland_domain::reducer::AgentActionRequestProjection {
             request_id: request_id.to_owned(),
             agent_id: agent_id.to_owned(),
+            controller_account_id: message
+                .context
+                .sender
+                .as_account_id()
+                .expect("test message has an Account actor")
+                .clone(),
             status: soland_domain::reducer::AgentActionRequestStatus::Approved,
             requested_at: message.created_at - chrono::Duration::minutes(1),
             resolved_at: Some(message.created_at),

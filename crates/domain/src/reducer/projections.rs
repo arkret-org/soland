@@ -644,7 +644,7 @@ pub struct CircleProjection {
 pub struct SidecarProjection {
     pub sidecar_id: String,
     pub realm_id: String,
-    pub controller_id: String,
+    pub controller_account_id: arkret_wire::AccountId,
     pub encryption_profile:
         arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile,
     pub state: arkret_models_collaboration::agent_operations::AgentSidecarState,
@@ -792,6 +792,7 @@ pub enum AgentActionRequestStatus {
 pub struct AgentActionRequestProjection {
     pub request_id: String,
     pub agent_id: String,
+    pub controller_account_id: arkret_wire::AccountId,
     pub status: AgentActionRequestStatus,
     pub requested_at: chrono::DateTime<chrono::Utc>,
     pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,

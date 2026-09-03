@@ -1,4 +1,4 @@
-use arkret_identifiers::{CellRef, DidCoreId};
+use arkret_identifiers::CellRef;
 use arkret_models_collaboration::contact_operations::RequestAcceptanceReceipt;
 use arkret_wire::ActorId;
 use soland_domain::identity::{ConsentCellKey, ConsentCellRecord, ConsentGrantDot, ContactRecord};
@@ -10,7 +10,7 @@ use super::{BTreeMap, PersistenceResult, Utc, Value, async_trait};
 /// Seal construction, CBA frontiers, or state roots.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ContactVerifiedMirrorRecord {
-    pub target_holder_id: String,
+    pub target_holder_principal_id: String,
     pub request_event_id: String,
     pub request_digest: String,
     pub canonical_event_bytes: Vec<u8>,
@@ -23,12 +23,12 @@ pub struct ContactVerifiedMirrorRecord {
 pub trait ContactVerifiedMirrorStore: Send + Sync {
     async fn get(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_event_id: &str,
     ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
     async fn get_by_digest(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_digest: &str,
     ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>>;
 
@@ -114,7 +114,7 @@ pub fn validate_invite_policy_account(
 pub trait ConsentCellStore: Send + Sync {
     async fn get(
         &self,
-        holder_id: &DidCoreId,
+        holder_account_id: &arkret_wire::AccountId,
         cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;

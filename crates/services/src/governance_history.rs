@@ -15,8 +15,8 @@ use soland_storage::{
     ExactWriteOutcome, HistoryRequestPage, HistoryRequestRecord, HistoryRequestWrite,
     HistoryResponseAckTokenWrite, HistoryResponseCompleteOutcome, HistoryResponseCompleteWrite,
     HistoryResponseReadPage, HistoryResponseReservationInput, HistoryResponseReservationRecord,
-    HistoryResponseRetryRecord, HistoryTraversalAccess, PendingRrkAcquisitionInput,
-    PendingRrkAcquisitionRecord, PersistenceStore, StorageCasOutcome,
+    HistoryResponseRetryRecord, HistoryTraversalAccess, PendingRhrkAcquisitionInput,
+    PendingRhrkAcquisitionRecord, PersistenceStore, StorageCasOutcome,
 };
 
 use crate::{ServiceError, ServiceResult};
@@ -400,7 +400,7 @@ impl GovernanceHistoryService {
                     ..
                 },
             ) => {
-                &archive_authorization_tuple.controller_id
+                &archive_authorization_tuple.method_controller_principal_id
                     == caller.signing_principal_id()
             }
             (
@@ -412,7 +412,7 @@ impl GovernanceHistoryService {
                     archive_authorization_tuple,
                     ..
                 },
-            ) => &archive_authorization_tuple.holder_id == caller,
+            ) => &archive_authorization_tuple.holder_service_id == caller,
             _ => false,
         };
         if !caller_authorized {
@@ -425,7 +425,7 @@ impl GovernanceHistoryService {
         Ok(Some(record))
     }
 
-    pub async fn enqueue_rrk_replica(
+    pub async fn enqueue_rhrk_replica(
         &self,
         replica: OrganizationRecoveryArchiveReplica,
         now: DateTime<Utc>,
@@ -434,7 +434,7 @@ impl GovernanceHistoryService {
             .validate()
             .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
         let archive_replica_digest = proof_free_digest(&replica)?;
-        let input = PendingRrkAcquisitionInput {
+        let input = PendingRhrkAcquisitionInput {
             acquisition_digest: archive_replica_digest.clone(),
             archive_replica_digest: archive_replica_digest.clone(),
             archive_replica: replica,
@@ -442,7 +442,7 @@ impl GovernanceHistoryService {
         };
         let outcome = self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .enqueue_exact(input, now)
             .await?;
         Ok((archive_replica_digest, outcome))
@@ -459,33 +459,33 @@ impl GovernanceHistoryService {
             .await?)
     }
 
-    pub async fn rrk_acquisition(
+    pub async fn rhrk_acquisition(
         &self,
         acquisition_digest: &Hash,
-    ) -> ServiceResult<Option<PendingRrkAcquisitionRecord>> {
+    ) -> ServiceResult<Option<PendingRhrkAcquisitionRecord>> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .get(acquisition_digest)
             .await?)
     }
 
-    pub async fn list_accepted_rrk_for_authority(
+    pub async fn list_accepted_rhrk_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,
-        controller_id: &DidCoreId,
-        holder_id: &DidCoreId,
+        method_controller_principal_id: &DidCoreId,
+        holder_service_id: &DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
-    ) -> ServiceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> ServiceResult<Vec<PendingRhrkAcquisitionRecord>> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .list_accepted_for_authority(
                 effective_scope,
-                controller_id,
-                holder_id,
+                method_controller_principal_id,
+                holder_service_id,
                 from_epoch,
                 to_epoch,
                 limit,
@@ -493,35 +493,40 @@ impl GovernanceHistoryService {
             .await?)
     }
 
-    pub async fn list_accepted_rrk_for_archive_query(
+    pub async fn list_accepted_rhrk_for_archive_query(
         &self,
         query: &OrganizationRecoveryArchiveListQuery,
-        controller_id: &DidCoreId,
+        method_controller_principal_id: &DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
-    ) -> ServiceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> ServiceResult<Vec<PendingRhrkAcquisitionRecord>> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
-            .list_accepted_for_archive_query(query, controller_id, after_archive_sequence, limit)
+            .pending_rhrk_acquisitions()
+            .list_accepted_for_archive_query(
+                query,
+                method_controller_principal_id,
+                after_archive_sequence,
+                limit,
+            )
             .await?)
     }
 
-    pub async fn claim_due_rrk(
+    pub async fn claim_due_rhrk(
         &self,
         now: DateTime<Utc>,
         claim_token: &str,
         claim_until: DateTime<Utc>,
         limit: usize,
-    ) -> ServiceResult<Vec<PendingRrkAcquisitionRecord>> {
+    ) -> ServiceResult<Vec<PendingRhrkAcquisitionRecord>> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .claim_due(now, claim_token, claim_until, limit)
             .await?)
     }
 
-    pub async fn retry_rrk(
+    pub async fn retry_rhrk(
         &self,
         acquisition_digest: &Hash,
         claim_token: &str,
@@ -532,7 +537,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<StorageCasOutcome> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .record_retry(
                 acquisition_digest,
                 claim_token,
@@ -544,7 +549,7 @@ impl GovernanceHistoryService {
             .await?)
     }
 
-    pub async fn mark_rrk_ready(
+    pub async fn mark_rhrk_ready(
         &self,
         acquisition_digest: &Hash,
         claim_token: &str,
@@ -553,7 +558,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<StorageCasOutcome> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .mark_ready(
                 acquisition_digest,
                 claim_token,
@@ -563,7 +568,7 @@ impl GovernanceHistoryService {
             .await?)
     }
 
-    pub async fn accept_rrk(
+    pub async fn accept_rhrk(
         &self,
         acquisition_digest: &Hash,
         claim_token: &str,
@@ -572,7 +577,7 @@ impl GovernanceHistoryService {
     ) -> ServiceResult<StorageCasOutcome> {
         Ok(self
             .persistence
-            .pending_rrk_acquisitions()
+            .pending_rhrk_acquisitions()
             .mark_accepted(
                 acquisition_digest,
                 claim_token,
@@ -731,5 +736,5 @@ impl GovernanceHistoryService {
 }
 
 fn proof_free_digest(replica: &OrganizationRecoveryArchiveReplica) -> ServiceResult<Hash> {
-    soland_storage::rrk_archive_replica_digest(replica).map_err(ServiceError::from)
+    soland_storage::rhrk_archive_replica_digest(replica).map_err(ServiceError::from)
 }

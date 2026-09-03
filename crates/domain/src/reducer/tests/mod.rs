@@ -65,10 +65,12 @@ pub(super) fn actor_cell_subject(actor: &arkret_wire::ActorId) -> String {
 pub(super) fn install_realm_authority_root(
     state: &mut ProjectionState,
     realm_id: &str,
-    controller_id: &str,
+    controller_actor_id: &str,
 ) {
     let value = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-        arkret_wire::ActorId::service(arkret_identifiers::DidCoreId::new(controller_id).unwrap()),
+        arkret_wire::ActorId::service(
+            arkret_identifiers::DidCoreId::new(controller_actor_id).unwrap(),
+        ),
     );
     state.realm_null_subject_cells.insert(
         (

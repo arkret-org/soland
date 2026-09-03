@@ -187,7 +187,7 @@ CREATE INDEX agent_participation_ceiling_realm_idx ON public.agent_participation
 
 CREATE TABLE public.agent_principals (
     id text PRIMARY KEY,
-    controller_id text NOT NULL,
+    controller_principal_id text NOT NULL,
     principal_control_realm_id text NOT NULL,
     controller_authorization_ref text NOT NULL,
     display_name text,
@@ -232,7 +232,7 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );
 
-CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_id);
+CREATE INDEX agent_principals_controller_idx ON public.agent_principals USING btree (controller_principal_id);
 
 ALTER TABLE ONLY public.agent_principals
     ADD CONSTRAINT agent_principals_controller_account_pk_fkey
@@ -240,7 +240,7 @@ ALTER TABLE ONLY public.agent_principals
 
 CREATE UNIQUE INDEX agent_principals_pcr_idx ON public.agent_principals USING btree (principal_control_realm_id);
 
-CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_id, agent_slug) WHERE (agent_slug IS NOT NULL);
+CREATE INDEX agent_principals_controller_agent_slug_idx ON public.agent_principals USING btree (controller_principal_id, agent_slug) WHERE (agent_slug IS NOT NULL);
 
 CREATE UNIQUE INDEX agent_principals_pairing_request_idx ON public.agent_principals USING btree (pairing_request_id) WHERE (pairing_request_id IS NOT NULL);
 
@@ -275,17 +275,17 @@ CREATE TABLE public.agent_sidecars (
     pk bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id bytea NOT NULL CHECK (octet_length(id) = 33),
     realm_id text NOT NULL,
-    controller_id text NOT NULL,
+    controller_account_id jsonb NOT NULL,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
     CONSTRAINT agent_sidecars_id_key UNIQUE (id),
-    CONSTRAINT agent_sidecars_realm_controller_key UNIQUE (realm_id, controller_id),
+    CONSTRAINT agent_sidecars_realm_controller_key UNIQUE (realm_id, controller_account_id),
     CONSTRAINT agent_sidecars_state_check CHECK ((state = ANY (ARRAY['active'::text, 'suspended'::text, 'tombstoned'::text])))
 );
 
-CREATE INDEX agent_sidecars_controller_idx ON public.agent_sidecars USING btree (controller_id, created_at, pk);
+CREATE INDEX agent_sidecars_controller_idx ON public.agent_sidecars USING btree (controller_account_id, created_at, pk);
 
 -- `sidecar_pk` is the local FK; the two Event references keep the protocol
 -- 33-byte identity because canonical Event interning belongs to the admission
@@ -1185,17 +1185,17 @@ CREATE TABLE public.history_key_response_tombstones (
 CREATE INDEX history_key_response_tombstones_retention_idx
     ON public.history_key_response_tombstones (retain_until, response_id);
 
-CREATE SEQUENCE public.history_rrk_archive_sequence AS bigint MINVALUE 1;
+CREATE SEQUENCE public.history_rhrk_archive_sequence AS bigint MINVALUE 1;
 
-CREATE TABLE public.pending_rrk_acquisitions (
+CREATE TABLE public.pending_rhrk_acquisitions (
     acquisition_digest text PRIMARY KEY,
     realm_id text NOT NULL,
     effective_scope jsonb NOT NULL,
     mls_group_id text NOT NULL,
     epoch bigint NOT NULL,
     recovery_key_id text NOT NULL,
-    controller_id text NOT NULL CHECK (controller_id LIKE 'ak:did_core:%'),
-    holder_id text NOT NULL,
+    method_controller_principal_id text NOT NULL CHECK (method_controller_principal_id LIKE 'ak:did_core:%'),
+    holder_service_id text NOT NULL,
     container_event_ref text NOT NULL,
     archive_tuple_digest text NOT NULL,
     archive_replica_digest text NOT NULL,
@@ -1222,15 +1222,15 @@ CREATE TABLE public.pending_rrk_acquisitions (
         container_event_ref,
         archive_tuple_digest
     ),
-    CONSTRAINT pending_rrk_acquisitions_epoch_check CHECK (epoch >= 0),
-    CONSTRAINT pending_rrk_acquisitions_attempt_count_check CHECK (attempt_count >= 0),
-    CONSTRAINT pending_rrk_acquisitions_archive_sequence_check CHECK (archive_sequence >= 0),
-    CONSTRAINT pending_rrk_acquisitions_state_check CHECK (state IN ('pending', 'ready', 'accepted')),
-    CONSTRAINT pending_rrk_acquisitions_claim_check CHECK (
+    CONSTRAINT pending_rhrk_acquisitions_epoch_check CHECK (epoch >= 0),
+    CONSTRAINT pending_rhrk_acquisitions_attempt_count_check CHECK (attempt_count >= 0),
+    CONSTRAINT pending_rhrk_acquisitions_archive_sequence_check CHECK (archive_sequence >= 0),
+    CONSTRAINT pending_rhrk_acquisitions_state_check CHECK (state IN ('pending', 'ready', 'accepted')),
+    CONSTRAINT pending_rhrk_acquisitions_claim_check CHECK (
         (claim_token IS NULL AND claim_until IS NULL) OR
         (claim_token IS NOT NULL AND claim_until IS NOT NULL)
     ),
-    CONSTRAINT pending_rrk_acquisitions_terminal_check CHECK (
+    CONSTRAINT pending_rhrk_acquisitions_terminal_check CHECK (
         (state = 'pending' AND ready_at IS NULL AND accepted_at IS NULL
             AND archive_sequence IS NULL AND accepted_outcome_bytes IS NULL
             AND accepted_outcome_json IS NULL) OR
@@ -1244,24 +1244,24 @@ CREATE TABLE public.pending_rrk_acquisitions (
     )
 );
 
-CREATE INDEX pending_rrk_acquisitions_due_idx
-    ON public.pending_rrk_acquisitions (state, next_attempt_at, claim_until, acquisition_digest)
+CREATE INDEX pending_rhrk_acquisitions_due_idx
+    ON public.pending_rhrk_acquisitions (state, next_attempt_at, claim_until, acquisition_digest)
     WHERE state IN ('pending', 'ready');
 
-CREATE INDEX pending_rrk_acquisitions_authority_epoch_idx
-    ON public.pending_rrk_acquisitions (
+CREATE INDEX pending_rhrk_acquisitions_authority_epoch_idx
+    ON public.pending_rhrk_acquisitions (
         effective_scope,
-        controller_id,
-        holder_id,
+        method_controller_principal_id,
+        holder_service_id,
         epoch,
         container_event_ref,
         archive_replica_digest
     )
     WHERE state = 'accepted';
 
-CREATE INDEX pending_rrk_acquisitions_archive_list_idx
-    ON public.pending_rrk_acquisitions (
-        controller_id,
+CREATE INDEX pending_rhrk_acquisitions_archive_list_idx
+    ON public.pending_rhrk_acquisitions (
+        method_controller_principal_id,
         effective_scope,
         recovery_key_id,
         archive_sequence
@@ -1301,7 +1301,7 @@ CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm
 CREATE TABLE public.consent_cells (
     id uuid PRIMARY KEY,
     cell_id text NOT NULL,
-    holder_id text NOT NULL,
+    holder_account_id jsonb NOT NULL,
     peer jsonb NOT NULL,
     consent_scope text NOT NULL,
     grant_dots jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -1310,10 +1310,10 @@ CREATE TABLE public.consent_cells (
 );
 
 ALTER TABLE ONLY public.consent_cells
-    ADD CONSTRAINT consent_cells_holder_cell_key UNIQUE (holder_id, cell_id);
+    ADD CONSTRAINT consent_cells_holder_cell_key UNIQUE (holder_account_id, cell_id);
 
 CREATE INDEX consent_cells_holder_intent_idx
-    ON public.consent_cells USING btree (holder_id, consent_scope);
+    ON public.consent_cells USING btree (holder_account_id, consent_scope);
 
 -- Private service-local MIMI request correlation. These rows are not consent
 -- cells and do not represent accepted protocol state; they only bind the
@@ -1376,18 +1376,18 @@ CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id);
 -- Principal-private verified carrier mirrors are deliberately isolated from
 -- canonical_events: they drive no reducer, Seal, frontier, or state root.
 CREATE TABLE public.contact_verified_mirrors (
-    target_holder_id text NOT NULL,
+    target_holder_principal_id text NOT NULL,
     request_event_id text NOT NULL,
     request_digest text NOT NULL,
     canonical_event_bytes bytea NOT NULL,
     source_receipt jsonb NOT NULL,
     issuer_id text NOT NULL,
     verified_at timestamp with time zone NOT NULL,
-    PRIMARY KEY (target_holder_id, request_event_id)
+    PRIMARY KEY (target_holder_principal_id, request_event_id)
 );
 
 CREATE UNIQUE INDEX contact_verified_mirrors_holder_digest_key
-    ON public.contact_verified_mirrors USING btree (target_holder_id, request_digest);
+    ON public.contact_verified_mirrors USING btree (target_holder_principal_id, request_digest);
 
 CREATE INDEX contact_verified_mirrors_verified_at_idx
     ON public.contact_verified_mirrors USING btree (verified_at);
@@ -2258,7 +2258,7 @@ DECLARE
     notification_id uuid;
     account_pk bigint;
     service_id text;
-    controller_id text;
+    controller_principal_id text;
     artifact_id text;
     notification_data jsonb;
 BEGIN
@@ -2270,7 +2270,7 @@ BEGIN
         notification_id := NEW.approval_notification_id;
         account_pk := NEW.controller_account_pk;
         service_id := NEW.recipient_id;
-        controller_id := NEW.controller_id;
+        controller_principal_id := NEW.controller_principal_id;
         artifact_id := NEW.approval_request_id;
         notification_data := jsonb_build_object(
             'approval_request_id', NEW.approval_request_id,
@@ -2294,7 +2294,7 @@ BEGIN
         notification_id := OLD.approval_notification_id;
         account_pk := OLD.controller_account_pk;
         service_id := OLD.recipient_id;
-        controller_id := OLD.controller_id;
+        controller_principal_id := OLD.controller_principal_id;
         artifact_id := OLD.approval_request_id;
         notification_data := jsonb_build_object(
             'reason', terminal_reason
@@ -2309,7 +2309,7 @@ BEGIN
         priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
-        notification_id, controller_id, account_pk, service_id,
+        notification_id, controller_principal_id, account_pk, service_id,
         'agent_runtime_approval', artifact_id,
         'normal', 'unread', delta_action,
         notification_data, now(), now()

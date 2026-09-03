@@ -106,7 +106,7 @@ diesel::table! {
 diesel::table! {
     agent_principals (id) {
         id -> Text,
-        controller_id -> Text,
+        controller_principal_id -> Text,
         principal_control_realm_id -> Text,
         controller_authorization_ref -> Text,
         display_name -> Nullable<Text>,
@@ -156,7 +156,7 @@ diesel::table! {
         pk -> Int8,
         id -> Bytea,
         realm_id -> Text,
-        controller_id -> Text,
+        controller_account_id -> Jsonb,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
@@ -321,7 +321,7 @@ diesel::table! {
     consent_cells (id) {
         id -> Uuid,
         cell_id -> Text,
-        holder_id -> Text,
+        holder_account_id -> Jsonb,
         peer -> Jsonb,
         consent_scope -> Text,
         grant_dots -> Jsonb,
@@ -372,8 +372,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    contact_verified_mirrors (target_holder_id, request_event_id) {
-        target_holder_id -> Text,
+    contact_verified_mirrors (target_holder_principal_id, request_event_id) {
+        target_holder_principal_id -> Text,
         request_event_id -> Text,
         request_digest -> Text,
         canonical_event_bytes -> Bytea,
@@ -1780,15 +1780,15 @@ diesel::table! {
 }
 
 diesel::table! {
-    pending_rrk_acquisitions (acquisition_digest) {
+    pending_rhrk_acquisitions (acquisition_digest) {
         acquisition_digest -> Text,
         realm_id -> Text,
         effective_scope -> Jsonb,
         mls_group_id -> Text,
         epoch -> Int8,
         recovery_key_id -> Text,
-        controller_id -> Text,
-        holder_id -> Text,
+        method_controller_principal_id -> Text,
+        holder_service_id -> Text,
         container_event_ref -> Text,
         archive_tuple_digest -> Text,
         archive_replica_digest -> Text,
@@ -2001,7 +2001,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     history_key_requests,
     history_key_response_tombstones,
     history_key_responses,
-    pending_rrk_acquisitions,
+    pending_rhrk_acquisitions,
     state_cell_ops,
     state_control_events,
     state_control_seal_repair_cursor,

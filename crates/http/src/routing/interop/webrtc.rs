@@ -1489,7 +1489,7 @@ async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<Stri
     let projection = state.projections().snapshot();
     let owner = projection
         .realm_authority_root(realm_id)
-        .map(|root| root.controller_id.to_string());
+        .map(|root| root.controller_actor_id.to_string());
     let members = projection
         .members_of_realm(realm_id)
         .into_iter()

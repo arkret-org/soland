@@ -24,7 +24,7 @@ pub struct PendingAgentPairingCommitIntent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentPrincipalRecord {
     pub id: String,
-    pub controller_id: String,
+    pub controller_principal_id: String,
     pub principal_control_realm_id: String,
     pub controller_authorization_ref: DidUrl,
     pub display_name: Option<String>,
@@ -61,7 +61,7 @@ pub struct AgentPrincipalRecord {
 impl AgentPrincipalRecord {
     pub fn new(
         id: String,
-        controller_id: String,
+        controller_principal_id: String,
         principal_control_realm_id: String,
         controller_authorization_ref: DidUrl,
         state: AgentLifecycleState,
@@ -69,7 +69,7 @@ impl AgentPrincipalRecord {
     ) -> Self {
         Self {
             id,
-            controller_id,
+            controller_principal_id,
             principal_control_realm_id,
             controller_authorization_ref,
             display_name: None,

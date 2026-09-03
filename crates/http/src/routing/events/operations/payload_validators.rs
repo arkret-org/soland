@@ -559,7 +559,7 @@ mod tests {
             json!({"key": "ak.dnd_schedule", "expected_revision": 0, "tombstone": true}),
         );
         assert_eq!(super::validate_account_data_set_payload(&operation), Ok(()));
-        operation.payload["holder_id"] = json!("ak:did_core:web:other-holder.example");
+        operation.payload["legacy_holder_field"] = json!("ak:did_core:web:other-holder.example");
         assert_eq!(
             super::validate_account_data_set_payload(&operation),
             Err("account_data.set payload violates SDK artifact schema")

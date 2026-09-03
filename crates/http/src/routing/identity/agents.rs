@@ -20,7 +20,7 @@
 //!   `ak.self.agent.sidecar.command.ensure.v1`
 //! - `GET    /_arkret/self/agent-sidecars[/{sidecar_id}]`      — dedicated reads
 //!
-//! Controller operations enforce the persisted `agent_principals.controller_id`
+//! Controller operations enforce the persisted `agent_principals.controller_principal_id`
 //! binding before they mutate state or emit fan-out. Each handler appends an
 //! audit-log row matching the canonical event-kind name so the existing admin /
 //! federation projections stay in sync ahead of the reducer rewrite.

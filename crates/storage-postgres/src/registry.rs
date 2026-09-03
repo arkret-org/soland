@@ -46,7 +46,7 @@ pub struct PgPersistenceStore {
     governance_dependencies: PgGovernanceDependencyStore,
     history_traversal_retentions: PgHistoryTraversalRetentionStore,
     history_response_streams: PgHistoryResponseStreamStore,
-    pending_rrk_acquisitions: PgPendingRrkAcquisitionStore,
+    pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore,
     push_bridge_cache: PgPushBridgeCacheStore,
     multisig_pending: PgMultisigPendingStore,
     audit: PgAuditStore,
@@ -133,7 +133,7 @@ impl PgPersistenceStore {
             governance_dependencies: PgGovernanceDependencyStore { pool: pool.clone() },
             history_traversal_retentions: PgHistoryTraversalRetentionStore { pool: pool.clone() },
             history_response_streams: PgHistoryResponseStreamStore { pool: pool.clone() },
-            pending_rrk_acquisitions: PgPendingRrkAcquisitionStore { pool: pool.clone() },
+            pending_rhrk_acquisitions: PgPendingRhrkAcquisitionStore { pool: pool.clone() },
             push_bridge_cache: PgPushBridgeCacheStore { pool: pool.clone() },
             multisig_pending: PgMultisigPendingStore { pool: pool.clone() },
             audit: PgAuditStore { pool: pool.clone() },
@@ -338,8 +338,8 @@ impl FederationGovernanceStoreRegistry for PgPersistenceStore {
         &self.history_traversal_retentions
     }
 
-    fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore {
-        &self.pending_rrk_acquisitions
+    fn pending_rhrk_acquisitions(&self) -> &dyn PendingRhrkAcquisitionStore {
+        &self.pending_rhrk_acquisitions
     }
 
     fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore {

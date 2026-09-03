@@ -132,7 +132,7 @@ pub trait AgentStore: Send + Sync {
     ) -> PersistenceResult<Option<AgentPrincipalRecord>>;
     async fn list_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> PersistenceResult<Vec<AgentPrincipalRecord>>;
     async fn set_state(
         &self,

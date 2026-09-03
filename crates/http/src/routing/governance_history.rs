@@ -25,7 +25,7 @@ use arkret_models_collaboration::history_key::{
     OrganizationRecoveryArchiveReplicaOutcome, OrganizationRecoveryArchiveSetMember,
     PcrDeviceViewLocator, RealmCurrentGateProjection, RealmCurrentGateProjectionKind,
     RealmSealViewLocator, RequestExpiringRetention, RequestExpiringRetentionKind,
-    RequesterEndpointAuthorization, RrkHolderAuthorityObservation, SourceAuthorityLocator,
+    RequesterEndpointAuthorization, RhrkHolderAuthorityObservation, SourceAuthorityLocator,
     SourceKind, SourceRelayAttestation, SourceRelayAttestationKind, SourceRelayViewLocator,
     agent_signer_evidence_digest, organization_recovery_archive_coverage,
     response_capability_commitment,
@@ -1351,7 +1351,7 @@ async fn resolve_history_source_signer_dependencies(
                 byte_limit: 8 * 1_024 * 1_024,
                 history_traversal_access: None,
             };
-            let outcome = super::federation::rrk_acquisition::fetch_peer_governance_dependencies(
+            let outcome = super::federation::rhrk_acquisition::fetch_peer_governance_dependencies(
                 state,
                 peer_source_id,
                 &request,
@@ -1574,7 +1574,7 @@ async fn build_local_history_source_relay(
         | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
     };
     if let Some((archive_tuple, authority_observation)) =
-        local_rrk_source_authority(state, response, request, realm_id).await?
+        local_rhrk_source_authority(state, response, request, realm_id).await?
     {
         authority_observation
             .validate_for_archive_tuple(&archive_tuple)
@@ -1704,7 +1704,7 @@ async fn build_local_history_source_relay(
     Ok(attestation)
 }
 
-async fn local_rrk_source_authority(
+async fn local_rhrk_source_authority(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
     request: &HistoryKeyRequest,
@@ -1712,7 +1712,7 @@ async fn local_rrk_source_authority(
 ) -> Result<
     Option<(
         arkret_models_collaboration::history_key::ArchiveAuthorizationTuple,
-        RrkHolderAuthorityObservation,
+        RhrkHolderAuthorityObservation,
     )>,
     AppError,
 > {
@@ -1730,7 +1730,7 @@ async fn local_rrk_source_authority(
         return Ok(None);
     }
     let coverage_ranges = history_response_coverage_ranges(state, response).await?;
-    let candidates = accepted_rrk_for_ranges(
+    let candidates = accepted_rhrk_for_ranges(
         state,
         &response.effective_scope,
         response.source_actor_id.signing_principal_id(),
@@ -1742,8 +1742,9 @@ async fn local_rrk_source_authority(
     .filter(|record| {
         let archive = &record.input.archive_replica.archive;
         record.accepted_outcome.is_some()
-            && archive.controller_id == *response.source_actor_id.signing_principal_id()
-            && archive.holder_id == local_service_id
+            && archive.method_controller_principal_id
+                == *response.source_actor_id.signing_principal_id()
+            && archive.holder_service_id == local_service_id
             && archive.effective_scope == response.effective_scope
             && request
                 .requested_ranges
@@ -1756,11 +1757,11 @@ async fn local_rrk_source_authority(
     }
     let mut groups = std::collections::BTreeMap::<
         String,
-        Vec<soland_storage::PendingRrkAcquisitionRecord>,
+        Vec<soland_storage::PendingRhrkAcquisitionRecord>,
     >::new();
     for record in candidates {
         let digest =
-            soland_storage::rrk_archive_authorization_tuple_digest(&record.input.archive_replica)
+            soland_storage::rhrk_archive_authorization_tuple_digest(&record.input.archive_replica)
                 .map_err(|error| AppError::internal(error.to_string()))?;
         groups.entry(digest.to_string()).or_default().push(record);
     }
@@ -1779,16 +1780,16 @@ async fn local_rrk_source_authority(
     let [records] = covering_groups.as_mut_slice() else {
         return Err(AppError::new(
             ErrorCode::DependencyMissing,
-            "history response is not covered by one exact RRK tuple",
+            "history response is not covered by one exact RHRK tuple",
         ));
     };
     let replica = &records
         .first()
-        .expect("covering RRK group is non-empty")
+        .expect("covering RHRK group is non-empty")
         .input
         .archive_replica;
-    let tuple = soland_storage::rrk_archive_authorization_tuple(replica);
-    let authority_observation = current_rrk_holder_authority_observation(
+    let tuple = soland_storage::rhrk_archive_authorization_tuple(replica);
+    let authority_observation = current_rhrk_holder_authority_observation(
         state,
         realm_id,
         response.source_actor_id.signing_principal_id(),
@@ -1830,7 +1831,7 @@ async fn history_response_coverage_ranges(
                 .ok_or_else(|| {
                     AppError::new(
                         ErrorCode::DependencyMissing,
-                        "history response manifest is unavailable for RRK source authority",
+                        "history response manifest is unavailable for RHRK source authority",
                     )
                 })?,
             };
@@ -1850,7 +1851,7 @@ async fn history_response_coverage_ranges(
             } else {
                 Err(AppError::new(
                     ErrorCode::DependencyMissing,
-                    "history chunk descriptor is unavailable for RRK source authority",
+                    "history chunk descriptor is unavailable for RHRK source authority",
                 ))
             };
         }
@@ -1862,16 +1863,16 @@ async fn history_response_coverage_ranges(
         .collect())
 }
 
-async fn accepted_rrk_for_ranges(
+async fn accepted_rhrk_for_ranges(
     state: &AppState,
     effective_scope: &HistoryEffectiveScope,
-    controller_id: &arkret_wire::DidCoreId,
-    holder_id: &arkret_wire::DidCoreId,
+    method_controller_principal_id: &arkret_wire::DidCoreId,
+    holder_service_id: &arkret_wire::DidCoreId,
     ranges: &[arkret_models_collaboration::history_key::EpochRange],
-) -> Result<Vec<soland_storage::PendingRrkAcquisitionRecord>, AppError> {
+) -> Result<Vec<soland_storage::PendingRhrkAcquisitionRecord>, AppError> {
     if ranges.is_empty() {
         return Err(AppError::param_invalid(
-            "RRK archive query requires at least one epoch range",
+            "RHRK archive query requires at least one epoch range",
         ));
     }
     let mut records = std::collections::BTreeMap::new();
@@ -1882,10 +1883,10 @@ async fn accepted_rrk_for_ranges(
         let page = state
             .persistence()
             .governance_history_service()
-            .list_accepted_rrk_for_authority(
+            .list_accepted_rhrk_for_authority(
                 effective_scope,
-                controller_id,
-                holder_id,
+                method_controller_principal_id,
+                holder_service_id,
                 range.from_epoch,
                 range.to_epoch,
                 65_537 - records.len(),
@@ -1899,76 +1900,78 @@ async fn accepted_rrk_for_ranges(
     if records.len() > 65_536 {
         return Err(AppError::new(
             ErrorCode::LimitExceeded,
-            "RRK archive authority query exceeds 65536 records",
+            "RHRK archive authority query exceeds 65536 records",
         ));
     }
     Ok(records.into_values().collect())
 }
 
-fn current_rrk_holder_authority_observation(
+fn current_rhrk_holder_authority_observation(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
-    controller_id: &arkret_wire::DidCoreId,
-    holder_id: &arkret_wire::DidCoreId,
+    method_controller_principal_id: &arkret_wire::DidCoreId,
+    holder_service_id: &arkret_wire::DidCoreId,
     archive_authorization_tuple_digest: arkret_wire::Hash,
     observed_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
-) -> Result<RrkHolderAuthorityObservation, AppError> {
-    const RRK_CELL: &str = "ak:cell:ak.component.realm.organization_recovery_key.v1:null";
+) -> Result<RhrkHolderAuthorityObservation, AppError> {
+    const RHRK_CELL: &str = "ak:cell:ak.component.realm.organization_recovery_key.v1:null";
     let snapshot = state.projections().snapshot();
     let cell = snapshot
         .realm_null_subject_cells
-        .get(&(realm_id.as_str().to_owned(), RRK_CELL.to_owned()))
+        .get(&(realm_id.as_str().to_owned(), RHRK_CELL.to_owned()))
         .ok_or_else(|| {
             AppError::new(
                 ErrorCode::DependencyMissing,
-                "current RRK authority cell is unavailable",
+                "current RHRK authority cell is unavailable",
             )
         })?;
     let arkret_state::lattice::CellState::Value(value) = cell else {
         return Err(AppError::capability_denied(
-            "current RRK authority cell is conflicted",
+            "current RHRK authority cell is conflicted",
         ));
     };
     let key_tuple = value
         .get("key_tuple")
         .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| AppError::internal("current RRK cell omits key_tuple"))?;
-    let current_controller_id = key_tuple
-        .get("controller_id")
+        .ok_or_else(|| AppError::internal("current RHRK cell omits key_tuple"))?;
+    let current_method_controller_principal_id = key_tuple
+        .get("method_controller_principal_id")
         .cloned()
-        .ok_or_else(|| AppError::internal("current RRK cell omits controller_id"))
+        .ok_or_else(|| AppError::internal("current RHRK cell omits method_controller_principal_id"))
         .and_then(|value| {
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
-    let current_holder_id = key_tuple
-        .get("holder_id")
+    let current_holder_service_id = key_tuple
+        .get("holder_service_id")
         .cloned()
-        .ok_or_else(|| AppError::internal("current RRK cell omits holder_id"))
+        .ok_or_else(|| AppError::internal("current RHRK cell omits holder_service_id"))
         .and_then(|value| {
             serde_json::from_value::<arkret_wire::DidCoreId>(value)
                 .map_err(|error| AppError::internal(error.to_string()))
         })?;
-    if &current_controller_id != controller_id || &current_holder_id != holder_id {
+    if &current_method_controller_principal_id != method_controller_principal_id
+        || &current_holder_service_id != holder_service_id
+    {
         return Err(AppError::capability_denied(
-            "current RRK authority names a different holder",
+            "current RHRK authority names a different holder",
         ));
     }
-    let observation = RrkHolderAuthorityObservation {
-        controller_id: current_controller_id,
-        holder_id: current_holder_id,
+    let observation = RhrkHolderAuthorityObservation {
+        method_controller_principal_id: current_method_controller_principal_id,
+        holder_service_id: current_holder_service_id,
         current_holder_signing_ref: key_tuple
             .get("holder_signing_ref")
             .cloned()
-            .ok_or_else(|| AppError::internal("current RRK cell omits holder_signing_ref"))
+            .ok_or_else(|| AppError::internal("current RHRK cell omits holder_signing_ref"))
             .and_then(|value| {
                 serde_json::from_value(value).map_err(|error| AppError::internal(error.to_string()))
             })?,
         accepted_key_evidence_ref: value
             .get("accepted_key_evidence_ref")
             .cloned()
-            .ok_or_else(|| AppError::internal("current RRK cell omits accepted_key_evidence_ref"))
+            .ok_or_else(|| AppError::internal("current RHRK cell omits accepted_key_evidence_ref"))
             .and_then(|value| {
                 serde_json::from_value(value).map_err(|error| AppError::internal(error.to_string()))
             })?,
@@ -1976,7 +1979,7 @@ fn current_rrk_holder_authority_observation(
         holder_trusted_basis: value
             .get("holder_trusted_basis")
             .cloned()
-            .ok_or_else(|| AppError::internal("current RRK cell omits holder_trusted_basis"))
+            .ok_or_else(|| AppError::internal("current RHRK cell omits holder_trusted_basis"))
             .and_then(|value| {
                 serde_json::from_value(value).map_err(|error| AppError::internal(error.to_string()))
             })?,
@@ -2002,7 +2005,7 @@ async fn validate_history_source_relay_binding(
             HistoryEffectiveScope::Realm { realm_id }
             | HistoryEffectiveScope::Circle { realm_id, .. } => realm_id,
         };
-        let current = current_rrk_holder_authority_observation(
+        let current = current_rhrk_holder_authority_observation(
             state,
             realm_id,
             attestation.source_actor_id.signing_principal_id(),
@@ -2015,11 +2018,11 @@ async fn validate_history_source_relay_binding(
         )?;
         if &current != authority_observation {
             return Err(AppError::capability_denied(
-                "history RRK relay authority observation is stale",
+                "history RHRK relay authority observation is stale",
             ));
         }
         let ranges = history_response_coverage_ranges(state, response).await?;
-        let records = accepted_rrk_for_ranges(
+        let records = accepted_rhrk_for_ranges(
             state,
             &attestation.effective_scope,
             attestation.source_actor_id.signing_principal_id(),
@@ -2031,18 +2034,18 @@ async fn validate_history_source_relay_binding(
             let replica = &record.input.archive_replica;
             record.accepted_outcome.is_some()
                 && replica.archive.effective_scope == attestation.effective_scope
-                && replica.archive.controller_id
+                && replica.archive.method_controller_principal_id
                     == *attestation.source_actor_id.signing_principal_id()
-                && replica.archive.holder_id == attestation.source_id
+                && replica.archive.holder_service_id == attestation.source_id
                 && authority_observation
-                    .validate_for_archive_tuple(&soland_storage::rrk_archive_authorization_tuple(
+                    .validate_for_archive_tuple(&soland_storage::rhrk_archive_authorization_tuple(
                         replica,
                     ))
                     .is_ok()
         });
         return authorized
             .then_some(())
-            .ok_or_else(|| AppError::capability_denied("history RRK relay tuple is unavailable"));
+            .ok_or_else(|| AppError::capability_denied("history RHRK relay tuple is unavailable"));
     }
     let SourceAuthorityLocator::Member {
         member_id,
@@ -2960,9 +2963,10 @@ async fn build_history_release_attestation(
     released_range: arkret_models_collaboration::history_key::EpochRange,
 ) -> Result<HistoryReleaseAttestation, AppError> {
     let request = &request_record.write.request;
-    let rrk_archive_material = if source_relay.source_kind == SourceKind::OrganizationRecoveryHolder
+    let rhrk_archive_material = if source_relay.source_kind
+        == SourceKind::OrganizationRecoveryHolder
     {
-        Some(validate_rrk_release_coverage(state, source_relay, response, &released_range).await?)
+        Some(validate_rhrk_release_coverage(state, source_relay, response, &released_range).await?)
     } else {
         None
     };
@@ -3101,7 +3105,7 @@ async fn build_history_release_attestation(
             response.expires_at,
         )
         .await?;
-    let (archive_tuple, archive_coverage) = match rrk_archive_material {
+    let (archive_tuple, archive_coverage) = match rhrk_archive_material {
         Some((archive_tuple, replicas)) => {
             let members = replicas
                 .iter()
@@ -3115,7 +3119,7 @@ async fn build_history_release_attestation(
                 .map_err(|error| AppError::internal(error.to_string()))?;
             if archive_coverage.tuple_digest != tuple_digest {
                 return Err(AppError::capability_denied(
-                    "RRK archive coverage does not bind the accepted authorization tuple",
+                    "RHRK archive coverage does not bind the accepted authorization tuple",
                 ));
             }
             (Some(archive_tuple), Some(archive_coverage))
@@ -3171,7 +3175,7 @@ async fn build_history_release_attestation(
     Ok(attestation)
 }
 
-async fn validate_rrk_release_coverage(
+async fn validate_rhrk_release_coverage(
     state: &AppState,
     source_relay: &SourceRelayAttestation,
     response: &HistoryKeyResponseSendRequest,
@@ -3188,7 +3192,7 @@ async fn validate_rrk_release_coverage(
     } = &source_relay.source_authority_locator
     else {
         return Err(AppError::capability_denied(
-            "RRK source relay omits its authority observation",
+            "RHRK source relay omits its authority observation",
         ));
     };
     let expected_count = released_range
@@ -3197,8 +3201,10 @@ async fn validate_rrk_release_coverage(
         .and_then(|distance| distance.checked_add(1))
         .and_then(|count| usize::try_from(count).ok())
         .filter(|count| *count <= 65_536)
-        .ok_or_else(|| AppError::new(ErrorCode::LimitExceeded, "RRK release range is too large"))?;
-    let records = accepted_rrk_for_ranges(
+        .ok_or_else(|| {
+            AppError::new(ErrorCode::LimitExceeded, "RHRK release range is too large")
+        })?;
+    let records = accepted_rhrk_for_ranges(
         state,
         &response.effective_scope,
         source_relay.source_actor_id.signing_principal_id(),
@@ -3214,14 +3220,15 @@ async fn validate_rrk_release_coverage(
         let archive = &replica.archive;
         if record.accepted_outcome.is_none()
             || archive.effective_scope != response.effective_scope
-            || archive.controller_id != *source_relay.source_actor_id.signing_principal_id()
-            || archive.holder_id != source_relay.source_id
+            || archive.method_controller_principal_id
+                != *source_relay.source_actor_id.signing_principal_id()
+            || archive.holder_service_id != source_relay.source_id
             || archive.epoch < released_range.from_epoch
             || archive.epoch > released_range.to_epoch
         {
             continue;
         }
-        let candidate = soland_storage::rrk_archive_authorization_tuple(replica);
+        let candidate = soland_storage::rhrk_archive_authorization_tuple(replica);
         if authority_observation
             .validate_for_archive_tuple(&candidate)
             .is_err()
@@ -3234,7 +3241,7 @@ async fn validate_rrk_release_coverage(
             },
         ) {
             return Err(AppError::capability_denied(
-                "RRK release range spans multiple authorization tuples",
+                "RHRK release range spans multiple authorization tuples",
             ));
         }
         tuple = Some(candidate);
@@ -3243,7 +3250,7 @@ async fn validate_rrk_release_coverage(
             .is_some()
         {
             return Err(AppError::conflict(
-                "RRK release range contains duplicate archive epochs",
+                "RHRK release range contains duplicate archive epochs",
             ));
         }
         replicas_by_epoch.insert(archive.epoch, replica.clone());
@@ -3254,13 +3261,13 @@ async fn validate_rrk_release_coverage(
     {
         return Err(AppError::new(
             ErrorCode::DependencyMissing,
-            "RRK release range is not continuously archived",
+            "RHRK release range is not continuously archived",
         ));
     }
     let tuple = tuple.ok_or_else(|| {
         AppError::new(
             ErrorCode::DependencyMissing,
-            "RRK release authorization tuple is unavailable",
+            "RHRK release authorization tuple is unavailable",
         )
     })?;
     Ok((tuple, replicas_by_epoch.into_values().collect()))
@@ -3784,11 +3791,12 @@ async fn list_history_key_requests(
                 .iter()
                 .flat_map(|record| record.write.request.requested_ranges.iter().cloned())
                 .collect::<Vec<_>>();
-            let accepted_rrk =
-                accepted_rrk_for_ranges(state, &scope, &caller, &local_service_id, &ranges).await?;
+            let accepted_rhrk =
+                accepted_rhrk_for_ranges(state, &scope, &caller, &local_service_id, &ranges)
+                    .await?;
             for record in &page.records {
-                if accepted_rrk.iter().any(|archive| {
-                    rrk_record_authorizes_request(archive, &caller, &record.write.request)
+                if accepted_rhrk.iter().any(|archive| {
+                    rhrk_record_authorizes_request(archive, &caller, &record.write.request)
                 }) {
                     authorized.push((
                         record.sequence,
@@ -3917,7 +3925,7 @@ async fn list_organization_recovery_archives(
     let mut candidates = state
         .persistence()
         .governance_history_service()
-        .list_accepted_rrk_for_archive_query(&query, &caller, after_sequence, 4_097)
+        .list_accepted_rhrk_for_archive_query(&query, &caller, after_sequence, 4_097)
         .await
         .map_err(map_service_error)?;
     let has_more_candidates = candidates.len() == 4_097;
@@ -4113,39 +4121,39 @@ async fn validate_history_request_replica_destination(
             }
         }
         HistoryKeyRequestReplicaDestinationAuthorization::OrganizationRecoveryHolder {
-            controller_id,
-            holder_id,
+            method_controller_principal_id,
+            holder_service_id,
             archive_tuple_digest,
         } => {
-            if holder_id != local_service_id {
+            if holder_service_id != local_service_id {
                 return Err(AppError::capability_denied(
-                    "history request RRK destination service mismatch",
+                    "history request RHRK destination service mismatch",
                 ));
             }
-            let accepted = accepted_rrk_for_ranges(
+            let accepted = accepted_rhrk_for_ranges(
                 state,
                 &replica.request.effective_scope,
-                controller_id,
-                holder_id,
+                method_controller_principal_id,
+                holder_service_id,
                 &replica.request.requested_ranges,
             )
             .await?;
             let authorized = accepted.iter().any(|record| {
                 let archive = &record.input.archive_replica.archive;
-                archive.controller_id == *controller_id
-                    && archive.holder_id == *holder_id
+                archive.method_controller_principal_id == *method_controller_principal_id
+                    && archive.holder_service_id == *holder_service_id
                     && archive.effective_scope == replica.request.effective_scope
                     && replica.request.requested_ranges.iter().any(|range| {
                         range.from_epoch <= archive.epoch && archive.epoch <= range.to_epoch
                     })
-                    && soland_storage::rrk_archive_authorization_tuple_digest(
+                    && soland_storage::rhrk_archive_authorization_tuple_digest(
                         &record.input.archive_replica,
                     )
                     .is_ok_and(|digest| digest == *archive_tuple_digest)
             });
             if !authorized {
                 return Err(AppError::capability_denied(
-                    "history request RRK destination tuple is unavailable",
+                    "history request RHRK destination tuple is unavailable",
                 ));
             }
         }
@@ -4184,21 +4192,21 @@ async fn replicate_organization_recovery_archive(
             "local service DID cannot project to core_id: {error}"
         ))
     })?;
-    if replica.source_id.as_str() != source_id || replica.holder_id != local_service_id {
+    if replica.source_id.as_str() != source_id || replica.holder_service_id != local_service_id {
         return Err(AppError::capability_denied(
             "organization recovery archive transport binding mismatch",
         ));
     }
     let history = state.persistence().governance_history_service();
     let (digest, _) = history
-        .enqueue_rrk_replica(replica, now())
+        .enqueue_rhrk_replica(replica, now())
         .await
         .map_err(map_service_error)?;
     let acquisition = history
-        .rrk_acquisition(&digest)
+        .rhrk_acquisition(&digest)
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| AppError::internal("pending RRK acquisition disappeared"))?;
+        .ok_or_else(|| AppError::internal("pending RHRK acquisition disappeared"))?;
     match acquisition.accepted_outcome {
         Some(outcome) => json_ok(outcome),
         None => Err(AppError::new(

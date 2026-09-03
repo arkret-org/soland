@@ -235,11 +235,11 @@ pub(super) async fn validate_member_state_policy(
 }
 
 fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operation) -> bool {
-    let Some(controller_id) = membership_target(operation) else {
+    let Some(controller_actor_id) = membership_target(operation) else {
         return false;
     };
     let projection = state.projections().snapshot();
-    let controller_key = controller_id.to_string();
+    let controller_key = controller_actor_id.to_string();
     let Some(controller) = projection.member(operation.realm_id.as_str(), &controller_key) else {
         return false;
     };
@@ -247,8 +247,8 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
         return false;
     };
     let authority = arkret_wire::AccountId::new(
-        controller_id.signing_principal_id().clone(),
-        controller_id.route_service_id().clone(),
+        controller_actor_id.signing_principal_id().clone(),
+        controller_actor_id.route_service_id().clone(),
     );
     projection
         .agent_membership_bindings
@@ -264,7 +264,7 @@ fn controller_has_bound_agent_memberships(state: &AppState, operation: &Operatio
 async fn agent_controlled_by_record(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
-    controller_id: &arkret_wire::ActorId,
+    controller_actor_id: &arkret_wire::ActorId,
 ) -> Option<soland_services::identity::AgentPairingState> {
     state
         .agent_pairings()
@@ -272,7 +272,9 @@ async fn agent_controlled_by_record(
         .await
         .ok()
         .flatten()
-        .filter(|record| record.controller_id == controller_id.signing_principal_id().as_str())
+        .filter(|record| {
+            record.controller_principal_id == controller_actor_id.signing_principal_id().as_str()
+        })
 }
 
 async fn realm_member_is_joined(
@@ -295,7 +297,7 @@ async fn realm_member_is_joined(
 async fn has_active_accountability_grant(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
-    controller_id: &arkret_wire::ActorId,
+    controller_actor_id: &arkret_wire::ActorId,
 ) -> bool {
     let now = chrono::Utc::now();
     state
@@ -314,10 +316,10 @@ async fn has_active_accountability_grant(
                         serde_json::from_value::<arkret_wire::ActorId>(value.clone()).ok()
                     })
                     .as_ref()
-                    == Some(controller_id)
+                    == Some(controller_actor_id)
                 && accountability_grant_value_active_for(
                     record.envelope.get("payload").unwrap_or(&record.envelope),
-                    controller_id.signing_principal_id().as_str(),
+                    controller_actor_id.signing_principal_id().as_str(),
                     agent_id.signing_principal_id().as_str(),
                     now,
                 )
@@ -327,7 +329,7 @@ async fn has_active_accountability_grant(
 async fn agent_controlled_by(
     state: &AppState,
     agent_id: &arkret_wire::ActorId,
-    controller_id: &arkret_wire::ActorId,
+    controller_actor_id: &arkret_wire::ActorId,
     require_active: bool,
 ) -> bool {
     let Ok(Some(record)) = state
@@ -337,7 +339,7 @@ async fn agent_controlled_by(
     else {
         return false;
     };
-    record.controller_id == controller_id.signing_principal_id().as_str()
+    record.controller_principal_id == controller_actor_id.signing_principal_id().as_str()
         && (!require_active || record.state == AgentLifecycleState::Active)
 }
 

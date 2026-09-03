@@ -422,7 +422,7 @@ async fn validate_ghost_managed_actor_unit(
     if payload.actor_role != AppletManagedActorRole::Ghost
         || payload.applet_id != basis.applet_id
         || payload.service_id != basis.service_id
-        || payload.actor_id.signing_principal_id() == &record.package.controller_id
+        || payload.actor_id.signing_principal_id() == &record.package.controller_principal_id
         || payload.actor_id == record.package.bot_actor_id
         || payload.actor_id.route_service_id().as_str() != state.service_id()
         || record.registration_event.event_id != payload.registration_ref

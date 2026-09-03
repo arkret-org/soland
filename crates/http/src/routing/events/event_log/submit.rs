@@ -1393,7 +1393,7 @@ pub(in crate::routing) async fn submit_direct_conversation_founding_unit(
                 .await
                 .map_err(|error| SubmitOneError::new(StatusCode::INTERNAL_SERVER_ERROR, "internal_error", error.to_string()))?
                 .ok_or_else(|| SubmitOneError::new(StatusCode::CONFLICT, "failed_precondition", "accepted Agent provision Event is unavailable"))?;
-            if agent.controller_id != founder_id.signing_principal_id().as_str()
+            if agent.controller_principal_id != founder_id.signing_principal_id().as_str()
                 || agent.state
                     != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
                 || stored_provision_ref != Some(agent_provision_ref.as_str())

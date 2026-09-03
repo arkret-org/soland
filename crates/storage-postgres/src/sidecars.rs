@@ -28,8 +28,8 @@ struct SidecarRow {
     id: Vec<u8>,
     #[diesel(sql_type = Text)]
     realm_id: String,
-    #[diesel(sql_type = Text)]
-    controller_id: arkret_wire::DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    controller_account_id: Value,
     #[diesel(sql_type = Text)]
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
@@ -56,9 +56,15 @@ impl TryFrom<SidecarRow> for AgentSidecarRecord {
             PersistenceError::Internal(format!("Sidecar `{sidecar_id}` has invalid state: {error}"))
         })?;
         Ok(Self {
-            sidecar_id,
+            sidecar_id: sidecar_id.clone(),
             realm_id: row.realm_id,
-            controller_id: row.controller_id.to_string(),
+            controller_account_id: serde_json::from_value(row.controller_account_id).map_err(
+                |error| {
+                    PersistenceError::Internal(format!(
+                        "Sidecar `{sidecar_id}` has invalid controller account: {error}"
+                    ))
+                },
+            )?,
             state,
             state_changed_at: row.state_changed_at,
             created_at: row.created_at,
@@ -116,7 +122,7 @@ impl From<SidecarContextRow> for AgentSidecarContextRecord {
     }
 }
 
-const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
+const SIDECAR_SELECT: &str = "SELECT id, realm_id, controller_account_id, state, state_changed_at, created_at, updated_at FROM agent_sidecars";
 // `sidecar_pk` never leaves the database, so every context read joins back to
 // `agent_sidecars` and returns the protocol 33-byte Sidecar identity instead.
 const CONTEXT_SELECT: &str = "SELECT s.id AS sidecar_id, c.normalized_context_ref_digest, c.normalized_context_ref, c.version, c.predecessor_event_ref, c.attach_event_ref, c.created_at      FROM agent_sidecar_contexts c JOIN agent_sidecars s ON s.pk = c.sidecar_pk";
@@ -154,16 +160,18 @@ impl SidecarStore for PgSidecarStore {
         crate::realm_identity::ensure_realm_pk(&mut conn, &record.realm_id).await?;
         sql_query(
             "WITH inserted AS (\
-             INSERT INTO agent_sidecars (id, realm_id, controller_id, state, state_changed_at, created_at, updated_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (realm_id, controller_id) DO NOTHING \
-             RETURNING id, realm_id, controller_id, state, state_changed_at, created_at, updated_at) \
+             INSERT INTO agent_sidecars (id, realm_id, controller_account_id, state, state_changed_at, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (realm_id, controller_account_id) DO NOTHING \
+             RETURNING id, realm_id, controller_account_id, state, state_changed_at, created_at, updated_at) \
              SELECT * FROM inserted UNION ALL \
-             SELECT id, realm_id, controller_id, state, state_changed_at, created_at, updated_at \
-             FROM agent_sidecars WHERE realm_id=$2 AND controller_id=$3 LIMIT 1",
+             SELECT id, realm_id, controller_account_id, state, state_changed_at, created_at, updated_at \
+             FROM agent_sidecars WHERE realm_id=$2 AND controller_account_id=$3 LIMIT 1",
         )
         .bind::<Binary, _>(id)
         .bind::<Text, _>(&record.realm_id)
-        .bind::<Text, _>(&record.controller_id)
+        .bind::<Jsonb, _>(serde_json::to_value(&record.controller_account_id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("Sidecar controller account is not serializable: {error}"))
+        })?)
         .bind::<Text, _>(sidecar_state_label(record.state))
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
         .bind::<Timestamptz, _>(record.created_at)
@@ -190,14 +198,20 @@ impl SidecarStore for PgSidecarStore {
     async fn get_for_realm_controller(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "{SIDECAR_SELECT} WHERE realm_id=$1 AND controller_id=$2"
+            "{SIDECAR_SELECT} WHERE realm_id=$1 AND controller_account_id=$2"
         ))
         .bind::<Text, _>(realm_id)
-        .bind::<Text, _>(controller_id)
+        .bind::<Jsonb, _>(
+            serde_json::to_value(controller_account_id).map_err(|error| {
+                PersistenceError::SchemaViolation(format!(
+                    "Sidecar controller account is not serializable: {error}"
+                ))
+            })?,
+        )
         .get_result::<SidecarRow>(&mut *conn)
         .await
         .optional()
@@ -208,14 +222,16 @@ impl SidecarStore for PgSidecarStore {
 
     async fn list_for_controller(
         &self,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
         realm_id: Option<&str>,
     ) -> PersistenceResult<Vec<AgentSidecarRecord>> {
         let mut conn = pg_conn(&self.pool).await?;
         sql_query(format!(
-            "{SIDECAR_SELECT} WHERE controller_id=$1 AND ($2 IS NULL OR realm_id=$2) ORDER BY created_at,pk"
+            "{SIDECAR_SELECT} WHERE controller_account_id=$1 AND ($2 IS NULL OR realm_id=$2) ORDER BY created_at,pk"
         ))
-        .bind::<Text, _>(controller_id)
+        .bind::<Jsonb, _>(serde_json::to_value(controller_account_id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("Sidecar controller account is not serializable: {error}"))
+        })?)
             .bind::<Nullable<Text>, _>(realm_id)
         .load::<SidecarRow>(&mut *conn)
         .await

@@ -1656,6 +1656,7 @@ fn evaluate_invite_receive(
             if crate::routing::identity::consent::has_active_consent_grant_evidence(
                 state,
                 subject,
+                recipient_id,
                 inviter_id,
                 consent_grant_ref.as_str(),
                 consent_id.as_deref(),

@@ -6,7 +6,7 @@ use super::{PersistenceResult, Value, async_trait};
 pub struct AgentSidecarRecord {
     pub sidecar_id: String,
     pub realm_id: String,
-    pub controller_id: String,
+    pub controller_account_id: arkret_wire::AccountId,
     /// Lifecycle state; canonical SDK enum, persisted as its snake_case wire
     /// name (`active` | `suspended` | `tombstoned`).
     pub state: AgentSidecarState,
@@ -36,11 +36,11 @@ pub trait SidecarStore: Send + Sync {
     async fn get_for_realm_controller(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
     ) -> PersistenceResult<Option<AgentSidecarRecord>>;
     async fn list_for_controller(
         &self,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
         realm_id: Option<&str>,
     ) -> PersistenceResult<Vec<AgentSidecarRecord>>;
     async fn snapshot_all(&self) -> PersistenceResult<Vec<AgentSidecarRecord>>;

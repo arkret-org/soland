@@ -335,7 +335,7 @@ pub(crate) async fn seed_active_controller_device_generation(
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
     let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
+    let controller_principal_id = arkret_wire::project_did_to_core_id(&actor).unwrap();
     let authorize_payload = controller_founding_authorize_payload(&actor, created_at, &signing_key);
     let founding_device_descriptor = controller_founding_device_descriptor(&authorize_payload);
     let initial_resolution = arkret_models_identity::ResolutionCommitment {
@@ -345,11 +345,14 @@ pub(crate) async fn seed_active_controller_device_generation(
     };
     let bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
-            principal_id: controller_id.clone(),
+            principal_id: controller_principal_id.clone(),
             principal_did: actor.clone(),
             station_id: arkret_identifiers::DidCoreId::new(state.service_id().to_owned()).unwrap(),
             notary: principal_control_notary(
-                arkret_wire::AccountId::new(controller_id.clone(), state.service_core_id()),
+                arkret_wire::AccountId::new(
+                    controller_principal_id.clone(),
+                    state.service_core_id(),
+                ),
                 actor.as_str(),
             ),
             initial_resolution: initial_resolution.clone(),
@@ -407,7 +410,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
-        controller_id.clone(),
+        controller_principal_id.clone(),
         soland_test_support::fixture_station_id(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
@@ -563,7 +566,7 @@ pub(crate) async fn seed_active_controller_device_generation(
         .test_persistence()
         .devices()
         .put(&soland_storage::DeviceInventoryRecord {
-            actor: controller_id.to_string(),
+            actor: controller_principal_id.to_string(),
             device_id: CONTROLLER_DEVICE_ID.to_owned(),
             display_name: Some("Alice Desktop".to_owned()),
             verification_state: "verified".to_owned(),
@@ -590,7 +593,7 @@ pub(crate) async fn seed_active_controller_device_generation(
 
 pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, controller: &str) {
     let now = chrono::Utc::now();
-    let controller_id = arkret_wire::project_did_to_core_id(
+    let controller_principal_id = arkret_wire::project_did_to_core_id(
         &arkret_identifiers::Did::new(controller.to_owned()).unwrap(),
     )
     .unwrap();
@@ -618,7 +621,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .insert(soland_storage::RecoveryPolicyRecord {
             policy_id: policy_id.clone(),
             account_id: arkret_wire::AccountId::new(
-                controller_id.clone(),
+                controller_principal_id.clone(),
                 state.service_core_id().clone(),
             ),
             version: 1,
@@ -634,7 +637,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
             raw_payload: serde_json::json!({
                 "schema": "ak.schema.recovery_policy.v1",
                 "policy_id": policy_id,
-                "principal_id": controller_id,
+                "principal_id": controller_principal_id,
                 "version": 1,
                 "trust_domain": "ak:trust_domain:soland.local",
                 "allowed_proof_kinds": ["did_root"],
@@ -687,7 +690,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
             &realm_id,
             &soland_storage::RealmMetaRecord {
                 owner: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                    controller_id.clone(),
+                    controller_principal_id.clone(),
                     state.service_core_id(),
                 ))
                 .to_string(),
@@ -812,14 +815,14 @@ async fn provision_agent_sdk_commit_attempt_inner(
     >(requested_scope.clone())
     .unwrap();
     let controller_did = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+    let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let binding_signing_key = SigningKey::from_bytes(&[22_u8; 32]);
     let successor_signing_key = SigningKey::from_bytes(&[23_u8; 32]);
     let agent_inception = arkret_signatures::webvh::prepare_agent_inception(
         &arkret_signatures::webvh::AgentInceptionInput {
             principal_endpoint: &url::Url::parse("https://soland.local").unwrap(),
             local_id: &format!("agent-{}", uuid::Uuid::now_v7().simple()),
-            controller_id: &controller_id,
+            controller_principal_id: &controller_principal_id,
             version_time: chrono::Utc::now(),
             root_seed: &[21_u8; 32],
             next_root_public_key_multibase: &arkret_canonical::ed25519_pubkey_to_did_key_multibase(
@@ -879,9 +882,12 @@ async fn provision_agent_sdk_commit_attempt_inner(
         panic!("prepare must await the controller-authored provision Event");
     };
     assert_eq!(arkret_wire::project_did_to_core_id(&did).unwrap(), agent_id);
-    let expected_scope_digest =
-        arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
-            .unwrap();
+    let expected_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
+        &agent_id,
+        &controller_principal_id,
+        &scope,
+    )
+    .unwrap();
     assert_eq!(requested_scope_digest, expected_scope_digest);
     let controller_actor = arkret_wire::ActorId::account(controller_authority.clone());
     let actor_frontier_request =
@@ -930,7 +936,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
                 did.as_str(),
             ),
             initial_resolution: initial_resolution.clone(),
-            controller_id: controller_id.clone(),
+            controller_principal_id: controller_principal_id.clone(),
             genesis_salt: arkret_wire::GenesisSalt::generate().unwrap(),
             trust_domain: state.config().trust_domain.clone(),
             created_at: now,
@@ -996,7 +1002,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
         .expect("typed controller Realm Seal frontier");
     let frontier = frontier.frontier;
     let event = arkret_bootstrap::build_agent_provision_intent(
-        &controller_id,
+        &controller_principal_id,
         &controller_realm_id,
         &agent_id,
         &principal_control_realm_id,
@@ -1359,7 +1365,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             next_root_public_key_multibase: &arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                 successor_signing_key.verifying_key().as_bytes(),
             ),
-            controller_id: &controller_id,
+            controller_principal_id: &controller_principal_id,
             principal_control_realm_id: &principal_control_realm_id,
             requested_scope_digest: &expected_scope_digest,
         },
@@ -1450,14 +1456,14 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
 
     assert_eq!(status, StatusCode::CREATED, "{body}");
     assert_eq!(body["status"], "complete");
-    let controller_id =
+    let controller_principal_id =
         arkret_wire::project_did_to_core_id(&arkret_wire::Did::new(controller.to_owned()).unwrap())
             .unwrap();
     assert_eq!(
         state
             .test_persistence()
             .agents()
-            .list_for_controller(controller_id.as_str())
+            .list_for_controller(controller_principal_id.as_str())
             .await
             .unwrap()
             .len(),
@@ -1469,7 +1475,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events_body() {
     let app = app_from_state(state.clone());
     let mut replay_response = TestClient::query("http://server/_arkret/self/events")
         .json(&serde_json::json!({"actor_ids": [arkret_wire::ActorId::account(
-            arkret_wire::AccountId::new(controller_id, state.service_core_id().clone()))], "limit": 100}))
+            arkret_wire::AccountId::new(controller_principal_id, state.service_core_id().clone()))], "limit": 100}))
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app)
         .await;
@@ -1681,14 +1687,14 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
             did_document.key_log_head.as_deref(),
             Some(did_history[1].event_digest.as_str())
         );
-        let controller_id = arkret_wire::project_did_to_core_id(
+        let controller_principal_id = arkret_wire::project_did_to_core_id(
             &arkret_wire::Did::new(controller.to_owned()).unwrap(),
         )
         .unwrap();
         assert_eq!(
             persistence
                 .agents()
-                .list_for_controller(controller_id.as_str())
+                .list_for_controller(controller_principal_id.as_str())
                 .await
                 .unwrap()
                 .len(),
@@ -1717,7 +1723,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
     seed_agent_provision_prerequisites(&state, controller).await;
 
     let controller_did = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
-    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+    let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let controller_realm_id = arkret_identifiers::RealmId::new(
         soland_test_support::fixture_principal_control_realm(controller),
     )
@@ -1731,7 +1737,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
         arkret_wire::ScopeRef::Realm {
             realm_id: controller_realm_id.clone(),
         },
-        controller_id.clone(),
+        controller_principal_id.clone(),
         soland_test_support::fixture_station_id(),
         1,
         hlc.clone(),

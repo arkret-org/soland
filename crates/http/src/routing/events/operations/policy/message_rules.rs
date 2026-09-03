@@ -310,7 +310,7 @@ pub(in crate::routing::events::operations) async fn validate_agent_control_realm
             .payload
             .get("object")
             .ok_or("agent_pcr_genesis_object_missing")?;
-        let controller_id = operation
+        let controller_actor_id = operation
             .context
             .executed_by
             .as_ref()
@@ -319,7 +319,7 @@ pub(in crate::routing::events::operations) async fn validate_agent_control_realm
             crate::routing::identity::agent_pcr::agent_controller_account(state, &record)
                 .await
                 .map_err(|_| "agent_principal_binding_unavailable")?;
-        if controller_id != &arkret_wire::ActorId::account(controller_account) {
+        if controller_actor_id != &arkret_wire::ActorId::account(controller_account) {
             return Err("agent_principal_binding_unavailable");
         }
         let initial_resolution =
@@ -328,7 +328,7 @@ pub(in crate::routing::events::operations) async fn validate_agent_control_realm
         crate::routing::identity::agent_pcr::validate_agent_pcr_genesis_object(
             object,
             agent_id,
-            controller_id.signing_principal_id().as_str(),
+            controller_actor_id.signing_principal_id().as_str(),
             expected,
             state.config().trust_domain.as_str(),
             &initial_resolution,

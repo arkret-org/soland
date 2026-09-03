@@ -147,7 +147,7 @@ struct DevicePairingCasRow {
 #[derive(diesel::QueryableByName)]
 struct ContactMirrorCommitRow {
     #[diesel(sql_type = Text)]
-    target_holder_id: String,
+    target_holder_principal_id: String,
 }
 
 #[derive(diesel::QueryableByName)]
@@ -447,11 +447,13 @@ async fn commit_consent_projection(
             .collect(),
     );
     let affected = sql_query(
-        "INSERT INTO consent_cells (id, cell_id, holder_id, peer, consent_scope, grant_dots, revoked_dots, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (holder_id, cell_id) DO UPDATE SET grant_dots = EXCLUDED.grant_dots, revoked_dots = EXCLUDED.revoked_dots, updated_at = EXCLUDED.updated_at WHERE consent_cells.peer = EXCLUDED.peer AND consent_cells.consent_scope = EXCLUDED.consent_scope",
+        "INSERT INTO consent_cells (id, cell_id, holder_account_id, peer, consent_scope, grant_dots, revoked_dots, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) ON CONFLICT (holder_account_id, cell_id) DO UPDATE SET grant_dots = EXCLUDED.grant_dots, revoked_dots = EXCLUDED.revoked_dots, updated_at = EXCLUDED.updated_at WHERE consent_cells.peer = EXCLUDED.peer AND consent_cells.consent_scope = EXCLUDED.consent_scope",
     )
     .bind::<Uuid, _>(uuid::Uuid::now_v7())
     .bind::<Text, _>(&cell.cell_id)
-    .bind::<Text, _>(&cell.holder_id)
+    .bind::<Jsonb, _>(serde_json::to_value(&cell.holder_account_id).map_err(|error| {
+        PersistenceError::SchemaViolation(format!("consent holder account is not serializable: {error}"))
+    })?)
     .bind::<Jsonb, _>(serde_json::to_value(&cell.peer).map_err(|error| {
         PersistenceError::SchemaViolation(format!("consent peer is not serializable: {error}"))
     })?)
@@ -646,17 +648,17 @@ async fn commit_contact_projection(
         })?;
         let committed = sql_query(
             "INSERT INTO contact_verified_mirrors \
-             (target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at) \
+             (target_holder_principal_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (target_holder_id, request_event_id) DO UPDATE \
+             ON CONFLICT (target_holder_principal_id, request_event_id) DO UPDATE \
              SET verified_at = contact_verified_mirrors.verified_at \
              WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
                AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
                AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
                AND contact_verified_mirrors.issuer_id = EXCLUDED.issuer_id \
-             RETURNING target_holder_id",
+             RETURNING target_holder_principal_id",
         )
-        .bind::<Text, _>(&mirror.target_holder_id)
+        .bind::<Text, _>(&mirror.target_holder_principal_id)
         .bind::<Text, _>(&mirror.request_event_id)
         .bind::<Text, _>(&mirror.request_digest)
         .bind::<Binary, _>(&mirror.canonical_event_bytes)
@@ -669,7 +671,7 @@ async fn commit_contact_projection(
         .map_err(PersistenceError::database)?;
         if committed
             .as_ref()
-            .is_none_or(|row| row.target_holder_id != mirror.target_holder_id)
+            .is_none_or(|row| row.target_holder_principal_id != mirror.target_holder_principal_id)
         {
             return Err(PersistenceError::Conflict(
                 "contact_verified_mirror_conflict".to_owned(),

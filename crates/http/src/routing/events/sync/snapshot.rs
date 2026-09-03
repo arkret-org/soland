@@ -1736,8 +1736,9 @@ pub(crate) async fn projection_record_visible_to_session(
     if let Some(sidecar_id) = sidecar_id {
         return session.is_some_and(|session| {
             projection.sidecars.get(&sidecar_id).is_some_and(|sidecar| {
-                session_actor(state, session)
-                    .is_some_and(|actor| sidecar.controller_id == actor.to_string())
+                session_actor(state, session).is_some_and(|actor| {
+                    actor.as_account_id() == Some(&sidecar.controller_account_id)
+                })
             })
         });
     }

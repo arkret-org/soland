@@ -36,14 +36,14 @@ fn agent_provision_request_hash(body: &AgentProvisionRequestBody) -> Result<Stri
 }
 
 fn allocation_binding(
-    controller_id: &str,
+    controller_principal_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
     idempotency_key: &arkret_wire::IdempotencyKey,
     nonce: &str,
 ) -> Result<Vec<u8>, AppError> {
     arkret_canonical::canonical::canonical_json_bytes(&json!({
         "domain": AGENT_PROVISION_ALLOCATION_DOMAIN,
-        "controller_id": controller_id,
+        "controller_principal_id": controller_principal_id,
         "operation_id": operation_id,
         "idempotency_key": idempotency_key,
         "nonce": nonce,
@@ -53,14 +53,19 @@ fn allocation_binding(
 
 fn issue_allocation_handle(
     state: &AppState,
-    controller_id: &str,
+    controller_principal_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
     idempotency_key: &arkret_wire::IdempotencyKey,
 ) -> Result<arkret_wire::ProtocolOpaqueId, AppError> {
     use ed25519_dalek::Signer as _;
 
     let nonce = uuid::Uuid::now_v7().simple().to_string();
-    let binding = allocation_binding(controller_id, operation_id, idempotency_key, &nonce)?;
+    let binding = allocation_binding(
+        controller_principal_id,
+        operation_id,
+        idempotency_key,
+        &nonce,
+    )?;
     let signing_key = state.notary_signing_key();
     let signature = signing_key.sign(&binding);
     arkret_wire::ProtocolOpaqueId::new(format!(
@@ -72,7 +77,7 @@ fn issue_allocation_handle(
 }
 
 fn verify_allocation_handle(
-    controller_id: &str,
+    controller_principal_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
     idempotency_key: &arkret_wire::IdempotencyKey,
     handle: &arkret_wire::ProtocolOpaqueId,
@@ -129,7 +134,12 @@ fn verify_allocation_handle(
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })?;
-    let binding = allocation_binding(controller_id, operation_id, idempotency_key, nonce)?;
+    let binding = allocation_binding(
+        controller_principal_id,
+        operation_id,
+        idempotency_key,
+        nonce,
+    )?;
     verifying_key.verify(&binding, &signature).map_err(|_| {
         AppError::new(
             ErrorCode::FailedPrecondition,
@@ -142,16 +152,16 @@ fn verify_allocation_handle(
 
 async fn lookup_provision_allocation(
     state: &AppState,
-    controller_id: &str,
+    controller_principal_id: &str,
     key: &str,
 ) -> Result<Option<soland_services::jobs::IdempotencyState>, AppError> {
-    let controller_id = DidCoreId::new(controller_id.to_owned())
+    let controller_principal_id = DidCoreId::new(controller_principal_id.to_owned())
         .map_err(|error| AppError::internal(format!("controller principal id invalid: {error}")))?;
     state
         .jobs()
         .scoped_idempotency_record(
             &arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-                controller_id,
+                controller_principal_id,
                 state.service_core_id(),
             )),
             "ak.self.agent.command.provision",
@@ -196,7 +206,7 @@ pub(super) async fn provision_agent(
 ) -> JsonResult<AgentProvisionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let controller_id = session.actor.clone();
+    let controller_principal_id = session.actor.clone();
     let body = body.into_inner();
     let requested_scope = match &body {
         AgentProvisionRequestBody::Prepare {
@@ -224,7 +234,9 @@ pub(super) async fn provision_agent(
             pairing_ttl_ms,
         } => {
             let key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
-            if let Some(record) = lookup_provision_allocation(state, &controller_id, &key).await? {
+            if let Some(record) =
+                lookup_provision_allocation(state, &controller_principal_id, &key).await?
+            {
                 if record.expires_at <= now_utc {
                     state
                         .jobs()
@@ -259,11 +271,12 @@ pub(super) async fn provision_agent(
             }
             validate_agent_slug(&slug)
                 .map_err(|error| AppError::param_invalid(format!("slug is invalid: {error}")))?;
-            let controller_id = DidCoreId::new(controller_id.clone()).map_err(|error| {
-                AppError::internal(format!("authenticated controller id is invalid: {error}"))
-            })?;
+            let controller_principal_id =
+                DidCoreId::new(controller_principal_id.clone()).map_err(|error| {
+                    AppError::internal(format!("authenticated controller id is invalid: {error}"))
+                })?;
             let controller_authority =
-                arkret_wire::AccountId::new(controller_id.clone(), controller_station_id);
+                arkret_wire::AccountId::new(controller_principal_id.clone(), controller_station_id);
             let active_recovery_policy = state
                 .recovery_policies()
                 .active_policy(&controller_authority)
@@ -284,7 +297,7 @@ pub(super) async fn provision_agent(
                     .await?;
             let mut existing = state
                 .agent_pairings()
-                .agents_for_controller(controller_id.as_str())
+                .agents_for_controller(controller_principal_id.as_str())
                 .await
                 .map_err(|error| {
                     AppError::internal(format!("agent slug conflict check failed: {error}"))
@@ -308,12 +321,12 @@ pub(super) async fn provision_agent(
                 crate::routing::identity::agent_pcr::accepted_agent_initial_resolution(
                     state,
                     &did,
-                    &controller_id,
+                    &controller_principal_id,
                 )
                 .await?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
                 &agent_id,
-                &controller_id,
+                &controller_principal_id,
                 &requested_scope,
             )
             .map_err(|error| {
@@ -323,7 +336,7 @@ pub(super) async fn provision_agent(
                 crate::routing::identity::agent_pcr::controller_authorization_ref(&did)?;
             let allocation_handle = issue_allocation_handle(
                 state,
-                controller_id.as_str(),
+                controller_principal_id.as_str(),
                 &operation_id,
                 &idempotency_key,
             )?;
@@ -349,7 +362,10 @@ pub(super) async fn provision_agent(
                 .jobs()
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
                     authenticated_actor: arkret_wire::ActorId::account(
-                        arkret_wire::AccountId::new(controller_id.clone(), state.service_core_id()),
+                        arkret_wire::AccountId::new(
+                            controller_principal_id.clone(),
+                            state.service_core_id(),
+                        ),
                     ),
                     operation_id: "ak.self.agent.command.provision".to_owned(),
                     idempotency_key: key.clone(),
@@ -371,7 +387,7 @@ pub(super) async fn provision_agent(
                     ))
                 })?;
 
-            let landed = lookup_provision_allocation(state, controller_id.as_str(), &key)
+            let landed = lookup_provision_allocation(state, controller_principal_id.as_str(), &key)
                 .await?
                 .ok_or_else(|| {
                     AppError::internal("Agent provision allocation disappeared after persist")
@@ -402,10 +418,11 @@ pub(super) async fn provision_agent(
             pairing_ttl_ms,
         } => {
             let prepare_key = agent_provision_phase_key("prepare", &operation_id, &idempotency_key);
-            let allocation = lookup_provision_allocation(state, &controller_id, &prepare_key)
-                .await?
-                .filter(|record| record.expires_at > now_utc)
-                .ok_or_else(allocation_missing)?;
+            let allocation =
+                lookup_provision_allocation(state, &controller_principal_id, &prepare_key)
+                    .await?
+                    .filter(|record| record.expires_at > now_utc)
+                    .ok_or_else(allocation_missing)?;
             let prepared: PreparedAgentProvision =
                 serde_json::from_value(allocation.response_body.clone()).map_err(|error| {
                     AppError::internal(format!(
@@ -446,7 +463,7 @@ pub(super) async fn provision_agent(
                 return Err(allocation_mismatch());
             }
             verify_allocation_handle(
-                &controller_id,
+                &controller_principal_id,
                 &operation_id,
                 &idempotency_key,
                 &allocation_handle,
@@ -471,7 +488,7 @@ pub(super) async fn provision_agent(
                 != arkret_wire::ActorId::account(prepared.controller_authority.clone())
                 || provision_event.event.realm_id != controller_realm_id
                 || provision_payload.agent_id != agent_id
-                || &provision_payload.controller_id != controller_core_id
+                || &provision_payload.controller_principal_id != controller_core_id
                 || provision_payload.principal_control_realm_id != principal_control_realm_id
                 || provision_payload.controller_authorization_ref != controller_authorization_ref
                 || provision_payload.agent_slug != slug
@@ -489,7 +506,7 @@ pub(super) async fn provision_agent(
             let provision_event_id = provision_event.event.event_id.to_string();
             let commit_key = agent_provision_phase_key("commit", &operation_id, &idempotency_key);
             if let Some(record) =
-                lookup_provision_allocation(state, &controller_id, &commit_key).await?
+                lookup_provision_allocation(state, &controller_principal_id, &commit_key).await?
             {
                 if record.request_hash != request_hash {
                     return Err(AppError::conflict(
@@ -506,7 +523,7 @@ pub(super) async fn provision_agent(
             }
             let mut existing = state
                 .agent_pairings()
-                .agents_for_controller(&controller_id)
+                .agents_for_controller(&controller_principal_id)
                 .await
                 .map_err(|error| AppError::internal(format!("agent lookup failed: {error}")))?;
             for record in &mut existing {
@@ -517,7 +534,7 @@ pub(super) async fn provision_agent(
                 .find(|record| record.id == agent_id.as_str())
                 .cloned();
             if let Some(record) = existing_record.as_ref() {
-                let replay_matches = record.controller_id == controller_id
+                let replay_matches = record.controller_principal_id == controller_principal_id
                     && record.principal_control_realm_id == principal_control_realm_id.as_str()
                     && record.agent_slug.as_deref() == Some(slug.as_str())
                     && record.requested_scope.as_ref() == Some(&requested_scope_value)
@@ -569,7 +586,7 @@ pub(super) async fn provision_agent(
 
                 let mut principal = AgentPrincipalRecord::new(
                     agent_id.to_string(),
-                    controller_id.clone(),
+                    controller_principal_id.clone(),
                     principal_control_realm_id.as_str().to_owned(),
                     controller_authorization_ref.clone(),
                     AgentLifecycleState::Active,
@@ -623,7 +640,7 @@ pub(super) async fn provision_agent(
             if !crate::routing::identity::agent_pcr::agent_binding_is_accepted(
                 state,
                 &initial_resolution,
-                controller_id.as_str(),
+                controller_principal_id.as_str(),
                 &principal_control_realm_id,
                 &controller_authorization_ref,
                 &requested_scope_digest,
@@ -723,7 +740,7 @@ pub(super) async fn provision_agent(
                 .store_idempotency_record(soland_services::jobs::IdempotencyState {
                     authenticated_actor: arkret_wire::ActorId::account(
                         arkret_wire::AccountId::new(
-                            DidCoreId::new(controller_id.clone()).map_err(|error| {
+                            DidCoreId::new(controller_principal_id.clone()).map_err(|error| {
                                 AppError::internal(format!(
                                     "controller principal id invalid: {error}"
                                 ))
@@ -753,7 +770,7 @@ pub(super) async fn provision_agent(
                 arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_PROVISION_V1,
                 json!({
                     "agent_id": agent_id,
-                    "controller_id": controller_id,
+                    "controller_principal_id": controller_principal_id,
                     "slug": slug,
                     "pairing_request_id": pairing_request_id,
                     "principal_control_realm_id": principal_control_realm_id,
@@ -906,7 +923,7 @@ pub(super) async fn renew_agent_pairing(
         arkret_wire::ServiceOperationId::SELF_AGENT_COMMAND_RENEW_PAIRING_V1,
         json!({
             "agent_id": agent_id,
-            "controller_id": session.actor,
+            "controller_principal_id": session.actor,
             "slug": agent_slug,
             "pairing_request_id": pairing_request_id,
             "mode": if bootstrap_reopen { "bootstrap_reopen" } else { "runtime_replacement" },
@@ -1014,7 +1031,7 @@ pub(super) async fn get_agent(
     }
     // Controller-self only: hide others' agents behind 404 to avoid enumeration.
     if let Some(session) = session.as_ref()
-        && record.controller_id != session.actor
+        && record.controller_principal_id != session.actor
     {
         return Err(AppError::not_found("agent not found"));
     }

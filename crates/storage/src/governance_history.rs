@@ -868,13 +868,13 @@ pub trait HistoryTraversalRetentionStore: Send + Sync {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PendingRrkAcquisitionState {
+pub enum PendingRhrkAcquisitionState {
     Pending,
     Ready,
     Accepted,
 }
 
-impl PendingRrkAcquisitionState {
+impl PendingRhrkAcquisitionState {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -885,37 +885,37 @@ impl PendingRrkAcquisitionState {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PendingRrkAcquisitionInput {
+pub struct PendingRhrkAcquisitionInput {
     pub acquisition_digest: Hash,
     pub archive_replica_digest: Hash,
     pub archive_replica: OrganizationRecoveryArchiveReplica,
     pub next_attempt_at: DateTime<Utc>,
 }
 
-pub fn rrk_archive_authorization_tuple(
+pub fn rhrk_archive_authorization_tuple(
     replica: &OrganizationRecoveryArchiveReplica,
 ) -> ArchiveAuthorizationTuple {
     let archive = &replica.archive;
     ArchiveAuthorizationTuple {
         recovery_key_id: archive.recovery_key_id.clone(),
         key_agreement_ref: archive.key_agreement_ref.clone(),
-        controller_id: archive.controller_id.clone(),
-        holder_id: archive.holder_id.clone(),
+        method_controller_principal_id: archive.method_controller_principal_id.clone(),
+        holder_service_id: archive.holder_service_id.clone(),
         holder_signing_ref: archive.holder_signing_ref.clone(),
         accepted_key_evidence_ref: archive.accepted_key_evidence_ref.clone(),
         holder_trusted_basis: archive.holder_trusted_basis.clone(),
     }
 }
 
-pub fn rrk_archive_authorization_tuple_digest(
+pub fn rhrk_archive_authorization_tuple_digest(
     replica: &OrganizationRecoveryArchiveReplica,
 ) -> PersistenceResult<Hash> {
-    rrk_archive_authorization_tuple(replica)
+    rhrk_archive_authorization_tuple(replica)
         .archive_authorization_tuple_digest()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
 }
 
-pub fn rrk_archive_replica_digest(
+pub fn rhrk_archive_replica_digest(
     replica: &OrganizationRecoveryArchiveReplica,
 ) -> PersistenceResult<Hash> {
     replica
@@ -923,7 +923,7 @@ pub fn rrk_archive_replica_digest(
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))
 }
 
-pub fn rrk_semantically_same(
+pub fn rhrk_semantically_same(
     left: &OrganizationRecoveryArchiveReplica,
     right: &OrganizationRecoveryArchiveReplica,
 ) -> PersistenceResult<bool> {
@@ -932,22 +932,22 @@ pub fn rrk_semantically_same(
             && left.archive.mls_group_id == right.archive.mls_group_id
             && left.archive.epoch == right.archive.epoch
             && left.container_event_ref == right.container_event_ref
-            && rrk_archive_authorization_tuple_digest(left)?
-                == rrk_archive_authorization_tuple_digest(right)?,
+            && rhrk_archive_authorization_tuple_digest(left)?
+                == rhrk_archive_authorization_tuple_digest(right)?,
     )
 }
 
-impl PendingRrkAcquisitionInput {
+impl PendingRhrkAcquisitionInput {
     pub fn validate(&self) -> PersistenceResult<()> {
         self.archive_replica
             .validate()
             .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
-        let expected_digest = rrk_archive_replica_digest(&self.archive_replica)?;
+        let expected_digest = rhrk_archive_replica_digest(&self.archive_replica)?;
         if self.archive_replica_digest != expected_digest
             || self.acquisition_digest != self.archive_replica_digest
         {
             return Err(PersistenceError::SchemaViolation(
-                "pending RRK identity does not match the canonical archive replica digest"
+                "pending RHRK identity does not match the canonical archive replica digest"
                     .to_owned(),
             ));
         }
@@ -955,27 +955,27 @@ impl PendingRrkAcquisitionInput {
     }
 }
 
-pub fn validate_rrk_acceptance(
-    input: &PendingRrkAcquisitionInput,
+pub fn validate_rhrk_acceptance(
+    input: &PendingRhrkAcquisitionInput,
     outcome: &OrganizationRecoveryArchiveReplicaOutcome,
 ) -> PersistenceResult<()> {
     outcome
         .validate()
         .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
     if outcome.archive_replica_digest != input.archive_replica_digest
-        || outcome.holder_id != input.archive_replica.holder_id
+        || outcome.holder_service_id != input.archive_replica.holder_service_id
     {
         return Err(PersistenceError::SchemaViolation(
-            "RRK acceptance outcome does not bind its pending archive replica".to_owned(),
+            "RHRK acceptance outcome does not bind its pending archive replica".to_owned(),
         ));
     }
     Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub struct PendingRrkAcquisitionRecord {
-    pub input: PendingRrkAcquisitionInput,
-    pub state: PendingRrkAcquisitionState,
+pub struct PendingRhrkAcquisitionRecord {
+    pub input: PendingRhrkAcquisitionInput,
+    pub state: PendingRhrkAcquisitionState,
     pub attempt_count: u64,
     pub claim_token: Option<String>,
     pub claim_until: Option<DateTime<Utc>>,
@@ -988,35 +988,35 @@ pub struct PendingRrkAcquisitionRecord {
 }
 
 #[async_trait]
-pub trait PendingRrkAcquisitionStore: Send + Sync {
+pub trait PendingRhrkAcquisitionStore: Send + Sync {
     async fn enqueue_exact(
         &self,
-        input: PendingRrkAcquisitionInput,
+        input: PendingRhrkAcquisitionInput,
         now: DateTime<Utc>,
     ) -> PersistenceResult<ExactWriteOutcome>;
 
     async fn get(
         &self,
         acquisition_digest: &Hash,
-    ) -> PersistenceResult<Option<PendingRrkAcquisitionRecord>>;
+    ) -> PersistenceResult<Option<PendingRhrkAcquisitionRecord>>;
 
     async fn list_accepted_for_authority(
         &self,
         effective_scope: &HistoryEffectiveScope,
-        controller_id: &arkret_wire::DidCoreId,
-        holder_id: &arkret_wire::DidCoreId,
+        method_controller_principal_id: &arkret_wire::DidCoreId,
+        holder_service_id: &arkret_wire::DidCoreId,
         from_epoch: u64,
         to_epoch: u64,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>>;
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>>;
 
     async fn list_accepted_for_archive_query(
         &self,
         query: &OrganizationRecoveryArchiveListQuery,
-        controller_id: &arkret_wire::DidCoreId,
+        method_controller_principal_id: &arkret_wire::DidCoreId,
         after_archive_sequence: Option<u64>,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>>;
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>>;
 
     async fn claim_due(
         &self,
@@ -1024,7 +1024,7 @@ pub trait PendingRrkAcquisitionStore: Send + Sync {
         claim_token: &str,
         claim_until: DateTime<Utc>,
         limit: usize,
-    ) -> PersistenceResult<Vec<PendingRrkAcquisitionRecord>>;
+    ) -> PersistenceResult<Vec<PendingRhrkAcquisitionRecord>>;
 
     async fn record_retry(
         &self,

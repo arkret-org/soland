@@ -370,12 +370,14 @@ async fn validate_sidecar_mention_subjects(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let sidecar_id = operation.payload.get("sidecar_id").and_then(Value::as_str);
-    let Some((controller_id, realm_id)) = sidecar_id.and_then(|sidecar_id| {
+    let Some((controller_account_id, realm_id)) = sidecar_id.and_then(|sidecar_id| {
         let projection = state.projections().snapshot();
-        projection
-            .sidecars
-            .get(sidecar_id)
-            .map(|sidecar| (sidecar.controller_id.clone(), sidecar.realm_id.clone()))
+        projection.sidecars.get(sidecar_id).map(|sidecar| {
+            (
+                sidecar.controller_account_id.clone(),
+                sidecar.realm_id.clone(),
+            )
+        })
     }) else {
         return Ok(());
     };
@@ -386,8 +388,7 @@ async fn validate_sidecar_mention_subjects(
     if subjects.is_empty() {
         return Ok(());
     }
-    let controller = serde_json::from_str::<arkret_wire::ActorId>(&controller_id)
-        .map_err(|_| "addressed_agent_not_eligible")?;
+    let controller = arkret_wire::ActorId::account(controller_account_id);
     let controller_account = controller
         .as_account_id()
         .ok_or("addressed_agent_not_eligible")?;

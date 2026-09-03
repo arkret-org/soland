@@ -779,13 +779,14 @@ pub fn verify_principal_authorized_event_proof_async<'a>(
                 .await
                 .map_err(|error| fail(format!("Agent authority lookup failed: {error}")))?
                 .ok_or_else(|| fail("delegated Event actor is not a local Agent".to_owned()))?;
-            let agent_controller_id = arkret_wire::DidCoreId::new(agent.controller_id.clone())
-                .or_else(|_| {
-                    arkret_wire::Did::new(agent.controller_id.clone())
-                        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-                })
-                .map_err(|error| fail(format!("Agent controller is invalid: {error}")))?;
-            if agent_controller_id != expected_principal_id {
+            let agent_controller_principal_id =
+                arkret_wire::DidCoreId::new(agent.controller_principal_id.clone())
+                    .or_else(|_| {
+                        arkret_wire::Did::new(agent.controller_principal_id.clone())
+                            .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+                    })
+                    .map_err(|error| fail(format!("Agent controller is invalid: {error}")))?;
+            if agent_controller_principal_id != expected_principal_id {
                 return Err(fail(
                     "delegated Event signer is not the Agent controller".to_owned(),
                 ));
@@ -1142,19 +1143,20 @@ pub async fn resolve_ed25519_verification_key_for_did(
 }
 
 pub fn validate_verification_method_controller(
-    controller_id: &str,
+    controller_principal_id: &str,
     verification_method: &str,
 ) -> Result<(), String> {
     let method_controller = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| format!("verification method is not a DID URL: {error}"))?;
-    let controller_matches =
-        if let Ok(controller_core) = arkret_wire::DidCoreId::new(controller_id.to_owned()) {
-            arkret_wire::project_did_to_core_id(&method_controller)
-                .is_ok_and(|method_core| method_core == controller_core)
-        } else {
-            Did::new(controller_id.to_owned())
-                .is_ok_and(|controller_did| method_controller == controller_did)
-        };
+    let controller_matches = if let Ok(controller_core) =
+        arkret_wire::DidCoreId::new(controller_principal_id.to_owned())
+    {
+        arkret_wire::project_did_to_core_id(&method_controller)
+            .is_ok_and(|method_core| method_core == controller_core)
+    } else {
+        Did::new(controller_principal_id.to_owned())
+            .is_ok_and(|controller_did| method_controller == controller_did)
+    };
     if !controller_matches {
         return Err("verification method controller does not match DID".to_owned());
     }

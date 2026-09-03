@@ -300,10 +300,11 @@ async fn run() -> anyhow::Result<()> {
         enabled = state.config().federation_outbound_enabled,
         "background worker configured"
     );
-    let _rrk_acquisition = soland_http::routing::federation::rrk_acquisition::spawn(state.clone());
+    let _rhrk_acquisition =
+        soland_http::routing::federation::rhrk_acquisition::spawn(state.clone());
     tracing::info!(
-        worker = "rrk_acquisition",
-        enabled = _rrk_acquisition.is_some(),
+        worker = "rhrk_acquisition",
+        enabled = _rhrk_acquisition.is_some(),
         "background worker configured"
     );
 

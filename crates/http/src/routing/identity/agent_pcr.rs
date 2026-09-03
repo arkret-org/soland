@@ -14,10 +14,10 @@ use soland_services::identity::{
 
 use crate::state::AppState;
 
-fn managed_controller_core_id(controller_id: &str) -> Result<DidCoreId, AppError> {
-    DidCoreId::new(controller_id.to_owned())
+fn managed_controller_core_id(controller_principal_id: &str) -> Result<DidCoreId, AppError> {
+    DidCoreId::new(controller_principal_id.to_owned())
         .or_else(|_| {
-            Did::new(controller_id.to_owned())
+            Did::new(controller_principal_id.to_owned())
                 .and_then(|did| arkret_wire::project_did_to_core_id(&did))
         })
         .map_err(|error| schema_error(format!("Agent controller DID is invalid: {error}")))
@@ -40,7 +40,7 @@ pub(crate) fn controller_authorization_ref(agent_did: &Did) -> Result<DidUrl, Ap
 pub(crate) async fn accepted_agent_initial_resolution(
     state: &AppState,
     agent_did: &Did,
-    controller_id: &arkret_identifiers::DidCoreId,
+    controller_principal_id: &arkret_identifiers::DidCoreId,
 ) -> Result<arkret_models_identity::ResolutionCommitment, AppError> {
     let pinned = state
         .dids()
@@ -58,7 +58,12 @@ pub(crate) async fn accepted_agent_initial_resolution(
             "agent_inception_not_current",
         ));
     }
-    validate_agent_inception_document(&pinned.document, agent_did, controller_id.as_str(), false)?;
+    validate_agent_inception_document(
+        &pinned.document,
+        agent_did,
+        controller_principal_id.as_str(),
+        false,
+    )?;
     Ok(arkret_models_identity::ResolutionCommitment {
         did: agent_did.clone(),
         method_history_head: pinned.log_head_digest.to_string(),
@@ -69,7 +74,7 @@ pub(crate) async fn accepted_agent_initial_resolution(
 fn validate_agent_inception_document(
     document: &Value,
     agent_did: &Did,
-    controller_id: &str,
+    controller_principal_id: &str,
     allow_pcr_binding: bool,
 ) -> Result<(), AppError> {
     arkret_signatures::webvh::validate_agent_did_document_profile(
@@ -94,7 +99,7 @@ fn validate_agent_inception_document(
         || controller
             .pointer("/serviceEndpoint/controller_did")
             .and_then(Value::as_str)
-            != Some(controller_id)
+            != Some(controller_principal_id)
     {
         return Err(schema_error(
             "Agent inception must contain one matching controller delegation",
@@ -107,12 +112,12 @@ fn validate_agent_inception_document(
 pub(crate) async fn agent_binding_is_accepted(
     state: &AppState,
     initial_resolution: &arkret_models_identity::ResolutionCommitment,
-    controller_id: &str,
+    controller_principal_id: &str,
     principal_control_realm_id: &RealmId,
     authorization_ref: &DidUrl,
     requested_scope_digest: &Hash,
 ) -> Result<bool, AppError> {
-    let controller_core_id = managed_controller_core_id(controller_id)?;
+    let controller_core_id = managed_controller_core_id(controller_principal_id)?;
     let initial_head =
         arkret_identifiers::Hash::new(initial_resolution.method_history_head.clone())
             .map_err(|error| schema_error(format!("Agent inception head is invalid: {error}")))?;
@@ -209,10 +214,10 @@ pub(crate) async fn agent_binding_is_accepted(
 /// its accepted signing device, and the current device generation.
 pub(crate) async fn active_series_pointer_is_current(
     state: &AppState,
-    controller_id: &str,
+    controller_principal_id: &str,
     pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    let controller_core = managed_controller_core_id(controller_id)?;
+    let controller_core = managed_controller_core_id(controller_principal_id)?;
     let Some(authority) = pointer.actor_id.as_account_id() else {
         return Ok(false);
     };
@@ -354,7 +359,8 @@ pub(crate) async fn agent_controller_account(
             "agent_controller_binding_missing",
         )
     })?;
-    if account.account_id.principal_id != managed_controller_core_id(&record.controller_id)?
+    if account.account_id.principal_id
+        != managed_controller_core_id(&record.controller_principal_id)?
         || record
             .controller_account_pk
             .is_some_and(|pk| pk != account.pk)
@@ -407,11 +413,11 @@ pub(crate) async fn agent_record_for_actor(
 
 pub(crate) async fn controller_manages_agent_pcr(
     state: &AppState,
-    controller_id: &str,
+    controller_principal_id: &str,
     pcr_id: &str,
 ) -> Result<bool, AppError> {
     Ok(
-        agent_record_for_controller_pcr(state, controller_id, pcr_id)
+        agent_record_for_controller_pcr(state, controller_principal_id, pcr_id)
             .await?
             .is_some(),
     )
@@ -419,12 +425,12 @@ pub(crate) async fn controller_manages_agent_pcr(
 
 pub(crate) async fn agent_record_for_controller_pcr(
     state: &AppState,
-    controller_id: &str,
+    controller_principal_id: &str,
     pcr_id: &str,
 ) -> Result<Option<AgentPrincipalRecord>, AppError> {
     let agents = state
         .agent_pairings()
-        .agents_for_controller(controller_id)
+        .agents_for_controller(controller_principal_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?;
     Ok(agents.into_iter().find(|record| {
@@ -623,7 +629,7 @@ async fn validate_active_agent_accountability(
 pub(crate) async fn validate_delegated_agent_envelope(
     state: &AppState,
     envelope: &serde_json::Map<String, Value>,
-    controller_id: &str,
+    controller_principal_id: &str,
 ) -> Result<(), AppError> {
     if agent_envelope_uses_root_anchor(envelope) {
         return Err(failed_precondition(
@@ -639,8 +645,8 @@ pub(crate) async fn validate_delegated_agent_envelope(
         .map_err(|error| schema_error(format!("delegated Agent Event is invalid: {error}")))?;
     let agent_id = event.actor_id.signing_principal_id().as_str();
     let record = agent_record(state, agent_id).await?;
-    let controller_core_id = managed_controller_core_id(controller_id)?;
-    if managed_controller_core_id(&record.controller_id)? != controller_core_id
+    let controller_core_id = managed_controller_core_id(controller_principal_id)?;
+    if managed_controller_core_id(&record.controller_principal_id)? != controller_core_id
         || event
             .executed_by
             .as_ref()
@@ -682,7 +688,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
         validate_agent_pcr_genesis_object(
             object,
             agent_id,
-            controller_id,
+            controller_principal_id,
             record.principal_control_realm_id.as_str(),
             state.config().trust_domain.as_str(),
             &agent_initial_resolution_for_record(&record)?,
@@ -763,7 +769,7 @@ fn validate_agent_pcr_genesis_effect(
 pub(crate) fn validate_agent_pcr_genesis_object(
     object: &Value,
     agent_id: &str,
-    controller_id: &str,
+    controller_principal_id: &str,
     expected_realm_id: &str,
     trust_domain: &str,
     expected_initial_resolution: &arkret_models_identity::ResolutionCommitment,
@@ -803,7 +809,7 @@ pub(crate) fn validate_agent_pcr_genesis_object(
             agent_id,
             notary,
             initial_resolution: expected_initial_resolution.clone(),
-            controller_id: managed_controller_core_id(controller_id)?,
+            controller_principal_id: managed_controller_core_id(controller_principal_id)?,
             genesis_salt: arkret_wire::GenesisSalt::new(genesis_salt.to_owned()).map_err(
                 |error| schema_error(format!("Agent PCR genesis_salt is invalid: {error}")),
             )?,
@@ -914,8 +920,8 @@ pub(crate) fn requested_scope_digest_for_record(
     .map_err(|error| schema_error(format!("Agent requested_scope is invalid: {error}")))?;
     let agent_id = arkret_identifiers::DidCoreId::new(record.id.clone())
         .map_err(|error| schema_error(format!("Agent DID is invalid: {error}")))?;
-    let controller_id = managed_controller_core_id(&record.controller_id)?;
-    agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+    let controller_principal_id = managed_controller_core_id(&record.controller_principal_id)?;
+    agent_requested_scope_digest(&agent_id, &controller_principal_id, &requested_scope)
         .map_err(|error| schema_error(format!("Agent ceiling digest failed: {error}")))
 }
 
@@ -1135,7 +1141,7 @@ mod tests {
                     method_history_head: format!("sha256:{}", "8".repeat(64)),
                     version_id: "1-Qmfixture".to_owned(),
                 },
-                controller_id: arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
+                controller_principal_id: arkret_identifiers::DidCoreId::new(CONTROLLER).unwrap(),
                 genesis_salt: arkret_wire::GenesisSalt::new(
                     "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                 )

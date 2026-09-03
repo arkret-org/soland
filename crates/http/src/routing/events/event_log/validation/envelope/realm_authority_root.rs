@@ -63,7 +63,7 @@ pub(super) fn validate_realm_authority_root_authorization(
         accepted_seal_root(state, object, realm_id)?
     };
 
-    if root.controller_id != subject {
+    if root.controller_actor_id != subject {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "realm_authority_controller_mismatch",

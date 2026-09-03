@@ -516,7 +516,7 @@ async fn peer_contacts_submit(
         state
             .persistence()
             .put_contact_verified_mirror(&soland_storage::ContactVerifiedMirrorRecord {
-                target_holder_id: subject_id.clone(),
+                target_holder_principal_id: subject_id.clone(),
                 request_event_id: signed_event.event_id.to_string(),
                 request_digest,
                 canonical_event_bytes,

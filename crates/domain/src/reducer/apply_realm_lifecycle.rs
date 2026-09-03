@@ -215,7 +215,7 @@ impl ProjectionState {
                 reason: "realm_authority_root_missing".to_owned(),
             };
         };
-        if operation.context.sender != root.controller_id {
+        if operation.context.sender != root.controller_actor_id {
             return ProjectionEffect::Rejected {
                 reason: "realm_authority_controller_mismatch".to_owned(),
             };
@@ -263,7 +263,7 @@ impl ProjectionState {
                     };
                 };
                 if self
-                    .member(&realm_id, &payload.patch.controller_id.to_string())
+                    .member(&realm_id, &payload.patch.controller_actor_id.to_string())
                     .is_none_or(|member| member.state != "join")
                     || serde_json::to_value(&payload.successor_acceptance)
                         .ok()
@@ -277,7 +277,7 @@ impl ProjectionState {
                         reason: "realm_authority_controller_mismatch".to_owned(),
                     };
                 }
-                root.controller_id = payload.patch.controller_id;
+                root.controller_actor_id = payload.patch.controller_actor_id;
                 root.controller_epoch = successor_epoch;
             }
             arkret_wire::EventKind::RealmAuthorityReset => {
@@ -1067,7 +1067,7 @@ impl ProjectionState {
         let creator = if kind == arkret_wire::EventKind::RealmCreate {
             registered_authority_root_write(self.projected_cell_writes()).and_then(|value| {
                 value
-                    .get("controller_id")
+                    .get("controller_actor_id")
                     .cloned()
                     .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
             })

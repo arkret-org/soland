@@ -817,7 +817,7 @@ impl ProjectionState {
     ) -> bool {
         if self
             .realm_authority_root(realm_id)
-            .is_some_and(|root| &root.controller_id == actor)
+            .is_some_and(|root| &root.controller_actor_id == actor)
         {
             return true;
         }
@@ -1071,7 +1071,7 @@ impl ProjectionState {
                     root_realm_id == realm_id
                         && cell_ref == arkret_wire::REALM_AUTHORITY_ROOT_CELL
                         && self.realm_authority_root(realm_id).is_some_and(|root| {
-                            root.controller_id == issuer
+                            root.controller_actor_id == issuer
                                 && root.controller_epoch == *controller_epoch_at_issuance
                                 && root.authority_generation == *authority_generation
                         })
@@ -1440,7 +1440,7 @@ impl ProjectionState {
         let actor_is_target_issuer = operation.context.sender == target.issuer_id;
         let actor_is_target_realm_controller = self
             .realm_authority_root(&target.realm_id)
-            .is_some_and(|root| root.controller_id == operation.context.sender);
+            .is_some_and(|root| root.controller_actor_id == operation.context.sender);
         if !actor_is_target_issuer && !actor_is_target_realm_controller {
             return ProjectionEffect::Rejected {
                 reason: "grant_revoke_not_authorized".to_owned(),

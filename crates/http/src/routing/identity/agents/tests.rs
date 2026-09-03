@@ -28,14 +28,14 @@ fn test_session(actor: &str) -> SessionRecord {
     }
 }
 
-fn agent_record(agent_id: &str, controller_id: &str) -> AgentPrincipalRecord {
+fn agent_record(agent_id: &str, controller_principal_id: &str) -> AgentPrincipalRecord {
     let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-11T00:00:00.000Z")
         .expect("fixture timestamp")
         .with_timezone(&chrono::Utc);
-    let controller_did = web_did(controller_id);
+    let controller_did = web_did(controller_principal_id);
     let mut record = AgentPrincipalRecord::new(
         agent_id.to_owned(),
-        controller_id.to_owned(),
+        controller_principal_id.to_owned(),
         "ak:realm:AZbOMvW-csKhom4LhjgFr2cuYB-cQ9oR21-cRX94cL9M".to_owned(),
         arkret_wire::DidUrl::new(format!("{controller_did}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
@@ -48,12 +48,12 @@ fn agent_record(agent_id: &str, controller_id: &str) -> AgentPrincipalRecord {
 
 fn pending_pairing_record(
     agent_id: &str,
-    controller_id: &str,
+    controller_principal_id: &str,
     requested_scope: Value,
     pairing_code: &str,
     pairing_expires_at: &str,
 ) -> AgentPrincipalRecord {
-    let mut record = agent_record(agent_id, controller_id);
+    let mut record = agent_record(agent_id, controller_principal_id);
     // Lifecycle intent is active from provisioning; the open bootstrap
     // handle drives runtime_state to pending_runtime_key (key-management.md
     // §3.6.1).
@@ -299,13 +299,14 @@ fn key_pair_request_body(
             .encode(signing_key.sign(&transcript).to_bytes()),
     )
     .unwrap();
-    let controller_id = DidCoreId::new("ak:did_core:web:controller.example".to_owned()).unwrap();
+    let controller_principal_id =
+        DidCoreId::new("ak:did_core:web:controller.example".to_owned()).unwrap();
     let requested_scope: AgentKeyScope = serde_json::from_value(requested_agent_scope()).unwrap();
     let requested_scope_disclosure = serde_json::from_value(json!({
         "schema": "ak.schema.agent_requested_scope_disclosure.v1",
         "request_id": "ak:request:01999999-0000-7000-8000-000000000099",
         "agent_id": agent_id.as_str(),
-        "controller_id": controller_id.as_str(),
+        "controller_principal_id": controller_principal_id.as_str(),
         "requested_scope": requested_scope,
         "verifier_id": service_id,
         "audience": "ak.gate.account.command.pair_agent_key.v1",
@@ -354,7 +355,7 @@ fn key_pair_request_body(
         "public_key_digest": signing_public_key_digest,
         "agent_key_authorize_event_id": authorize_event_id,
         "issued_at": "2026-07-06T00:00:00.000Z",
-        "controller_id": controller_id,
+        "controller_principal_id": controller_principal_id,
         "controller_proof": {
             "kind": "detached_jws",
             "verification_method": "did:web:controller.example#key-1",
@@ -421,7 +422,7 @@ fn verification_method_agent_endpoint_matches_projected_controller() {
 
 fn bind_pairing_request_to_controller_device(
     body: &mut AgentKeyPairRequestBody,
-    controller_id: &str,
+    controller_principal_id: &str,
 ) {
     let device_id = body
         .authorize_event
@@ -432,21 +433,22 @@ fn bind_pairing_request_to_controller_device(
         .as_str();
     let mut proof = body.requested_scope_disclosure.proofs[0].clone();
     proof.verification_method =
-        arkret_wire::DidUrl::new(format!("{}#{device_id}", web_did(controller_id))).unwrap();
+        arkret_wire::DidUrl::new(format!("{}#{device_id}", web_did(controller_principal_id)))
+            .unwrap();
     body.authorize_event.event.executed_by = Some(arkret_wire::ActorId::service(
-        crate::test_actor_id_str(&web_did(controller_id)),
+        crate::test_actor_id_str(&web_did(controller_principal_id)),
     ));
     body.authorize_event.event.proofs = vec![proof.into()];
 }
 
 #[test]
 fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submission() {
-    let controller_id = CONTROLLER_CORE;
+    let controller_principal_id = CONTROLLER_CORE;
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
-    bind_pairing_request_to_controller_device(&mut body, controller_id);
+    bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
 
-    let device_id = service_pairing_controller_device_id(&body, controller_id)
+    let device_id = service_pairing_controller_device_id(&body, controller_principal_id)
         .expect("signed submission binds the service session device");
 
     assert_eq!(
@@ -462,35 +464,35 @@ fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submissio
 
 #[test]
 fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
-    let controller_id = CONTROLLER_CORE;
+    let controller_principal_id = CONTROLLER_CORE;
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
-    bind_pairing_request_to_controller_device(&mut body, controller_id);
+    bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
     let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
         panic!("fixture must carry a producer proof")
     };
     proof.verification_method = arkret_wire::DidUrl::new(format!(
         "{}#ak:device:01904100-0000-7000-8000-000000000099",
-        web_did(controller_id)
+        web_did(controller_principal_id)
     ))
     .unwrap();
 
-    assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
+    assert!(service_pairing_controller_device_id(&body, controller_principal_id).is_err());
 }
 
 #[test]
 fn service_pairing_rejects_a_non_device_controller_proof() {
-    let controller_id = CONTROLLER_CORE;
+    let controller_principal_id = CONTROLLER_CORE;
     let mut body =
         key_pair_request_body(AGENT_DID, "did:web:agent.example#runtime-key", SERVICE_CORE);
-    bind_pairing_request_to_controller_device(&mut body, controller_id);
+    bind_pairing_request_to_controller_device(&mut body, controller_principal_id);
     let arkret_wire::EventProof::Producer(proof) = &mut body.authorize_event.event.proofs[0] else {
         panic!("fixture must carry a producer proof")
     };
     proof.verification_method =
-        arkret_wire::DidUrl::new(format!("{}#key-1", web_did(controller_id))).unwrap();
+        arkret_wire::DidUrl::new(format!("{}#key-1", web_did(controller_principal_id))).unwrap();
 
-    assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
+    assert!(service_pairing_controller_device_id(&body, controller_principal_id).is_err());
 }
 
 #[test]
@@ -514,7 +516,7 @@ fn agent_view_projects_spec_shape_dropping_internal_columns() {
     assert_eq!(agent["agent"]["readiness"]["state"], "ready");
     assert_eq!(agent["agent"]["agent_id"], "ak:did_core:web:agent.example");
     // soland-internal columns MUST NOT leak into the protocol projection.
-    assert!(agent["agent"].get("controller_id").is_none());
+    assert!(agent["agent"].get("controller_principal_id").is_none());
 }
 
 #[test]
@@ -743,9 +745,16 @@ fn agent_key_state_projects_pending_runtime_approval() {
         },
     );
 
-    let key_state =
-        agent_key_state_from_record(&record, Vec::new(), AgentRuntimeState::PendingRuntimeKey)
-            .expect("key state projection");
+    let key_state = agent_key_state_from_record(
+        &record,
+        arkret_wire::AccountId::new(
+            DidCoreId::new(CONTROLLER_CORE).unwrap(),
+            crate::test_event::station_id(),
+        ),
+        Vec::new(),
+        AgentRuntimeState::PendingRuntimeKey,
+    )
+    .expect("key state projection");
 
     assert_eq!(
         key_state.approval_request_id.as_deref(),

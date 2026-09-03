@@ -32,6 +32,7 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
     controller: &str,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::SidecarCreate)
+        || operation.context.sender.as_account_id().is_none()
     {
         return Err("sidecar_create_denied");
     }
@@ -41,16 +42,9 @@ pub(crate) fn validate_trusted_sidecar_create_operation(
         .ok_or("sidecar_create_denied")?;
     if operation.context.sender.signing_principal_id().as_str() != controller
         || payload.get("encryption_profile").and_then(Value::as_str) != Some("mls_rfc9420")
-        || payload.keys().any(|field| {
-            !matches!(
-                field.as_str(),
-                "encryption_profile" | "event_id" | "sender" | "hlc"
-            )
-        })
-        || !payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .is_some_and(|event_id| arkret_identifiers::EventId::new(event_id.to_owned()).is_ok())
+        || payload
+            .keys()
+            .any(|field| field.as_str() != "encryption_profile")
     {
         return Err("sidecar_create_denied");
     }
@@ -237,6 +231,7 @@ async fn validate_one_operation_policy(
         if !(agent_membership_cascade && cleanup_transition) {
             validate_agent_operation_membership(state, operation).await?;
         }
+        validate_agent_private_controller_account(state, operation).await?;
         if kinds::canonical_kind_for_operation(operation)
             == Some(arkret_wire::EventKind::SidecarCreate)
         {
@@ -359,6 +354,51 @@ async fn validate_agent_operation_membership(
     result.map_err(|_| "agent_membership_inactive")
 }
 
+async fn validate_agent_private_controller_account(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if !matches!(
+        kinds::canonical_kind_for_operation(operation),
+        Some(arkret_wire::EventKind::AgentDraftPropose)
+            | Some(arkret_wire::EventKind::AgentActionRequest)
+    ) {
+        return Ok(());
+    }
+    let agent_id = operation
+        .payload
+        .get("agent_id")
+        .and_then(Value::as_str)
+        .ok_or("agent_private_controller_binding_invalid")?;
+    let declared_controller = operation
+        .payload
+        .get("controller_account_id")
+        .cloned()
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok())
+        .ok_or("agent_private_controller_binding_invalid")?;
+    let sender = operation
+        .context
+        .sender
+        .as_account_id()
+        .ok_or("agent_private_actor_not_account")?;
+    if sender.principal_id.as_str() != agent_id {
+        return Err("agent_private_actor_mismatch");
+    }
+    let record = state
+        .agent_pairings()
+        .agent(agent_id)
+        .await
+        .map_err(|_| "agent_private_controller_lookup_failed")?
+        .ok_or("agent_private_controller_binding_missing")?;
+    let controller = crate::routing::identity::agent_pcr::agent_controller_account(state, &record)
+        .await
+        .map_err(|_| "agent_private_controller_binding_missing")?;
+    if declared_controller != controller {
+        return Err("agent_private_controller_binding_mismatch");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[expect(
     clippy::items_after_test_module,
@@ -390,6 +430,47 @@ mod tests {
             "object": { "created_by": "did:web:example.com:users:alice" },
         }));
         assert_eq!(policy_operation_sender(&op), Some(&op.context.sender));
+    }
+
+    #[test]
+    fn trusted_sidecar_create_rejects_service_actor() {
+        let mut operation = arkret_event_draft::test_support::raw_projected_operation(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01964137-0000-7000-8000-000000000041",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(
+                "ak:realm:AQcksDTzb8Sxrn1BUVVlHtH4vBOy99RKUB4EwOq_413b",
+            )
+            .unwrap(),
+            arkret_wire::EventKind::SidecarCreate.as_str(),
+            serde_json::json!({
+                "encryption_profile": "mls_rfc9420",
+                "event_id": "ak:event:AXo80MUBfEyZDoQCP8SJ2j6fRF_ZCzJnhiTSomOJGLCB",
+                "sender": "ak:did_core:web:fixture.example"
+            }),
+        );
+        let controller = operation
+            .context
+            .sender
+            .signing_principal_id()
+            .as_str()
+            .to_owned();
+        operation.context.sender = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(controller.clone()).unwrap(),
+            arkret_wire::DidCoreId::new("ak:did_core:web:service.fixture").unwrap(),
+        ));
+        assert_eq!(
+            validate_trusted_sidecar_create_operation(&operation, &controller),
+            Ok(())
+        );
+
+        operation.context.sender =
+            arkret_wire::ActorId::service(arkret_wire::DidCoreId::new(controller.clone()).unwrap());
+        assert_eq!(
+            validate_trusted_sidecar_create_operation(&operation, &controller),
+            Err("sidecar_create_denied")
+        );
     }
 
     #[tokio::test]

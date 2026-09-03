@@ -42,9 +42,9 @@ pub(super) async fn require_controller_principal_control_realm(
     session: &SessionRecord,
     authority: &arkret_wire::AccountId,
 ) -> Result<String, AppError> {
-    let controller_id = arkret_wire::DidCoreId::new(session.actor.clone())
+    let controller_principal_id = arkret_wire::DidCoreId::new(session.actor.clone())
         .map_err(|error| AppError::internal(format!("session actor is invalid: {error}")))?;
-    if authority.principal_id != controller_id
+    if authority.principal_id != controller_principal_id
         || authority.station_id.as_str() != state.service_id()
     {
         return Err(AppError::new(
@@ -174,7 +174,7 @@ pub(super) async fn submit_provision_event(
     if event.actor_id != session_actor
         || event.realm_id.as_str() != controller_realm_id
         || payload.agent_id != *agent_id
-        || payload.controller_id != session_core_id
+        || payload.controller_principal_id != session_core_id
         || payload.principal_control_realm_id != *principal_control_realm_id
         || payload.controller_authorization_ref != *controller_authorization_ref
         || payload.agent_slug != agent_slug
@@ -249,10 +249,7 @@ pub(super) fn validate_durable_agent_lifecycle(
         );
     }
     let payload_reason = event.payload.get("reason").and_then(Value::as_str);
-    if event.payload.get("agent_id").and_then(Value::as_str) != Some(agent_id)
-        || event.payload.get("controller_id").and_then(Value::as_str)
-            != Some(session.actor.as_str())
-        || event.payload.get("transition").and_then(Value::as_str) != Some(transition)
+    if event.payload.get("transition").and_then(Value::as_str) != Some(transition)
         || event.payload.get("previous_status").and_then(Value::as_str) != Some(previous_status)
         || payload_reason != reason
     {
@@ -398,9 +395,9 @@ mod tests {
         let controller_did =
             arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
                 .unwrap();
-        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
         let controller_account =
-            arkret_wire::AccountId::new(controller_id, state.service_core_id());
+            arkret_wire::AccountId::new(controller_principal_id, state.service_core_id());
         let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
         let controller_key = controller_actor.to_string();
 
@@ -435,9 +432,9 @@ mod tests {
         let controller_did =
             arkret_wire::Did::new("did:webvh:z6mkfixture:example.test:users:alice".to_owned())
                 .unwrap();
-        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
         let controller_account =
-            arkret_wire::AccountId::new(controller_id, state.service_core_id());
+            arkret_wire::AccountId::new(controller_principal_id, state.service_core_id());
         let other_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixturebob").unwrap(),
             state.service_core_id(),

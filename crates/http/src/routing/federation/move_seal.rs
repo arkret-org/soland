@@ -1435,19 +1435,20 @@ pub(crate) async fn apply_agent_event_seal(
             events.len()
         ))
     })?;
-    let record_controller_id = arkret_wire::DidCoreId::new(agent_record.controller_id.clone())
-        .or_else(|_| {
-            arkret_wire::Did::new(agent_record.controller_id.clone())
-                .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-        })
-        .map_err(|error| {
-            device_generation_fenced(format!(
-                "accepted Agent controller identity is invalid: {error}"
-            ))
-        })?;
+    let record_controller_principal_id =
+        arkret_wire::DidCoreId::new(agent_record.controller_principal_id.clone())
+            .or_else(|_| {
+                arkret_wire::Did::new(agent_record.controller_principal_id.clone())
+                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+            })
+            .map_err(|error| {
+                device_generation_fenced(format!(
+                    "accepted Agent controller identity is invalid: {error}"
+                ))
+            })?;
     if material.realm_id != seal.realm_id
         || material.agent_id.signing_principal_id().as_str() != agent_record.id
-        || material.controller_id.signing_principal_id() != &record_controller_id
+        || material.controller_actor_id.signing_principal_id() != &record_controller_principal_id
         || material.authorization_ref.as_str() != agent_record.controller_authorization_ref.as_str()
     {
         return Err(device_generation_fenced(
@@ -1549,7 +1550,7 @@ pub(crate) async fn apply_agent_event_seal(
         ));
     };
     if !session_device_verification_method_matches(
-        &agent_record.controller_id,
+        &agent_record.controller_principal_id,
         session_device_id,
         &signature.verification_method,
     ) {
@@ -1560,7 +1561,7 @@ pub(crate) async fn apply_agent_event_seal(
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
-            actor_id: agent_record.controller_id.clone(),
+            actor_id: agent_record.controller_principal_id.clone(),
             device_id: session_device_id.to_owned(),
         })
         .await
@@ -1573,7 +1574,7 @@ pub(crate) async fn apply_agent_event_seal(
         .ok_or_else(|| device_generation_fenced("controller device is not registered"))?;
     let generation = crate::routing::identity::device_generation::current_device_generation(
         state,
-        &agent_record.controller_id,
+        &agent_record.controller_principal_id,
     )
     .await
     .map_err(|error| {

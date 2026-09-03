@@ -138,26 +138,12 @@ impl ProjectionState {
         operation: &Operation,
         target: AgentLifecycleState,
     ) -> ProjectionEffect {
-        let Some(agent_id) = operation
-            .payload
-            .get("agent_id")
-            .and_then(|v| v.as_str())
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "agent_lifecycle_missing_agent_id".to_owned(),
-            };
-        };
         let Some(agent_account) = operation.context.sender.as_account_id() else {
             return ProjectionEffect::Rejected {
                 reason: "agent_lifecycle_actor_not_account".to_owned(),
             };
         };
-        if agent_account.principal_id.as_str() != agent_id {
-            return ProjectionEffect::Rejected {
-                reason: "agent_lifecycle_actor_mismatch".to_owned(),
-            };
-        }
+        let agent_id = agent_account.principal_id.to_string();
         let Ok(agent_actor_id) = operation.context.sender.canonical_key() else {
             return ProjectionEffect::Rejected {
                 reason: "agent_lifecycle_actor_invalid".to_owned(),
@@ -226,6 +212,16 @@ impl ProjectionState {
                 reason: "agent_action_request_actor_mismatch".to_owned(),
             };
         }
+        let Some(controller_account_id) = operation
+            .payload
+            .get("controller_account_id")
+            .cloned()
+            .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "agent_action_request_missing_controller_account_id".to_owned(),
+            };
+        };
         let Ok(agent_actor_id) = operation.context.sender.canonical_key() else {
             return ProjectionEffect::Rejected {
                 reason: "agent_action_request_actor_invalid".to_owned(),
@@ -270,6 +266,7 @@ impl ProjectionState {
                 AgentActionRequestProjection {
                     request_id,
                     agent_id,
+                    controller_account_id,
                     status: AgentActionRequestStatus::Pending,
                     requested_at: operation.created_at,
                     resolved_at: None,
@@ -304,6 +301,11 @@ impl ProjectionState {
         if let Some(request) = self.agent_action_requests.get_mut(&request_key)
             && request.status == AgentActionRequestStatus::Pending
         {
+            if operation.context.sender.as_account_id() != Some(&request.controller_account_id) {
+                return ProjectionEffect::Rejected {
+                    reason: "agent_action_resolution_controller_mismatch".to_owned(),
+                };
+            }
             let approval = if status == AgentActionRequestStatus::Approved {
                 let Some(approval_id) = operation
                     .payload

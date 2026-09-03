@@ -475,8 +475,10 @@ impl AppletRecord {
         if self.applet_id != self.package.applet_id
             || self.applet_id != self.identity.initial_package.applet_id
             || self.applet_id != self.install_response.applet_id
-            || self.registry_id != self.package.controller_id
-            || self.package.controller_id != self.identity.initial_package.controller_id
+            || self.registry_id != self.package.controller_principal_id
+            || self.package.controller_principal_id == self.package.service_id
+            || self.package.controller_principal_id
+                != self.identity.initial_package.controller_principal_id
             || self.package.service_id != self.identity.initial_package.service_id
             || self.package.bot_actor_id != self.identity.initial_package.bot_actor_id
             || self.bot_actor_id != self.package.bot_actor_id
@@ -704,7 +706,8 @@ impl AppletRecord {
         for ghost in &self.ghosts {
             if ghost.ghost_actor_id.route_service_id() != self.bot_actor_id.route_service_id()
                 || ghost.ghost_actor_id.signing_principal_id() == &self.package.service_id
-                || ghost.ghost_actor_id.signing_principal_id() == &self.package.controller_id
+                || ghost.ghost_actor_id.signing_principal_id()
+                    == &self.package.controller_principal_id
                 || !managed_actor_ids.insert(ghost.ghost_actor_id.clone())
                 || !external_refs.insert((
                     ghost.external_ref.protocol.clone(),

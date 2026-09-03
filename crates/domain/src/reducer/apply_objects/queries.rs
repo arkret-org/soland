@@ -293,15 +293,15 @@ impl ProjectionState {
         let Some(binding) = self.agent_membership_binding(realm_id, agent_id) else {
             return false;
         };
-        let controller_id =
+        let controller_actor_key =
             arkret_wire::ActorId::account(binding.controller_account_id.clone()).to_string();
-        let Some(controller) = self.member(realm_id, &controller_id) else {
+        let Some(controller) = self.member(realm_id, &controller_actor_key) else {
             return false;
         };
         controller.state == "join"
             && controller.membership_event_ref.as_deref()
                 == Some(binding.controller_membership_generation_ref.as_str())
-            && controller.member == controller_id
+            && controller.member == controller_actor_key
     }
 
     /// Read the FSM state of a member directly from the cells map.

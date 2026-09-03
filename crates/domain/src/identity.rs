@@ -6,7 +6,7 @@ use arkret_models_collaboration::contact_operations::{
     ContactRoundEvidenceBundle, PeerContactMirrorReceipt, PeerContactSubmitOutcome,
     RequestAcceptanceReceipt,
 };
-use arkret_wire::ActorId;
+use arkret_wire::{AccountId, ActorId};
 use chrono::{DateTime, Utc};
 
 /// A consent cell is addressed by its subject: `consent_id` is the cell
@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 /// carried by the cell's dots, not part of its address.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ConsentCellKey {
-    pub holder_id: DidCoreId,
+    pub holder_account_id: AccountId,
     pub cell_id: CellRef,
 }
 
@@ -35,7 +35,7 @@ pub struct ConsentGrantDot {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConsentCellRecord {
     pub cell_id: CellRef,
-    pub holder_id: DidCoreId,
+    pub holder_account_id: AccountId,
     pub peer: ConsentPeer,
     pub consent_scope: String,
     pub grant_dots: BTreeMap<String, ConsentGrantDot>,

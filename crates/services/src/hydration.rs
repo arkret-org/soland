@@ -203,7 +203,7 @@ pub async fn hydrate_sidecar_projections(
             SidecarProjection {
                 sidecar_id: record.sidecar_id,
                 realm_id: record.realm_id,
-                controller_id: record.controller_id,
+                controller_account_id: record.controller_account_id,
                 encryption_profile: arkret_models_collaboration::agent_operations::AgentSidecarEncryptionProfile::MlsRfc9420,
                 state: record.state,
                 state_changed_at: record.state_changed_at,

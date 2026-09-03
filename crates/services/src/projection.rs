@@ -2922,7 +2922,7 @@ impl ProjectionService {
     pub fn reconcile_realm_owner(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_actor_id: &str,
         deleted: bool,
         created_at: DateTime<Utc>,
         updated_at: DateTime<Utc>,
@@ -2931,10 +2931,10 @@ impl ProjectionService {
         let mut state = self.state.lock();
         match state.realm_states.get_mut(realm_id) {
             Some(realm) => match realm.owner.as_deref() {
-                Some(owner) if owner != controller_id => false,
+                Some(owner) if owner != controller_actor_id => false,
                 Some(_) => true,
                 None => {
-                    realm.owner = Some(controller_id.to_owned());
+                    realm.owner = Some(controller_actor_id.to_owned());
                     true
                 }
             },
@@ -2943,7 +2943,7 @@ impl ProjectionService {
                     realm_id.to_owned(),
                     SolandRealmState {
                         realm_id: realm_id.to_owned(),
-                        owner: Some(controller_id.to_owned()),
+                        owner: Some(controller_actor_id.to_owned()),
                         title: None,
                         deleted,
                         archived: false,

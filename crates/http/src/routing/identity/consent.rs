@@ -35,7 +35,7 @@ use arkret_models_collaboration::governance::invite_addressing::{
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
-use arkret_wire::{AccountDataKey, ConsentScope, Event, SealId};
+use arkret_wire::{AccountDataKey, AccountId, ConsentScope, Event, SealId};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -105,7 +105,7 @@ impl ConsentRejection {
 /// Event is accepted.
 #[derive(Clone, Debug)]
 pub(crate) struct ConsentAdmission {
-    holder: DidCoreId,
+    holder_account_id: AccountId,
     event_id: String,
     consent_id: String,
     commit: CommitConsentProjection,
@@ -165,10 +165,10 @@ pub(crate) async fn apply_committed_consent_admission(
         ConsentAdmissionEffect::Grant { dot } => {
             append_audit_log(
                 state,
-                Some(admission.holder.as_str()),
+                Some(admission.holder_account_id.principal_id.as_str()),
                 "consent.grant",
                 json!({
-                    "holder_id": admission.holder,
+                    "holder_account_id": admission.holder_account_id,
                     "peer": admission.commit.cell.peer,
                     "consent_scope": admission.commit.cell.consent_scope,
                     "consent_id": admission.consent_id,
@@ -186,10 +186,10 @@ pub(crate) async fn apply_committed_consent_admission(
         } => {
             append_audit_log(
                 state,
-                Some(admission.holder.as_str()),
+                Some(admission.holder_account_id.principal_id.as_str()),
                 "consent.revoke",
                 json!({
-                    "holder_id": admission.holder,
+                    "holder_account_id": admission.holder_account_id,
                     "peer": admission.commit.cell.peer,
                     "consent_scope": admission.commit.cell.consent_scope,
                     "consent_id": admission.consent_id,
@@ -202,7 +202,7 @@ pub(crate) async fn apply_committed_consent_admission(
             if let Some(cas) = admission.commit.invite_quarantine.as_ref() {
                 fanout_actor_private_update(
                     state,
-                    admission.holder.as_str(),
+                    admission.holder_account_id.principal_id.as_str(),
                     ActorPrivateDeviceUpdate::AccountData {
                         sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
@@ -218,10 +218,10 @@ pub(crate) async fn apply_committed_consent_admission(
                 .await;
                 append_audit_log(
                     state,
-                    Some(admission.holder.as_str()),
+                    Some(admission.holder_account_id.principal_id.as_str()),
                     "consent.revoke.invite_quarantine_invalidation",
                     json!({
-                        "holder_id": admission.holder,
+                        "holder_account_id": admission.holder_account_id,
                         "peer": admission.commit.cell.peer,
                         "consent_scope": admission.commit.cell.consent_scope,
                         "removed_entries": quarantine_entries_invalidated,
@@ -252,7 +252,7 @@ async fn plan_consent_grant(
     state: &AppState,
     operation: &Operation,
 ) -> Result<ConsentAdmission, ConsentRejection> {
-    let holder = consent_event_holder(operation)?;
+    let holder_account_id = consent_event_holder(operation)?;
     let payload = operation
         .typed_payload::<arkret_wire::event_spec::ConsentGrant>()
         .map_err(|error| {
@@ -260,13 +260,13 @@ async fn plan_consent_grant(
         })?;
     let peer = payload.peer;
     let consent_scope = payload.consent_scope.as_str().to_owned();
-    validate_consent_intent(&holder, &peer)?;
+    validate_consent_intent(&holder_account_id, &peer)?;
     let consent_id = payload.consent_id.to_string();
     let cell_id = consent_cell_id_for_consent_id(&consent_id)?;
     let dot = consent_grant_dot(operation);
     let granted_at = operation.created_at;
 
-    let mut cell = match state.consents().holder_cell(&holder, &cell_id) {
+    let mut cell = match state.consents().holder_cell(&holder_account_id, &cell_id) {
         Some(existing) => {
             if existing.peer != peer || existing.consent_scope != consent_scope {
                 return Err(ConsentRejection::precondition(
@@ -278,7 +278,7 @@ async fn plan_consent_grant(
         }
         None => ConsentCellRecord {
             cell_id: cell_id.clone(),
-            holder_id: holder.clone(),
+            holder_account_id: holder_account_id.clone(),
             peer: peer.clone(),
             consent_scope: consent_scope.clone(),
             grant_dots: BTreeMap::new(),
@@ -304,7 +304,7 @@ async fn plan_consent_grant(
     cell.updated_at = granted_at;
 
     Ok(ConsentAdmission {
-        holder,
+        holder_account_id,
         event_id: operation.context.event_id.to_string(),
         consent_id,
         commit: CommitConsentProjection {
@@ -326,7 +326,7 @@ async fn plan_consent_revoke(
     operation: &Operation,
     event: &Event,
 ) -> Result<ConsentAdmission, ConsentRejection> {
-    let holder = consent_event_holder(operation)?;
+    let holder_account_id = consent_event_holder(operation)?;
     let payload = operation
         .typed_payload::<arkret_wire::event_spec::ConsentRevoke>()
         .map_err(|error| {
@@ -346,14 +346,14 @@ async fn plan_consent_revoke(
 
     let mut cell = state
         .consents()
-        .holder_cell(&holder, &cell_id)
+        .holder_cell(&holder_account_id, &cell_id)
         .ok_or_else(|| {
             ConsentRejection::precondition(
                 "consent_cell_unknown",
                 "revoke consent_id does not identify a holder consent cell",
             )
         })?;
-    validate_consent_intent(&holder, &cell.peer)?;
+    validate_consent_intent(&holder_account_id, &cell.peer)?;
 
     // The reducer's removal set and the signed payload MUST be the same set
     // (§3.3): schema validation, audit projection and the lattice reducer all
@@ -423,7 +423,7 @@ async fn plan_consent_revoke(
         .unwrap_or(0);
 
     Ok(ConsentAdmission {
-        holder,
+        holder_account_id,
         event_id: operation.context.event_id.to_string(),
         consent_id,
         commit: CommitConsentProjection {
@@ -605,12 +605,13 @@ async fn list_consent_cells(
 ) -> JsonResult<ConsentCellList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let holder_account_id = authenticated_holder_account_id(state, &session.actor)?;
     let now = now();
     // Consent is holder-private (spec section 8): only the holder's own cells
     // are listed, never the cells a peer appears in.
     let mut cells = state
         .consents()
-        .holder_cells(&session.actor)
+        .holder_cells(&holder_account_id)
         .iter()
         .map(|cell| consent_response(cell, now))
         .collect::<Result<Vec<_>, _>>()?;
@@ -633,7 +634,7 @@ async fn get_consent_cell(
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = session.actor.clone();
+    let holder_account_id = authenticated_holder_account_id(state, &session.actor)?;
     let peer =
         query_param(req, "peer").ok_or_else(|| AppError::param_missing("peer is required"))?;
     let peer: ConsentPeer = serde_json::from_str(&peer)
@@ -641,7 +642,7 @@ async fn get_consent_cell(
     let consent_scope = normalize_scope(query_param(req, "consent_scope").as_deref())?;
     let matches = state
         .consents()
-        .cells_for_intent(&holder, &peer, &consent_scope);
+        .cells_for_intent(&holder_account_id, &peer, &consent_scope);
     match matches.as_slice() {
         [cell] => json_ok(consent_response(cell, now())?),
         [] => Err(AppError::not_found("consent cell not found")),
@@ -669,16 +670,16 @@ async fn grant_consent_cell(
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = session.actor.clone();
+    let holder_account_id = authenticated_holder_account_id(state, &session.actor)?;
     let submission = body.into_inner().grant_event;
     let consent_id = caller_signed_consent_event_identity(
         &session.actor,
-        &holder,
+        &holder_account_id,
         &submission.event,
         arkret_wire::EventKind::ConsentGrant.as_str(),
     )?;
     submit_caller_signed_consent_event(state, &session, submission).await?;
-    read_back_consent_cell(state, &holder, &consent_id)
+    read_back_consent_cell(state, &holder_account_id, &consent_id)
 }
 
 #[endpoint(
@@ -695,19 +696,19 @@ async fn revoke_consent_cell(
 ) -> JsonResult<ConsentCellView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let holder = session.actor.clone();
+    let holder_account_id = authenticated_holder_account_id(state, &session.actor)?;
     let submission = body.into_inner().revoke_event;
     // The dots being removed come from the Event the holder signed, never from
     // a server-side enumeration: an observe-remove OR-Set revoke is only
     // correct when the revoker named the dots it observed.
     let consent_id = caller_signed_consent_event_identity(
         &session.actor,
-        &holder,
+        &holder_account_id,
         &submission.event,
         arkret_wire::EventKind::ConsentRevoke.as_str(),
     )?;
     submit_caller_signed_consent_event(state, &session, submission).await?;
-    read_back_consent_cell(state, &holder, &consent_id)
+    read_back_consent_cell(state, &holder_account_id, &consent_id)
 }
 
 #[endpoint(
@@ -741,16 +742,14 @@ async fn request_consent_cell(
 
 fn read_back_consent_cell(
     state: &AppState,
-    holder: &str,
+    holder_account_id: &AccountId,
     consent_id: &str,
 ) -> JsonResult<ConsentCellView> {
     let cell_id = consent_cell_id_for_consent_id(consent_id)
         .map_err(|rejection| AppError::param_invalid(rejection.message))?;
-    let holder = DidCoreId::new(holder.to_owned())
-        .map_err(|_| AppError::param_invalid("invalid holder principal id"))?;
     let cell = state
         .consents()
-        .holder_cell(&holder, &cell_id)
+        .holder_cell(holder_account_id, &cell_id)
         .ok_or_else(|| {
             AppError::internal("consent event accepted but the cell was not projected")
         })?;
@@ -766,7 +765,7 @@ fn read_back_consent_cell(
 /// Event that was submitted.
 fn caller_signed_consent_event_identity(
     actor: &str,
-    holder: &str,
+    holder_account_id: &AccountId,
     event: &Event,
     expected_kind: &str,
 ) -> Result<String, AppError> {
@@ -775,17 +774,14 @@ fn caller_signed_consent_event_identity(
             "submitted Event kind must be {expected_kind}"
         )));
     }
-    if DidCoreId::new(holder.to_owned()).is_err() {
-        return Err(AppError::param_invalid("invalid holder principal id"));
-    }
-    if event.actor_id.signing_principal_id().as_str() != holder {
+    if event.actor_id.as_account_id() != Some(holder_account_id) {
         return Err(AppError::param_invalid(
-            "the submitted Event must be authored by the path holder",
+            "the submitted Event must be authored by the exact holder account",
         ));
     }
-    if actor != holder {
+    if actor != holder_account_id.principal_id.as_str() {
         return Err(AppError::capability_denied(
-            "only the holder DID may update a consent cell",
+            "only the holder account may update a consent cell",
         ));
     }
     let consent_id = event
@@ -900,8 +896,22 @@ fn consent_cell_id_for_consent_id(consent_id: &str) -> Result<CellRef, ConsentRe
 
 /// Spec section 2.1 — the Event actor and the authenticated holder are the same
 /// principal, and consent state is written only into that holder's own cell.
-fn consent_event_holder(operation: &Operation) -> Result<DidCoreId, ConsentRejection> {
-    Ok(operation.context.sender.signing_principal_id().clone())
+fn consent_event_holder(operation: &Operation) -> Result<AccountId, ConsentRejection> {
+    operation
+        .context
+        .sender
+        .as_account_id()
+        .cloned()
+        .ok_or_else(|| ConsentRejection::schema("consent holder must be an Account Actor"))
+}
+
+fn authenticated_holder_account_id(state: &AppState, actor: &str) -> Result<AccountId, AppError> {
+    let principal_id = DidCoreId::new(actor.to_owned())
+        .map_err(|error| AppError::internal(format!("authenticated actor is invalid: {error}")))?;
+    Ok(AccountId::new(
+        principal_id,
+        state.service_core_id().clone(),
+    ))
 }
 
 fn consent_peer_principal(peer: &ConsentPeer) -> &DidCoreId {
@@ -911,8 +921,11 @@ fn consent_peer_principal(peer: &ConsentPeer) -> &DidCoreId {
     }
 }
 
-fn validate_consent_intent(holder: &DidCoreId, peer: &ConsentPeer) -> Result<(), ConsentRejection> {
-    if consent_peer_principal(peer) == holder {
+fn validate_consent_intent(
+    holder_account_id: &AccountId,
+    peer: &ConsentPeer,
+) -> Result<(), ConsentRejection> {
+    if consent_peer_principal(peer) == &holder_account_id.principal_id {
         return Err(ConsentRejection::schema(
             "peer signing principal must differ from holder principal",
         ));
@@ -952,6 +965,7 @@ fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String>
 pub(crate) fn has_active_consent_grant_evidence(
     state: &AppState,
     subject: &str,
+    holder_station_id: &str,
     inviter_id: &str,
     consent_grant_ref: &str,
     consent_id: Option<&str>,
@@ -968,9 +982,14 @@ pub(crate) fn has_active_consent_grant_evidence(
         },
         None => None,
     };
-    let Ok(inviter_principal_id) = DidCoreId::new(inviter_id.to_owned()) else {
+    let (Ok(holder_principal_id), Ok(holder_station_id), Ok(inviter_principal_id)) = (
+        DidCoreId::new(subject.to_owned()),
+        DidCoreId::new(holder_station_id.to_owned()),
+        DidCoreId::new(inviter_id.to_owned()),
+    ) else {
         return false;
     };
+    let holder_account_id = arkret_wire::AccountId::new(holder_principal_id, holder_station_id);
     let inviter = ConsentPeer::Actor {
         actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             inviter_principal_id,
@@ -979,7 +998,7 @@ pub(crate) fn has_active_consent_grant_evidence(
     };
     state
         .consents()
-        .cells_for_pair(subject, &inviter)
+        .cells_for_pair(&holder_account_id, &inviter)
         .iter()
         .any(|cell| {
             if !matches!(cell.consent_scope.as_str(), "invite" | "any") {
@@ -1168,12 +1187,15 @@ async fn emit_consent_revoke_invalidation(
     } else {
         vec![cell.consent_scope.as_str()]
     };
-    let target_peer_ids =
-        consent_invalidation_peer_ids(state, &cell.holder_id, consent_peer_principal(&cell.peer))
-            .await;
+    let target_peer_ids = consent_invalidation_peer_ids(
+        state,
+        &cell.holder_account_id,
+        consent_peer_principal(&cell.peer),
+    )
+    .await;
     let payload = json!({
         "schema": "ak.vector.consent.cache_invalidation.v1",
-        "holder_id": cell.holder_id,
+        "holder_account_id": cell.holder_account_id,
         "peer": cell.peer,
         "consent_scope": cell.consent_scope,
         "cell_id": cell.cell_id,
@@ -1192,7 +1214,7 @@ async fn emit_consent_revoke_invalidation(
     });
     append_audit_log(
         state,
-        Some(cell.holder_id.as_str()),
+        Some(cell.holder_account_id.principal_id.as_str()),
         "consent.revoke.cache_invalidation",
         payload,
         "accepted",
@@ -1202,21 +1224,18 @@ async fn emit_consent_revoke_invalidation(
 
 async fn consent_invalidation_peer_ids(
     state: &AppState,
-    holder: &DidCoreId,
+    holder_account_id: &AccountId,
     peer: &DidCoreId,
 ) -> Vec<String> {
     let mut services = BTreeSet::new();
-    let holder_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-        holder.clone(),
-        state.service_core_id().clone(),
-    ));
+    let holder_actor = arkret_wire::ActorId::account(holder_account_id.clone());
     let records = match state.contacts().contacts_for_actor(&holder_actor).await {
         Ok(records) => records,
         Err(error) => {
             tracing::warn!(
                 %error,
-                actor = %holder,
-                holder = %holder.as_str(),
+                actor = %holder_actor,
+                holder = %holder_account_id.principal_id,
                 peer = %peer.as_str(),
                 "failed to list contacts for consent invalidation target discovery"
             );
@@ -1224,10 +1243,11 @@ async fn consent_invalidation_peer_ids(
         }
     };
     for record in records {
-        let same_pair = (record.requester_id.signing_principal_id() == holder
+        let same_pair = (record.requester_id.signing_principal_id()
+            == &holder_account_id.principal_id
             && record.target_id.signing_principal_id() == peer)
             || (record.requester_id.signing_principal_id() == peer
-                && record.target_id.signing_principal_id() == holder);
+                && record.target_id.signing_principal_id() == &holder_account_id.principal_id);
         if !same_pair {
             continue;
         }
@@ -1252,6 +1272,7 @@ mod tests {
     use crate::routing::events::event_log::projection_operation_from_envelope;
 
     const HOLDER: &str = "ak:did_core:web:holder.example";
+    const HOLDER_STATION: &str = "ak:did_core:web:soland.test";
     const PEER: &str = "ak:did_core:web:peer.example";
     const OTHER_PEER: &str = "ak:did_core:web:second-peer.example";
     const CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000041";
@@ -1289,7 +1310,7 @@ mod tests {
             "realm_id": HOLDER_PCR,
             "scope_ref": { "kind": "realm", "realm_id": HOLDER_PCR },
             "actor_id": {"kind": "account", "account_id": {
-                "principal_id": actor, "station_id": "ak:did_core:web:soland.test"
+                "principal_id": actor, "station_id": HOLDER_STATION
             }},
             "actor_seq": 0,
             "created_at": "2026-07-06T00:00:00.000Z",
@@ -1308,6 +1329,13 @@ mod tests {
     fn consent_operation(kind: &str, event_id: &str, actor: &str, payload: Value) -> Operation {
         projection_operation_from_envelope(&consent_envelope(kind, event_id, actor, payload))
             .expect("consent operation")
+    }
+
+    fn holder_account_id() -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            DidCoreId::new(HOLDER_STATION.to_owned()).unwrap(),
+        )
     }
 
     fn grant_payload(peer: &str, consent_scope: &str) -> Value {
@@ -1337,7 +1365,7 @@ mod tests {
     ) -> ConsentCellRecord {
         ConsentCellRecord {
             cell_id: consent_cell_id_for_consent_id(consent_id).expect("cell id"),
-            holder_id: DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            holder_account_id: holder_account_id(),
             peer: ConsentPeer::Actor {
                 actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                     DidCoreId::new(peer.to_owned()).unwrap(),
@@ -1406,7 +1434,7 @@ mod tests {
         assert!(
             state
                 .consents()
-                .holder_cells(DidCoreId::new(HOLDER.to_owned()).unwrap())
+                .holder_cells(&holder_account_id())
                 .is_empty()
         );
     }
@@ -1563,13 +1591,7 @@ mod tests {
             .expect_err("a basis this service never accepted cannot resolve dots");
         assert_eq!(rejection.code, "consent_seal_basis_unknown");
         // A scope=any revoke never enumerates the concrete-scope cells.
-        assert_eq!(
-            state
-                .consents()
-                .holder_cells(DidCoreId::new(HOLDER.to_owned()).unwrap())
-                .len(),
-            1
-        );
+        assert_eq!(state.consents().holder_cells(&holder_account_id()).len(), 1);
     }
 
     #[test]
@@ -1688,7 +1710,10 @@ mod tests {
         let mut cell = granted_cell(CONSENT_ID, PEER, "invite", &format!("{GRANT_EVENT}:0"));
         cell.revoked_dots.insert(format!("{GRANT_EVENT}:0"));
         let admission = ConsentAdmission {
-            holder: DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            holder_account_id: arkret_wire::AccountId::new(
+                DidCoreId::new(HOLDER.to_owned()).unwrap(),
+                crate::test_event::station_id(),
+            ),
             event_id: REVOKE_EVENT.to_owned(),
             consent_id: CONSENT_ID.to_owned(),
             commit: CommitConsentProjection {
@@ -1730,7 +1755,7 @@ mod tests {
             state
                 .consents()
                 .holder_cell(
-                    DidCoreId::new(HOLDER.to_owned()).unwrap(),
+                    &holder_account_id(),
                     consent_cell_id_for_consent_id(CONSENT_ID).unwrap(),
                 )
                 .expect("committed cell is published to the runtime projection")

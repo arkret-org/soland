@@ -1369,7 +1369,7 @@ async fn verified_contact_mirror_event(
             .event_digest_with_digest_suite(digest_suite)
             .map_err(|error| AppError::internal(format!("Contact mirror Event digest: {error}")))?
             != mirror.request_digest
-        || mirror.target_holder_id != session.actor
+        || mirror.target_holder_principal_id != session.actor
     {
         return Ok(None);
     }
@@ -1737,7 +1737,7 @@ async fn events_frontier(
             .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
             .is_some_and(|record| {
                 is_local_account
-                    && record.controller_id == session.actor
+                    && record.controller_principal_id == session.actor
                     && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
             });
@@ -1806,7 +1806,7 @@ async fn events_frontier(
         .map_err(|error| AppError::internal(format!("Agent lookup failed: {error}")))?
         .filter(|record| {
             is_local_account
-                && record.controller_id == session.actor
+                && record.controller_principal_id == session.actor
                 && record.state != AgentLifecycleState::Deactivated
         })
         .map(|record| record.principal_control_realm_id);

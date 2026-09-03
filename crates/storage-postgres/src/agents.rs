@@ -309,8 +309,8 @@ impl AgentStore for PgAgentStore {
             .set(&principal);
         let affected = diesel::query_dsl::methods::FilterDsl::filter(
             upsert,
-            agent_principals::controller_id
-                .eq(&principal.controller_id)
+            agent_principals::controller_principal_id
+                .eq(&principal.controller_principal_id)
                 .and(
                     agent_principals::principal_control_realm_id
                         .eq(&principal.principal_control_realm_id),
@@ -365,13 +365,13 @@ impl AgentStore for PgAgentStore {
 
     async fn list_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let records = agent_principals::table
-            .filter(agent_principals::controller_id.eq(controller_id))
+            .filter(agent_principals::controller_principal_id.eq(controller_principal_id))
             .order(agent_principals::created_at.asc())
             .select(AgentPrincipalRow::as_select())
             .load::<AgentPrincipalRow>(&mut *conn)

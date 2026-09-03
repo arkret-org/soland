@@ -343,7 +343,7 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn audit(&self) -> &dyn AuditStore;
     fn governance_dependencies(&self) -> &dyn GovernanceDependencyStore;
     fn history_traversal_retentions(&self) -> &dyn HistoryTraversalRetentionStore;
-    fn pending_rrk_acquisitions(&self) -> &dyn PendingRrkAcquisitionStore;
+    fn pending_rhrk_acquisitions(&self) -> &dyn PendingRhrkAcquisitionStore;
     fn history_response_streams(&self) -> &dyn HistoryResponseStreamStore;
 }
 

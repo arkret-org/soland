@@ -8,14 +8,14 @@ use super::*;
 /// the deployment S2S credential and the handler has re-validated the claimed
 /// controller against the authoritative Agent record.
 pub(super) fn controller_service_session(
-    controller_id: &str,
+    controller_principal_id: &str,
     device_id: &str,
     state: &AppState,
 ) -> SessionRecord {
     SessionRecord {
-        token_hash: format!("agent-pair-commit:{controller_id}"),
+        token_hash: format!("agent-pair-commit:{controller_principal_id}"),
         account_pk: None,
-        actor: controller_id.to_owned(),
+        actor: controller_principal_id.to_owned(),
         device_id: device_id.to_owned(),
         audience: state.service_id().clone(),
         session_public_key: None,
@@ -43,12 +43,12 @@ pub(super) fn ensure_agent_record_controller(
             "agent principal record does not match the requested principal",
         ));
     }
-    if record.controller_id.trim().is_empty() {
+    if record.controller_principal_id.trim().is_empty() {
         return Err(AppError::capability_denied(
             "agent principal has no controller binding",
         ));
     }
-    if record.controller_id != session.actor {
+    if record.controller_principal_id != session.actor {
         return Err(AppError::capability_denied(
             "agent principal is not controlled by the authenticated session",
         ));
@@ -608,7 +608,7 @@ mod requested_scope_tests {
 /// Project a persisted agent_principal JSON record into the spec
 /// `agent_projection` shape (`agent-operations.schema.json#/$defs/agent_projection`):
 /// `{agent_id, display_name?, slug, avatar_blob_ref?, status, created_at?, updated_at?}`.
-/// Soland-internal columns (`controller_id`, `pairing_*`) are NOT
+/// Soland-internal columns (`controller_principal_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
 /// The controller lifecycle intent axis (`status`, key-management.md §3.6.1).
@@ -736,7 +736,14 @@ pub(super) async fn agent_view_from_record(
         chrono::Utc::now(),
     );
     let agent = agent_projection_from_record(record, runtime_state);
-    let key_state = agent_key_state_from_record(record, active_authorizations, runtime_state)?;
+    let controller_account_id =
+        crate::routing::identity::agent_pcr::agent_controller_account(state, record).await?;
+    let key_state = agent_key_state_from_record(
+        record,
+        controller_account_id,
+        active_authorizations,
+        runtime_state,
+    )?;
     Ok(AgentView {
         agent,
         grants: Vec::new(),
@@ -746,6 +753,7 @@ pub(super) async fn agent_view_from_record(
 
 pub(super) fn agent_key_state_from_record(
     record: &AgentPrincipalRecord,
+    controller_account_id: arkret_wire::AccountId,
     active_authorizations: Vec<
         arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState,
     >,
@@ -769,12 +777,11 @@ pub(super) fn agent_key_state_from_record(
         .map(|binding| binding.authorized_event_ref.clone());
     let agent_id = arkret_wire::DidCoreId::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
-    let controller_id =
-        arkret_identifiers::DidCoreId::new(record.controller_id.clone()).map_err(|error| {
-            AppError::internal(format!(
-                "persisted Agent controller DID is invalid: {error}"
-            ))
-        })?;
+    if controller_account_id.principal_id.as_str() != record.controller_principal_id {
+        return Err(AppError::internal(
+            "persisted Agent controller account differs from its immutable principal binding",
+        ));
+    }
     // pairing handle presence and its branch are a projection of the single
     // derived runtime_state (key-management.md §3.6.1): an open handle appears
     // exactly for pending_runtime_key (bootstrap) and replacing (replacement).
@@ -801,7 +808,7 @@ pub(super) fn agent_key_state_from_record(
         })?;
     Ok(KeyState {
         agent_id,
-        controller_id,
+        controller_account_id,
         principal_control_realm_id: RealmId::new(record.principal_control_realm_id.clone())
             .map_err(|error| {
                 AppError::internal(format!("persisted Agent PCR is invalid: {error}"))

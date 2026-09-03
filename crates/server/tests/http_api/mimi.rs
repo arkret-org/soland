@@ -601,11 +601,11 @@ async fn exact_agent_mimi_report_body(
 ) -> arkret_models_collaboration::http_bodies::MimiReportAbuseRequestBody {
     let (reporter_actor, membership_event_id, room_binding_event_id) =
         install_current_mimi_report_binding(state, realm_id, room_uri, MIMI_TEST_STRAND_ID).await;
-    let controller_id = fixture_actor_core_id("did:web:alice.example");
+    let controller_principal_id = fixture_actor_core_id("did:web:alice.example");
     let records = state
         .test_persistence()
         .agents()
-        .list_for_controller(controller_id.as_str())
+        .list_for_controller(controller_principal_id.as_str())
         .await
         .unwrap();
     let record = records

@@ -1538,14 +1538,14 @@ impl NotaryWorker {
             ));
         }
 
-        let holder_id = arkret_wire::DidCoreId::new(state.service_id().clone())
+        let holder_service_id = arkret_wire::DidCoreId::new(state.service_id().clone())
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         if !local_service_is_eligible_availability_holder(
             state,
             realm_id,
             predecessor_state,
             predecessor_covered_events,
-            &holder_id,
+            &holder_service_id,
         )
         .await?
         {
@@ -1566,7 +1566,7 @@ impl NotaryWorker {
             })?;
         let evidence = arkret_identity::service_signer_evidence_from_authenticated_resolution(
             authenticated_resolution,
-            &holder_id,
+            &holder_service_id,
             sealed_at,
         )
         .map_err(|error| {
@@ -1623,7 +1623,7 @@ impl NotaryWorker {
                 realm_id: realm_id.clone(),
                 event_id: accepted_move.event.event_id.clone(),
                 bytes_digest,
-                holder_id: holder_id.clone(),
+                holder_service_id: holder_service_id.clone(),
                 retention_expires_at,
                 holder_signer_evidence_ref: evidence_ref.clone(),
                 signature: PayloadProof {

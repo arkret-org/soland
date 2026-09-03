@@ -619,7 +619,7 @@ impl crate::identity::AgentDirectoryPort for PersistenceAgentDirectory {
             .get(agent_id)
             .await?
             .map(|agent| crate::identity::AgentController {
-                controller_id: agent.controller_id,
+                controller_principal_id: agent.controller_principal_id,
             }))
     }
 }
@@ -652,12 +652,12 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
 
     async fn agents_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> crate::ServiceResult<Vec<crate::identity::AgentPairingState>> {
         Ok(self
             .0
             .agents()
-            .list_for_controller(controller_id)
+            .list_for_controller(controller_principal_id)
             .await?
             .into_iter()
             .map(application_agent_pairing)
@@ -803,7 +803,7 @@ fn application_agent_pairing(
 ) -> crate::identity::AgentPairingState {
     crate::identity::AgentPairingState {
         id: record.id,
-        controller_id: record.controller_id,
+        controller_principal_id: record.controller_principal_id,
         principal_control_realm_id: record.principal_control_realm_id,
         controller_authorization_ref: record.controller_authorization_ref,
         display_name: record.display_name,
@@ -843,7 +843,7 @@ fn persistence_agent_pairing(
 ) -> soland_storage::AgentPrincipalRecord {
     soland_storage::AgentPrincipalRecord {
         id: record.id,
-        controller_id: record.controller_id,
+        controller_principal_id: record.controller_principal_id,
         principal_control_realm_id: record.principal_control_realm_id,
         controller_authorization_ref: record.controller_authorization_ref,
         display_name: record.display_name,
@@ -895,23 +895,23 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
     async fn sidecar_for_realm_controller(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
     ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarState>> {
         Ok(self
             .0
             .sidecars()
-            .get_for_realm_controller(realm_id, controller_id)
+            .get_for_realm_controller(realm_id, controller_account_id)
             .await?)
     }
     async fn sidecars_for_controller(
         &self,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
         realm_id: Option<&str>,
     ) -> crate::ServiceResult<Vec<crate::identity::AgentSidecarState>> {
         Ok(self
             .0
             .sidecars()
-            .list_for_controller(controller_id, realm_id)
+            .list_for_controller(controller_account_id, realm_id)
             .await?)
     }
     async fn ensure_context(

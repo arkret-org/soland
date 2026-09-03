@@ -5537,7 +5537,7 @@ mod trust_binding_tests {
             "public_key_digest": public_key_digest.as_str(),
             "agent_key_authorize_event_id": authorize_event_id,
             "issued_at": "2026-01-01T00:00:00.000Z",
-            "controller_id": "ak:did_core:web:alice.example",
+            "controller_principal_id": "ak:did_core:web:alice.example",
             "controller_proof": {
                 "kind": "controller_signature",
                 "verification_method": "did:webvh:z6mkfixtureagent:agent.example#managed-controller",

@@ -595,7 +595,7 @@ fn deterministic_managed_actor_seed(label: &str) -> [u8; 32] {
 fn managed_actor_fixture(
     namespace: &str,
     local_id: &str,
-    controller_id: &arkret_identifiers::DidCoreId,
+    controller_principal_id: &arkret_identifiers::DidCoreId,
 ) -> ManagedActorFixture {
     let endpoint: Url = format!(
         "https://managed-{}.applet.example/",
@@ -605,11 +605,11 @@ fn managed_actor_fixture(
     .expect("fixture managed-actor endpoint");
     let local_id = safe_did_token(local_id);
     let root_seed = deterministic_managed_actor_seed(&format!(
-        "{}:{local_id}:root:{controller_id}",
+        "{}:{local_id}:root:{controller_principal_id}",
         safe_did_token(namespace)
     ));
     let next_seed = deterministic_managed_actor_seed(&format!(
-        "{}:{local_id}:next:{controller_id}",
+        "{}:{local_id}:next:{controller_principal_id}",
         safe_did_token(namespace)
     ));
     let next_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
@@ -624,7 +624,7 @@ fn managed_actor_fixture(
         &arkret_signatures::webvh::AgentInceptionInput {
             principal_endpoint: &endpoint,
             local_id: &local_id,
-            controller_id,
+            controller_principal_id,
             version_time,
             root_seed: &root_seed,
             next_root_public_key_multibase: &next_key,
@@ -2351,7 +2351,10 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
         .await
         .unwrap()
         .expect("accepted Applet identity winner remains durable after ghost provision");
-    assert_eq!(stored_identity["registry_id"], json!(package.controller_id));
+    assert_eq!(
+        stored_identity["registry_id"],
+        json!(package.controller_principal_id)
+    );
 
     let membership_event_ref = admit_applet_managed_member(
         &state,
@@ -2577,7 +2580,7 @@ fn signed_applet_package(
     target_station_id: &arkret_identifiers::DidCoreId,
 ) -> AppletPackage {
     let controller_did = Did::new("did:web:registry.example".to_owned()).unwrap();
-    let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+    let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
     let service_did = Did::new(format!(
         "did:web:{}.applet.example",
         safe_did_token(namespace)
@@ -2591,7 +2594,7 @@ fn signed_applet_package(
         AppletId::new(applet_id.to_owned()).unwrap(),
         service_id.clone(),
         service_did.clone(),
-        controller_id.clone(),
+        controller_principal_id.clone(),
         format!("https://{}.applet.example", safe_did_token(namespace)),
         arkret_wire::ActorId::account(arkret_wire::AccountId::new(
             bot_actor_id,

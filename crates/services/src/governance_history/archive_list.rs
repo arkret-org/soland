@@ -13,7 +13,7 @@ pub struct PreparedArchiveListPage {
 }
 
 pub fn build_archive_list_page(
-    candidates: Vec<soland_storage::PendingRrkAcquisitionRecord>,
+    candidates: Vec<soland_storage::PendingRhrkAcquisitionRecord>,
     query: &OrganizationRecoveryArchiveListQuery,
     caller: &DidCoreId,
     byte_limit: usize,
@@ -28,7 +28,7 @@ pub fn build_archive_list_page(
         };
         let replica = &record.input.archive_replica;
         let archive = &replica.archive;
-        if archive.controller_id != *caller
+        if archive.method_controller_principal_id != *caller
             || archive.effective_scope != query.effective_scope
             || archive.recovery_key_id != query.recovery_key_id
             || archive.key_agreement_ref != query.key_agreement_ref
@@ -81,7 +81,7 @@ mod tests {
 
     fn fixture_parts() -> (
         OrganizationRecoveryArchiveListQuery,
-        soland_storage::PendingRrkAcquisitionRecord,
+        soland_storage::PendingRhrkAcquisitionRecord,
         DidCoreId,
     ) {
         let fixture = arkret_schema_conformance::spec_json_artifact(
@@ -95,14 +95,14 @@ mod tests {
         let outcome: OrganizationRecoveryArchiveReplicaOutcome =
             serde_json::from_value(kat["first_receipt"].clone()).unwrap();
         let now = Utc::now();
-        let record = soland_storage::PendingRrkAcquisitionRecord {
-            input: soland_storage::PendingRrkAcquisitionInput {
+        let record = soland_storage::PendingRhrkAcquisitionRecord {
+            input: soland_storage::PendingRhrkAcquisitionInput {
                 acquisition_digest: outcome.archive_replica_digest.clone(),
                 archive_replica_digest: outcome.archive_replica_digest.clone(),
                 archive_replica: replica,
                 next_attempt_at: now,
             },
-            state: soland_storage::PendingRrkAcquisitionState::Accepted,
+            state: soland_storage::PendingRhrkAcquisitionState::Accepted,
             attempt_count: 1,
             claim_token: None,
             claim_until: None,
@@ -113,12 +113,17 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        let caller = record.input.archive_replica.archive.controller_id.clone();
+        let caller = record
+            .input
+            .archive_replica
+            .archive
+            .method_controller_principal_id
+            .clone();
         (query, record, caller)
     }
 
     fn expected_item(
-        record: &soland_storage::PendingRrkAcquisitionRecord,
+        record: &soland_storage::PendingRhrkAcquisitionRecord,
     ) -> OrganizationRecoveryArchiveListItem {
         let outcome = record.accepted_outcome.as_ref().unwrap();
         let replica = &record.input.archive_replica;

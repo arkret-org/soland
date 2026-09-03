@@ -136,6 +136,7 @@ pub(super) fn validate_admin_install_events(
     basis: &AppletInstallAuthoringRequestBasis,
     install_actor: &ActorId,
 ) -> Result<ValidatedAdminInstallEvents, AppError> {
+    validate_applet_controller_principal(package)?;
     let realm_id = basis.effective_scope.realm_id();
     let registration = &basis.registration_event;
     if &basis.install_actor_id != install_actor
@@ -336,7 +337,7 @@ fn validate_bot_managed_actor_unit(
         || provision.applet_id != expected_applet_id
         || provision.service_id != package.service_id
         || provision.actor_id != bot_actor_id
-        || provision.actor_id.signing_principal_id() == &package.controller_id
+        || provision.actor_id.signing_principal_id() == &package.controller_principal_id
         || provision.actor_id.route_service_id().as_str() != station_id
         || provision.registration_ref != basis.registration_event.event_id
         || !grant_ids.contains(&provision.applet_authority_ref)
@@ -741,7 +742,7 @@ pub(super) async fn register_package_install(
             (
                 AppletIdentityRecord {
                     applet_id: package.applet_id.clone(),
-                    registry_id: package.controller_id.clone(),
+                    registry_id: package.controller_principal_id.clone(),
                     bot_actor_id: bot_provision.actor_id.clone(),
                     bot_actor_provision_ref: bundle.managed_actor_provision_event.event_id.clone(),
                     bot_principal_control_realm_id: RealmId::from_event_id(
@@ -776,7 +777,7 @@ pub(super) async fn register_package_install(
             let reference = reuse.reuse_existing_managed_actor;
             let initial_package = &existing.initial_package;
             if package.applet_id != initial_package.applet_id
-                || package.controller_id != initial_package.controller_id
+                || package.controller_principal_id != initial_package.controller_principal_id
                 || package.service_id != initial_package.service_id
                 || package.bot_actor_id != initial_package.bot_actor_id
                 || reference.actor_id != existing.bot_actor_id
@@ -1103,6 +1104,7 @@ pub(super) fn validate_applet_package(
     package: &AppletPackage,
     registration_epoch_evidence: &AppletRegistrationEpochEvidence,
 ) -> Result<(), AppError> {
+    validate_applet_controller_principal(package)?;
     validate_requested_capability_actions(package)?;
     validated_registration_epoch_evidence(state, package, registration_epoch_evidence)?;
     package
@@ -1149,15 +1151,25 @@ pub(super) fn validate_applet_package(
         );
     }
     // applet-integration.md §4.1 line 193/199 + §4b line 229: the controller
-    // detached proof MUST be a real signature by `controller_id` covering the
+    // detached proof MUST be a real signature by `controller_principal_id` covering the
     // canonical package body. Digest equality alone is forgeable — anyone can
     // recompute `payload_digest` over `unsigned` and sign it with an arbitrary
-    // key. Anchor the proof's verification_method to `controller_id` and run
+    // key. Anchor the proof's verification_method to `controller_principal_id` and run
     // the same detached-JWS verifier every other soland proof path uses
     // (dev: shape-only; production: DID-resolved Ed25519). Preview/commit MUST
     // fail closed (`proof_invalid`) when the controller proof is invalid or its
     // key cannot be resolved.
     validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
+    Ok(())
+}
+
+fn validate_applet_controller_principal(package: &AppletPackage) -> Result<(), AppError> {
+    if package.controller_principal_id == package.service_id {
+        return Err(AppError::param_invalid(
+            "applet runtime service_id cannot be used as controller_principal_id",
+        )
+        .with_wire_code("schema_violation"));
+    }
     Ok(())
 }
 
@@ -1216,9 +1228,9 @@ fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), 
 /// controller DID document and runs the Ed25519 verify against the
 /// verification method's public key.
 ///
-/// `controller_id` is anchored two ways: the proof's `verification_method`
-/// MUST be a DID URL under `controller_id`, and the resolved public key MUST
-/// come from `controller_id`'s DID document (production). A proof signed by any
+/// `controller_principal_id` is anchored two ways: the proof's `verification_method`
+/// MUST be a DID URL under `controller_principal_id`, and the resolved public key MUST
+/// come from `controller_principal_id`'s DID document (production). A proof signed by any
 /// other key — even with a correctly recomputed `payload_digest` — fails here.
 fn validate_controller_proof(
     state: &AppState,
@@ -1229,13 +1241,13 @@ fn validate_controller_proof(
         .proof
         .as_ref()
         .ok_or_else(|| AppError::param_invalid("applet package proof is required"))?;
-    let controller_id = package.controller_id.as_str();
+    let controller_principal_id = package.controller_principal_id.as_str();
     crate::jws_verify::validate_verification_method_controller(
-        controller_id,
+        controller_principal_id,
         &proof.verification_method,
     )
     .map_err(|reason| {
-        AppError::param_invalid("applet package proof is not anchored to controller_id")
+        AppError::param_invalid("applet package proof is not anchored to controller_principal_id")
             .with_wire_code("proof_invalid")
             .with_reason_detail(reason)
     })?;
@@ -1244,14 +1256,14 @@ fn validate_controller_proof(
             unsigned_canonical_bytes,
             &proof.jws,
             &proof.verification_method,
-            controller_id,
+            controller_principal_id,
         )
     } else {
         crate::jws_verify::verify_did_controlled_jws(
             unsigned_canonical_bytes,
             &proof.jws,
             &proof.verification_method,
-            controller_id,
+            controller_principal_id,
             state,
         )
     };
@@ -1381,7 +1393,7 @@ pub(super) fn registration_payload_from_package(
     Ok(json!({
         "applet_id": package.applet_id,
         "service_id": package.service_id,
-        "controller_id": package.controller_id,
+        "controller_principal_id": package.controller_principal_id,
         "base_url": package.base_url,
         "bot_actor_id": package.bot_actor_id,
         "claimed_profiles": package.claimed_profiles,
@@ -1686,10 +1698,10 @@ mod tests {
         (Did::new(did_str).unwrap(), vm)
     }
 
-    /// Build a sealed package whose `controller_id` is a `did:key` and whose
+    /// Build a sealed package whose `controller_principal_id` is a `did:key` and whose
     /// `registration_epoch_evidence` is consistent with a non-empty service
     /// DID document, then sign it with the signer/verification_method chosen
-    /// by the caller. When the signer key differs from `controller_id`'s key
+    /// by the caller. When the signer key differs from `controller_principal_id`'s key
     /// the resulting controller proof MUST fail verification.
     fn signed_did_key_package(
         controller_seed: [u8; 32],
@@ -1697,7 +1709,7 @@ mod tests {
         verification_method: &str,
     ) -> AppletPackage {
         let (controller_did, _) = did_key_for_seed(controller_seed);
-        let controller_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
+        let controller_principal_id = arkret_wire::project_did_to_core_id(&controller_did).unwrap();
         let service_did = Did::new("did:web:test-applet.example".to_owned()).unwrap();
         let service_id = arkret_wire::project_did_to_core_id(&service_did).unwrap();
         let mut package = AppletPackage::new(
@@ -1706,7 +1718,7 @@ mod tests {
                 .unwrap(),
             service_id.clone(),
             service_did.clone(),
-            controller_id.clone(),
+            controller_principal_id.clone(),
             "https://test-applet.example".to_owned(),
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 DidCoreId::new("ak:did_core:web:bot-test-applet.example".to_owned()).unwrap(),
@@ -1759,8 +1771,8 @@ mod tests {
     #[test]
     fn validate_controller_proof_rejects_wrong_key_signature() {
         let state = production_test_state();
-        // controller_id is keyed by `controller_seed`, but the proof is signed
-        // with `signer_seed` while still naming controller_id's verification
+        // controller_principal_id is keyed by `controller_seed`, but the proof is signed
+        // with `signer_seed` while still naming controller_principal_id's verification
         // method. The forged proof recomputes the correct payload digest yet
         // the Ed25519 signature is made by the wrong key — verification MUST
         // fail closed with `proof_invalid`.
@@ -1792,11 +1804,21 @@ mod tests {
     }
 
     #[test]
+    fn runtime_service_cannot_be_the_applet_controller_principal() {
+        let mut package = sample_package();
+        package.controller_principal_id = package.service_id.clone();
+
+        let error = validate_applet_controller_principal(&package)
+            .expect_err("runtime service must not be accepted as publisher principal");
+        assert_eq!(error.wire_code(), "schema_violation");
+    }
+
+    #[test]
     fn validate_controller_proof_rejects_unanchored_verification_method() {
         let state = production_test_state();
         // Sign with a verification_method belonging to a *different* DID than
-        // controller_id. The anchoring gate MUST reject before any crypto,
-        // because the proof is not attributable to controller_id.
+        // controller_principal_id. The anchoring gate MUST reject before any crypto,
+        // because the proof is not attributable to controller_principal_id.
         let controller_seed = [1u8; 32];
         let other_seed = [2u8; 32];
         let (_, other_vm) = did_key_for_seed(other_seed);
@@ -1805,15 +1827,16 @@ mod tests {
         let mut unsigned = package.clone();
         unsigned.proof = None;
         let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
-        let error = validate_controller_proof(&state, &package, &bytes)
-            .expect_err("controller proof not anchored to controller_id must be rejected");
+        let error = validate_controller_proof(&state, &package, &bytes).expect_err(
+            "controller proof not anchored to controller_principal_id must be rejected",
+        );
         assert_eq!(error.wire_code(), "proof_invalid");
     }
 
     #[test]
     fn validate_controller_proof_accepts_correct_controller_signature() {
         let state = production_test_state();
-        // Same key for controller_id and signer: a genuine controller proof
+        // Same key for controller_principal_id and signer: a genuine controller proof
         // verifies against the resolved did:key public key.
         let seed = [1u8; 32];
         let (_, vm) = did_key_for_seed(seed);

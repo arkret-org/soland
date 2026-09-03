@@ -49,7 +49,7 @@ pub struct PgContactVerifiedMirrorStore {
 #[derive(QueryableByName)]
 struct ContactVerifiedMirrorRow {
     #[diesel(sql_type = Text)]
-    target_holder_id: String,
+    target_holder_principal_id: String,
     #[diesel(sql_type = Text)]
     request_event_id: String,
     #[diesel(sql_type = Text)]
@@ -69,7 +69,7 @@ impl TryFrom<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
 
     fn try_from(row: ContactVerifiedMirrorRow) -> Result<Self, Self::Error> {
         Ok(Self {
-            target_holder_id: row.target_holder_id,
+            target_holder_principal_id: row.target_holder_principal_id,
             request_event_id: row.request_event_id,
             request_digest: row.request_digest,
             canonical_event_bytes: row.canonical_event_bytes,
@@ -84,22 +84,22 @@ impl TryFrom<ContactVerifiedMirrorRow> for ContactVerifiedMirrorRecord {
     }
 }
 
-const CONTACT_VERIFIED_MIRROR_COLUMNS: &str = "target_holder_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at";
+const CONTACT_VERIFIED_MIRROR_COLUMNS: &str = "target_holder_principal_id, request_event_id, request_digest, canonical_event_bytes, source_receipt, issuer_id, verified_at";
 
 #[async_trait]
 impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
     async fn get(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_event_id: &str,
     ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(format!(
-            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_event_id = $2"
+            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_principal_id = $1 AND request_event_id = $2"
         ))
-        .bind::<Text, _>(target_holder_id)
+        .bind::<Text, _>(target_holder_principal_id)
         .bind::<Text, _>(request_event_id)
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
         .await
@@ -110,16 +110,16 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
 
     async fn get_by_digest(
         &self,
-        target_holder_id: &str,
+        target_holder_principal_id: &str,
         request_digest: &str,
     ) -> PersistenceResult<Option<ContactVerifiedMirrorRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(format!(
-            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_id = $1 AND request_digest = $2 LIMIT 1"
+            "SELECT {CONTACT_VERIFIED_MIRROR_COLUMNS} FROM contact_verified_mirrors WHERE target_holder_principal_id = $1 AND request_digest = $2 LIMIT 1"
         ))
-        .bind::<Text, _>(target_holder_id)
+        .bind::<Text, _>(target_holder_principal_id)
         .bind::<Text, _>(request_digest)
         .get_result::<ContactVerifiedMirrorRow>(&mut *conn)
         .await
@@ -139,14 +139,14 @@ impl ContactVerifiedMirrorStore for PgContactVerifiedMirrorStore {
         })?;
         let row = sql_query(format!(
             "INSERT INTO contact_verified_mirrors ({CONTACT_VERIFIED_MIRROR_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7) \
-             ON CONFLICT (target_holder_id, request_event_id) DO UPDATE SET verified_at = contact_verified_mirrors.verified_at \
+             ON CONFLICT (target_holder_principal_id, request_event_id) DO UPDATE SET verified_at = contact_verified_mirrors.verified_at \
              WHERE contact_verified_mirrors.request_digest = EXCLUDED.request_digest \
                AND contact_verified_mirrors.canonical_event_bytes = EXCLUDED.canonical_event_bytes \
                AND contact_verified_mirrors.source_receipt = EXCLUDED.source_receipt \
                AND contact_verified_mirrors.issuer_id = EXCLUDED.issuer_id \
              RETURNING {CONTACT_VERIFIED_MIRROR_COLUMNS}"
         ))
-        .bind::<Text, _>(&record.target_holder_id)
+        .bind::<Text, _>(&record.target_holder_principal_id)
         .bind::<Text, _>(&record.request_event_id)
         .bind::<Text, _>(&record.request_digest)
         .bind::<Binary, _>(&record.canonical_event_bytes)
@@ -739,8 +739,8 @@ pub struct PgConsentCellStore {
 struct ConsentCellRow {
     #[diesel(sql_type = Text)]
     cell_id: CellRef,
-    #[diesel(sql_type = Text)]
-    holder_id: DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    holder_account_id: Value,
     #[diesel(sql_type = Jsonb)]
     peer: Value,
     #[diesel(sql_type = Text)]
@@ -754,6 +754,9 @@ struct ConsentCellRow {
 }
 impl ConsentCellRow {
     fn into_pair(self) -> (ConsentCellKey, ConsentCellRecord) {
+        let holder_account_id: arkret_wire::AccountId =
+            serde_json::from_value(self.holder_account_id)
+                .expect("persisted consent holder account is valid");
         let revoked_dots: BTreeSet<String> = self
             .revoked_dots
             .as_array()
@@ -765,12 +768,12 @@ impl ConsentCellRow {
             })
             .unwrap_or_default();
         let key = ConsentCellKey {
-            holder_id: self.holder_id.clone(),
+            holder_account_id: holder_account_id.clone(),
             cell_id: self.cell_id.clone(),
         };
         let record = ConsentCellRecord {
             cell_id: self.cell_id,
-            holder_id: self.holder_id,
+            holder_account_id,
             peer: serde_json::from_value(self.peer).expect("persisted consent peer is valid"),
             consent_scope: self.consent_scope,
             grant_dots: decode_grant_dots(&self.grant_dots),
@@ -781,21 +784,23 @@ impl ConsentCellRow {
     }
 }
 const CONSENT_CELL_COLUMNS: &str =
-    "cell_id, holder_id AS holder_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
+    "cell_id, holder_account_id, peer, consent_scope, grant_dots, revoked_dots, updated_at";
 #[async_trait]
 impl ConsentCellStore for PgConsentCellStore {
     async fn get(
         &self,
-        holder_id: &DidCoreId,
+        holder_account_id: &arkret_wire::AccountId,
         cell_id: &CellRef,
     ) -> PersistenceResult<Option<ConsentCellRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(format!(
-            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells              WHERE holder_id = $1 AND cell_id = $2"
+            "SELECT {CONSENT_CELL_COLUMNS} FROM consent_cells WHERE holder_account_id = $1 AND cell_id = $2"
         ))
-        .bind::<Text, _>(holder_id)
+        .bind::<Jsonb, _>(serde_json::to_value(holder_account_id).map_err(|error| {
+            PersistenceError::SchemaViolation(format!("consent holder account is not serializable: {error}"))
+        })?)
         .bind::<Text, _>(cell_id)
         .get_result::<ConsentCellRow>(&mut *conn)
         .await

@@ -154,7 +154,7 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
     let local_service_evidence = current_service_signer_evidence(state).await?;
     let controller_evidence = current_controller_signer_evidence(
         state,
-        &binding.controller_id,
+        &binding.controller_principal_id,
         &binding.controller_proof.verification_method,
         &local_service_evidence,
     )
@@ -339,12 +339,12 @@ async fn current_service_signer_evidence(
 
 async fn current_controller_signer_evidence(
     state: &AppState,
-    controller_id: &DidCoreId,
+    controller_principal_id: &DidCoreId,
     verification_method: &arkret_wire::DidUrl,
     attester: &AuthenticatedSignerResolutionEvidence,
 ) -> Result<AuthenticatedSignerResolutionEvidence, AgentSignerEvidenceQueryFailureReason> {
     let station_id = attester.signer_id().clone();
-    let authority = arkret_wire::AccountId::new(controller_id.clone(), station_id);
+    let authority = arkret_wire::AccountId::new(controller_principal_id.clone(), station_id);
     let (public_resolution, normalized_did_document) =
         crate::routing::system::principal_resolution::current_public_principal_resolution(
             state, &authority,
@@ -352,7 +352,7 @@ async fn current_controller_signer_evidence(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let evidence = AuthenticatedSignerResolutionEvidence::Principal {
-        signer_id: controller_id.clone(),
+        signer_id: controller_principal_id.clone(),
         verification_method: verification_method.clone(),
         public_resolution,
         normalized_did_document,
@@ -803,7 +803,7 @@ async fn preflight_controller_gate(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let principal_id = DidCoreId::new(agent.controller_id)
+    let principal_id = DidCoreId::new(agent.controller_principal_id)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let destination_id = crate::routing::events::peer::trusted_account_authority_id(state)
         .await
@@ -1082,7 +1082,6 @@ async fn produce_current_agent_signer_evidence(
         agent_lifecycle_witness: AgentLifecycleWitness {
             component: non_empty(AGENT_STATUS_COMPONENT)?,
             agent_id: agent_id.clone(),
-            controller_id: runtime.signing_key_binding.controller_id.clone(),
             status: AgentLifecycleStatus::Active,
             provenance: lifecycle.provenance,
             accepted_status_event: lifecycle.event,
@@ -1399,7 +1398,7 @@ async fn verify_current_evidence(
         .and_then(|(_, fragment)| arkret_wire::DeviceId::new(fragment.to_owned()).ok())
         .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let controller_account = arkret_wire::AccountId::new(
-        binding.controller_id.clone(),
+        binding.controller_principal_id.clone(),
         state.service_core_id().clone(),
     );
     let controller_key =
@@ -1469,7 +1468,7 @@ async fn verify_current_evidence(
         signer_id: agent_id,
         signer_actor_id: &agent_actor,
         agent_key_id: &binding.agent_key_id,
-        controller_id: &binding.controller_id,
+        controller_principal_id: &binding.controller_principal_id,
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
         authorize_public_key_digest: &binding.public_key_digest,
         authorize_signing_key_binding_digest: &binding_digest,
@@ -1484,7 +1483,7 @@ async fn verify_current_evidence(
     let common = arkret_signatures::agent_evidence::AgentEvidenceCommonContext {
         signer_id: agent_id,
         agent_key_id: &binding.agent_key_id,
-        controller_id: &binding.controller_id,
+        controller_principal_id: &binding.controller_principal_id,
         verification_method,
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
         authorize_public_key_digest: &binding.public_key_digest,

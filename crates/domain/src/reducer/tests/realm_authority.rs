@@ -59,7 +59,7 @@ fn transfer_changes_only_controller_and_epoch() {
                 "realm_id": REALM,
                 "expected_state_digest": root_digest(&state),
                 "patch": {
-                    "controller_id": account_actor(SUCCESSOR)
+                    "controller_actor_id": account_actor(SUCCESSOR)
                 },
                 "successor_acceptance": { "proof": "accepted" },
                 "sender": OWNER
@@ -70,7 +70,7 @@ fn transfer_changes_only_controller_and_epoch() {
     assert!(matches!(effect, ProjectionEffect::RealmLifecycle { .. }));
     let after = state.realm_authority_root(REALM).unwrap();
     assert_eq!(
-        after.controller_id.signing_principal_id().as_str(),
+        after.controller_actor_id.signing_principal_id().as_str(),
         SUCCESSOR
     );
     assert_eq!(after.controller_epoch, before.controller_epoch + 1);
@@ -88,7 +88,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": expected,
                 "patch": {
-                    "controller_id": account_actor("ak:did_core:web:outsider.example")
+                    "controller_actor_id": account_actor("ak:did_core:web:outsider.example")
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER
@@ -109,7 +109,7 @@ fn transfer_rejects_nonmember_and_stale_expected_state() {
                 "realm_id": REALM,
                 "expected_state_digest": format!("sha256:{}", "0".repeat(64)),
                 "patch": {
-                    "controller_id": account_actor(SUCCESSOR)
+                    "controller_actor_id": account_actor(SUCCESSOR)
                 },
                 "successor_acceptance": "accepted",
                 "sender": OWNER
@@ -141,7 +141,7 @@ fn reset_changes_only_generation() {
     );
     assert!(matches!(reset, ProjectionEffect::RealmLifecycle { .. }));
     let after_reset = state.realm_authority_root(REALM).unwrap();
-    assert_eq!(after_reset.controller_id, before.controller_id);
+    assert_eq!(after_reset.controller_actor_id, before.controller_actor_id);
     assert_eq!(after_reset.controller_epoch, before.controller_epoch);
     assert_eq!(after_reset.authority_generation, 1);
 }

@@ -105,7 +105,12 @@ pub(super) async fn set_agent_participation(
         arkret_wire::ServiceOperationId::SELF_AGENT_PARTICIPATION_RESOURCE_REPLACE_V1,
         json!({
             "agent_id": agent_id,
-            "controller_id": session.actor.clone(),
+            "controller_account_id": arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
+                    AppError::internal(format!("session actor is invalid: {error}"))
+                })?,
+                state.service_core_id().clone(),
+            ),
             "scope": scope_value,
             "scope_key": scope_key,
             "selection": selection_value,

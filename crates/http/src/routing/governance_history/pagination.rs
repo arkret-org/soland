@@ -101,14 +101,14 @@ pub(super) fn history_sequence_cursor_decode(
     Ok(sequence)
 }
 
-pub(super) fn rrk_record_authorizes_request(
-    record: &soland_storage::PendingRrkAcquisitionRecord,
+pub(super) fn rhrk_record_authorizes_request(
+    record: &soland_storage::PendingRhrkAcquisitionRecord,
     caller: &arkret_wire::DidCoreId,
     request: &arkret_models_collaboration::history_key::HistoryKeyRequest,
 ) -> bool {
     let replica = &record.input.archive_replica;
     record.accepted_outcome.is_some()
-        && replica.archive.controller_id == *caller
+        && replica.archive.method_controller_principal_id == *caller
         && replica.archive.effective_scope == request.effective_scope
         && request.requested_ranges.iter().any(|range| {
             range.from_epoch <= replica.archive.epoch && replica.archive.epoch <= range.to_epoch

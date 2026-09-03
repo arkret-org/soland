@@ -846,7 +846,7 @@ async fn actor_has_exact_scope_moderation_capability(
     let projection = state.projections().snapshot();
     let owner = projection
         .realm_authority_root(realm_id)
-        .map(|root| root.controller_id.to_string());
+        .map(|root| root.controller_actor_id.to_string());
     let members = RealmId::new(realm_id.to_owned())
         .ok()
         .and_then(|id| state.realm_directory().snapshot().get(&id).cloned())

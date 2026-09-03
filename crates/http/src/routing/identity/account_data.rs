@@ -889,7 +889,7 @@ mod tests {
         ) -> ServiceResult<Option<AgentController>> {
             Ok(
                 (agent_id == "did:web:agent.alice.example").then(|| AgentController {
-                    controller_id: "ak:did_core:web:alice.example".to_owned(),
+                    controller_principal_id: "ak:did_core:web:alice.example".to_owned(),
                 }),
             )
         }
@@ -966,7 +966,7 @@ mod tests {
             "ak.account.blocklist"
         ));
         assert!(!is_service_internal_account_data_key(
-            "ak.agent.sidecar_view_state.v1:ak:did_core:fixture"
+            "ak.agent.sidecar_view_state.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1:ak:strand:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-"
         ));
     }
 
@@ -1053,9 +1053,15 @@ mod tests {
         // The active view-state surface is unaffected.
         assert!(
             validate_registered_account_data_key(
-                "ak.agent.sidecar_view_state.v1:did:web:alice.example"
+                "ak.agent.sidecar_view_state.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1:ak:strand:Aepgr15HbtERKfqPAh9SrfWBdihSvX_c94JvujvBS2f-"
             )
             .is_ok()
+        );
+        assert!(
+            validate_registered_account_data_key(
+                "ak.agent.sidecar_view_state.v1:did:web:alice.example"
+            )
+            .is_err()
         );
     }
 

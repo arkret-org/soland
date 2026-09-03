@@ -815,9 +815,13 @@ async fn verify_mimi_consent_correlation(
                 .ok_or_else(mimi_consent_correlation_unavailable)?;
             let cell_id = arkret_state::consent::consent_cell_id(&body.consent_id)
                 .map_err(|error| AppError::internal(format!("MIMI consent cell id: {error}")))?;
+            let holder_account_id = body
+                .actor_id
+                .as_account_id()
+                .ok_or_else(mimi_consent_correlation_unavailable)?;
             let cell = state
                 .consents()
-                .holder_cell(body.actor_id.signing_principal_id(), &cell_id)
+                .holder_cell(holder_account_id, &cell_id)
                 .filter(|cell| {
                     (match &cell.peer {
                         arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
@@ -1214,12 +1218,13 @@ async fn verify_mimi_reporter_authority(
             .await
             .map_err(|_| mimi_reporter_resolution_required())?
             .ok_or_else(mimi_reporter_resolution_required)?;
-        let controller_id = arkret_wire::DidCoreId::new(record.controller_id.clone())
-            .or_else(|_| {
-                arkret_wire::Did::new(record.controller_id.clone())
-                    .and_then(|did| arkret_wire::project_did_to_core_id(&did))
-            })
-            .map_err(|_| mimi_reporter_resolution_required())?;
+        let controller_principal_id =
+            arkret_wire::DidCoreId::new(record.controller_principal_id.clone())
+                .or_else(|_| {
+                    arkret_wire::Did::new(record.controller_principal_id.clone())
+                        .and_then(|did| arkret_wire::project_did_to_core_id(&did))
+                })
+                .map_err(|_| mimi_reporter_resolution_required())?;
         let authorization_ref = record
             .authorized_event_ref
             .as_deref()
@@ -1230,7 +1235,7 @@ async fn verify_mimi_reporter_authority(
             .ok_or_else(mimi_reporter_resolution_required)?;
         if record.state
             != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
-            || controller_id != *authority.actor_id.signing_principal_id()
+            || controller_principal_id != *authority.actor_id.signing_principal_id()
             || event
                 .authorization_ref
                 .as_ref()

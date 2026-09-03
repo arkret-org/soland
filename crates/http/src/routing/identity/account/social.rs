@@ -408,7 +408,7 @@ async fn contact_list_rows(
             ContactPeer::Agent {
                 actor_id: peer.clone(),
                 controller_account_id: arkret_wire::AccountId::new(
-                    arkret_identifiers::DidCoreId::new(agent.controller_id)
+                    arkret_identifiers::DidCoreId::new(agent.controller_principal_id)
                         .expect("stored Agent controller DID is validated"),
                     peer.route_service_id().clone(),
                 ),
@@ -573,7 +573,7 @@ async fn contact_list_rows(
         if record.state != AgentLifecycleState::Active {
             continue;
         }
-        if record.controller_id != controller_account_id.principal_id.as_str() {
+        if record.controller_principal_id != controller_account_id.principal_id.as_str() {
             continue;
         }
         let controller_actor = arkret_wire::ActorId::account(controller_account_id.clone());

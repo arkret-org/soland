@@ -679,50 +679,46 @@ impl ConsentService {
     /// projection. The Event commit already succeeded, so this only refreshes
     /// the working view a restart would rebuild from `hydrate_runtime`.
     pub fn install_committed_cell(&self, cell: ConsentCellRecord) {
-        let key = consent_cell_key(&cell.holder_id, &cell.cell_id);
+        let key = consent_cell_key(&cell.holder_account_id, &cell.cell_id);
         self.runtime_cells.lock().insert(key, cell);
     }
 
     /// Every consent cell the holder owns. Consent is holder-private
     /// (`consent-model.md` section 8): a peer never reads cells, dots or
     /// expiry, so there is no peer-visible listing.
-    pub fn holder_cells(&self, holder_id: impl AsRef<str>) -> Vec<ConsentCellRecord> {
-        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
-            return Vec::new();
-        };
+    pub fn holder_cells(
+        &self,
+        holder_account_id: &arkret_wire::AccountId,
+    ) -> Vec<ConsentCellRecord> {
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder_id == holder_id)
+            .filter(|cell| &cell.holder_account_id == holder_account_id)
             .cloned()
             .collect()
     }
 
     pub fn holder_cell(
         &self,
-        holder_id: impl AsRef<str>,
+        holder_account_id: &arkret_wire::AccountId,
         cell_id: impl AsRef<str>,
     ) -> Option<ConsentCellRecord> {
-        let holder_id = DidCoreId::new(holder_id.as_ref().to_owned()).ok()?;
         let cell_id = CellRef::new(cell_id.as_ref().to_owned()).ok()?;
         self.runtime_cells
             .lock()
-            .get(&consent_cell_key(&holder_id, &cell_id))
+            .get(&consent_cell_key(holder_account_id, &cell_id))
             .cloned()
     }
 
     pub fn cells_for_pair(
         &self,
-        holder_id: impl AsRef<str>,
+        holder_account_id: &arkret_wire::AccountId,
         peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
     ) -> Vec<ConsentCellRecord> {
-        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
-            return Vec::new();
-        };
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| cell.holder_id == holder_id && &cell.peer == peer)
+            .filter(|cell| &cell.holder_account_id == holder_account_id && &cell.peer == peer)
             .cloned()
             .collect()
     }
@@ -730,18 +726,15 @@ impl ConsentService {
     /// Holder cells whose frozen intent is exactly `(peer, consent_scope)`.
     pub fn cells_for_intent(
         &self,
-        holder_id: impl AsRef<str>,
+        holder_account_id: &arkret_wire::AccountId,
         peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
         consent_scope: &str,
     ) -> Vec<ConsentCellRecord> {
-        let Ok(holder_id) = DidCoreId::new(holder_id.as_ref().to_owned()) else {
-            return Vec::new();
-        };
         self.runtime_cells
             .lock()
             .values()
             .filter(|cell| {
-                cell.holder_id == holder_id
+                &cell.holder_account_id == holder_account_id
                     && &cell.peer == peer
                     && cell.consent_scope == consent_scope
             })
@@ -750,9 +743,12 @@ impl ConsentService {
     }
 }
 
-fn consent_cell_key(holder_id: &DidCoreId, cell_id: &CellRef) -> ConsentCellKey {
+fn consent_cell_key(
+    holder_account_id: &arkret_wire::AccountId,
+    cell_id: &CellRef,
+) -> ConsentCellKey {
     ConsentCellKey {
-        holder_id: holder_id.clone(),
+        holder_account_id: holder_account_id.clone(),
         cell_id: cell_id.clone(),
     }
 }
@@ -914,7 +910,7 @@ pub struct FindAgentControllerQuery {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AgentController {
-    pub controller_id: String,
+    pub controller_principal_id: String,
 }
 
 #[async_trait]
@@ -1034,7 +1030,7 @@ pub use soland_storage::PendingAgentPairingCommitIntent as AgentPairingCommitInt
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentPairingState {
     pub id: String,
-    pub controller_id: String,
+    pub controller_principal_id: String,
     pub principal_control_realm_id: String,
     pub controller_authorization_ref: DidUrl,
     pub display_name: Option<String>,
@@ -1105,7 +1101,7 @@ pub struct AgentRuntimeBindings {
 impl AgentPairingState {
     pub fn new(
         id: String,
-        controller_id: String,
+        controller_principal_id: String,
         principal_control_realm_id: String,
         controller_authorization_ref: DidUrl,
         state: AgentLifecycleState,
@@ -1113,7 +1109,7 @@ impl AgentPairingState {
     ) -> Self {
         Self {
             id,
-            controller_id,
+            controller_principal_id,
             principal_control_realm_id,
             controller_authorization_ref,
             display_name: None,
@@ -1352,7 +1348,7 @@ pub trait AgentPairingPort: Send + Sync {
     async fn agent(&self, agent_id: &str) -> ServiceResult<Option<AgentPairingState>>;
     async fn agents_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> ServiceResult<Vec<AgentPairingState>>;
     async fn save_agent(&self, agent: AgentPairingState) -> ServiceResult<()>;
     async fn store_runtime_approval(
@@ -1389,11 +1385,11 @@ pub trait SidecarPort: Send + Sync {
     async fn sidecar_for_realm_controller(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<AgentSidecarState>>;
     async fn sidecars_for_controller(
         &self,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
         realm_id: Option<&str>,
     ) -> ServiceResult<Vec<AgentSidecarState>>;
     async fn ensure_context(
@@ -1987,9 +1983,11 @@ impl AgentPairingService {
 
     pub async fn agents_for_controller(
         &self,
-        controller_id: &str,
+        controller_principal_id: &str,
     ) -> ServiceResult<Vec<AgentPairingState>> {
-        self.pairing.agents_for_controller(controller_id).await
+        self.pairing
+            .agents_for_controller(controller_principal_id)
+            .await
     }
 
     pub async fn save_agent(&self, agent: AgentPairingState) -> ServiceResult<()> {
@@ -2048,19 +2046,19 @@ impl AgentPairingService {
     pub async fn sidecar_for_realm_controller(
         &self,
         realm_id: &str,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
     ) -> ServiceResult<Option<AgentSidecarState>> {
         self.sidecars
-            .sidecar_for_realm_controller(realm_id, controller_id)
+            .sidecar_for_realm_controller(realm_id, controller_account_id)
             .await
     }
     pub async fn sidecars_for_controller(
         &self,
-        controller_id: &str,
+        controller_account_id: &arkret_wire::AccountId,
         realm_id: Option<&str>,
     ) -> ServiceResult<Vec<AgentSidecarState>> {
         self.sidecars
-            .sidecars_for_controller(controller_id, realm_id)
+            .sidecars_for_controller(controller_account_id, realm_id)
             .await
     }
     pub async fn ensure_sidecar_context(
@@ -2818,7 +2816,7 @@ mod tests {
                 "public_key_digest": format!("sha256:{}", "00".repeat(32)),
                 "agent_key_authorize_event_id": ACTIVE_BINDING_EVENT_ID,
                 "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_id": "ak:did_core:web:alice.example",
+                "controller_principal_id": "ak:did_core:web:alice.example",
                 "controller_proof": {
                     "kind": "controller_signature",
                     "verification_method": "did:web:alice.example#key-1",
@@ -3127,13 +3125,13 @@ mod tests {
         async fn sidecar_for_realm_controller(
             &self,
             _realm_id: &str,
-            _controller_id: &str,
+            _controller_account_id: &arkret_wire::AccountId,
         ) -> ServiceResult<Option<AgentSidecarState>> {
             Ok(None)
         }
         async fn sidecars_for_controller(
             &self,
-            _controller_id: &str,
+            _controller_account_id: &arkret_wire::AccountId,
             _realm_id: Option<&str>,
         ) -> ServiceResult<Vec<AgentSidecarState>> {
             Ok(Vec::new())
@@ -3396,7 +3394,7 @@ mod tests {
 
         async fn agents_for_controller(
             &self,
-            _controller_id: &str,
+            _controller_principal_id: &str,
         ) -> ServiceResult<Vec<AgentPairingState>> {
             Ok(Vec::new())
         }
@@ -3539,7 +3537,7 @@ mod tests {
                 "agent_key_authorize_event_id":
                     "ak:event:AdkQ-RmB1a8zyc52yl9GWAsodQ_EUle1WAVZqbO7pc19",
                 "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_id": "ak:did_core:web:alice.example",
+                "controller_principal_id": "ak:did_core:web:alice.example",
                 "controller_proof": {
                     "kind": "controller_signature",
                     "verification_method": "did:web:alice.example#key-1",
