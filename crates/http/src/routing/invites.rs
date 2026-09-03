@@ -2451,7 +2451,7 @@ mod invite_locator_security_tests {
         state
             .identities()
             .save_account(AccountProfileState {
-                pk: soland_storage::AccountPk(1),
+                pk: soland_storage::AccountPk(0),
                 account_id: arkret_wire::AccountId::new(
                     DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
                     state.service_core_id().clone(),

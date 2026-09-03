@@ -67,10 +67,7 @@ pub async fn resolve_and_build_persistence(
     db: &Db,
 ) -> anyhow::Result<ServiceIdentityBootstrap> {
     let pool = db.pool.as_ref().ok_or_else(|| {
-        anyhow::anyhow!(
-            "DATABASE_URL is required: the Soland runtime uses PostgreSQL persistence; \
-             soland-storage-memory is test-only"
-        )
+        anyhow::anyhow!("DATABASE_URL is required: the Soland runtime persists through PostgreSQL")
     })?;
     let persistence = PersistenceHandle::new(Arc::new(PgPersistenceStore::new(pool.clone())));
     let key_store: Option<Arc<dyn KeyStore>> = config
@@ -2126,9 +2123,18 @@ fn seed_public_multibase(seed: &[u8; 32]) -> String {
 mod tests {
     use arkret_keystore::{InMemoryKeyStore, KeyStore};
     use soland_storage::DeliveryPolicyStoreRegistry;
-    use soland_storage_memory::SolandMemoryPersistenceStore;
+    use soland_storage_postgres::PgPersistenceStore;
+    use soland_storage_postgres::test_database::TestDatabase;
 
     use super::*;
+
+    /// A durable store on a database leased for the calling test. The lease is
+    /// owned by the store, so it lasts exactly as long as the fixture holds it.
+    async fn leased_store() -> Arc<PgPersistenceStore> {
+        Arc::new(PgPersistenceStore::leased(Arc::new(
+            TestDatabase::lease().await,
+        )))
+    }
 
     fn bootstrap_config() -> AppConfig {
         AppConfig {
@@ -2336,7 +2342,7 @@ mod tests {
     #[tokio::test]
     async fn first_provisioning_persists_sdk_identity_and_both_control_keys() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
 
@@ -2384,7 +2390,7 @@ mod tests {
     #[tokio::test]
     async fn restart_reuses_identity_and_rejects_missing_control_key() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
@@ -2428,7 +2434,7 @@ mod tests {
             key_store: soland_http::config::KeyStoreConfig::Platform,
             ..AppConfig::test_default()
         };
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
 
@@ -2470,7 +2476,7 @@ mod tests {
     #[tokio::test]
     async fn database_row_loss_recovers_from_local_registration_without_reminting() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
         let state = resolve_service_identity(&persistence, &config, Some(&key_store), None, true)
@@ -2478,7 +2484,7 @@ mod tests {
             .expect("first provisioning");
         let first_did = state_did(&state);
 
-        let replacement_identity_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let replacement_identity_store = leased_store().await;
         let replacement_persistence = PersistenceHandle::new(replacement_identity_store.clone());
         let key = registration_key(&config).unwrap();
         let outcome = persistence_store
@@ -2520,7 +2526,7 @@ mod tests {
     #[tokio::test]
     async fn empty_database_restores_verified_identity_bundle() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let bundle_dir = std::env::temp_dir().join(format!(
@@ -2539,7 +2545,7 @@ mod tests {
         .expect("first provisioning with bundle");
         let first_did = state_did(&state);
 
-        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_database = leased_store().await;
         let empty_persistence = PersistenceHandle::new(empty_database.clone());
         let restored_config = bootstrap_config();
         let restored_state = resolve_service_identity(
@@ -2629,7 +2635,7 @@ mod tests {
     #[tokio::test]
     async fn bundle_restore_rejects_a_forged_provider_receipt() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let bundle_dir = std::env::temp_dir().join(format!(
@@ -2656,7 +2662,7 @@ mod tests {
         forged.receipt_chains[0] = forged.identity.registration_receipt.clone();
         bundle_backend.store(&forged).unwrap();
 
-        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_database = leased_store().await;
         let empty_persistence = PersistenceHandle::new(empty_database);
         let error = resolve_service_identity(
             &empty_persistence,
@@ -2674,7 +2680,7 @@ mod tests {
     #[tokio::test]
     async fn production_without_first_provisioning_fails_closed() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let error = resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
@@ -2694,7 +2700,7 @@ mod tests {
             external_webvh_registration_bearer: Some("test-registration-bearer".to_owned()),
             ..bootstrap_config()
         };
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = Arc::new(InMemoryKeyStore::new());
 
@@ -2782,7 +2788,7 @@ mod tests {
     #[tokio::test]
     async fn provisioning_without_durable_control_store_is_rejected() {
         let config = bootstrap_config();
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let error = resolve_service_identity(&persistence, &config, None, None, true)
             .await

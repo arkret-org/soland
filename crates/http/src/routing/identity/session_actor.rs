@@ -211,23 +211,22 @@ mod tests {
             .as_account_id()
             .unwrap()
             .clone();
-        for (pk, account_id) in [
-            (soland_storage::AccountPk(1), local_account.clone()),
-            (
-                soland_storage::AccountPk(2),
-                AccountId::new(
-                    local_account.principal_id.clone(),
-                    DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
-                ),
-            ),
+        let other_station_account = AccountId::new(
+            local_account.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
+        );
+        for (label, account_id) in [
+            ("local", local_account.clone()),
+            ("other-station", other_station_account.clone()),
         ] {
             state
                 .identities()
                 .save_account(soland_services::identity::AccountProfileState {
-                    pk,
+                    // The store assigns the primary key.
+                    pk: soland_storage::AccountPk(0),
                     principal_id: account_id.principal_id.clone(),
                     account_id,
-                    localpart: format!("account-{}", pk.0),
+                    localpart: format!("account-{label}"),
                     display_name: None,
                     bio: None,
                     avatar_blob_ref: None,
@@ -236,12 +235,26 @@ mod tests {
                 .await
                 .unwrap();
         }
-        session.account_pk = Some(soland_storage::AccountPk(1));
+        let local_pk = state
+            .identities()
+            .account(&local_account)
+            .await
+            .expect("local account lookup")
+            .expect("local account was just saved")
+            .pk;
+        let other_station_pk = state
+            .identities()
+            .account(&other_station_account)
+            .await
+            .expect("other-station account lookup")
+            .expect("other-station account was just saved")
+            .pk;
+        session.account_pk = Some(local_pk);
         assert_eq!(
             validated_session_actor(&state, &session).await.unwrap(),
             ActorId::account(local_account)
         );
-        session.account_pk = Some(soland_storage::AccountPk(2));
+        session.account_pk = Some(other_station_pk);
         assert!(validated_session_actor(&state, &session).await.is_err());
     }
 }

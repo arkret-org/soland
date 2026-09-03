@@ -772,8 +772,8 @@ fn provision_agent_sdk_commit_attempt<'a>(
     slug: &'a str,
     requested_scope: Value,
     fault: Option<(
-        &'a soland_storage_memory::FaultInjector,
-        soland_storage_memory::FaultPlan,
+        &'a soland_test_support::fault_injection::FaultInjector,
+        soland_test_support::fault_injection::FaultPlan,
     )>,
 ) -> AgentCommitAttempt<'a> {
     Box::pin(provision_agent_sdk_commit_attempt_inner(
@@ -795,8 +795,8 @@ async fn provision_agent_sdk_commit_attempt_inner(
     slug: &str,
     requested_scope: Value,
     fault: Option<(
-        &soland_storage_memory::FaultInjector,
-        soland_storage_memory::FaultPlan,
+        &soland_test_support::fault_injection::FaultInjector,
+        soland_test_support::fault_injection::FaultPlan,
     )>,
 ) -> (StatusCode, Value, Value, Option<(StatusCode, Value)>) {
     let app = app_from_state(state.clone());
@@ -1544,7 +1544,9 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
     use soland_storage::{
         DeliveryPolicyStoreRegistry, EventProjectionStoreRegistry, MlsAgentStoreRegistry,
     };
-    use soland_storage_memory::{FaultPlan, FaultPoint, FaultTiming, SolandMemoryPersistenceStore};
+    use soland_test_support::fault_injection::{
+        FaultInjectingStore, FaultPlan, FaultPoint, FaultTiming,
+    };
 
     let plans = [
         FaultPlan::new(FaultPoint::EventCommit, FaultTiming::Before, 1),
@@ -1556,7 +1558,12 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary_body() {
     ];
 
     for (index, plan) in plans.into_iter().enumerate() {
-        let persistence = std::sync::Arc::new(SolandMemoryPersistenceStore::new_with_demo_data());
+        let leased = std::sync::Arc::new(
+            soland_storage_postgres::test_database::TestDatabase::lease().await,
+        );
+        let durable: std::sync::Arc<dyn soland_storage::PersistenceStore> =
+            std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::leased(leased));
+        let persistence = std::sync::Arc::new(FaultInjectingStore::new(durable));
         let injector = persistence.fault_injector();
         let state =
             soland_test_support::app_state_with_persistence(test_config(), persistence.clone())

@@ -6,7 +6,6 @@ const GUARDED_PACKAGES: &[&str] = &[
     "soland-http",
     "soland-services",
     "soland-storage-postgres",
-    "soland-storage-memory",
     "soland-storage",
     "soland-domain",
     "soland-contracts",
@@ -26,7 +25,6 @@ const ALLOWED: &[(&str, &str)] = &[
     ("soland-services", "soland-storage"),
     ("soland-services", "arkret-sdk"),
     ("soland-storage-postgres", "soland-storage"),
-    ("soland-storage-memory", "soland-storage"),
     ("soland-storage", "soland-domain"),
     ("soland-storage", "arkret-sdk"),
     ("soland-domain", "arkret-sdk"),
@@ -46,7 +44,6 @@ const BANNED: &[(&str, &[&str])] = &[
         ],
     ),
     ("soland-storage", &["salvo", "diesel", "diesel-async"]),
-    ("soland-storage-memory", &["diesel", "diesel-async"]),
     (
         "soland-services",
         &[

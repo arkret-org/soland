@@ -88,6 +88,12 @@ pub struct PgPersistenceStore {
     idempotency_keys: PgIdempotencyStore,
     websocket_auth: PgWebsocketAuthStore,
     control_proposal_authority_acks: PgControlProposalAuthorityAckStore,
+    /// The leased test database this store reads and writes, when a fixture
+    /// built it. Holding the lease here ties it to the store's lifetime, so a
+    /// fixture that keeps the store keeps its database, and a restart fixture
+    /// that rebuilds `AppState` over the same store keeps the same rows.
+    #[cfg(any(test, feature = "test-support"))]
+    lease: Option<std::sync::Arc<crate::test_database::TestDatabase>>,
 }
 
 impl PgPersistenceStore {
@@ -171,7 +177,19 @@ impl PgPersistenceStore {
                 pool: pool.clone(),
             },
             notifications: PgNotificationStore { pool },
+            #[cfg(any(test, feature = "test-support"))]
+            lease: None,
         }
+    }
+
+    /// Build a store over a leased test database and take ownership of the
+    /// lease, so the slot is returned when the last holder of this store drops.
+    #[cfg(any(test, feature = "test-support"))]
+    #[must_use]
+    pub fn leased(database: std::sync::Arc<crate::test_database::TestDatabase>) -> Self {
+        let mut store = Self::new(database.pool());
+        store.lease = Some(database);
+        store
     }
 }
 

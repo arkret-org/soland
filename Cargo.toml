@@ -8,7 +8,6 @@ members = [
     "crates/server",
     "crates/services",
     "crates/storage",
-    "crates/storage-memory",
     "crates/storage-postgres",
     "crates/test-support",
     "xtask",
@@ -108,7 +107,6 @@ soland-domain = { version = "0.3.0", path = "crates/domain" }
 soland-http = { version = "0.3.0", path = "crates/http" }
 soland-services = { version = "0.3.0", path = "crates/services" }
 soland-storage = { version = "0.3.0", path = "crates/storage" }
-soland-storage-memory = { version = "0.3.0", path = "crates/storage-memory" }
 soland-storage-postgres = { version = "0.3.0", path = "crates/storage-postgres" }
 soland-test-support = { version = "0.3.0", path = "crates/test-support" }
 subtle = "2.6.1"

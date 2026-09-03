@@ -1000,17 +1000,15 @@ mod tests {
             local.principal_id.clone(),
             super::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         );
-        for (pk, account_id) in [
-            (soland_storage::AccountPk(1), local.clone()),
-            (soland_storage::AccountPk(2), foreign),
-        ] {
+        for (label, account_id) in [("local", local.clone()), ("foreign", foreign.clone())] {
             state
                 .identities()
                 .save_account(soland_services::identity::AccountProfileState {
-                    pk,
+                    // The store assigns the primary key.
+                    pk: soland_storage::AccountPk(0),
                     principal_id: account_id.principal_id.clone(),
                     account_id,
-                    localpart: format!("controller-{}", pk.0),
+                    localpart: format!("controller-{label}"),
                     display_name: None,
                     bio: None,
                     avatar_blob_ref: None,
@@ -1019,6 +1017,20 @@ mod tests {
                 .await
                 .unwrap();
         }
+        let local_pk = state
+            .identities()
+            .account(&local)
+            .await
+            .expect("local account lookup")
+            .expect("local account was just saved")
+            .pk;
+        let foreign_pk = state
+            .identities()
+            .account(&foreign)
+            .await
+            .expect("foreign account lookup")
+            .expect("foreign account was just saved")
+            .pk;
         let mut record = super::AgentPrincipalRecord::new(
             AGENT.into(),
             CONTROLLER.into(),
@@ -1035,7 +1047,7 @@ mod tests {
                 .unwrap(),
             local
         );
-        record.controller_account_pk = Some(soland_storage::AccountPk(1));
+        record.controller_account_pk = Some(local_pk);
         state
             .agent_pairings()
             .save_agent(record.clone())
@@ -1057,7 +1069,7 @@ mod tests {
                 .await
                 .is_err()
         );
-        record.controller_account_pk = Some(soland_storage::AccountPk(2));
+        record.controller_account_pk = Some(foreign_pk);
         assert!(
             super::agent_controller_account(&state, &record)
                 .await

@@ -603,7 +603,7 @@ pub(crate) async fn seed_bearer_session_with_device_payload(
             .test_persistence()
             .accounts()
             .put(&soland_storage::AccountRecord {
-                pk: soland_storage::AccountPk(1),
+                pk: soland_storage::AccountPk(0),
                 principal_id,
                 station_id: state.service_core_id().clone(),
                 localpart: "recovery-test".to_owned(),

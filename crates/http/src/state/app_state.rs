@@ -456,22 +456,38 @@ mod test_construction {
     use soland_services::jobs::RuntimeHealthPort;
     use soland_services::projection::EventSealCommitPort;
     use soland_storage::PersistenceStore;
-    use soland_storage_memory::SolandMemoryPersistenceStore;
+    use soland_storage_postgres::test_database::{TestDatabase, block_on_lease_runtime};
     use soland_storage_postgres::{Db, EventSealCommitStore, PgPersistenceStore};
 
     use super::*;
 
     impl AppState {
+        /// Build a fixture `AppState`.
+        ///
+        /// A caller that already has a pool keeps it. A caller that does not
+        /// leases a real database: Soland stores through one adapter, so a
+        /// fixture reaching for a second implementation would prove nothing
+        /// about what production runs. The lease is owned by the persistence
+        /// store, so the slot is returned when the last holder drops.
         pub fn new(config: AppConfig, db: Db) -> Self {
-            let fallback: Arc<dyn PersistenceStore> = if config.seed_demo_data {
-                Arc::new(SolandMemoryPersistenceStore::new_with_demo_data())
-            } else {
-                Arc::new(SolandMemoryPersistenceStore::new())
+            let (db, persistence): (Db, Arc<dyn PersistenceStore>) = match db.pool.clone() {
+                Some(pool) => (db, Arc::new(PgPersistenceStore::new(pool))),
+                None => {
+                    // The lease supplies the persistence store only. The
+                    // state-resolution plane keeps the SDK's in-process stores
+                    // it already used here: its traits are synchronous, and
+                    // driving the durable ones from a current-thread test
+                    // runtime deadlocks the connection that serves them.
+                    let leased = Arc::new(TestDatabase::lease_blocking());
+                    (
+                        Db { pool: None },
+                        Arc::new(PgPersistenceStore::leased(leased)),
+                    )
+                }
             };
-            let persistence = db.pool.as_ref().map_or_else(
-                || fallback.clone(),
-                |pool| Arc::new(PgPersistenceStore::new(pool.clone())),
-            );
+            if config.seed_demo_data {
+                seed_demo_data(&persistence);
+            }
             Self::new_with_persistence(config, db, persistence)
         }
 
@@ -554,6 +570,65 @@ mod test_construction {
                 resolved_signing_seed,
             )
         }
+    }
+
+    /// The two rows the development demo projection reads.
+    ///
+    /// The demo Realm id itself is derived from config and identity, not read
+    /// back from storage, so only these rows need seeding.
+    const DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+
+    fn seed_demo_data(persistence: &Arc<dyn PersistenceStore>) {
+        use soland_storage::{AccountRecord, RealmMetaRecord};
+
+        let store = persistence.clone();
+        block_on_lease_runtime(async move {
+            let now = chrono::Utc::now();
+            store
+                .accounts()
+                .put(&AccountRecord {
+                    // The store assigns the primary key.
+                    pk: soland_storage::AccountPk(0),
+                    principal_id: arkret_wire::DidCoreId::new(
+                        "ak:did_core:web:alice.example".to_owned(),
+                    )
+                    .expect("demo principal id is canonical"),
+                    station_id: arkret_wire::DidCoreId::new(
+                        "ak:did_core:web:server.example".to_owned(),
+                    )
+                    .expect("demo Station id is canonical"),
+                    localpart: "alice".to_owned(),
+                    display_name: Some("Alice Example".to_owned()),
+                    bio: None,
+                    avatar_blob_ref: None,
+                    created_at: now,
+                })
+                .await
+                .expect("seed the demo account");
+            store
+                .realm_meta()
+                .put(
+                    DEMO_REALM_ID,
+                    &RealmMetaRecord {
+                        owner: "ak:did_core:web:alice.example".to_owned(),
+                        deleted: false,
+                        discoverability: "public".to_owned(),
+                        history_access: "all_history_for_current_members".to_owned(),
+                        preview_policy: None,
+                        preview_policy_digest: None,
+                        asset_privacy_policy: None,
+                        asset_privacy_policy_digest: None,
+                        encryption_profile: None,
+                        plaintext_visible_services: BTreeSet::new(),
+                        plaintext_visible_service_classes: BTreeMap::new(),
+                        minimal_metadata_realm: false,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                )
+                .await
+                .expect("seed the demo Realm metadata");
+        });
     }
 
     fn fixture_signing_seed(config: &AppConfig, identity: &DidCoreIdentityState) -> [u8; 32] {
@@ -2172,8 +2247,8 @@ mod membership_hydration_tests {
         CanonicalEventRecord, EventProjectionStoreRegistry, IdentityStoreRegistry,
         MlsAgentStoreRegistry, PersistenceStore, RealmMetaRecord,
     };
-    use soland_storage_memory::SolandMemoryPersistenceStore;
-    use soland_storage_postgres::Db;
+    use soland_storage_postgres::test_database::TestDatabase;
+    use soland_storage_postgres::{Db, PgPersistenceStore};
 
     use super::*;
 
@@ -2182,7 +2257,9 @@ mod membership_hydration_tests {
         let config = AppConfig::test_default();
         let identity = development_fixture_service_identity(&config);
         let commitment = development_fixture_resolution_commitment(&identity);
-        let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence: Arc<dyn PersistenceStore> = Arc::new(PgPersistenceStore::leased(
+            Arc::new(TestDatabase::lease_blocking()),
+        ));
         let resolved_seed = [0xa5; 32];
 
         let state = AppState::new_with_service_identity(
@@ -2360,7 +2437,8 @@ mod membership_hydration_tests {
     async fn joined_member_survives_reducer_projection_hydration() {
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let member = "ak:did_core:web:bob.example";
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         store
             .events()
             .put(member_state_event(realm_id, member, "join"))
@@ -2418,7 +2496,28 @@ mod membership_hydration_tests {
 
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let group_id = "mls-group-019f0dd3-aaaa";
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
+        // `mls_key_packages.owner_account_pk` references `accounts`, so the
+        // owner has to exist before its KeyPackages can.
+        let owner_account_pk = store
+            .accounts()
+            .put(&soland_storage::AccountRecord {
+                pk: soland_storage::AccountPk(0),
+                principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:bob.example".to_owned())
+                    .expect("fixture principal id is canonical"),
+                station_id: arkret_wire::DidCoreId::new(
+                    "ak:did_core:web:server.example".to_owned(),
+                )
+                .expect("fixture Station id is canonical"),
+                localpart: "bob".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: chrono::Utc::now(),
+            })
+            .await
+            .expect("seed the KeyPackage owner account");
 
         store
             .mls_key_packages()
@@ -2426,7 +2525,7 @@ mod membership_hydration_tests {
                 id: "keypackage-01".to_owned(),
                 keypackage_ref: "sha256:ref".to_owned(),
                 keypackage_digest: "sha256:digest".to_owned(),
-                owner_account_pk: soland_storage::AccountPk(1),
+                owner_account_pk,
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2456,7 +2555,7 @@ mod membership_hydration_tests {
                 id: "keypackage-retired".to_owned(),
                 keypackage_ref: "sha256:retired-ref".to_owned(),
                 keypackage_digest: "sha256:retired-digest".to_owned(),
-                owner_account_pk: soland_storage::AccountPk(1),
+                owner_account_pk,
                 actor_id: "ak:did_core:web:bob.example".to_owned(),
                 device_id: Some("ak:device:bob-1".to_owned()),
                 endpoint_verification_method: None,
@@ -2583,7 +2682,8 @@ mod membership_hydration_tests {
     async fn key_backup_active_series_rehydrates_from_projection_events() {
         use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
 
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         let actor = "ak:did_core:web:alice.example";
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let series_id = "ak:backup_series:019f0dd3-081c-7f03-b388-e0399e775901";
@@ -2730,7 +2830,8 @@ mod membership_hydration_tests {
     async fn agent_key_authorization_rehydrates_from_projection_events() {
         use soland_storage::{ProjectionEventAppendOutcome, ProjectionEventRecord};
 
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         let agent_id =
             "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
         let realm_id = "ak:realm:ATOqK9nfa8bBku-Ep99rtz0j0cavouf7r7EzOLgzm-LP";
@@ -2865,12 +2966,11 @@ mod membership_hydration_tests {
 
     #[tokio::test]
     async fn realm_owner_metadata_rehydrates_without_implying_capability() {
-        use soland_storage_memory::SolandMemoryPersistenceStore;
-
         let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let owner = "did:webvh:z6mkfixture:example.test:users:alice";
         let now = chrono::Utc::now();
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         store
             .realm_meta()
             .put(
@@ -2919,7 +3019,8 @@ mod membership_hydration_tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-07-20T00:00:01.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let store = SolandMemoryPersistenceStore::new();
+        let database = TestDatabase::lease().await;
+        let store = PgPersistenceStore::new(database.pool());
         store
             .events()
             .put(canonical_projection_source_event(

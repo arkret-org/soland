@@ -179,7 +179,7 @@ mod tests {
         let principal =
             arkret_wire::DidCoreId::new("ak:did_core:web:foreign-only.example").unwrap();
         let mut account = soland_services::identity::AccountProfileState {
-            pk: soland_storage::AccountPk(91),
+            pk: soland_storage::AccountPk(0),
             account_id: arkret_wire::AccountId::new(
                 principal.clone(),
                 arkret_wire::DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
@@ -202,7 +202,7 @@ mod tests {
                 .iter()
                 .any(|row| row["actor_id"].as_str() == Some(principal.as_str()))
         );
-        account.pk = soland_storage::AccountPk(92);
+        account.pk = soland_storage::AccountPk(0);
         account.account_id.station_id = state.service_core_id();
         account.localpart = "local-account".to_owned();
         state.identities().save_account(account).await.unwrap();

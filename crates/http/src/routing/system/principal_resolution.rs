@@ -255,19 +255,13 @@ async fn principal_method_history_evidence(
             if did.method() == "web" {
                 validate_did_web_coordinates(projection, &evidence.document_digest)?;
                 Ok((
-                    ResolutionMethodHistoryEvidence::DidWebDocument {
-                        boundary,
-                        evidence,
-                    },
+                    ResolutionMethodHistoryEvidence::DidWebDocument { boundary, evidence },
                     document,
                 ))
             } else {
                 validate_did_key_coordinates(projection, &projection.did)?;
                 Ok((
-                    ResolutionMethodHistoryEvidence::DidKeyExpansion {
-                        boundary,
-                        evidence,
-                    },
+                    ResolutionMethodHistoryEvidence::DidKeyExpansion { boundary, evidence },
                     document,
                 ))
             }

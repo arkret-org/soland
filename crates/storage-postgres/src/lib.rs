@@ -142,6 +142,8 @@ mod sidecars;
 mod signal;
 mod state_resolution;
 mod sync_cursor;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_database;
 mod unit_of_work;
 mod websocket_auth;
 mod webvh;
@@ -192,6 +194,8 @@ pub use sidecars::*;
 pub use signal::*;
 pub use state_resolution::*;
 pub use sync_cursor::*;
+#[cfg(any(test, feature = "test-support"))]
+pub use test_database::TestDatabase;
 pub use unit_of_work::*;
 pub use websocket_auth::*;
 pub use webvh::*;

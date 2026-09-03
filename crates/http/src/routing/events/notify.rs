@@ -667,7 +667,7 @@ mod tests {
 
     fn fixture_actor(principal: &str) -> arkret_wire::ActorId {
         let principal = arkret_wire::DidCoreId::new(principal).unwrap();
-        if principal.as_str() == "ak:did_core:web:agents.example:alice-summary" {
+        if principal.as_str() == "ak:did_core:webvh:z6mkalicesummary" {
             arkret_wire::ActorId::account(arkret_wire::AccountId::new(
                 principal,
                 crate::test_event::station_id(),
@@ -749,9 +749,10 @@ mod tests {
         state
             .identities()
             .save_account(soland_services::identity::AccountProfileState {
-                pk: soland_storage::AccountPk(101),
+                // The store assigns the primary key.
+                pk: soland_storage::AccountPk(0),
                 principal_id: controller_account.principal_id.clone(),
-                account_id: controller_account,
+                account_id: controller_account.clone(),
                 localpart: "controller".to_owned(),
                 display_name: None,
                 bio: None,
@@ -770,7 +771,15 @@ mod tests {
         );
         record.agent_slug = Some("summary".to_owned());
         record.display_name = Some("Summary".to_owned());
-        record.controller_account_pk = Some(soland_storage::AccountPk(101));
+        record.controller_account_pk = Some(
+            state
+                .identities()
+                .account(&controller_account)
+                .await
+                .expect("controller account lookup")
+                .expect("controller account was just saved")
+                .pk,
+        );
         state
             .agent_pairings()
             .save_agent(record)
@@ -1333,13 +1342,13 @@ mod tests {
         let realm_id = "ak:realm:Ae34nQKc2ovP6XDJ1VP9lVATdzZ-6obodata7oQp4ucY";
         let controller = "ak:did_core:web:alice.example";
         let third_party = "ak:did_core:web:bob.example";
-        let agent = "ak:did_core:web:agents.example:alice-summary";
+        let agent = "ak:did_core:webvh:z6mkalicesummary";
         seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
         put_agent(
             &state,
             agent,
             controller,
-            "did:web:agents.example:alice-summary#managed-controller",
+            "did:webvh:z6mkalicesummary:agents.example#managed-controller",
         )
         .await;
         set_realm_selection(&state, realm_id, agent, false, 0).await;
@@ -1406,13 +1415,13 @@ mod tests {
         let strand_id = "ak:strand:AWfDaIWeo-OwLmokFm6boWYM7iYeSPeyw_TUiOku1wdZ";
         let controller = "ak:did_core:web:alice.example";
         let third_party = "ak:did_core:web:bob.example";
-        let agent = "ak:did_core:web:agents.example:alice-summary";
+        let agent = "ak:did_core:webvh:z6mkalicesummary";
         seed_realm_members(&state, realm_id, &[controller, third_party, agent]);
         put_agent(
             &state,
             agent,
             controller,
-            "did:web:agents.example:alice-summary#managed-controller",
+            "did:webvh:z6mkalicesummary:agents.example#managed-controller",
         )
         .await;
         seed_strand_scope(&state, realm_id, strand_id, circle_id);

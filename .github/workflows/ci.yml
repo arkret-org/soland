@@ -105,18 +105,82 @@ jobs:
         working-directory: soland
 
       # Keep test binaries separate from `target/dev`, matching the local
-      # `just test` gate and preventing Windows dev-server file locks. This
-      # command includes the full `-p soland --test http_api` suite.
+      # `just test` gate and preventing Windows dev-server file locks.
       #
-      # `soland-storage-postgres` is excluded here because its contract tests
-      # require a real database and now fail rather than skip without one.
-      # Service containers only run on Linux, so those tests get their own job
-      # (`postgres-storage-contracts`) instead of being silently skipped on
-      # three platforms.
-      - name: Test (includes HTTP API suite)
+      # Soland persists through one adapter, so every test that needs storage
+      # leases a real database and fails without one. Service containers only
+      # run on Linux, so this matrix runs the crates that need no database and
+      # the Linux-only `postgres-workspace` job below runs the rest.
+      - name: Test (no database required)
         env:
           CARGO_TARGET_DIR: target/test
-        run: cargo +1.98 test --locked --workspace --exclude soland-storage-postgres
+        run: >-
+          cargo +1.98 test --locked
+          -p soland-domain -p soland-contracts -p soland-keystore-keygen
+        working-directory: soland
+
+  postgres-workspace:
+    name: Workspace tests (postgres)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: soland
+          POSTGRES_PASSWORD: soland
+          POSTGRES_DB: soland_ws
+        ports:
+          - 5432:5432
+        # Every test leases its own database from this server and the leases
+        # are exclusive, so the connection budget has to cover
+        # `test threads * live AppStates per test` pools plus one session per
+        # lease. The default 100 is not enough for a 16-thread runner.
+        options: >-
+          --health-cmd "pg_isready -U soland"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --shm-size=1g
+    env:
+      DATABASE_URL: postgres://soland:soland@localhost:5432/soland_ws
+      # Demand is `test threads * live AppStates per test`, not the thread
+      # count: restart fixtures hold two leases at once and the deep-stack
+      # runners give each test its own thread. A 12-thread local run peaks near
+      # 50, so this leaves headroom on a larger runner.
+      SOLAND_TEST_DATABASE_SLOTS: "192"
+    steps:
+      - name: Checkout soland
+        uses: actions/checkout@v6
+        with:
+          path: soland
+
+      - name: Checkout Arkret Rust SDK
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ github.repository_owner }}/arkret-rust-sdk
+          path: arkret-rust-sdk
+          token: ${{ secrets.CI_REPO_TOKEN || github.token }}
+
+      - name: Install Rust 1.98
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.98"
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: soland -> target
+
+      - name: Raise the PostgreSQL connection ceiling
+        run: |
+          docker exec "$(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')"             psql -U soland -d soland_ws -c "ALTER SYSTEM SET max_connections = 500;"
+          docker restart "$(docker ps --filter ancestor=postgres:16 --format '{{.ID}}')"
+          for i in {1..30}; do pg_isready -h localhost -p 5432 -U soland && break; sleep 1; done
+
+      - name: Test (whole workspace, real database)
+        env:
+          CARGO_TARGET_DIR: target/test
+        run: cargo +1.98 test --locked --workspace
         working-directory: soland
 
   migration-cycle:

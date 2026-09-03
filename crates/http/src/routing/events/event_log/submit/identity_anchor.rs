@@ -1847,9 +1847,9 @@ fn build_pcr_genesis_batch_receipt(
                 control_key_digest: pins.control_key_digest.clone(),
                 registration_evidence_digest: pins.registration_evidence_digest.clone(),
                 accepted_device_id: descriptor.device_id.clone(),
-                device_key_digest: descriptor.device_key_digest().map_err(|error| {
-                    unit_error(format!("founding device key digest: {error}"))
-                })?,
+                device_key_digest: descriptor
+                    .device_key_digest()
+                    .map_err(|error| unit_error(format!("founding device key digest: {error}")))?,
                 hpke_key_digest: descriptor.hpke_key_digest().map_err(|error| {
                     unit_error(format!("founding device HPKE key digest: {error}"))
                 })?,

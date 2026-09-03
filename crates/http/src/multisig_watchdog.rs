@@ -422,15 +422,29 @@ mod tests {
     async fn other_node_lease_is_respected_until_deadline() {
         let state = test_state();
         let cfg = MultisigWatchdogConfig::for_service(state.service_id());
-        let mut record = make_record("ak:seal:sha256:04", 1, 1);
-        record.claimed_by_node_id = Some("other-node".to_owned());
-        record.claimed_until = Some(Utc::now() + chrono::Duration::seconds(120));
+        let record = make_record("ak:seal:sha256:04", 1, 1);
+        let seal_id = record.seal_id.clone();
         state
             .test_persistence()
             .multisig_pending()
             .upsert(record)
             .await
             .unwrap();
+        // A pending row starts unclaimed; the lease belongs to the claim path,
+        // so the other node has to take it the way a real node would.
+        let now = Utc::now();
+        let (claimed, _) = state
+            .test_persistence()
+            .multisig_pending()
+            .try_claim(
+                &seal_id,
+                "other-node",
+                now,
+                now + chrono::Duration::seconds(120),
+            )
+            .await
+            .unwrap();
+        assert!(claimed, "the other node must hold the lease");
         let report = run_watchdog_pass(&state, &cfg).await;
         assert!(report.claimed.is_empty());
     }

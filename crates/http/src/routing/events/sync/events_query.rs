@@ -1538,13 +1538,13 @@ mod tests {
             arkret_wire::DidCoreId::new(TEST_ACTOR_CORE).unwrap(),
             state.service_core_id(),
         );
-        let account_pk = soland_storage::AccountPk(1);
         state
             .identities()
             .save_account(soland_services::identity::AccountProfileState {
-                pk: account_pk,
+                // The store assigns the primary key.
+                pk: soland_storage::AccountPk(0),
                 principal_id: account_id.principal_id.clone(),
-                account_id,
+                account_id: account_id.clone(),
                 localpart: "alice".to_owned(),
                 display_name: None,
                 bio: None,
@@ -1553,6 +1553,13 @@ mod tests {
             })
             .await
             .unwrap();
+        let account_pk = state
+            .identities()
+            .account(&account_id)
+            .await
+            .expect("account lookup")
+            .expect("account was just saved")
+            .pk;
         let session = SessionIdentityState {
             token_hash: crate::routing::identity::auth::session_credential_hash(
                 "stream-test",

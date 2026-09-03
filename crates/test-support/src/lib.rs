@@ -1,13 +1,14 @@
 #![forbid(unsafe_code)]
 
 pub mod cba_basis;
+pub mod fault_injection;
 pub mod sealed_grant;
 pub mod signed_event;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
 use arkret_identity::service_identity::{
@@ -42,7 +43,8 @@ use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
 use soland_services::projection::{EventSealCommitPort, ProjectionService};
 use soland_storage::PersistenceStore;
-use soland_storage_memory::SolandMemoryPersistenceStore;
+use soland_storage_postgres::PgPersistenceStore;
+use soland_storage_postgres::test_database::{TestDatabase, block_on_lease_runtime};
 
 pub fn app_config() -> AppConfig {
     AppConfig {
@@ -51,37 +53,104 @@ pub fn app_config() -> AppConfig {
     }
 }
 
+/// Lease a database and seed the fixture service identity into it.
+///
+/// Soland stores through one adapter, so a fixture takes a real database
+/// rather than a second in-memory implementation. The lease is owned by the
+/// store, so the slot returns when the last holder drops.
+fn leased_fixture_persistence(
+    config: &AppConfig,
+    identity: &DidCoreIdentityState,
+    signing_seed: [u8; 32],
+    seed_webvh_log: bool,
+) -> Arc<dyn PersistenceStore> {
+    let leased = Arc::new(TestDatabase::lease_blocking());
+    let persistence: Arc<dyn PersistenceStore> = Arc::new(PgPersistenceStore::leased(leased));
+    let stored = fixture_stored_service_identity(config, identity, signing_seed);
+    let webvh_log = seed_webvh_log.then(|| fixture_service_webvh_log(config, signing_seed));
+    let demo = config.seed_demo_data;
+    let store = persistence.clone();
+    block_on_lease_runtime(async move {
+        store
+            .service_identity()
+            .put(stored)
+            .await
+            .expect("fixture service identity seed");
+        if let Some(log) = webvh_log {
+            store
+                .webvh()
+                .append_log_event(log)
+                .await
+                .expect("fixture service WebVH history seed");
+        }
+        if demo {
+            seed_demo_data(store.as_ref()).await;
+        }
+    });
+    persistence
+}
+
+/// The demo Realm the development projection reads. The Realm id the directory
+/// advertises is derived from config and identity, not read back from storage.
+const DEMO_REALM_ID: &str = "ak:realm:AZAySZA7XRDeJ9cO4MqaDWrJD-rqPk6Cudk7CCzsDQz1";
+
+/// The two rows the development demo projection reads.
+async fn seed_demo_data(store: &dyn PersistenceStore) {
+    let now = chrono::Utc::now();
+    store
+        .accounts()
+        .put(&soland_storage::AccountRecord {
+            // The store assigns the primary key.
+            pk: soland_storage::AccountPk(0),
+            principal_id: arkret_wire::DidCoreId::new("ak:did_core:web:alice.example".to_owned())
+                .expect("demo principal id is canonical"),
+            station_id: arkret_wire::DidCoreId::new("ak:did_core:web:server.example".to_owned())
+                .expect("demo Station id is canonical"),
+            localpart: "alice".to_owned(),
+            display_name: Some("Alice Example".to_owned()),
+            bio: None,
+            avatar_blob_ref: None,
+            created_at: now,
+        })
+        .await
+        .expect("seed the demo account");
+    store
+        .realm_meta()
+        .put(
+            DEMO_REALM_ID,
+            &soland_storage::RealmMetaRecord {
+                owner: "ak:did_core:web:alice.example".to_owned(),
+                deleted: false,
+                discoverability: "public".to_owned(),
+                history_access: "all_history_for_current_members".to_owned(),
+                preview_policy: None,
+                preview_policy_digest: None,
+                asset_privacy_policy: None,
+                asset_privacy_policy_digest: None,
+                encryption_profile: None,
+                plaintext_visible_services: BTreeSet::new(),
+                plaintext_visible_service_classes: BTreeMap::new(),
+                minimal_metadata_realm: false,
+                created_at: now,
+                updated_at: now,
+            },
+        )
+        .await
+        .expect("seed the demo Realm metadata");
+}
+
 pub fn app_state(config: AppConfig) -> AppState {
     let identity = fixture_service_identity(&config);
     let signing_seed = fixture_signing_seed(&config, &identity);
-    let persistence = if config.seed_demo_data {
-        SolandMemoryPersistenceStore::new_with_demo_data()
-    } else {
-        SolandMemoryPersistenceStore::new()
-    };
-    persistence.seed_service_identity(fixture_stored_service_identity(
-        &config,
-        &identity,
-        signing_seed,
-    ));
-    persistence.seed_webvh_log_event(fixture_service_webvh_log(&config, signing_seed));
-    app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
+    let persistence = leased_fixture_persistence(&config, &identity, signing_seed, true);
+    app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
 pub fn app_state_with_service_did(config: AppConfig, did: Did) -> AppState {
     let identity = fixture_service_identity_for_did(&config, did);
     let signing_seed = fixture_signing_seed(&config, &identity);
-    let persistence = if config.seed_demo_data {
-        SolandMemoryPersistenceStore::new_with_demo_data()
-    } else {
-        SolandMemoryPersistenceStore::new()
-    };
-    persistence.seed_service_identity(fixture_stored_service_identity(
-        &config,
-        &identity,
-        signing_seed,
-    ));
-    app_state_with_identity(config, Arc::new(persistence), identity, signing_seed)
+    let persistence = leased_fixture_persistence(&config, &identity, signing_seed, false);
+    app_state_with_identity(config, persistence, identity, signing_seed)
 }
 
 pub async fn app_state_with_persistence(
@@ -124,6 +193,16 @@ pub async fn app_state_with_persistence(
             .append_log_event(fixture_service_webvh_log(&config, signing_seed))
             .await
             .expect("fixture service WebVH history seed");
+    }
+    if config.seed_demo_data
+        && persistence
+            .realm_meta()
+            .get(DEMO_REALM_ID)
+            .await
+            .expect("demo Realm metadata lookup")
+            .is_none()
+    {
+        seed_demo_data(persistence.as_ref()).await;
     }
     app_state_with_identity(config, persistence, identity, signing_seed)
 }
@@ -285,10 +364,10 @@ pub fn app_state_with_identity(
         service_resolution_commitment,
         resolved_signing_seed,
     );
-    state_test_registry().lock().insert(
+    register_state_resources(
         app_state_key(&state),
         StateTestResources {
-            persistence,
+            persistence: Arc::downgrade(&persistence),
             projection: Some(projection),
             realms: Some(realms),
             control_event_store: Some(control_event_store),
@@ -297,6 +376,17 @@ pub fn app_state_with_identity(
         },
     );
     state
+}
+
+/// Record one fixture's resources, dropping entries whose `AppState` is gone.
+///
+/// Keys are `Arc` addresses, so a freed `AppState` can hand its key to the
+/// next one; purging dead entries keeps a stale key from answering for a live
+/// state and keeps the map from growing for the life of the process.
+fn register_state_resources(key: usize, resources: StateTestResources) {
+    let mut registry = state_test_registry().lock();
+    registry.retain(|_, entry| entry.persistence.strong_count() > 0);
+    registry.insert(key, resources);
 }
 
 pub trait AppStateTestExt {
@@ -333,11 +423,11 @@ pub trait AppStateTestExt {
     ) -> StoreResult<()>;
 }
 
-pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceStore>) {
-    state_test_registry().lock().insert(
+pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceStore>) {
+    register_state_resources(
         app_state_key(state),
         StateTestResources {
-            persistence,
+            persistence: Arc::downgrade(persistence),
             projection: None,
             realms: None,
             control_event_store: None,
@@ -434,7 +524,7 @@ impl AppStateTestExt for AppState {
         state_test_registry()
             .lock()
             .get(&app_state_key(self))
-            .map(|resources| resources.persistence.clone())
+            .and_then(|resources| resources.persistence.upgrade())
             .expect("AppState was not constructed by soland-test-support")
     }
 
@@ -523,7 +613,10 @@ fn app_state_key(state: &AppState) -> usize {
 }
 
 struct StateTestResources {
-    persistence: Arc<dyn PersistenceStore>,
+    /// Weak on purpose. The store owns its database lease, so a strong
+    /// reference here would hold every fixture's slot and its session for the
+    /// life of the process and exhaust the server's connection budget.
+    persistence: Weak<dyn PersistenceStore>,
     projection: Option<&'static Arc<Mutex<ProjectionState>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
     control_event_store: Option<Arc<dyn ControlEventStore>>,

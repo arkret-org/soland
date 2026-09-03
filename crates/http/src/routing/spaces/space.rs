@@ -944,14 +944,29 @@ mod tests {
         )
     }
 
+    /// The durable invite row stores complete Account ids, so a fixture cannot
+    /// use a bare principal core id for either party.
+    fn lifecycle_account(state: &AppState, principal: &str) -> arkret_wire::AccountId {
+        arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).unwrap(),
+            state.service_core_id(),
+        )
+    }
+
     async fn put_pending_invite(state: &AppState, token: &str) {
         state
             .realm_invites()
             .put(RealmInviteState {
                 invite_id: LIFECYCLE_INVITE.to_owned(),
                 realm_id: LIFECYCLE_REALM.to_owned(),
-                inviter_id: LIFECYCLE_ACTOR.to_owned(),
-                invitee_id: Some("ak:did_core:web:bob.example".to_owned()),
+                inviter_id: lifecycle_account(state, LIFECYCLE_ACTOR)
+                    .canonical_key()
+                    .unwrap(),
+                invitee_id: Some(
+                    lifecycle_account(state, "ak:did_core:web:bob.example")
+                        .canonical_key()
+                        .unwrap(),
+                ),
                 introduction_evidence_digest: None,
                 third_party_invite: None,
                 invite_token: token.to_owned(),
@@ -1044,7 +1059,9 @@ mod tests {
             .put(RealmInviteState {
                 invite_id: "ak:invite:ATDCCDepUfY2x8Ah8veGLjoJl1foYqzljIn1qxn7iDSg".to_owned(),
                 realm_id: LIFECYCLE_REALM.to_owned(),
-                inviter_id: LIFECYCLE_ACTOR.to_owned(),
+                inviter_id: lifecycle_account(&state, LIFECYCLE_ACTOR)
+                    .canonical_key()
+                    .unwrap(),
                 invitee_id: Some(account.canonical_key().unwrap()),
                 introduction_evidence_digest: None,
                 third_party_invite: None,

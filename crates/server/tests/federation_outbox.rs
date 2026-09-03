@@ -960,24 +960,17 @@ async fn outbox_row(state: &AppState, id: &str) -> soland_storage::FederationOut
 // These are the tests that actually prove durability, so they must not reuse
 // the previous process's in-memory objects: each "restart" builds a brand-new
 // `AppState` and dispatcher over the same pool, exactly as a real restart does.
-// They skip when `DATABASE_URL` is unset.
-
-/// These cases each drive migrations and then own the whole `federation_outbox`
-/// table's visible state, so they run one at a time against the shared database.
-static PG_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+// Each case leases its own database, so they no longer contend for one
+// `federation_outbox` table and no longer skip when no database is configured:
+// the lease fails instead.
 
 /// A fresh `AppState` over the same PostgreSQL pool — the test's "restart".
-async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
-    std::env::var("DATABASE_URL")
-        .ok()
-        .filter(|url| !url.trim().is_empty())?;
-    let db = soland_storage_postgres::Db::connect(
-        std::env::var("DATABASE_URL").ok().as_deref(),
-        Default::default(),
-    )
-    .await
-    .expect("postgres migrations should run");
-    let pool = db.pool.clone().expect("postgres test requires a pool");
+async fn pg_restart(
+    database: &soland_storage_postgres::TestDatabase,
+    routes: &[VerifiedPeerRoute],
+) -> AppState {
+    let db = database.db();
+    let pool = db.pool.clone().expect("a leased test database has a pool");
     let config = outbox_test_config();
     let persistence_store: std::sync::Arc<dyn soland_storage::PersistenceStore> =
         std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::new(pool));
@@ -1000,11 +993,11 @@ async fn pg_restart(routes: &[VerifiedPeerRoute]) -> Option<AppState> {
         signing_seed,
     )
     .expect("postgres AppState");
-    soland_test_support::register_persistence(&state, persistence_store);
+    soland_test_support::register_persistence(&state, &persistence_store);
     if !routes.is_empty() {
         install_verified_routes(&state, routes);
     }
-    Some(state)
+    state
 }
 
 /// A `(peer, idempotency_key)` pair unique to one test run, so concurrent runs
@@ -1015,10 +1008,8 @@ fn unique_key(prefix: &str) -> String {
 
 #[tokio::test]
 async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
-    let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart(&[]).await else {
-        return;
-    };
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let state = pg_restart(&database, &[]).await;
     let (peer_url, request_rx) = spawn_mock_peer();
     let route = unique_peer_route("restart-pending", &peer_url);
     let key = unique_key("restart-pending");
@@ -1035,9 +1026,7 @@ async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
     // Drop every in-process object and rebuild from the database alone.
     drop(state);
 
-    let restarted = pg_restart(std::slice::from_ref(&route))
-        .await
-        .expect("restart");
+    let restarted = pg_restart(&database, std::slice::from_ref(&route)).await;
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -1051,10 +1040,8 @@ async fn postgres_pending_row_is_delivered_by_a_restarted_dispatcher() {
 
 #[tokio::test]
 async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
-    let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart(&[]).await else {
-        return;
-    };
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let state = pg_restart(&database, &[]).await;
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("503 Service Unavailable", br#"{"error":"unavailable"}"#);
     let route = unique_peer_route("restart-backoff", &peer_url);
@@ -1084,9 +1071,7 @@ async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
 
     // The mock peer has no second response queued: if the restarted dispatcher
     // sent early, the delivery would fail and `attempts` would advance.
-    let restarted = pg_restart(std::slice::from_ref(&route))
-        .await
-        .expect("restart");
+    let restarted = pg_restart(&database, std::slice::from_ref(&route)).await;
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -1102,10 +1087,8 @@ async fn postgres_future_next_attempt_is_not_sent_early_after_restart() {
 
 #[tokio::test]
 async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
-    let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart(&[]).await else {
-        return;
-    };
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let state = pg_restart(&database, &[]).await;
     // Model a peer that accepted the abandoned first transport: the restarted
     // sender receives the formal duplicate outcome for the unchanged
     // Idempotency-Key (`federation.md` §8.5).
@@ -1143,9 +1126,7 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
     assert!(claimed.iter().any(|claimed| claimed.id == row.id));
     drop(state);
 
-    let restarted = pg_restart(std::slice::from_ref(&route))
-        .await
-        .expect("restart");
+    let restarted = pg_restart(&database, std::slice::from_ref(&route)).await;
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await
@@ -1167,10 +1148,8 @@ async fn postgres_crash_before_recording_resends_the_same_transport_identity() {
 
 #[tokio::test]
 async fn postgres_terminal_rows_are_not_resent_after_restart() {
-    let _guard = PG_GUARD.lock().await;
-    let Some(state) = pg_restart(&[]).await else {
-        return;
-    };
+    let database = soland_storage_postgres::TestDatabase::lease().await;
+    let state = pg_restart(&database, &[]).await;
     let (peer_url, request_rx) =
         spawn_mock_peer_with_status("404 Not Found", br#"{"error":"unknown_peer"}"#);
     let peer_route = unique_peer_route("restart-dead", &peer_url);
@@ -1214,9 +1193,7 @@ async fn postgres_terminal_rows_are_not_resent_after_restart() {
     );
     drop(state);
 
-    let restarted = pg_restart(&[peer_route, denied_route])
-        .await
-        .expect("restart");
+    let restarted = pg_restart(&database, &[peer_route, denied_route]).await;
     FederationDispatcher::new(restarted.clone())
         .run_one_pass()
         .await

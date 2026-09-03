@@ -15,6 +15,9 @@ const ALICE_DID: &str = "did:webvh:z6mkalice:alice.example";
 const ALICE_CORE_ID: &str = "ak:did_core:webvh:z6mkalice";
 const BOB_CORE_ID: &str = "ak:did_core:web:bob.example";
 const AGENT_CORE_ID: &str = "ak:did_core:webvh:z6mkfixtureagent";
+/// The Agent's own DID. `controller_authorization_ref` is a DID URL on the
+/// Agent document, so it must project back to `AGENT_CORE_ID`.
+const AGENT_DID: &str = "did:webvh:z6mkfixtureagent:agent.example";
 const AGENT_CONTROLLER_MEMBERSHIP_EVENT_ID: &str =
     "ak:event:AeJsr0sf3TZ_Cuzj2uLddhd-O-Cywvdj8ypnqpVG8zim";
 
@@ -989,7 +992,7 @@ async fn register_agent_selection(
         agent_id.to_owned(),
         ALICE_CORE_ID.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{ALICE_DID}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{AGENT_DID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         chrono::Utc::now(),
     );
@@ -1037,7 +1040,7 @@ async fn register_agent_membership_context(
         agent.to_owned(),
         controller.to_owned(),
         "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K".to_owned(),
-        arkret_wire::DidUrl::new(format!("{ALICE_DID}#managed-controller")).unwrap(),
+        arkret_wire::DidUrl::new(format!("{AGENT_DID}#managed-controller")).unwrap(),
         AgentLifecycleState::Active,
         now,
     );

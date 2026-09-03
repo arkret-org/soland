@@ -1,0 +1,580 @@
+//! Durable-boundary fault injection for fixtures.
+//!
+//! A crash-consistency fixture needs to interrupt a durable commit at an exact
+//! boundary and then prove the retry converges. Soland has one storage
+//! implementation, so the interruption is a decorator around the store rather
+//! than a second adapter that grows its own injection points.
+//!
+//! Every point is at a method's entry or exit, which is what makes the
+//! decorator equivalent to the adapter-internal checks it replaces. Against a
+//! real database the two timings also mean something sharper than they did in
+//! memory: `Before` is a crash with the transaction unopened, so nothing may be
+//! visible, and `After` is a crash once it has committed, so the retry must be
+//! an idempotent replay.
+
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use parking_lot::Mutex;
+use soland_storage::{
+    AgentPairingCommitIntent, AgentPrincipalRecord, AgentRuntimeActivation,
+    AgentRuntimeApprovalWrite, AgentRuntimeEnqueueOutcome, AgentStore,
+    DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, EnqueueAgentRuntimeMessage,
+    EventBatchCommitRequest, EventCommitOutcome, EventCommitRequest, EventCommitUnitOfWork,
+    PersistenceError, PersistenceResult, PersistenceStore, ServiceRegistrationCommitOutcome,
+    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+};
+
+/// The durable boundaries a fixture may interrupt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FaultPoint {
+    EventCommit,
+    WebvhLogCommit,
+    AgentPut,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FaultTiming {
+    /// Before the inner call: the commit never reached the database.
+    Before,
+    /// After the inner call returned: the commit landed and the caller died.
+    After,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FaultPlan {
+    pub point: FaultPoint,
+    pub timing: FaultTiming,
+    pub occurrence: usize,
+}
+
+impl FaultPlan {
+    #[must_use]
+    pub fn new(point: FaultPoint, timing: FaultTiming, occurrence: usize) -> Self {
+        assert!(occurrence > 0, "fault occurrence must be positive");
+        Self {
+            point,
+            timing,
+            occurrence,
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ArmedFault {
+    plan: FaultPlan,
+    observed: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct FaultInjector {
+    armed: Mutex<Option<ArmedFault>>,
+}
+
+impl FaultInjector {
+    pub fn arm(&self, plan: FaultPlan) {
+        *self.armed.lock() = Some(ArmedFault { plan, observed: 0 });
+    }
+
+    pub fn clear(&self) {
+        self.armed.lock().take();
+    }
+
+    fn check(&self, point: FaultPoint, timing: FaultTiming) -> PersistenceResult<()> {
+        let mut armed = self.armed.lock();
+        let Some(fault) = armed.as_mut() else {
+            return Ok(());
+        };
+        if fault.plan.point != point || fault.plan.timing != timing {
+            return Ok(());
+        }
+        fault.observed += 1;
+        if fault.observed != fault.plan.occurrence {
+            return Ok(());
+        }
+        armed.take();
+        Err(PersistenceError::Database(format!(
+            "injected {timing:?} failure at {point:?}"
+        )))
+    }
+}
+
+/// A `PersistenceStore` that can fail at named durable boundaries.
+pub struct FaultInjectingStore {
+    inner: Arc<dyn PersistenceStore>,
+    injector: Arc<FaultInjector>,
+    webvh: FaultWebvhStore,
+    agents: FaultAgentStore,
+}
+
+impl FaultInjectingStore {
+    #[must_use]
+    pub fn new(inner: Arc<dyn PersistenceStore>) -> Self {
+        let injector = Arc::new(FaultInjector::default());
+        Self {
+            webvh: FaultWebvhStore {
+                inner: inner.clone(),
+                injector: injector.clone(),
+            },
+            agents: FaultAgentStore {
+                inner: inner.clone(),
+                injector: injector.clone(),
+            },
+            inner,
+            injector,
+        }
+    }
+
+    #[must_use]
+    pub fn fault_injector(&self) -> Arc<FaultInjector> {
+        self.injector.clone()
+    }
+}
+
+impl PersistenceStore for FaultInjectingStore {}
+
+#[async_trait]
+impl EventCommitUnitOfWork for FaultInjectingStore {
+    async fn commit_event(
+        &self,
+        request: EventCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome> {
+        self.injector
+            .check(FaultPoint::EventCommit, FaultTiming::Before)?;
+        let outcome = self.inner.commit_event(request).await?;
+        self.injector
+            .check(FaultPoint::EventCommit, FaultTiming::After)?;
+        Ok(outcome)
+    }
+
+    async fn commit_event_batch(
+        &self,
+        request: EventBatchCommitRequest,
+    ) -> PersistenceResult<EventCommitOutcome> {
+        self.injector
+            .check(FaultPoint::EventCommit, FaultTiming::Before)?;
+        let outcome = self.inner.commit_event_batch(request).await?;
+        self.injector
+            .check(FaultPoint::EventCommit, FaultTiming::After)?;
+        Ok(outcome)
+    }
+}
+
+#[async_trait]
+impl DevicePairingCommitUnitOfWork for FaultInjectingStore {
+    async fn commit_device_pairing_authorization(
+        &self,
+        commit: DevicePairingAuthorizationCommit,
+    ) -> PersistenceResult<bool> {
+        self.inner.commit_device_pairing_authorization(commit).await
+    }
+}
+
+struct FaultWebvhStore {
+    inner: Arc<dyn PersistenceStore>,
+    injector: Arc<FaultInjector>,
+}
+
+#[async_trait]
+impl WebvhStore for FaultWebvhStore {
+    async fn get_document(&self, did: &str) -> PersistenceResult<Option<WebvhDocumentRecord>> {
+        self.inner.webvh().get_document(did).await
+    }
+    async fn get_embedded_webvh_document_by_local_id(
+        &self,
+        local_id: &str,
+    ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
+        self.inner
+            .webvh()
+            .get_embedded_webvh_document_by_local_id(local_id)
+            .await
+    }
+    async fn put_document(&self, record: WebvhDocumentRecord) -> PersistenceResult<()> {
+        self.inner.webvh().put_document(record).await
+    }
+    async fn append_log_event(&self, event: WebvhLogRecord) -> PersistenceResult<()> {
+        self.inner.webvh().append_log_event(event).await
+    }
+    async fn list_log_events(&self, did: &str) -> PersistenceResult<Vec<WebvhLogRecord>> {
+        self.inner.webvh().list_log_events(did).await
+    }
+    async fn commit_log_operation(
+        &self,
+        expected_current_head: Option<String>,
+        document: WebvhDocumentRecord,
+        event: WebvhLogRecord,
+    ) -> PersistenceResult<WebvhLogCommitOutcome> {
+        self.injector
+            .check(FaultPoint::WebvhLogCommit, FaultTiming::Before)?;
+        let outcome = self
+            .inner
+            .webvh()
+            .commit_log_operation(expected_current_head, document, event)
+            .await?;
+        self.injector
+            .check(FaultPoint::WebvhLogCommit, FaultTiming::After)?;
+        Ok(outcome)
+    }
+    async fn get_service_registration(
+        &self,
+        key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
+    ) -> PersistenceResult<
+        Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
+    > {
+        self.inner.webvh().get_service_registration(key).await
+    }
+    async fn commit_service_registration(
+        &self,
+        key: arkret_models_identity::service_identity::ServiceRegistrationKey,
+        outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
+        document: WebvhDocumentRecord,
+        event: WebvhLogRecord,
+    ) -> PersistenceResult<ServiceRegistrationCommitOutcome> {
+        self.inner
+            .webvh()
+            .commit_service_registration(key, outcome, document, event)
+            .await
+    }
+}
+
+struct FaultAgentStore {
+    inner: Arc<dyn PersistenceStore>,
+    injector: Arc<FaultInjector>,
+}
+
+#[async_trait]
+impl AgentStore for FaultAgentStore {
+    async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()> {
+        self.injector
+            .check(FaultPoint::AgentPut, FaultTiming::Before)?;
+        let outcome = self.inner.agents().put(record).await?;
+        self.injector
+            .check(FaultPoint::AgentPut, FaultTiming::After)?;
+        Ok(outcome)
+    }
+    async fn get(&self, agent_id: &str) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        self.inner.agents().get(agent_id).await
+    }
+    async fn get_by_pairing_request_id(
+        &self,
+        pairing_request_id: &str,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        self.inner
+            .agents()
+            .get_by_pairing_request_id(pairing_request_id)
+            .await
+    }
+    async fn list_for_controller(
+        &self,
+        controller_id: &str,
+    ) -> PersistenceResult<Vec<AgentPrincipalRecord>> {
+        self.inner.agents().list_for_controller(controller_id).await
+    }
+    async fn set_state(
+        &self,
+        agent_id: &str,
+        state: arkret_models_collaboration::agent_operations::AgentLifecycleState,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> PersistenceResult<bool> {
+        self.inner
+            .agents()
+            .set_state(agent_id, state, changed_at)
+            .await
+    }
+    async fn activate_runtime_if_current(
+        &self,
+        activation: &AgentRuntimeActivation,
+    ) -> PersistenceResult<bool> {
+        self.inner
+            .agents()
+            .activate_runtime_if_current(activation)
+            .await
+    }
+    async fn put_pairing_commit_intent_if_compatible(
+        &self,
+        intent: &AgentPairingCommitIntent,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        self.inner
+            .agents()
+            .put_pairing_commit_intent_if_compatible(intent)
+            .await
+    }
+    async fn clear_runtime_approval_notification_if_current(
+        &self,
+        agent_id: &str,
+        approval_request_id: &str,
+    ) -> PersistenceResult<bool> {
+        self.inner
+            .agents()
+            .clear_runtime_approval_notification_if_current(agent_id, approval_request_id)
+            .await
+    }
+    async fn put_runtime_approval_if_compatible(
+        &self,
+        write: &AgentRuntimeApprovalWrite,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        self.inner
+            .agents()
+            .put_runtime_approval_if_compatible(write)
+            .await
+    }
+    async fn enqueue_runtime_message_if_current(
+        &self,
+        command: &EnqueueAgentRuntimeMessage,
+    ) -> PersistenceResult<AgentRuntimeEnqueueOutcome> {
+        self.inner
+            .agents()
+            .enqueue_runtime_message_if_current(command)
+            .await
+    }
+}
+
+impl soland_storage::IdentityStoreRegistry for FaultInjectingStore {
+    fn accounts(&self) -> &dyn soland_storage::AccountStore {
+        self.inner.accounts()
+    }
+    fn account_localparts(&self) -> &dyn soland_storage::AccountLocalpartStore {
+        self.inner.account_localparts()
+    }
+    fn account_lifecycle(&self) -> &dyn soland_storage::AccountLifecycleStore {
+        self.inner.account_lifecycle()
+    }
+    fn sessions(&self) -> &dyn soland_storage::SessionStore {
+        self.inner.sessions()
+    }
+    fn account_data(&self) -> &dyn soland_storage::AccountDataStore {
+        self.inner.account_data()
+    }
+    fn contacts(&self) -> &dyn soland_storage::ContactStore {
+        self.inner.contacts()
+    }
+    fn contact_verified_mirrors(&self) -> &dyn soland_storage::ContactVerifiedMirrorStore {
+        self.inner.contact_verified_mirrors()
+    }
+    fn invite_receive_policies(&self) -> &dyn soland_storage::InviteReceivePolicyStore {
+        self.inner.invite_receive_policies()
+    }
+    fn invite_locators(&self) -> &dyn soland_storage::InviteLocatorStore {
+        self.inner.invite_locators()
+    }
+    fn invite_new_source_ledger(&self) -> &dyn soland_storage::InviteNewSourceLedgerStore {
+        self.inner.invite_new_source_ledger()
+    }
+    fn consent_cells(&self) -> &dyn soland_storage::ConsentCellStore {
+        self.inner.consent_cells()
+    }
+    fn mimi_consent_correlations(&self) -> &dyn soland_storage::MimiConsentCorrelationStore {
+        self.inner.mimi_consent_correlations()
+    }
+    fn realm_meta(&self) -> &dyn soland_storage::RealmMetaStore {
+        self.inner.realm_meta()
+    }
+    fn messages(&self) -> &dyn soland_storage::MessageStore {
+        self.inner.messages()
+    }
+    fn member_identity(&self) -> &dyn soland_storage::MemberIdentityStore {
+        self.inner.member_identity()
+    }
+    fn blobs(&self) -> &dyn soland_storage::BlobStore {
+        self.inner.blobs()
+    }
+    fn devices(&self) -> &dyn soland_storage::DeviceInventoryStore {
+        self.inner.devices()
+    }
+    fn device_pairings(&self) -> &dyn soland_storage::DevicePairingStore {
+        self.inner.device_pairings()
+    }
+    fn device_revocations(&self) -> &dyn soland_storage::DeviceRevocationStore {
+        self.inner.device_revocations()
+    }
+}
+
+impl soland_storage::FederationGovernanceStoreRegistry for FaultInjectingStore {
+    fn federation_outbox(&self) -> &dyn soland_storage::FederationOutboxStore {
+        self.inner.federation_outbox()
+    }
+    fn federation_frontier_exchange(&self) -> &dyn soland_storage::FederationFrontierExchangeStore {
+        self.inner.federation_frontier_exchange()
+    }
+    fn handle_releases(&self) -> &dyn soland_storage::HandleReleaseStore {
+        self.inner.handle_releases()
+    }
+    fn retention_policies(&self) -> &dyn soland_storage::RetentionPolicyStore {
+        self.inner.retention_policies()
+    }
+    fn retention_tombstones(&self) -> &dyn soland_storage::RetentionTombstoneStore {
+        self.inner.retention_tombstones()
+    }
+    fn organizations(&self) -> &dyn soland_storage::OrganizationStore {
+        self.inner.organizations()
+    }
+    fn organization_registrations(&self) -> &dyn soland_storage::OrganizationRegistrationStore {
+        self.inner.organization_registrations()
+    }
+    fn organization_policies(&self) -> &dyn soland_storage::OrganizationPolicyStore {
+        self.inner.organization_policies()
+    }
+    fn realm_organizations(&self) -> &dyn soland_storage::RealmOrganizationStore {
+        self.inner.realm_organizations()
+    }
+    fn realm_organization_statements(
+        &self,
+    ) -> &dyn soland_storage::RealmOrganizationStatementStore {
+        self.inner.realm_organization_statements()
+    }
+    fn audit(&self) -> &dyn soland_storage::AuditStore {
+        self.inner.audit()
+    }
+    fn governance_dependencies(&self) -> &dyn soland_storage::GovernanceDependencyStore {
+        self.inner.governance_dependencies()
+    }
+    fn history_traversal_retentions(&self) -> &dyn soland_storage::HistoryTraversalRetentionStore {
+        self.inner.history_traversal_retentions()
+    }
+    fn pending_rrk_acquisitions(&self) -> &dyn soland_storage::PendingRrkAcquisitionStore {
+        self.inner.pending_rrk_acquisitions()
+    }
+    fn history_response_streams(&self) -> &dyn soland_storage::HistoryResponseStreamStore {
+        self.inner.history_response_streams()
+    }
+}
+
+impl soland_storage::DeliveryPolicyStoreRegistry for FaultInjectingStore {
+    fn moderation(&self) -> &dyn soland_storage::ModerationStore {
+        self.inner.moderation()
+    }
+    fn federation_operations(&self) -> &dyn soland_storage::FederationOperationsStore {
+        self.inner.federation_operations()
+    }
+    fn push_devices(&self) -> &dyn soland_storage::PushDeviceStore {
+        self.inner.push_devices()
+    }
+    fn signal_relay(&self) -> &dyn soland_storage::SignalRelayStore {
+        self.inner.signal_relay()
+    }
+    fn push_bridge_cache(&self) -> &dyn soland_storage::PushBridgeCacheStore {
+        self.inner.push_bridge_cache()
+    }
+    fn policy_documents(&self) -> &dyn soland_storage::PolicyDocumentStore {
+        self.inner.policy_documents()
+    }
+    fn recovery_policies(&self) -> &dyn soland_storage::RecoveryPolicyStore {
+        self.inner.recovery_policies()
+    }
+    fn recovery_sessions(&self) -> &dyn soland_storage::RecoverySessionStore {
+        self.inner.recovery_sessions()
+    }
+    fn security_transactions(&self) -> &dyn soland_storage::SecurityTransactionStore {
+        self.inner.security_transactions()
+    }
+    fn webvh(&self) -> &dyn soland_storage::WebvhStore {
+        &self.webvh
+    }
+    fn service_identity(&self) -> &dyn soland_storage::ServiceIdentityStore {
+        self.inner.service_identity()
+    }
+    fn realm_invites(&self) -> &dyn soland_storage::RealmInviteStore {
+        self.inner.realm_invites()
+    }
+}
+
+impl soland_storage::EventProjectionStoreRegistry for FaultInjectingStore {
+    fn events(&self) -> &dyn soland_storage::EventStore {
+        self.inner.events()
+    }
+    fn projection_events(&self) -> &dyn soland_storage::ProjectionEventStore {
+        self.inner.projection_events()
+    }
+    fn applets(&self) -> &dyn soland_storage::AppletStore {
+        self.inner.applets()
+    }
+    fn device_messages(&self) -> &dyn soland_storage::DeviceMessageStore {
+        self.inner.device_messages()
+    }
+    fn device_keys(&self) -> &dyn soland_storage::DeviceKeyStore {
+        self.inner.device_keys()
+    }
+    fn one_time_keys(&self) -> &dyn soland_storage::OneTimeKeyStore {
+        self.inner.one_time_keys()
+    }
+    fn key_backups(&self) -> &dyn soland_storage::KeyBackupStore {
+        self.inner.key_backups()
+    }
+    fn multisig_pending(&self) -> &dyn soland_storage::MultisigPendingStore {
+        self.inner.multisig_pending()
+    }
+    fn space_container_projections(&self) -> &dyn soland_storage::SpaceContainerProjectionStore {
+        self.inner.space_container_projections()
+    }
+    fn circle_projections(&self) -> &dyn soland_storage::CircleProjectionStore {
+        self.inner.circle_projections()
+    }
+    fn strand_projections(&self) -> &dyn soland_storage::StrandProjectionStore {
+        self.inner.strand_projections()
+    }
+    fn strand_watch_projections(&self) -> &dyn soland_storage::StrandWatchProjectionStore {
+        self.inner.strand_watch_projections()
+    }
+    fn morph_projections(&self) -> &dyn soland_storage::MorphProjectionStore {
+        self.inner.morph_projections()
+    }
+    fn publication_evidence(&self) -> &dyn soland_storage::PublicationEvidenceStore {
+        self.inner.publication_evidence()
+    }
+}
+
+impl soland_storage::MlsAgentStoreRegistry for FaultInjectingStore {
+    fn mls_key_packages(&self) -> &dyn soland_storage::MlsKeyPackageStore {
+        self.inner.mls_key_packages()
+    }
+    fn mls_welcomes(&self) -> &dyn soland_storage::MlsWelcomeStore {
+        self.inner.mls_welcomes()
+    }
+    fn mls_commits(&self) -> &dyn soland_storage::MlsCommitStore {
+        self.inner.mls_commits()
+    }
+    fn agent_participation(&self) -> &dyn soland_storage::AgentParticipationStore {
+        self.inner.agent_participation()
+    }
+    fn agents(&self) -> &dyn soland_storage::AgentStore {
+        &self.agents
+    }
+    fn agent_membership_cascades(&self) -> &dyn soland_storage::AgentMembershipCascadeStore {
+        self.inner.agent_membership_cascades()
+    }
+    fn sidecars(&self) -> &dyn soland_storage::SidecarStore {
+        self.inner.sidecars()
+    }
+    fn notifications(&self) -> &dyn soland_storage::NotificationStore {
+        self.inner.notifications()
+    }
+}
+
+impl soland_storage::SyncStoreRegistry for FaultInjectingStore {
+    fn sync_cursors(&self) -> &dyn soland_storage::SyncCursorStore {
+        self.inner.sync_cursors()
+    }
+    fn idempotency_keys(&self) -> &dyn soland_storage::IdempotencyStore {
+        self.inner.idempotency_keys()
+    }
+    fn control_proposal_authority_acks(
+        &self,
+    ) -> &dyn soland_storage::ControlProposalAuthorityAckStore {
+        self.inner.control_proposal_authority_acks()
+    }
+    fn websocket_auth(&self) -> &dyn soland_storage::WebsocketAuthStore {
+        self.inner.websocket_auth()
+    }
+    fn account_status_replicas(&self) -> &dyn soland_storage::AccountStatusReplicaStore {
+        self.inner.account_status_replicas()
+    }
+}
+
+impl soland_storage::ResolutionStoreRegistry for FaultInjectingStore {
+    fn principal_resolutions(&self) -> &dyn soland_storage::PrincipalResolutionStore {
+        self.inner.principal_resolutions()
+    }
+    fn service_routes(&self) -> &dyn soland_storage::ServiceRouteStore {
+        self.inner.service_routes()
+    }
+}

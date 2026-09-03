@@ -15,12 +15,6 @@ SURFACES = {
     "crates/services/src/events.rs": ("test_index",),
     "crates/services/src/persistence.rs": ("shared_for_tests",),
     "crates/services/src/projection.rs": ("test_state",),
-    "crates/storage-memory/src/service_identity.rs": ("seed",),
-    "crates/storage-memory/src/store.rs": (
-        "seed_service_identity",
-        "seed_webvh_log_event",
-    ),
-    "crates/storage-memory/src/webvh.rs": ("seed_log_event",),
     "crates/storage/src/records.rs": ("with_coalescing_lane",),
 }
 

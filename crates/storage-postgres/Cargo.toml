@@ -9,6 +9,13 @@ homepage.workspace = true
 authors.workspace = true
 description = "PostgreSQL storage adapter and database bootstrap for Soland."
 
+[features]
+default = []
+# Leased test databases (`test_database`). Soland has one storage
+# implementation, so every test that needs storage takes a real database from
+# this module instead of a second in-memory adapter.
+test-support = []
+
 [dependencies]
 anyhow = { workspace = true }
 arkret-canonical.workspace = true

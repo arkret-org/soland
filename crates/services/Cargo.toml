@@ -47,8 +47,7 @@ uuid = { workspace = true, features = ["v7"] }
 [dev-dependencies]
 arkret-schema-conformance = { workspace = true }
 arkret-event-draft = { workspace = true, features = ["test-support"] }
-soland-storage-memory.workspace = true
-soland-storage-postgres.workspace = true
+soland-storage-postgres = { workspace = true, features = ["test-support"] }
 tokio = { workspace = true, features = ["macros"] }
 
 [lints]

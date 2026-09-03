@@ -536,7 +536,7 @@ mod tests {
         ));
         let service = arkret_wire::ActorId::service(account.principal_id.clone());
         let invite_id = "ak:invite:AcsFZ3o2tOdN3EFpNceeLV-aI3jZkB9S34_4YIwJ5DLy";
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+        let realm_id = "ak:realm:AcKqpIvVOZVtWunlTXZCQtNUZl5ICaoTGA-SU-z-901C";
         let timestamp = now();
         let mut invite = soland_services::events::RealmInviteState {
             invite_id: invite_id.to_owned(),

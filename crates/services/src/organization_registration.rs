@@ -1429,7 +1429,6 @@ mod tests {
     use arkret_wire::PayloadProof;
     use parking_lot::RwLock;
     use soland_storage::PersistenceStore;
-    use soland_storage_memory::SolandMemoryPersistenceStore;
 
     use super::*;
 
@@ -2514,25 +2513,15 @@ mod tests {
         }
     }
 
+    /// The 19 semantic outcomes, run against the one storage implementation
+    /// Soland has. The lease fails rather than skips when no database is
+    /// configured, so an unconfigured run breaks the build instead of
+    /// emptying this suite.
     #[tokio::test]
-    async fn embedded_fixture_runner_executes_all_19_semantic_outcomes_in_memory() {
-        run_embedded_fixture(Arc::new(SolandMemoryPersistenceStore::new())).await;
-    }
-
-    #[tokio::test]
-    async fn embedded_fixture_runner_executes_all_19_semantic_outcomes_in_postgres_when_configured()
-    {
-        let database = soland_storage_postgres::Db::connect(
-            std::env::var("DATABASE_URL").ok().as_deref(),
-            Default::default(),
-        )
-        .await
-        .expect("initialize test database");
-        let Some(pool) = database.pool else {
-            return;
-        };
+    async fn embedded_fixture_runner_executes_all_19_semantic_outcomes() {
+        let database = soland_storage_postgres::test_database::TestDatabase::lease().await;
         run_embedded_fixture(Arc::new(soland_storage_postgres::PgPersistenceStore::new(
-            pool,
+            database.pool(),
         )))
         .await;
     }

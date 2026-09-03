@@ -1480,8 +1480,7 @@ async fn seal_dependency_atomic_counts(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_boundary()
- {
+async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_boundary() {
     use arkret_models_collaboration::governance_dependencies::{
         GovernanceDependency, GovernanceDependencySelector,
     };
@@ -2295,8 +2294,7 @@ async fn postgres_adapter_settles_sealed_device_revocations() {
 }
 
 #[tokio::test]
-async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_seal_schedule()
- {
+async fn postgres_event_commit_indexes_basis_free_control_anchor_and_control_seal_schedule() {
     use diesel::sql_types::Text;
     use diesel::{QueryableByName, sql_query};
     use diesel_async::RunQueryDsl;
@@ -3236,8 +3234,7 @@ mod control_move_ingress_negatives {
     /// durable basis; replaying the same digest under the other class is a
     /// Conflict, while a byte-identical replay stays idempotent.
     #[tokio::test(flavor = "multi_thread")]
-    async fn postgres_control_move_ingress_class_mismatch_and_control_seal_schedule()
-     {
+    async fn postgres_control_move_ingress_class_mismatch_and_control_seal_schedule() {
         use arkret_state::state::store::{
             AcklessSelfPrincipalIngress, ControlProposalIngress, StoreError,
         };

@@ -1056,7 +1056,7 @@ mod tests {
         state
             .identities()
             .save_account(AccountProfileState {
-                pk: soland_storage::AccountPk(1),
+                pk: soland_storage::AccountPk(0),
                 account_id: account_id.clone(),
                 principal_id: arkret_wire::DidCoreId::new(holder.to_owned()).unwrap(),
                 localpart: "holder".to_owned(),

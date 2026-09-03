@@ -295,7 +295,7 @@ impl OrganizationStore for PgOrganizationStore {
         .bind::<Bool, _>(record.verified)
         .bind::<Jsonb, _>(&members)
         .bind::<BigInt, _>(member_count)
-        .bind::<Text, _>(record.created_by.as_str())
+        .bind::<Jsonb, _>(Value::String(record.created_by.to_string()))
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
@@ -338,8 +338,8 @@ struct OrganizationRow {
     members: Value,
     #[diesel(sql_type = BigInt)]
     member_count: i64,
-    #[diesel(sql_type = Text)]
-    created_by: arkret_wire::DidCoreId,
+    #[diesel(sql_type = Jsonb)]
+    created_by: Value,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -359,7 +359,14 @@ impl From<OrganizationRow> for OrganizationRecord {
             verified: row.verified,
             member_count: usize::try_from(row.member_count.max(0)).unwrap_or(usize::MAX),
             members,
-            created_by: row.created_by,
+            created_by: row
+                .created_by
+                .as_str()
+                .and_then(|id| arkret_wire::DidCoreId::new(id.to_owned()).ok())
+                .unwrap_or_else(|| {
+                    arkret_wire::DidCoreId::new("ak:did_core:web:unknown.invalid".to_owned())
+                        .expect("placeholder organization creator id is canonical")
+                }),
             created_at: row.created_at,
             updated_at: row.updated_at,
         }

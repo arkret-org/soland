@@ -198,13 +198,13 @@ pub(crate) fn advertise_websocket_binding(
     let Some(base_url) = websocket_base_url(state) else {
         return;
     };
-    description.transport_bindings.push(
-        arkret_models_discovery::TransportBinding::Websocket {
+    description
+        .transport_bindings
+        .push(arkret_models_discovery::TransportBinding::Websocket {
             base_url,
             max_frame_bytes: WS_MAX_FRAME_BYTES,
             max_channels: WS_MAX_CHANNELS,
-        },
-    );
+        });
     description
         .supported_operation_bundles
         .push("ak.operation_bundle.station.websocket.v1".to_owned());

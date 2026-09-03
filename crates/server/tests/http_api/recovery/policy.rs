@@ -3,10 +3,18 @@
 use std::sync::Arc;
 
 use soland_storage::PersistenceStore;
-use soland_storage_memory::SolandMemoryPersistenceStore;
 
 use super::helpers::*;
 use crate::common::*;
+
+/// A durable store on a database leased for the calling test. The lease is
+/// owned by the store, so a restart fixture that rebuilds `AppState` over the
+/// same `Arc` keeps the same rows.
+async fn leased_persistence() -> Arc<dyn PersistenceStore> {
+    Arc::new(soland_storage_postgres::PgPersistenceStore::leased(
+        Arc::new(soland_storage_postgres::test_database::TestDatabase::lease().await),
+    ))
+}
 
 #[test]
 fn recovery_policy_persistence_survives_state_restart_and_rejects_replays() {
@@ -17,7 +25,7 @@ fn recovery_policy_persistence_survives_state_restart_and_rejects_replays() {
 }
 
 async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays_body() {
-    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+    let persistence = leased_persistence().await;
     let state = shared_recovery_state(persistence.clone()).await;
     let signing = SigningKey::from_bytes(&[71u8; 32]);
     let (principal_id, vm) = did_webvh_principal(&signing);
@@ -50,7 +58,7 @@ fn recovery_policy_rejects_tampered_signature_body() {
 }
 
 async fn recovery_policy_rejects_tampered_signature_body_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let state = shared_recovery_state(leased_persistence().await).await;
     let signing = SigningKey::from_bytes(&[72u8; 32]);
     let (principal_id, verification_method) = did_key_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
@@ -80,9 +88,7 @@ fn recovery_policy_production_accepts_verified_payload() {
 async fn recovery_policy_production_accepts_verified_payload_body() {
     let mut config = test_config();
     config.development_mode = false;
-    let state =
-        shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config)
-            .await;
+    let state = shared_recovery_state_with_config(leased_persistence().await, config).await;
     assert!(!state.config().development_mode);
     let token = "prod_recovery_token";
     let signing = SigningKey::from_bytes(&[77u8; 32]);
@@ -112,7 +118,7 @@ fn recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder() {
 }
 
 async fn recovery_policy_rejects_unregistered_grant_and_mismatched_dpop_holder_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let state = shared_recovery_state(leased_persistence().await).await;
     let signing = SigningKey::from_bytes(&[78u8; 32]);
     let (principal_id, _verification_method) = did_key_principal(&signing);
     let token = verified_dev_token_for_device(
@@ -135,7 +141,7 @@ fn recovery_policy_accepts_genesis_session_device_signature() {
 }
 
 async fn recovery_policy_accepts_genesis_session_device_signature_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let state = shared_recovery_state(leased_persistence().await).await;
     let did_root = SigningKey::from_bytes(&[82u8; 32]);
     let device_signing = SigningKey::from_bytes(&[83u8; 32]);
     let (principal_id, principal_vm) = did_key_principal(&did_root);
@@ -177,7 +183,7 @@ fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
 }
 
 async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart_body() {
-    let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
+    let persistence = leased_persistence().await;
     let state = shared_recovery_state(persistence.clone()).await;
     let signing = SigningKey::from_bytes(&[76u8; 32]);
     let (principal_id, verification_method) = did_webvh_principal(&signing);
@@ -223,7 +229,7 @@ fn recovery_policy_get_returns_null_without_active_policy() {
 }
 
 async fn recovery_policy_get_returns_null_without_active_policy_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let state = shared_recovery_state(leased_persistence().await).await;
     let signing = SigningKey::from_bytes(&[90u8; 32]);
     let (principal_id, _vm) = did_key_principal(&signing);
     let token = verified_dev_token_for_device(
@@ -253,7 +259,7 @@ fn recovery_policy_get_returns_active_and_history() {
 }
 
 async fn recovery_policy_get_returns_active_and_history_body() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new())).await;
+    let state = shared_recovery_state(leased_persistence().await).await;
     let signing = SigningKey::from_bytes(&[91u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     // Authenticate AS the principal so the read APIs (principal-isolated) see it.

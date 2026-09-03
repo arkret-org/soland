@@ -438,7 +438,7 @@ pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
         signing_seed,
     )
     .expect("postgres test AppState");
-    soland_test_support::register_persistence(&state, persistence_store);
+    soland_test_support::register_persistence(&state, &persistence_store);
     state
 }
 

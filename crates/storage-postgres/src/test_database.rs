@@ -1,0 +1,761 @@
+//! Leased PostgreSQL databases for tests.
+//!
+//! Soland persists through one adapter. A test that needs storage leases a real
+//! database instead of reaching for a second, in-memory implementation, so the
+//! suite exercises exactly what production runs.
+//!
+//! A lease is exclusive for the life of its guard. The slot is claimed with a
+//! session-level advisory lock held on a dedicated connection, so a crashed or
+//! killed test releases it when its session ends, and every table that carries
+//! rows is emptied before the leasing test observes the database. Slots are
+//! reused, which makes a run cost one migration per slot instead of one per
+//! test: creating a fresh database or schema measures at 1.4-1.9 s here, while
+//! emptying the handful of tables a test dirtied measures at 9 ms to probe plus
+//! a few milliseconds to delete.
+//!
+//! There is no in-memory fallback and no skip. Without a reachable database
+//! [`TestDatabase::lease`] panics, which fails the test rather than emptying it.
+//!
+//! # Runtime ownership
+//!
+//! The advisory lock lives in a PostgreSQL session, and that session dies with
+//! the tokio runtime that drives its connection. Test runtimes are short-lived,
+//! so the lock connection is established on a process-wide runtime owned by
+//! this module instead. [`TestDatabase::lease_blocking`] drives the acquisition
+//! on that runtime from a helper thread, which lets the fixture constructors
+//! stay synchronous and infallible for their callers.
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::future::Future;
+use std::sync::{Mutex, OnceLock};
+
+use diesel::sql_types::Text;
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+use diesel_async::pooled_connection::deadpool::Pool;
+use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
+
+use crate::db::{Db, PgPool};
+
+/// Highest slot index the lease pool will hand out.
+///
+/// Slots are created on demand, so a run only pays for as many databases as it
+/// actually holds at once. The ceiling exists to turn "every slot is taken"
+/// into a diagnosable panic instead of an unbounded database count.
+///
+/// # Sizing
+///
+/// Demand is `test threads * live AppStates per test`, not the thread count:
+/// a fixture that builds a second state to model a restart holds two leases at
+/// once, and the deep-stack runners give each test its own thread. A 12-thread
+/// run of the current suite peaks near 50 slots. Size
+/// `SOLAND_TEST_DATABASE_SLOTS` against that product with headroom.
+///
+/// Exhaustion panics rather than waiting. One `cargo test` process is the only
+/// shape in use, and for it the ceiling is reachable only by mis-sizing. Change
+/// this to a blocking retry only if several test processes must ever share one
+/// server -- two runs of the same suite in parallel, say, or a runner that
+/// starts test binaries concurrently.
+const DEFAULT_MAX_SLOTS: u32 = 64;
+
+/// Advisory-lock namespace. Paired with the slot index it forms the two-integer
+/// key `pg_try_advisory_lock` takes, which keeps these locks disjoint from any
+/// the adapters themselves take.
+const LOCK_NAMESPACE: i32 = 0x5013_4E44_u32 as i32;
+
+/// Slot indices are lock keys in their own right, so database creation takes a
+/// key above the slot ceiling it can never collide with.
+const CREATE_LOCK_KEY: i32 = -1;
+
+/// Tables the reset must never empty: they carry the migration ledger and the
+/// schema-contract fence, not test rows.
+const PRESERVED_TABLES: &[&str] = &["__diesel_schema_migrations", "soland_schema_contract"];
+
+/// An exclusive lease on a migrated, empty PostgreSQL database.
+///
+/// Dropping the guard closes the session that holds the advisory lock, which
+/// returns the slot to the pool. Fixtures keep the guard alive for exactly as
+/// long as the `AppState` built from it.
+pub struct TestDatabase {
+    slot: u32,
+    url: String,
+    pool: PgPool,
+    /// Holding this connection holds the advisory lock. It is never used for
+    /// anything else, and closing it is what releases the slot.
+    lock_session: Option<AsyncPgConnection>,
+}
+
+impl std::fmt::Debug for TestDatabase {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("TestDatabase")
+            .field("slot", &self.slot)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for TestDatabase {
+    fn drop(&mut self) {
+        // The connection's driver task lives on the lease runtime, so the close
+        // has somewhere to run even though the test runtime is already gone.
+        if let Some(session) = self.lock_session.take() {
+            lease_runtime().spawn(async move { drop(session) });
+        }
+    }
+}
+
+impl TestDatabase {
+    /// Lease a database, or panic explaining why no database could be leased.
+    ///
+    /// # Panics
+    ///
+    /// Panics when no database URL is configured, when the server is
+    /// unreachable, or when every slot is already leased.
+    pub async fn lease() -> Self {
+        let admin_url = configured_url();
+        let slot_prefix = slot_prefix(&admin_url);
+        let max_slots = configured_max_slots();
+
+        for slot in 0..max_slots {
+            let slot_database = format!("{slot_prefix}{slot:02}");
+            let slot_url = replace_database(&admin_url, &slot_database);
+            let Some(lock_session) = try_claim(&slot_url, &slot_database, &admin_url, slot).await
+            else {
+                continue;
+            };
+            ensure_migrated(&slot_url, &slot_database).await;
+            // Reset over the session that already holds the lock: a second
+            // connection per lease costs more than the deletes it would run.
+            let mut lock_session = lock_session;
+            reset(&mut lock_session).await;
+            return Self {
+                slot,
+                pool: build_pool(&slot_url),
+                url: slot_url,
+                lock_session: Some(lock_session),
+            };
+        }
+
+        panic!(
+            "every one of the {max_slots} test database slots named {slot_prefix}NN is leased; \
+             raise SOLAND_TEST_DATABASE_SLOTS above the test thread count"
+        );
+    }
+
+    /// [`TestDatabase::lease`] for a synchronous caller.
+    ///
+    /// The acquisition runs on this module's runtime from a helper thread, so
+    /// it is safe to call from inside a `#[tokio::test]` of any flavour: the
+    /// helper thread carries no runtime context of its own, and the resulting
+    /// lock connection outlives the caller's runtime.
+    ///
+    /// # Panics
+    ///
+    /// Panics for the same reasons as [`TestDatabase::lease`].
+    #[must_use]
+    pub fn lease_blocking() -> Self {
+        let handle = lease_runtime().clone();
+        std::thread::spawn(move || handle.block_on(Self::lease()))
+            .join()
+            .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+    }
+
+    /// The `Db` handle a runtime `AppState` is built from.
+    #[must_use]
+    pub fn db(&self) -> Db {
+        Db {
+            pool: Some(self.pool.clone()),
+        }
+    }
+
+    #[must_use]
+    pub fn pool(&self) -> PgPool {
+        self.pool.clone()
+    }
+
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    #[must_use]
+    pub fn slot(&self) -> u32 {
+        self.slot
+    }
+}
+
+/// Run one setup future to completion from a synchronous fixture.
+///
+/// Fixtures that build an `AppState` are synchronous and infallible for their
+/// callers, but seeding a real database is asynchronous. The work runs on this
+/// module's runtime from a helper thread, so it is safe to call from inside a
+/// `#[tokio::test]` of any flavour.
+///
+/// # Panics
+///
+/// Propagates any panic raised by `future`.
+pub fn block_on_lease_runtime<F>(future: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let handle = lease_runtime().clone();
+    std::thread::spawn(move || handle.block_on(future))
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload))
+}
+
+/// Empty every table that carries rows.
+///
+/// Deletes run children-before-parents so the `ON DELETE RESTRICT` foreign keys
+/// in the schema stay satisfied. A dirty set the ordering cannot linearise -- a
+/// foreign-key cycle -- falls back to `TRUNCATE ... CASCADE`, which resolves
+/// order itself at roughly ten times the cost.
+async fn reset(connection: &mut AsyncPgConnection) {
+    let plan = reset_plan(connection).await;
+    let dirty = non_empty_tables(connection, &plan.probe).await;
+    if dirty.is_empty() {
+        return;
+    }
+    // A dirty table whose triggers reject `DELETE` forces the whole reset onto
+    // `TRUNCATE`, which is the only statement that can empty it.
+    let ordered = if dirty
+        .iter()
+        .any(|table| plan.delete_rejecting.contains(table))
+    {
+        None
+    } else {
+        plan.ordered_subset(&dirty)
+    };
+    match ordered {
+        Some(ordered) => {
+            // One `DO` block rather than one statement per table: the extended
+            // query protocol diesel uses refuses a multi-statement string, and
+            // a round trip per table would cost more than the deletes.
+            let statements = ordered
+                .iter()
+                .map(|table| format!("DELETE FROM public.{};", quote_ident(table)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            execute(
+                connection,
+                &format!("DO $reset$ BEGIN {statements} END $reset$"),
+            )
+            .await;
+        }
+        None => {
+            let list = dirty
+                .iter()
+                .map(|table| format!("public.{}", quote_ident(table)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            execute(
+                connection,
+                &format!("TRUNCATE {list} RESTART IDENTITY CASCADE"),
+            )
+            .await;
+        }
+    }
+}
+
+/// The runtime that owns every lock connection for the life of the process.
+fn lease_runtime() -> &'static tokio::runtime::Handle {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME
+        .get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .thread_name("soland-test-database-lease")
+                .build()
+                .expect("building the test database lease runtime")
+        })
+        .handle()
+}
+
+/// The database URL every test storage lease is derived from.
+///
+/// `SOLAND_TEST_DATABASE_URL` wins so a developer can point the suite at a
+/// throwaway server while `DATABASE_URL` still names the one their tools use.
+fn configured_url() -> String {
+    for key in ["SOLAND_TEST_DATABASE_URL", "DATABASE_URL"] {
+        if let Ok(value) = std::env::var(key)
+            && !value.trim().is_empty()
+        {
+            return value;
+        }
+    }
+    panic!(
+        "no test database is configured: set SOLAND_TEST_DATABASE_URL or DATABASE_URL to a \
+         PostgreSQL instance. Soland has one storage implementation, so a test without a \
+         database proves nothing and fails here instead of silently passing."
+    );
+}
+
+/// Slot ceiling, raised for a run with more test threads than the default.
+fn configured_max_slots() -> u32 {
+    std::env::var("SOLAND_TEST_DATABASE_SLOTS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|slots| *slots > 0)
+        .unwrap_or(DEFAULT_MAX_SLOTS)
+}
+
+/// The prefix leased slots take, derived from the configured database so two
+/// checkouts pointed at different databases on one server never share slots.
+fn slot_prefix(url: &str) -> String {
+    let base = database_name(url);
+    let truncated = base.chars().take(48).collect::<String>();
+    format!("{truncated}_slot")
+}
+
+fn database_name(url: &str) -> String {
+    let after_authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split_once('/')
+        .map_or("", |(_, rest)| rest);
+    let name = after_authority
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(after_authority);
+    assert!(
+        !name.is_empty(),
+        "the configured test database URL names no database: {url}"
+    );
+    name.to_owned()
+}
+
+fn replace_database(url: &str, database: &str) -> String {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("postgres", url));
+    let (authority, path_and_query) = rest.split_once('/').unwrap_or((rest, ""));
+    let query = path_and_query
+        .split_once('?')
+        .map(|(_, query)| format!("?{query}"))
+        .unwrap_or_default();
+    format!("{scheme}://{authority}/{database}{query}")
+}
+
+/// Claim one slot, creating its database the first time it is used.
+///
+/// The advisory lock is taken on the slot database itself, so the lock and the
+/// rows it protects live in the same place and a lost session cannot leave the
+/// slot claimed.
+async fn try_claim(
+    slot_url: &str,
+    slot_database: &str,
+    admin_url: &str,
+    slot: u32,
+) -> Option<AsyncPgConnection> {
+    let mut session = match AsyncPgConnection::establish(slot_url).await {
+        Ok(session) => session,
+        Err(_) => {
+            ensure_database(admin_url, slot_database).await;
+            connect(slot_url).await
+        }
+    };
+
+    #[derive(diesel::QueryableByName)]
+    struct ClaimRow {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        claimed: bool,
+    }
+
+    let claimed = diesel::sql_query("SELECT pg_try_advisory_lock($1, $2) AS claimed")
+        .bind::<diesel::sql_types::Integer, _>(LOCK_NAMESPACE)
+        .bind::<diesel::sql_types::Integer, _>(i32::try_from(slot).unwrap_or(i32::MAX))
+        .get_result::<ClaimRow>(&mut session)
+        .await
+        .unwrap_or_else(|error| panic!("claiming test database slot {slot} failed: {error}"))
+        .claimed;
+
+    claimed.then_some(session)
+}
+
+/// Create the slot database if it is missing.
+///
+/// Creation is serialized across every leaser on the server by an advisory
+/// lock taken on the maintenance database, and the existence check runs under
+/// that lock. Racing on `CREATE DATABASE` and inspecting the failure instead
+/// would have to read the server's error text, which is localized.
+async fn ensure_database(admin_url: &str, database: &str) {
+    #[derive(diesel::QueryableByName)]
+    struct ExistsRow {
+        #[diesel(sql_type = diesel::sql_types::Bool)]
+        present: bool,
+    }
+
+    let mut admin = connect(admin_url).await;
+    diesel::sql_query("SELECT pg_advisory_lock($1, $2)")
+        .bind::<diesel::sql_types::Integer, _>(LOCK_NAMESPACE)
+        .bind::<diesel::sql_types::Integer, _>(CREATE_LOCK_KEY)
+        .execute(&mut admin)
+        .await
+        .unwrap_or_else(|error| panic!("locking test database creation failed: {error}"));
+
+    let present = diesel::sql_query(
+        "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1) AS present",
+    )
+    .bind::<Text, _>(database)
+    .get_result::<ExistsRow>(&mut admin)
+    .await
+    .unwrap_or_else(|error| panic!("checking for test database {database} failed: {error}"))
+    .present;
+
+    if !present {
+        let statement = format!("CREATE DATABASE {}", quote_ident(database));
+        diesel::sql_query(statement)
+            .execute(&mut admin)
+            .await
+            .unwrap_or_else(|error| panic!("creating test database {database} failed: {error}"));
+    }
+    // Dropping the connection ends the session and releases the advisory lock.
+}
+
+/// Run migrations once per slot per process.
+async fn ensure_migrated(slot_url: &str, slot_database: &str) {
+    if migrated_slots()
+        .lock()
+        .expect("migrated slot registry is poisoned")
+        .contains(slot_database)
+    {
+        return;
+    }
+    Db::connect(Some(slot_url), crate::db::PoolTuning::default())
+        .await
+        .unwrap_or_else(|error| panic!("migrating test database {slot_database} failed: {error}"));
+    migrated_slots()
+        .lock()
+        .expect("migrated slot registry is poisoned")
+        .insert(slot_database.to_owned());
+}
+
+fn migrated_slots() -> &'static Mutex<BTreeSet<String>> {
+    static MIGRATED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    MIGRATED.get_or_init(|| Mutex::new(BTreeSet::new()))
+}
+
+/// Connections a leased pool may open.
+///
+/// deadpool defaults to `cpu_count * 4`, which a dozen concurrent leases turns
+/// into several hundred sessions and exhausts a stock `max_connections = 100`
+/// server. One test drives its database sequentially, so a handful is enough:
+/// the ceiling is what keeps a parallel run inside the server's budget.
+const POOL_MAX_CONNECTIONS: usize = 4;
+
+fn build_pool(url: &str) -> PgPool {
+    let manager = AsyncDieselConnectionManager::<AsyncPgConnection>::new(url);
+    Pool::builder(manager)
+        .max_size(POOL_MAX_CONNECTIONS)
+        .build()
+        .unwrap_or_else(|error| panic!("building the test connection pool failed: {error}"))
+}
+
+async fn connect(url: &str) -> AsyncPgConnection {
+    AsyncPgConnection::establish(url)
+        .await
+        .unwrap_or_else(|error| panic!("connecting to the test database failed: {error}"))
+}
+
+async fn execute(connection: &mut AsyncPgConnection, statement: &str) {
+    diesel::sql_query(statement)
+        .execute(connection)
+        .await
+        .unwrap_or_else(|error| panic!("test database reset failed: {error}"));
+}
+
+/// The table list, the foreign-key order, and the probe query, computed once
+/// per process because the schema is fixed by migrations.
+struct ResetPlan {
+    /// Delete order: children before the parents they reference.
+    order: Vec<String>,
+    probe: String,
+    /// Tables whose row triggers reject `DELETE`. The schema makes some ledgers
+    /// immutable that way, and `TRUNCATE` is the only statement that empties
+    /// them because it does not fire per-row triggers.
+    delete_rejecting: BTreeSet<String>,
+}
+
+impl ResetPlan {
+    /// Restrict the plan's order to the tables that carry rows, or `None` when
+    /// the schema's foreign keys could not be linearised at all.
+    fn ordered_subset(&self, dirty: &BTreeSet<String>) -> Option<Vec<String>> {
+        if self.order.is_empty() {
+            return None;
+        }
+        Some(
+            self.order
+                .iter()
+                .filter(|table| dirty.contains(*table))
+                .cloned()
+                .collect(),
+        )
+    }
+}
+
+async fn reset_plan(connection: &mut AsyncPgConnection) -> &'static ResetPlan {
+    static PLAN: OnceLock<ResetPlan> = OnceLock::new();
+    if let Some(plan) = PLAN.get() {
+        return plan;
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct TableRow {
+        #[diesel(sql_type = Text)]
+        table_name: String,
+    }
+
+    #[derive(diesel::QueryableByName)]
+    struct EdgeRow {
+        #[diesel(sql_type = Text)]
+        child: String,
+        #[diesel(sql_type = Text)]
+        parent: String,
+    }
+
+    let tables = diesel::sql_query(
+        "SELECT c.relname AS table_name \
+         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = 'public' AND c.relkind = 'r' \
+         ORDER BY c.relname",
+    )
+    .get_results::<TableRow>(connection)
+    .await
+    .unwrap_or_else(|error| panic!("reading the test schema table list failed: {error}"))
+    .into_iter()
+    .map(|row| row.table_name)
+    .filter(|table| !PRESERVED_TABLES.contains(&table.as_str()))
+    .collect::<Vec<_>>();
+
+    let edges = diesel::sql_query(
+        "SELECT child.relname AS child, parent.relname AS parent \
+         FROM pg_constraint k \
+         JOIN pg_class child ON child.oid = k.conrelid \
+         JOIN pg_class parent ON parent.oid = k.confrelid \
+         JOIN pg_namespace n ON n.oid = child.relnamespace \
+         WHERE k.contype = 'f' AND n.nspname = 'public'",
+    )
+    .get_results::<EdgeRow>(connection)
+    .await
+    .unwrap_or_else(|error| panic!("reading the test schema foreign keys failed: {error}"))
+    .into_iter()
+    .filter(|edge| edge.child != edge.parent)
+    .map(|edge| (edge.child, edge.parent))
+    .collect::<Vec<_>>();
+
+    let probe = tables
+        .iter()
+        .map(|table| {
+            format!(
+                "SELECT '{table}' AS table_name WHERE EXISTS (SELECT 1 FROM public.{})",
+                quote_ident(table)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" UNION ALL ");
+
+    let delete_rejecting = diesel::sql_query(
+        "SELECT c.relname AS table_name          FROM pg_trigger t          JOIN pg_class c ON c.oid = t.tgrelid          JOIN pg_namespace n ON n.oid = c.relnamespace          WHERE NOT t.tgisinternal AND n.nspname = 'public' AND (t.tgtype & 8) <> 0",
+    )
+    .get_results::<TableRow>(connection)
+    .await
+    .unwrap_or_else(|error| panic!("reading the test schema delete triggers failed: {error}"))
+    .into_iter()
+    .map(|row| row.table_name)
+    .collect::<BTreeSet<_>>();
+
+    let plan = ResetPlan {
+        order: delete_order(&tables, &edges),
+        probe,
+        delete_rejecting,
+    };
+    PLAN.get_or_init(|| plan)
+}
+
+/// Order tables so that every referencing table precedes the table it
+/// references. Returns an empty vector when the graph has a cycle, which the
+/// caller answers with `TRUNCATE ... CASCADE`.
+fn delete_order(tables: &[String], edges: &[(String, String)]) -> Vec<String> {
+    let present = tables.iter().cloned().collect::<BTreeSet<_>>();
+    let mut parents = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut remaining_children = BTreeMap::<String, usize>::new();
+    for table in tables {
+        parents.entry(table.clone()).or_default();
+        remaining_children.entry(table.clone()).or_insert(0);
+    }
+    for (child, parent) in edges {
+        if !present.contains(child) || !present.contains(parent) {
+            continue;
+        }
+        if parents
+            .get_mut(child)
+            .expect("every table has a parent set")
+            .insert(parent.clone())
+        {
+            *remaining_children
+                .get_mut(parent)
+                .expect("every table has a child count") += 1;
+        }
+    }
+
+    // A table no remaining table references can be emptied now; peeling those
+    // off in turn yields children before parents.
+    let mut ready = remaining_children
+        .iter()
+        .filter(|(_, count)| **count == 0)
+        .map(|(table, _)| table.clone())
+        .collect::<Vec<_>>();
+    let mut order = Vec::with_capacity(tables.len());
+    while let Some(table) = ready.pop() {
+        order.push(table.clone());
+        for parent in parents
+            .get(&table)
+            .expect("every table has a parent set")
+            .clone()
+        {
+            let count = remaining_children
+                .get_mut(&parent)
+                .expect("every table has a child count");
+            *count -= 1;
+            if *count == 0 {
+                ready.push(parent);
+            }
+        }
+    }
+
+    if order.len() == tables.len() {
+        order
+    } else {
+        Vec::new()
+    }
+}
+
+async fn non_empty_tables(connection: &mut AsyncPgConnection, probe: &str) -> BTreeSet<String> {
+    #[derive(diesel::QueryableByName)]
+    struct TableRow {
+        #[diesel(sql_type = Text)]
+        table_name: String,
+    }
+
+    if probe.is_empty() {
+        return BTreeSet::new();
+    }
+    diesel::sql_query(probe)
+        .get_results::<TableRow>(connection)
+        .await
+        .unwrap_or_else(|error| panic!("probing the test database for rows failed: {error}"))
+        .into_iter()
+        .map(|row| row.table_name)
+        .collect()
+}
+
+fn quote_ident(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{database_name, delete_order, replace_database, slot_prefix};
+
+    #[test]
+    fn slot_urls_keep_the_authority_and_query_of_the_configured_url() {
+        assert_eq!(
+            replace_database(
+                "postgres://u:p@host:5432/base?sslmode=require",
+                "base_slot00"
+            ),
+            "postgres://u:p@host:5432/base_slot00?sslmode=require"
+        );
+        assert_eq!(database_name("postgres://u:p@host:5432/base"), "base");
+        assert_eq!(
+            database_name("postgres://u:p@host:5432/base?sslmode=require"),
+            "base"
+        );
+        assert_eq!(
+            slot_prefix("postgres://u:p@host:5432/base"),
+            "base_slot".to_owned()
+        );
+    }
+
+    #[test]
+    fn delete_order_puts_referencing_tables_first() {
+        let tables = vec!["child".to_owned(), "parent".to_owned()];
+        let edges = vec![("child".to_owned(), "parent".to_owned())];
+        assert_eq!(delete_order(&tables, &edges), vec!["child", "parent"]);
+    }
+
+    /// Two leases held at once must be different databases, and a lease must
+    /// never observe rows written under a previous one.
+    #[tokio::test]
+    async fn concurrent_leases_are_isolated_and_reset_between_holders() {
+        use diesel_async::RunQueryDsl;
+
+        #[derive(diesel::QueryableByName)]
+        struct CountRow {
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            total: i64,
+        }
+
+        let first = super::TestDatabase::lease().await;
+        let second = super::TestDatabase::lease().await;
+        assert_ne!(
+            first.slot(),
+            second.slot(),
+            "two live leases must not share a database"
+        );
+
+        let mut connection = super::connect(first.url()).await;
+        diesel::sql_query(
+            "INSERT INTO public.server_settings (key, value, updated_by)              VALUES ('lease.probe', '1'::jsonb, '{}'::jsonb)",
+        )
+        .execute(&mut connection)
+        .await
+        .expect("write a row under the first lease");
+
+        let mut other = super::connect(second.url()).await;
+        let seen = diesel::sql_query("SELECT count(*) AS total FROM public.server_settings")
+            .get_result::<CountRow>(&mut other)
+            .await
+            .expect("read the second lease")
+            .total;
+        assert_eq!(
+            seen, 0,
+            "a concurrent lease must not observe another's rows"
+        );
+
+        let slot = first.slot();
+        drop(connection);
+        drop(first);
+
+        // Reclaiming is racy against other tests in this process, so assert the
+        // reset property on whichever slot comes back rather than on the id.
+        let reclaimed = super::TestDatabase::lease().await;
+        let mut fresh = super::connect(reclaimed.url()).await;
+        let total = diesel::sql_query("SELECT count(*) AS total FROM public.server_settings")
+            .get_result::<CountRow>(&mut fresh)
+            .await
+            .expect("read the reclaimed lease")
+            .total;
+        assert_eq!(
+            total, 0,
+            "slot {slot} was not emptied before the next holder saw it"
+        );
+    }
+
+    /// The synchronous entry point must work from inside a test runtime, which
+    /// is what lets `AppState` fixtures stay synchronous.
+    #[tokio::test]
+    async fn lease_blocking_works_inside_a_test_runtime() {
+        let leased = super::TestDatabase::lease_blocking();
+        assert!(leased.db().pool.is_some());
+    }
+
+    #[test]
+    fn a_foreign_key_cycle_reports_no_order() {
+        let tables = vec!["a".to_owned(), "b".to_owned()];
+        let edges = vec![
+            ("a".to_owned(), "b".to_owned()),
+            ("b".to_owned(), "a".to_owned()),
+        ];
+        assert!(delete_order(&tables, &edges).is_empty());
+    }
+}

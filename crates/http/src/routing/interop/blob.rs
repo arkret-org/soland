@@ -1201,7 +1201,9 @@ fn is_valid_content_addressed_blob_ref(value: &str) -> bool {
     };
     matches!(suite, "sha256" | "blake3")
         && hex.len() == 64
-        && hex.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        && hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn validate_encrypted_attachment_metadata(
@@ -1692,11 +1694,10 @@ mod tests {
         );
         let principal = DidCoreId::new("ak:did_core:web:blob-owner.example").unwrap();
         let account = arkret_wire::AccountId::new(principal.clone(), state.service_core_id());
-        let account_pk = soland_storage::AccountPk(71);
         state
             .identities()
             .save_account(soland_services::identity::AccountProfileState {
-                pk: account_pk,
+                pk: soland_storage::AccountPk(0),
                 principal_id: principal.clone(),
                 account_id: account.clone(),
                 localpart: "blob-owner".to_owned(),
@@ -1707,6 +1708,13 @@ mod tests {
             })
             .await
             .unwrap();
+        let account_pk = state
+            .identities()
+            .account(&account)
+            .await
+            .expect("account lookup")
+            .expect("account was just saved")
+            .pk;
         let mut session = SessionRecord {
             token_hash: "blob-membership-fixture".to_owned(),
             account_pk: Some(account_pk),

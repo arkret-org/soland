@@ -394,7 +394,8 @@ mod tests {
     use arkret_wire::{Base64UrlString, Did, DidUrl, ProtocolSignature};
     use chrono::TimeZone as _;
     use parking_lot::Mutex;
-    use soland_storage_memory::MemoryServiceRouteStore;
+    use soland_storage_postgres::PgServiceRouteStore;
+    use soland_storage_postgres::test_database::TestDatabase;
 
     use super::*;
 
@@ -475,7 +476,7 @@ mod tests {
     }
 
     struct RetainedLocatorFetcher {
-        store: Arc<MemoryServiceRouteStore>,
+        store: Arc<PgServiceRouteStore>,
         current: Option<ServiceResolutionRecord>,
         now: DateTime<Utc>,
     }
@@ -515,7 +516,10 @@ mod tests {
 
     #[tokio::test]
     async fn route_refresh_failure_retains_locator_without_reusing_stale_authority() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let first = record("did:webvh:z6mkrefresh:route.example", 0, None);
         let expected = first.record.service_id.clone();
         let now = first.record.issued_at + Duration::minutes(1);
@@ -600,7 +604,10 @@ mod tests {
 
     #[tokio::test]
     async fn same_core_handover_advances_without_rebind() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let first = record("did:webvh:z6mksame:old.example", 0, None);
         let expected = first.record.service_id.clone();
         let first_fetcher = Arc::new(FakeFetcher {
@@ -641,7 +648,10 @@ mod tests {
 
     #[tokio::test]
     async fn new_core_is_rejected_without_an_authorized_route_source() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let accepted = record("did:webvh:z6mkexpected:route.example", 0, None);
         let expected = accepted.record.service_id.clone();
         let wrong = record("did:webvh:z6mkother:route.example", 0, None);
@@ -664,7 +674,10 @@ mod tests {
 
     #[tokio::test]
     async fn quarantine_is_checked_before_disposable_cache() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let accepted = record("did:webvh:z6mkquarantined:route.example", 0, None);
         let expected = accepted.record.service_id.clone();
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
@@ -701,7 +714,10 @@ mod tests {
 
     #[tokio::test]
     async fn fork_fails_closed_without_trying_the_notice_source() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let accepted = record("did:webvh:z6mkforked:old.example", 0, None);
         let expected = accepted.record.service_id.clone();
         let now = Utc.with_ymd_and_hms(2026, 8, 10, 0, 1, 0).unwrap();
@@ -780,7 +796,10 @@ mod tests {
 
     #[tokio::test]
     async fn resolved_route_cache_honours_describe_expiry() {
-        let store = Arc::new(MemoryServiceRouteStore::new());
+        let database = TestDatabase::lease().await;
+        let store = Arc::new(PgServiceRouteStore {
+            pool: database.pool(),
+        });
         let accepted = record("did:webvh:z6mkcache:route.example", 0, None);
         let expected = accepted.record.service_id.clone();
         let fetcher = Arc::new(FakeFetcher {

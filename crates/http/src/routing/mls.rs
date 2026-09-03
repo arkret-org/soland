@@ -5000,15 +5000,30 @@ mod trust_binding_tests {
             stored_at: at,
         };
         stored.validate().unwrap();
-        let persistence =
-            std::sync::Arc::new(soland_storage_memory::SolandMemoryPersistenceStore::new());
-        persistence.seed_service_identity(stored);
-        persistence.seed_webvh_log_event(soland_storage::WebvhLogRecord {
+        let leased = std::sync::Arc::new(
+            soland_storage_postgres::test_database::TestDatabase::lease_blocking(),
+        );
+        let persistence: std::sync::Arc<dyn soland_storage::PersistenceStore> =
+            std::sync::Arc::new(soland_storage_postgres::PgPersistenceStore::leased(leased));
+        let webvh_log = soland_storage::WebvhLogRecord {
             event_digest: history_digest.clone(),
             did: prepared.did.clone(),
             seq: 1,
             operation: prepared.log_entry.clone(),
             created_at: inception_at,
+        };
+        let seeding = persistence.clone();
+        soland_storage_postgres::test_database::block_on_lease_runtime(async move {
+            seeding
+                .service_identity()
+                .put(stored)
+                .await
+                .expect("fixture service identity seed");
+            seeding
+                .webvh()
+                .append_log_event(webvh_log)
+                .await
+                .expect("fixture service WebVH history seed");
         });
         AppState::new_with_service_identity(
             config,
@@ -5439,9 +5454,11 @@ mod trust_binding_tests {
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
         );
-        let principal = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let principal =
+            arkret_identifiers::Did::new("did:webvh:z6mkfixtureagent:agent.example".to_owned())
+                .unwrap();
         let principal_core = arkret_wire::project_did_to_core_id(&principal).unwrap();
-        let verification_method = "did:web:agent.example#runtime-1";
+        let verification_method = "did:webvh:z6mkfixtureagent:agent.example#runtime-1";
         let signing_seed = [17_u8; 32];
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&signing_seed);
         let public_key_digest = arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
@@ -5502,7 +5519,8 @@ mod trust_binding_tests {
             principal_core.to_string(),
             "ak:did_core:web:alice.example".to_owned(),
             authorize_event.realm_id.to_string(),
-            arkret_wire::DidUrl::new("did:web:alice.example#managed-controller").unwrap(),
+            arkret_wire::DidUrl::new("did:webvh:z6mkfixtureagent:agent.example#managed-controller")
+                .unwrap(),
             AgentLifecycleState::Active,
             now(),
         );
@@ -5522,7 +5540,7 @@ mod trust_binding_tests {
             "controller_id": "ak:did_core:web:alice.example",
             "controller_proof": {
                 "kind": "controller_signature",
-                "verification_method": "did:web:alice.example#managed-controller",
+                "verification_method": "did:webvh:z6mkfixtureagent:agent.example#managed-controller",
                 "jws": "proof"
             }
         }))
