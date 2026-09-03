@@ -975,9 +975,23 @@ impl AppConfig {
                 anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE is invalid: {error}")
             })?;
         }
-        if account_authority_url.is_none() != account_authority_id.is_none() {
+        // A pin needs something to pin. The reverse does not hold: a URL alone
+        // is a complete Account Authority configuration, because the signer
+        // identity is not operator input. The Account Authority signs as this
+        // Station under the `#account-authority` method authorized in the
+        // Station's own DID document, so the service id is this deployment's
+        // own and the signing key is read from the Authority's published keyset
+        // when the DID is minted. `SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID` and
+        // `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` stay as explicit
+        // overrides for a deployment that wants to name both by hand.
+        if account_authority_url.is_none() && account_authority_id.is_some() {
             anyhow::bail!(
-                "SOLAND_ACCOUNT_AUTHORITY_URL and SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID must be configured together"
+                "SOLAND_ACCOUNT_AUTHORITY_SERVICE_ID requires SOLAND_ACCOUNT_AUTHORITY_URL"
+            );
+        }
+        if account_authority_url.is_none() && account_authority_public_key_multibase.is_some() {
+            anyhow::bail!(
+                "SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE requires SOLAND_ACCOUNT_AUTHORITY_URL"
             );
         }
         if let Some(value) = account_authority_id.as_deref() {

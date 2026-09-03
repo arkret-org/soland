@@ -17,8 +17,9 @@ use arkret_identity::service_identity::{
 };
 use arkret_keystore::KeyStore;
 use arkret_models_identity::service_identity::{
-    CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
-    ServiceRegistrationOutcome, ServiceRegistrationReceipt,
+    ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT, CanonicalServiceUrl,
+    ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey, ServiceRegistrationOutcome,
+    ServiceRegistrationReceipt,
 };
 use arkret_wire::{PayloadProof, ServiceKind, project_did_to_core_id, proof_kind};
 use ed25519_dalek::SigningKey;
@@ -229,6 +230,9 @@ async fn resolve_service_identity(
         )
         .await?
     };
+
+    let stored =
+        ensure_account_authority_authorization(persistence, config, key_store, stored).await?;
 
     ensure_identity_bundle(persistence, bundle_backend, &stored).await?;
 
@@ -655,10 +659,28 @@ async fn ensure_identity_bundle(
         .await
         .map_err(|error| anyhow::anyhow!("reading service WebVH history failed: {error}"))?;
     if history.len() != 1 {
-        anyhow::bail!(
-            "service identity bundle v1 can preserve exactly one inception operation; found {} WebVH operations",
-            history.len()
+        // Bundle v1 carries `Vec<ServiceWebvhInceptionOperation>`, and a
+        // successor entry is not one: the type requires a `1-` versionId. The
+        // format was written when a service DID had exactly one entry for its
+        // whole life, which stopped being true once a Station could authorize
+        // an Account Authority key after minting.
+        //
+        // The bundle left in place is the one written at inception. It still
+        // preserves what a bundle exists to preserve - the DID, its SCID, and
+        // the control key generation the log starts from - and a restore from
+        // it re-authorizes the Account Authority key the same way this boot
+        // did. What it cannot do is carry the rotated document, so refuse to
+        // overwrite it with a snapshot whose `identity` claims a version the
+        // stored entries do not head; an inconsistent bundle fails on restore,
+        // which is exactly when it must not.
+        tracing::warn!(
+            did = %stored.identity.did,
+            entries = history.len(),
+            version_id = %stored.identity.version_id,
+            "service identity bundle v1 cannot represent a rotated WebVH log; keeping the \
+             inception bundle and not refreshing it"
         );
+        return Ok(());
     }
     let inception = serde_json::from_value(history[0].operation.clone()).map_err(|error| {
         anyhow::anyhow!("decoding authoritative service WebVH inception failed: {error}")
@@ -896,24 +918,11 @@ async fn validate_stored_service_identity(
         load_signing_seed(config, key_store, &stored.identity.active_signing_key_ref)?;
     validate_service_signing_binding(stored, &signing_seed)?;
 
-    if let Some(public_key) = &config.account_authority_public_key_multibase {
-        let method_id = format!("{}#account-authority", stored.identity.did);
-        if !stored.did_document.assertion_method.contains(&method_id)
-            || !stored
-                .did_document
-                .verification_method
-                .iter()
-                .any(|method| {
-                    method.id == method_id
-                        && method.controller == stored.identity.did
-                        && &method.public_key_multibase == public_key
-                })
-        {
-            anyhow::bail!(
-                "service_identity_key_mismatch: Account Authority key is not authorized by the stored Station DID history"
-            );
-        }
-    }
+    // The Account Authority key is deliberately not checked here.
+    // `ensure_account_authority_authorization` owns that comparison and, unlike
+    // a bail, can act on it: a document that is merely behind gets one
+    // successor entry instead of a deployment that refuses to start with no
+    // repair short of re-provisioning its identity.
 
     let log = persistence
         .webvh_history(stored.identity.did.as_str())
@@ -1015,6 +1024,452 @@ fn validate_control_key_binding(
     Ok(())
 }
 
+/// JWK `kid` under which an Account Authority publishes its S2S signing key.
+///
+/// coauth mints this key as `coauth_keystore::ACCOUNT_AUTHORITY_KEY_ID` and
+/// serves its public half in the standard OIDC keyset, so this constant is the
+/// cross-deployment contract between the two processes.
+const ACCOUNT_AUTHORITY_JWK_KID: &str = "coauth-account-authority-v1";
+
+/// The Account Authority signing key to authorize in this deployment's Station
+/// DID document, as a `z...` multibase string.
+///
+/// Two sources, in order:
+///
+/// 1. `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE`, used verbatim. An
+///    operator who wants to name the exact key still can, and that pin keeps
+///    being enforced against the stored DID history on every later boot.
+/// 2. Otherwise the Account Authority's own published keyset, read once from
+///    the operator-configured `SOLAND_ACCOUNT_AUTHORITY_URL`.
+///
+/// The second source exists because this key can only be authorized at DID
+/// inception. `#account-authority` enters the Station DID document when the DID
+/// is minted, and there is no update path for a service DID, so a deployment
+/// that mints without it can never verify a single S2S call from its Account
+/// Authority - and cannot be repaired short of re-provisioning the identity.
+/// Requiring an operator to hand-copy a multibase string before the very first
+/// boot is precisely how that unrecoverable state gets reached. Reading it from
+/// the service that owns the key removes the transcription step; the URL is
+/// operator configuration and TLS authenticates it, which is the same trust the
+/// hand-copied value already carried.
+///
+/// A configured-but-unreachable Account Authority is fatal rather than "mint
+/// without the key": minting is a one-way door, and the deployment an operator
+/// gets from silently skipping it is broken in a way only re-provisioning fixes.
+async fn account_authority_assertion_key(config: &AppConfig) -> anyhow::Result<Option<String>> {
+    if let Some(pinned) = config.account_authority_public_key_multibase.as_deref() {
+        return Ok(Some(pinned.to_owned()));
+    }
+    let Some(authority_url) = config.account_authority_url.as_deref() else {
+        return Ok(None);
+    };
+    let issuer = url::Url::parse(authority_url)
+        .map_err(|error| anyhow::anyhow!("SOLAND_ACCOUNT_AUTHORITY_URL is not a URL: {error}"))?;
+    // Plain GETs, deliberately not the typed Arkret client: these are the
+    // Account Authority's standard OIDC discovery and keyset documents, not
+    // Arkret operations, and the typed client rejects any path the operation
+    // registry does not name.
+    let mut client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none());
+    if config.development_mode {
+        // Local stacks front the Account Authority with a development CA this
+        // process does not trust. What is read is a public key: it is checked
+        // structurally here and has to prove itself by signing afterwards, so
+        // a relaxed handshake cannot make a wrong key work - only make a local
+        // stack reachable.
+        client = client.danger_accept_invalid_certs(true);
+    }
+    let unreachable = |what: &str, error: String| {
+        anyhow::anyhow!(
+            "reading the Account Authority {what} at {authority_url} failed: {error}. The \
+             signing key can only be authorized while this deployment mints its DID, so \
+             provisioning stops here rather than minting a Station that could never verify \
+             its Account Authority. Start the Account Authority first, or set \
+             SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE."
+        )
+    };
+    let client = client
+        .build()
+        .map_err(|error| unreachable("client", error.to_string()))?;
+    let fetch = async |url: url::Url, what: &str| -> anyhow::Result<serde_json::Value> {
+        client
+            .get(url)
+            .send()
+            .await
+            .and_then(reqwest::Response::error_for_status)
+            .map_err(|error| unreachable(what, error.to_string()))?
+            .json()
+            .await
+            .map_err(|error| unreachable(what, error.to_string()))
+    };
+
+    // The keyset path is the issuer's to publish, not ours to assume: coauth
+    // serves it at `/oauth/keys.json`, another Account Authority may not.
+    let discovery_url = issuer
+        .join("/.well-known/openid-configuration")
+        .map_err(|error| anyhow::anyhow!("Account Authority discovery URL is invalid: {error}"))?;
+    let discovery = fetch(discovery_url, "discovery document").await?;
+    let keyset_url = discovery
+        .get("jwks_uri")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "the Account Authority discovery document at {authority_url} publishes no jwks_uri"
+            )
+        })
+        .and_then(|value| {
+            url::Url::parse(value)
+                .map_err(|error| anyhow::anyhow!("published jwks_uri is not a URL: {error}"))
+        })?;
+    // A discovery document that points the keyset somewhere else would move
+    // the trust decision to a host the operator never named. The issuer origin
+    // is what `SOLAND_ACCOUNT_AUTHORITY_URL` authorizes, and it is where the
+    // key has to come from.
+    if keyset_url.origin() != issuer.origin() {
+        anyhow::bail!(
+            "the Account Authority at {authority_url} publishes its keyset on a different \
+             origin ({keyset_url}); the signing key must come from the configured Authority"
+        );
+    }
+    let keyset = fetch(keyset_url, "keyset").await?;
+    let multibase = account_authority_key_from_keyset(&keyset).ok_or_else(|| {
+        anyhow::anyhow!(
+            "the Account Authority keyset at {authority_url} publishes no Ed25519 key with kid              `{ACCOUNT_AUTHORITY_JWK_KID}`"
+        )
+    })?;
+    Ok(Some(multibase))
+}
+
+/// Pick the Account Authority Ed25519 key out of a JWKS document and re-encode
+/// it the way a DID document verification method carries it.
+///
+/// Selection is by `kid` rather than by "the only Ed25519 key": a deployment
+/// legitimately publishes several keys, and their order is not a contract.
+fn account_authority_key_from_keyset(keyset: &serde_json::Value) -> Option<String> {
+    use base64::Engine as _;
+
+    let key = keyset.get("keys")?.as_array()?.iter().find(|key| {
+        key.get("kid").and_then(serde_json::Value::as_str) == Some(ACCOUNT_AUTHORITY_JWK_KID)
+            && key.get("kty").and_then(serde_json::Value::as_str) == Some("OKP")
+            && key.get("crv").and_then(serde_json::Value::as_str) == Some("Ed25519")
+    })?;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(key.get("x")?.as_str()?)
+        .ok()?;
+    let raw: [u8; 32] = raw.try_into().ok()?;
+    Some(arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(&raw))
+}
+
+/// Bring the Station DID document in line with the deployment's Account
+/// Authority, advancing the log when it is behind.
+///
+/// Two sources of the key are deliberately not equal in authority:
+///
+/// - `SOLAND_ACCOUNT_AUTHORITY_PUBLIC_KEY_MULTIBASE` is the operator naming a
+///   key. It authorizes both filling an absent method and replacing one that
+///   names a different key, because editing it is a deliberate act.
+/// - A key read from the Authority's published keyset only ever fills an
+///   *absent* method. Letting a fetched value replace an authorized one would
+///   hand whoever answers at that URL the power to re-point this Station's
+///   trust at itself.
+///
+/// A deployment with no Account Authority configured, or one whose document is
+/// already correct, does no work and makes no network call.
+async fn ensure_account_authority_authorization(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    stored: StoredDidCoreIdentity,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    if config.account_authority_url.is_none() {
+        return Ok(stored);
+    }
+    let method_id = format!(
+        "{}#{ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT}",
+        stored.identity.did
+    );
+    let authorized = stored
+        .did_document
+        .verification_method
+        .iter()
+        .find(|method| method.id == method_id)
+        .map(|method| method.public_key_multibase.clone());
+
+    let key = match config.account_authority_public_key_multibase.as_deref() {
+        Some(pinned) => pinned.to_owned(),
+        None if authorized.is_some() => return Ok(stored),
+        None => match account_authority_assertion_key(config).await {
+            Ok(Some(fetched)) => fetched,
+            Ok(None) => return Ok(stored),
+            // An unreachable Account Authority is fatal while minting, because
+            // that DID can never be repaired afterwards. Here the identity
+            // already exists and stays verifiable: this Station keeps serving
+            // everything that does not depend on the Authority, its S2S
+            // Authority faces stay closed, and the next boot tries again. That
+            // is the spec's `DegradedStored` posture rather than a Station that
+            // refuses to start because a different process is down.
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    "Account Authority signing key is unavailable; its S2S faces stay closed"
+                );
+                return Ok(stored);
+            }
+        },
+    };
+    if authorized.as_deref() == Some(key.as_str()) {
+        return Ok(stored);
+    }
+    authorize_account_authority_key(persistence, config, key_store, stored, &key).await
+}
+
+/// Re-issue this deployment's own registration receipt over a successor entry.
+///
+/// A receipt binds `{registration_key, service_id, did, version_id,
+/// log_head_digest, control_key_digest}` and is signed by the Provider. A
+/// self-provisioned Station is its own Provider, so advancing its log means
+/// re-issuing rather than inheriting a statement about a version that is no
+/// longer the head.
+fn reissue_registration_receipt(
+    stored: &StoredDidCoreIdentity,
+    version_id: &str,
+    log_head_digest: &str,
+    control_key_multibase: &str,
+    signing_seed: &[u8; 32],
+    issued_at: chrono::DateTime<chrono::Utc>,
+) -> anyhow::Result<ServiceRegistrationReceipt> {
+    let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
+    let mut receipt = stored.registration_receipt.clone();
+    receipt.version_id = version_id.to_owned();
+    receipt.log_head_digest = log_head_digest.to_owned();
+    receipt.control_key_digest = arkret_canonical::sha256_digest(control_key_multibase.as_bytes());
+    receipt.issued_at = issued_at;
+    receipt.proof.created_at = issued_at;
+    receipt.registration_receipt_id = receipt.expected_registration_receipt_id()?;
+    receipt.proof.payload_digest = receipt.expected_payload_digest()?;
+    receipt.proof = arkret_signatures::service_identity::sign_registration_receipt_proof(
+        &receipt,
+        &SigningKey::from_bytes(signing_seed),
+    )?;
+    receipt.validate_for(
+        &stored.identity.registration_key,
+        &stored.identity.service_id,
+        &stored.identity.did,
+    )?;
+    Ok(receipt)
+}
+
+/// Authorize the Account Authority signing key in this deployment's own Station
+/// DID document, after the DID was already minted.
+///
+/// Minting is a one-way door: `#account-authority` used to be reachable only as
+/// an inception assertion key, so a Station that minted before its Account
+/// Authority existed could never verify a single S2S call from it, and the only
+/// repair was re-provisioning the identity - which changes the Station DID and
+/// orphans every credential and derived id already issued under it.
+///
+/// `identity-did.md` §3.7 never required that. I-4 defines the pre-rotation
+/// discipline for "inception 与每次 rotation", and the Provider paragraph makes
+/// rotation, endpoint update and registration-key migration all signed by
+/// update keys the service itself holds. So the DID advances by one successor
+/// entry, signed by the update key the previous entry pre-committed, publishing
+/// a document that differs only by this method.
+///
+/// The new pre-commitment is persisted before the entry is published. Losing it
+/// after publication is the spec's `RotationMaterialLost`, which forecloses
+/// every later change to this DID; losing an unpublished key costs nothing.
+async fn authorize_account_authority_key(
+    persistence: &PersistenceHandle,
+    config: &AppConfig,
+    key_store: Option<&dyn KeyStore>,
+    stored: StoredDidCoreIdentity,
+    public_key_multibase: &str,
+) -> anyhow::Result<StoredDidCoreIdentity> {
+    let did = stored.identity.did.clone();
+    let method_id = format!("{did}#{ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT}");
+    let entries = persistence
+        .webvh_history(did.as_str())
+        .await
+        .map_err(|error| anyhow::anyhow!("reading the Station WebVH history failed: {error}"))?;
+    let head = entries.last().ok_or_else(|| {
+        anyhow::anyhow!("the stored Station identity has no authoritative WebVH history")
+    })?;
+    let mut state =
+        head.operation.get("state").cloned().ok_or_else(|| {
+            anyhow::anyhow!("the Station WebVH head carries no DID document state")
+        })?;
+
+    let already_authorized = state
+        .get("verificationMethod")
+        .and_then(Value::as_array)
+        .is_some_and(|methods| {
+            methods.iter().any(|method| {
+                method["id"] == json!(method_id)
+                    && method["publicKeyMultibase"] == json!(public_key_multibase)
+            })
+        })
+        && state
+            .get("assertionMethod")
+            .and_then(Value::as_array)
+            .is_some_and(|methods| methods.contains(&json!(method_id)));
+    if already_authorized {
+        return Ok(stored);
+    }
+
+    // The successor differs from the head document by this method alone. A
+    // replacement (the Account Authority rotated its key) drops the superseded
+    // entry rather than accumulating two methods under one id.
+    let methods = state
+        .get_mut("verificationMethod")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("the Station DID document has no verificationMethod"))?;
+    methods.retain(|method| method["id"] != json!(method_id));
+    methods.push(json!({
+        "id": method_id,
+        "type": "Multikey",
+        "controller": did.as_str(),
+        "publicKeyMultibase": public_key_multibase,
+    }));
+    let assertions = state
+        .get_mut("assertionMethod")
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| anyhow::anyhow!("the Station DID document has no assertionMethod"))?;
+    if !assertions.contains(&json!(method_id)) {
+        assertions.push(json!(method_id));
+    }
+
+    let key_store = required_key_store(key_store)?;
+    // The head pre-committed the next generation, so that is the only key
+    // allowed to sign this successor.
+    let signing_control_ref = next_control_key_ref(&stored.identity.control_key_ref)?;
+    let signing_seed = load_seed(key_store, &signing_control_ref)?;
+    let following_control_ref = next_control_key_ref(&signing_control_ref)?;
+    let mut following_seed = [0u8; 32];
+    soland_http::state::getrandom_seed(&mut following_seed);
+    key_store
+        .store(following_control_ref.as_str(), &following_seed)
+        .map_err(|error| {
+            anyhow::anyhow!("persisting the next WebVH control key failed: {error}")
+        })?;
+    let following_public_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+        &SigningKey::from_bytes(&following_seed)
+            .verifying_key()
+            .to_bytes(),
+    );
+
+    let previous_entries: Vec<Value> = entries
+        .iter()
+        .map(|entry| entry.operation.clone())
+        .collect();
+    let rotation = arkret_signatures::webvh::prepare_service_rotation(
+        &arkret_signatures::webvh::ServiceRotationInput {
+            did: did.as_str(),
+            previous_entries: &previous_entries,
+            state: &state,
+            current_update_seed: &signing_seed,
+            next_update_public_key_multibase: &following_public_key,
+            version_time: chrono::Utc::now(),
+        },
+    )
+    .map_err(|error| anyhow::anyhow!("building the Station DID successor failed: {error}"))?;
+
+    // Re-validate the extended chain with the same checks this deployment
+    // applies to a successor submitted by anyone else. A locally built entry
+    // gets no shortcut.
+    let candidate: Vec<WebvhLogEntry> = previous_entries
+        .iter()
+        .cloned()
+        .chain(std::iter::once(rotation.log_entry.clone()))
+        .map(WebvhLogEntry::new)
+        .collect();
+    verify_webvh_log_proof(&rotation.log_entry)
+        .map_err(|message| anyhow::anyhow!("Station DID successor proof is invalid: {message}"))?;
+    validate_log_chain(&candidate)?;
+    verify_log_subject(did.as_str(), &candidate)?;
+    validate_witness_policy_for_log(&candidate)?;
+    validate_rotation_authorization_for_log(&candidate)?;
+
+    let event_digest = arkret_canonical::canonical_sha256(&rotation.log_entry)
+        .map_err(|error| anyhow::anyhow!("Station DID successor digest failed: {error}"))?;
+    let seq = u64::try_from(entries.len())
+        .ok()
+        .and_then(|len| len.checked_add(1))
+        .ok_or_else(|| anyhow::anyhow!("Station WebVH sequence overflow"))?;
+    let now = chrono::Utc::now();
+    let document = WebvhDocumentRecord {
+        did: did.to_string(),
+        did_document: state.clone(),
+        key_log_head: Some(event_digest.clone()),
+        seq,
+        method_evidence: json!({
+            "mode": "self_hosted_service_rotation",
+            "reason": "account_authority_assertion_key",
+            "version_id": rotation.version_id,
+            "self_provisioned": true,
+        }),
+        fetched_at: now,
+        expires_at: now,
+        updated_at: now,
+    };
+    let event_digest_for_receipt = event_digest.clone();
+    let event = WebvhLogRecord {
+        event_digest,
+        did: did.to_string(),
+        seq,
+        operation: rotation.log_entry.clone(),
+        created_at: now,
+    };
+    match persistence
+        .commit_webvh_log_operation(Some(head.event_digest.clone()), document, event)
+        .await
+        .map_err(|error| anyhow::anyhow!("publishing the Station DID successor failed: {error}"))?
+    {
+        soland_storage::WebvhLogCommitOutcome::Accepted
+        | soland_storage::WebvhLogCommitOutcome::Duplicate => {}
+        soland_storage::WebvhLogCommitOutcome::Conflict => {
+            anyhow::bail!(
+                "the Station WebVH head moved while authorizing the Account Authority key"
+            )
+        }
+    }
+
+    let mut updated = stored;
+    // The receipt states which version this deployment serves, and
+    // `service_resolution` compares the runtime commitment against both it and
+    // `identity.version_id`. Leaving either behind would advertise a resolution
+    // the log no longer heads, so the self-hosted Provider re-issues over the
+    // successor. `signing_control_ref` is now the active control key: the
+    // entry consumed the previous pre-commitment.
+    let signing_seed = load_signing_seed(
+        config,
+        Some(key_store),
+        &updated.identity.active_signing_key_ref,
+    )?;
+    updated.registration_receipt = reissue_registration_receipt(
+        &updated,
+        &rotation.version_id,
+        &event_digest_for_receipt,
+        &rotation.current_update_public_key_multibase,
+        &signing_seed,
+        now,
+    )?;
+    updated.identity.control_key_ref = signing_control_ref;
+    updated.identity.version_id = rotation.version_id;
+    updated.identity.last_verified_at = now;
+    updated.did_document = serde_json::from_value(state).map_err(|error| {
+        anyhow::anyhow!("the rotated Station DID document is not a service document: {error}")
+    })?;
+    updated.stored_at = now;
+    tracing::info!(
+        did = %did,
+        method = %method_id,
+        version_id = %updated.identity.version_id,
+        "authorized the Account Authority key in the Station DID document"
+    );
+    persist_stored_identity(persistence, updated).await
+}
+
 async fn mint_local_service_identity(
     persistence: &PersistenceHandle,
     config: &AppConfig,
@@ -1033,10 +1488,10 @@ async fn mint_local_service_identity(
         soland_http::state::getrandom_seed(&mut seed);
         seed
     });
-    let assertion_keys = config
-        .account_authority_public_key_multibase
+    let account_authority_key = account_authority_assertion_key(config).await?;
+    let assertion_keys = account_authority_key
         .as_deref()
-        .map(|key| vec![("account-authority", key)])
+        .map(|key| vec![(ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT, key)])
         .unwrap_or_default();
     let prepared =
         arkret_signatures::webvh::prepare_service_registration_inception_with_assertion_keys(
@@ -1322,6 +1777,114 @@ mod tests {
             .expect("serving service identity")
             .did
             .to_string()
+    }
+
+    /// A Station that minted before its Account Authority existed used to be
+    /// stuck: the delegated key could only enter the document at inception, so
+    /// the only repair was re-provisioning - a new Station DID, orphaning every
+    /// credential and derived id issued under the old one. It now advances its
+    /// own log instead.
+    #[tokio::test]
+    async fn an_account_authority_key_is_authorized_after_the_did_was_minted() {
+        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence = PersistenceHandle::new(persistence_store.clone());
+        let key_store = InMemoryKeyStore::new();
+
+        // Mint with no Account Authority in sight.
+        resolve_service_identity(
+            &persistence,
+            &bootstrap_config(),
+            Some(&key_store),
+            None,
+            true,
+        )
+        .await
+        .expect("first provisioning");
+        let minted = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .expect("identity lookup")
+            .expect("stored identity");
+        let method_id = format!(
+            "{}#{ACCOUNT_AUTHORITY_ASSERTION_METHOD_FRAGMENT}",
+            minted.identity.did
+        );
+        assert!(
+            !minted
+                .did_document
+                .verification_method
+                .iter()
+                .any(|method| method.id == method_id),
+            "the minted document deliberately carries no delegated key"
+        );
+
+        // The operator now names the Account Authority key. Boot authorizes it
+        // by publishing one successor entry rather than refusing to start.
+        let authority_key = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            &SigningKey::from_bytes(&[0x5a; 32])
+                .verifying_key()
+                .to_bytes(),
+        );
+        let config = AppConfig {
+            account_authority_url: Some("https://auth.example".to_owned()),
+            account_authority_public_key_multibase: Some(authority_key.clone()),
+            ..bootstrap_config()
+        };
+        resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect("boot authorizes the Account Authority key");
+
+        let rotated = persistence_store
+            .service_identity()
+            .get()
+            .await
+            .expect("identity lookup")
+            .expect("stored identity");
+        assert_eq!(
+            rotated.identity.did, minted.identity.did,
+            "authorizing a key must not move the Station DID"
+        );
+        let method = rotated
+            .did_document
+            .verification_method
+            .iter()
+            .find(|method| method.id == method_id)
+            .expect("the delegated key is authorized");
+        assert_eq!(method.public_key_multibase, authority_key);
+        assert!(rotated.did_document.assertion_method.contains(&method_id));
+        assert_ne!(
+            rotated.identity.version_id, minted.identity.version_id,
+            "the document changed, so the log advanced"
+        );
+        assert_ne!(
+            rotated.identity.control_key_ref, minted.identity.control_key_ref,
+            "the successor consumed the pre-committed update key"
+        );
+
+        let history = persistence
+            .webvh_history(rotated.identity.did.as_str())
+            .await
+            .expect("history");
+        assert_eq!(history.len(), 2, "exactly one successor was published");
+        assert_eq!(
+            history[1].operation["parameters"]["scid"], history[0].operation["parameters"]["scid"],
+            "the SCID is fixed for the life of the DID"
+        );
+
+        // The next boot sees a document that already matches and publishes
+        // nothing, so a restart loop cannot walk the log forward.
+        resolve_service_identity(&persistence, &config, Some(&key_store), None, false)
+            .await
+            .expect("second boot");
+        assert_eq!(
+            persistence
+                .webvh_history(rotated.identity.did.as_str())
+                .await
+                .expect("history")
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -1696,5 +2259,50 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod account_authority_keyset_tests {
+    use super::*;
+
+    #[test]
+    fn keyset_selection_is_by_kid_and_round_trips_to_the_did_document_encoding() {
+        let raw = [7u8; 32];
+        let x = {
+            use base64::Engine as _;
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(raw)
+        };
+        let expected = arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(&raw);
+
+        // A real keyset carries several keys and their order is not a
+        // contract, so selection is by kid, not by "the only Ed25519 key".
+        let keyset = serde_json::json!({
+            "keys": [
+                {"kid": "coauth-service-identity-v1", "kty": "OKP", "crv": "Ed25519", "x": x},
+                {"kid": "some-rsa", "kty": "RSA", "n": "...", "e": "AQAB"},
+                {"kid": ACCOUNT_AUTHORITY_JWK_KID, "kty": "OKP", "crv": "Ed25519", "x": x},
+            ]
+        });
+        let picked = account_authority_key_from_keyset(&keyset).expect("kid is present");
+        assert_eq!(picked, expected);
+        // What comes back is exactly what the DID document decoder accepts.
+        assert_eq!(
+            arkret_canonical::multibase::decode_ed25519_multibase(&picked).unwrap(),
+            raw
+        );
+
+        // Right kid, wrong key type: not a signer this deployment can authorize.
+        let wrong_type = serde_json::json!({
+            "keys": [{"kid": ACCOUNT_AUTHORITY_JWK_KID, "kty": "EC", "crv": "P-256", "x": x}]
+        });
+        assert!(account_authority_key_from_keyset(&wrong_type).is_none());
+
+        // Absent entirely, and a malformed `x`, both decline rather than guess.
+        assert!(account_authority_key_from_keyset(&serde_json::json!({"keys": []})).is_none());
+        let short = serde_json::json!({
+            "keys": [{"kid": ACCOUNT_AUTHORITY_JWK_KID, "kty": "OKP", "crv": "Ed25519", "x": "AAAA"}]
+        });
+        assert!(account_authority_key_from_keyset(&short).is_none());
     }
 }

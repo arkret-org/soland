@@ -562,6 +562,42 @@ impl PersistenceHandle {
             .collect())
     }
 
+    /// Append one successor entry to a DID this deployment hosts, comparing the
+    /// current head so a concurrent writer cannot be overwritten.
+    ///
+    /// `commit_service_registration` is inception-only. Everything after it -
+    /// authorizing a delegated assertion key, retiring one, moving an endpoint -
+    /// arrives here.
+    pub async fn commit_webvh_log_operation(
+        &self,
+        expected_current_head: Option<String>,
+        document: DidDocumentState,
+        event: DidLogEvent,
+    ) -> crate::ServiceResult<soland_storage::WebvhLogCommitOutcome> {
+        let document = soland_storage::WebvhDocumentRecord {
+            did: document.did,
+            did_document: document.did_document,
+            key_log_head: document.key_log_head,
+            seq: document.seq,
+            method_evidence: document.method_evidence,
+            fetched_at: document.fetched_at,
+            expires_at: document.expires_at,
+            updated_at: document.updated_at,
+        };
+        let event = soland_storage::WebvhLogRecord {
+            event_digest: event.event_digest,
+            did: event.did,
+            seq: event.seq,
+            operation: event.operation,
+            created_at: event.created_at,
+        };
+        Ok(self
+            .persistence
+            .webvh()
+            .commit_log_operation(expected_current_head, document, event)
+            .await?)
+    }
+
     pub async fn commit_service_registration(
         &self,
         key: arkret_models_identity::service_identity::ServiceRegistrationKey,
