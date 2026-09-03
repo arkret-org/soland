@@ -30,15 +30,16 @@ use arkret_models_discovery::{
     DirectoryHandleResolutionOutcome, DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
     DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
     DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome, DirectoryRequestProof,
-    DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
-    DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
-    DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
-    DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
-    DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
-    DirectoryUserSearchOutcome, ObjectPreview, ObjectPreviewId, OrganizationPreview,
-    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
-    RealmJoinCandidateSource, RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel,
-    RealmPreview, ServiceDescribe, TargetKind, UserSearchOutcome,
+    DirectoryRequestProofKind, DirectoryResolveAgentSelectorRequestBody,
+    DirectoryResolveHandleRequestBody, DirectoryResolveOrganizationRequestBody,
+    DirectoryResolveRealmRequestBody, DirectoryResolveTargetRequestBody, DirectoryResourceKind,
+    DirectorySearchActorsRequestBody, DirectorySearchOrganizationsRequestBody,
+    DirectorySearchRealmsRequestBody, DirectorySearchUsersRequestBody, DirectorySubjectHandleList,
+    DirectoryTargetResolutionOutcome, DirectoryUserSearchOutcome, ObjectPreview, ObjectPreviewId,
+    ObjectPreviewKind, OrganizationPreview, RealmJoinCandidate, RealmJoinCandidateRole,
+    RealmJoinCandidateServiceKind, RealmJoinCandidateSource, RealmJoinMethod,
+    RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, ServiceDescribe,
+    ServiceProtocolVersion, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
 use arkret_models_identity::{
@@ -49,7 +50,7 @@ use arkret_models_identity::{
 use arkret_server::{CursorAuthority, CursorAuthorityError, CursorBindingContext};
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AccountId, AddressLinkKind, Audience, CellFamilyId, Hash, JoinRule, PayloadProof,
+    AccountId, AddressLinkKind, Audience, CellFamilyId, EventId, Hash, JoinRule, PayloadProof,
     PayloadProofPurpose, PayloadSigner, RealmRef, TargetDescriptor, parse_address, proof_kind,
     target_digest,
 };
@@ -147,7 +148,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         service_resolution: service_resolution.as_ref().clone(),
         trust_domain,
         service_kind: arkret_wire::ServiceKind::DirectoryService,
-        protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+        protocol_version: ServiceProtocolVersion::V1,
         supported_profiles: vec![arkret_wire::ProfileId::DIRECTORY_SERVICE_V1.to_owned()],
         profile_bindings: Default::default(),
         supported_operation_bundles: DIRECTORY_OPERATION_BUNDLES

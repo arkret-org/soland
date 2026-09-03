@@ -335,7 +335,7 @@ async fn fetch_remote_handle_from_peer(
         );
         return Ok(None);
     }
-    let mut outcome: DirectoryHandleResolutionOutcome =
+    let outcome: DirectoryHandleResolutionOutcome =
         serde_json::from_str(&text).map_err(|error| {
             AppError::internal(format!("parse remote resolve-handle response: {error}"))
         })?;
@@ -344,9 +344,6 @@ async fn fetch_remote_handle_from_peer(
         .map_err(|reason| {
             AppError::capability_denied(reason).with_wire_code("handle_unverified")
         })?;
-    if !outcome.source_refs.iter().any(|service| service == peer_id) {
-        outcome.source_refs.push(peer_id.to_owned());
-    }
     if let Some(claims) = outcome.claims.as_ref() {
         for claim in claims {
             if let Ok(envelope) = serde_json::to_value(claim) {
@@ -371,10 +368,10 @@ async fn validate_remote_handle_resolution(
         return Err("remote handle resolution handle mismatch".to_owned());
     }
     let audience = resolve_handle_audience(body, peer_id);
-    if let Some(expected_principal_id) = body.expected_principal_id.as_ref()
-        && outcome.account_id.principal_id != *expected_principal_id
+    if let Some(expected_account_id) = body.expected_account_id.as_ref()
+        && outcome.account_id != *expected_account_id
     {
-        return Err("remote handle resolution expected_principal_id mismatch".to_owned());
+        return Err("remote handle resolution expected_account_id mismatch".to_owned());
     }
     let claim = outcome
         .claims
@@ -811,7 +808,7 @@ pub(super) async fn list_handles_for_subject(
         "operation": arkret_wire::ServiceOperationId::FIND_DIRECTORY_READ_LIST_HANDLES_FOR_SUBJECT_V1,
         "account_id": subject_account_id,
         "realm_id": body.realm_id.as_ref(),
-        "intent": body.intent.as_deref(),
+        "intent": body.intent.as_ref().map(ToString::to_string),
         "requester_id": body.requester_id.as_ref(),
         "as_of": body.as_of,
     }))

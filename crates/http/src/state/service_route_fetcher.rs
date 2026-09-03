@@ -248,7 +248,7 @@ fn validate_service_describe(
     description
         .validate()
         .map_err(|error| ServiceError::SchemaViolation(error.to_string()))?;
-    if description.protocol_version != arkret_wire::PROTOCOL_VERSION
+    if description.protocol_version.as_str() != arkret_wire::PROTOCOL_VERSION
         || description.service_id != record.record.service_id
         || description.service_kind != expected_kind
         || description.service_resolution.did != record.record.did
@@ -304,7 +304,7 @@ fn validate_service_describe(
         http_json_base_url: advertised_base.to_string(),
         route_binding_digest,
         trust_domain: description.trust_domain,
-        protocol_version: description.protocol_version,
+        protocol_version: description.protocol_version.to_string(),
     })
 }
 

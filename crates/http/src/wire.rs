@@ -578,7 +578,7 @@ pub fn describe(
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
         service_kind: arkret_wire::ServiceKind::Station,
-        protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_models_discovery::ServiceProtocolVersion::V1,
         supported_profiles: {
             let mut profiles = vec![
                 arkret_wire::ProfileId::CORE_EVENT_STORE_V1.to_owned(),

@@ -59,7 +59,7 @@ async fn directory_requester_proof_verified(
     issuer: Option<&str>,
     binding_for: impl Fn(&DirectoryRequestProof) -> Option<Vec<u8>>,
 ) -> bool {
-    if proof.kind != proof_kind::DETACHED_JWS {
+    if proof.kind != DirectoryRequestProofKind::DetachedJws {
         return false;
     }
     // §9.0.1: `audience_id` MUST be the target Directory `service_id` published
@@ -131,7 +131,7 @@ mod tests {
         payload_digest: Hash,
     ) -> DirectoryRequestProof {
         DirectoryRequestProof {
-            kind: proof_kind::DETACHED_JWS.to_owned(),
+            kind: DirectoryRequestProofKind::DetachedJws,
             verification_method: arkret_wire::DidUrl::new(
                 "did:web:directory-proof-test.invalid#ak:key:directory-requester_id".to_owned(),
             )
@@ -157,7 +157,7 @@ mod tests {
     fn handle_body(proofs: Vec<DirectoryRequestProof>) -> DirectoryResolveHandleRequestBody {
         DirectoryResolveHandleRequestBody {
             handle: "@alice:directory-proof-test.invalid".to_owned(),
-            expected_principal_id: None,
+            expected_account_id: None,
             proof_challenge: None,
             claim_presentations: Vec::new(),
             intent: None,

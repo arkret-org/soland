@@ -36,7 +36,7 @@ pub(super) async fn search_realms(
         realms: results
             .iter()
             .map(|entry| realm_preview_from_directory_entry(&projection, entry))
-            .collect(),
+            .collect::<Result<Vec<_>, _>>()?,
         next_cursor: None,
         has_more,
     })
@@ -130,7 +130,7 @@ pub(super) async fn resolve_realm(
                 realm_preview: realm_preview_from_directory_entry_with_alias(
                     &realm,
                     effective_alias,
-                ),
+                )?,
                 stripped_state_entries: Vec::new(),
                 join_rule: Some(join_rule_enum(&join_rule)),
                 join_candidates: join_candidates_for_resolved_realm(
@@ -300,7 +300,7 @@ fn object_preview_for_address(
                 .ok_or_else(|| AppError::internal("strand target is missing strand id"))?;
             let id = StrandId::new(format!("ak:strand:{strand}"))
                 .map_err(|error| AppError::internal(format!("invalid strand target: {error}")))?;
-            (ObjectPreviewId::Strand(id), "strand")
+            (ObjectPreviewId::Strand(id), ObjectPreviewKind::Strand)
         }
         TargetKind::Message => {
             let message = parsed
@@ -309,12 +309,12 @@ fn object_preview_for_address(
                 .ok_or_else(|| AppError::internal("message target is missing message id"))?;
             let id = MessageId::new(format!("ak:message:{message}"))
                 .map_err(|error| AppError::internal(format!("invalid message target: {error}")))?;
-            (ObjectPreviewId::Message(id), "message")
+            (ObjectPreviewId::Message(id), ObjectPreviewKind::Message)
         }
     };
     Ok(Some(ObjectPreview {
         object_id,
-        object_kind: object_kind.to_owned(),
+        object_kind,
         title: None,
         summary: None,
         as_of,
@@ -365,7 +365,7 @@ pub(super) fn target_kind_for_address(
 pub(super) fn realm_preview_from_directory_entry(
     projection: &ProjectionState,
     entry: &RealmDirectoryEntry,
-) -> RealmPreview {
+) -> Result<RealmPreview, AppError> {
     realm_preview_from_directory_entry_with_alias(
         entry,
         effective_realm_alias(projection, entry.realm_id.as_str()),
@@ -375,13 +375,13 @@ pub(super) fn realm_preview_from_directory_entry(
 fn realm_preview_from_directory_entry_with_alias(
     entry: &RealmDirectoryEntry,
     alias: Option<String>,
-) -> RealmPreview {
+) -> Result<RealmPreview, AppError> {
     let discoverability = if entry.public {
         "public"
     } else {
         "invite_only"
     };
-    RealmPreview {
+    Ok(RealmPreview {
         realm_id: entry.realm_id.clone(),
         alias,
         title: Some(entry.title.clone()),
@@ -400,11 +400,11 @@ fn realm_preview_from_directory_entry_with_alias(
         history_access: None,
         join_candidates: Vec::new(),
         as_of: entry.as_of,
-        source_refs: entry.source_refs.clone(),
+        source_refs: parse_event_source_refs(&entry.source_refs)?,
         policy_revision: entry.policy_revision.clone(),
         stale: None,
         divergent: None,
-    }
+    })
 }
 
 fn effective_realm_alias(projection: &ProjectionState, realm_id: &str) -> Option<String> {
@@ -524,7 +524,7 @@ pub(super) fn organization_preview_from_value(
         realm_ids: realms,
         realm_count,
         as_of,
-        source_refs: organization_source_refs(organization),
+        source_refs: organization_source_refs(organization)?,
         policy_revision: organization
             .get("policy_revision")
             .and_then(Value::as_str)
@@ -548,7 +548,7 @@ fn organization_timestamp(organization: &Value) -> Option<DateTime<Utc>> {
         })
 }
 
-fn organization_source_refs(organization: &Value) -> Vec<String> {
+fn organization_source_refs(organization: &Value) -> Result<Vec<EventId>, AppError> {
     let refs = organization
         .get("source_refs")
         .and_then(Value::as_array)
@@ -563,7 +563,17 @@ fn organization_source_refs(organization: &Value) -> Vec<String> {
         .unwrap_or_default();
     // No fabricated ref when there is none: an Event id names an Event, and
     // inventing one here produced a value nothing could resolve.
-    refs
+    parse_event_source_refs(&refs)
+}
+
+fn parse_event_source_refs(refs: &[String]) -> Result<Vec<EventId>, AppError> {
+    refs.iter()
+        .map(|value| {
+            EventId::new(value.clone()).map_err(|error| {
+                AppError::internal(format!("directory source_ref is invalid: {error}"))
+            })
+        })
+        .collect()
 }
 
 pub(super) fn organization_preview_with_spaces(
@@ -875,7 +885,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
             },
             service_kind: RealmJoinCandidateServiceKind::Station,
             role: RealmJoinCandidateRole::JoinedMemberStation,
-            endpoint: None,
+            endpoint_url: None,
             operations: vec![
                 arkret_wire::ServiceOperationId::PEER_EVENTS_COMMAND_SUBMIT_V1.to_owned(),
             ],

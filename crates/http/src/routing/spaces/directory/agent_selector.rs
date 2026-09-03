@@ -239,7 +239,6 @@ pub(super) async fn resolve_agent_selector(
         controller_subject_id: selector_claim.controller_subject_id.clone(),
         subject_id: selector_claim.subject_id.clone(),
         agent_slug: body.agent_slug,
-        verified: true,
         expires_at: selector_claim.expires_at,
         source_refs: Vec::new(),
         selector_claim,
