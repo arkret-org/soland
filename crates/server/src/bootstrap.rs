@@ -2159,7 +2159,7 @@ mod tests {
     /// own log instead.
     #[tokio::test]
     async fn an_account_authority_key_is_authorized_after_the_did_was_minted() {
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
 
@@ -2262,7 +2262,7 @@ mod tests {
 
     #[tokio::test]
     async fn interrupted_rotation_is_recovered_from_its_candidate_key() {
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store.clone());
         let key_store = InMemoryKeyStore::new();
         resolve_service_identity(
@@ -2571,7 +2571,7 @@ mod tests {
 
     #[tokio::test]
     async fn rotated_identity_bundle_replays_the_complete_history() {
-        let persistence_store = Arc::new(SolandMemoryPersistenceStore::new());
+        let persistence_store = leased_store().await;
         let persistence = PersistenceHandle::new(persistence_store);
         let key_store = InMemoryKeyStore::new();
         let bundle_dir = std::env::temp_dir().join(format!(
@@ -2608,7 +2608,7 @@ mod tests {
         .await
         .expect("rotation updates the bundle");
 
-        let empty_database = Arc::new(SolandMemoryPersistenceStore::new());
+        let empty_database = leased_store().await;
         let empty_persistence = PersistenceHandle::new(empty_database);
         let restored = resolve_service_identity(
             &empty_persistence,
