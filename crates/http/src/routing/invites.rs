@@ -1723,37 +1723,7 @@ fn evaluate_invite_receive(
     }
 
     let trust_tier = trust_tier_for_kind(effective_kind);
-
-    // §5 — allowlist gate. Evidence kinds not in `holder_allowed_introduction_kinds`
-    // MUST NOT notify; they fall through to the explicit/unknown behavior.
-    let allowlisted = policy
-        .holder_allowed_introduction_kinds
-        .iter()
-        .any(|kind| kind == effective_kind);
-
-    let unknown_path =
-        !allowlisted && !matches!(effective_kind, "handle_claim" | "explicit_address");
-
-    let mut action = if allowlisted {
-        match effective_kind {
-            "handle_claim" => policy
-                .handle_claim_behavior
-                .clone()
-                .unwrap_or(InviteReceiveAction::Quarantine),
-            "same_station" | "explicit_address" => policy.explicit_address_behavior.clone(),
-            _ => InviteReceiveAction::Notify,
-        }
-    } else if effective_kind == "handle_claim" {
-        policy
-            .handle_claim_behavior
-            .clone()
-            .unwrap_or(InviteReceiveAction::Quarantine)
-    } else if effective_kind == "explicit_address" {
-        policy.explicit_address_behavior.clone()
-    } else {
-        unknown_action_to_receive(&policy.unknown_invites)
-    };
-    action = apply_behavior_caps(constraints, effective_kind, unknown_path, action);
+    let action = receive_action_for_kind(policy, constraints, effective_kind);
 
     // §5.1 — graded disclosure. High-trust + `outcome` echoes the real
     // result; everything else stays opaque (`disclosed_outcome = None`).
@@ -1907,32 +1877,7 @@ pub(crate) fn evaluate_contact_receive(
     }
 
     let trust_tier = trust_tier_for_kind(effective_kind);
-    let allowlisted = policy
-        .holder_allowed_introduction_kinds
-        .iter()
-        .any(|kind| kind == effective_kind);
-    let unknown_path =
-        !allowlisted && !matches!(effective_kind, "handle_claim" | "explicit_address");
-    let mut action = if allowlisted {
-        match effective_kind {
-            "handle_claim" => policy
-                .handle_claim_behavior
-                .clone()
-                .unwrap_or(InviteReceiveAction::Quarantine),
-            "same_station" | "explicit_address" => policy.explicit_address_behavior.clone(),
-            _ => InviteReceiveAction::Notify,
-        }
-    } else if effective_kind == "handle_claim" {
-        policy
-            .handle_claim_behavior
-            .clone()
-            .unwrap_or(InviteReceiveAction::Quarantine)
-    } else if effective_kind == "explicit_address" {
-        policy.explicit_address_behavior.clone()
-    } else {
-        unknown_action_to_receive(&policy.unknown_invites)
-    };
-    action = apply_behavior_caps(constraints, effective_kind, unknown_path, action);
+    let action = receive_action_for_kind(policy, constraints, effective_kind);
     let disclosure_level = match trust_tier {
         TrustTier::High => policy
             .disclosure
@@ -2030,6 +1975,49 @@ fn cap_receive_action(
     }
 }
 
+/// `invite-addressing.md` §5 / §5.2 — the holder's effective receive action for
+/// one already-verified evidence kind.
+///
+/// The per-kind behavior fields do not carry two of the section's constraints
+/// on their own:
+///
+/// - `holder_allowed_introduction_kinds` is an allowlist, and §5 states that an
+///   evidence kind outside it MUST NOT reach a user notification. A holder who
+///   sets `handle_claim_behavior` / `explicit_address_behavior` to `notify`
+///   without also allowlisting the kind therefore lands on the next strictest
+///   behavior instead of notifying.
+/// - `unknown_invites` governs deliveries with no evidence or non-conforming
+///   evidence. `same_station` is receiver-derived but conforming, so it stays on
+///   the low-trust `explicit_address_behavior` even when it is not allowlisted.
+fn receive_action_for_kind(
+    policy: &InviteReceivePolicy,
+    constraints: Option<&ReceivePolicyConstraints>,
+    effective_kind: &str,
+) -> InviteReceiveAction {
+    let allowlisted = policy
+        .holder_allowed_introduction_kinds
+        .iter()
+        .any(|kind| kind == effective_kind);
+    let unknown_path = !allowlisted
+        && !matches!(
+            effective_kind,
+            "handle_claim" | "same_station" | "explicit_address"
+        );
+    let mut action = match effective_kind {
+        "handle_claim" => policy
+            .handle_claim_behavior
+            .clone()
+            .unwrap_or(InviteReceiveAction::Quarantine),
+        "same_station" | "explicit_address" => policy.explicit_address_behavior.clone(),
+        _ if allowlisted => InviteReceiveAction::Notify,
+        _ => unknown_action_to_receive(&policy.unknown_invites),
+    };
+    if !allowlisted {
+        action = cap_receive_action(action, Some(&InviteReceiveAction::Quarantine));
+    }
+    apply_behavior_caps(constraints, effective_kind, unknown_path, action)
+}
+
 fn apply_behavior_caps(
     constraints: Option<&ReceivePolicyConstraints>,
     effective_kind: &str,
@@ -2043,7 +2031,14 @@ fn apply_behavior_caps(
         "handle_claim" => {
             cap_receive_action(action, constraints.handle_claim_max_behavior.as_ref())
         }
-        "explicit_address" => {
+        // §2 puts `same_station` in the same low-trust tier as
+        // `explicit_address`, and `receive_policy_constraints` carries no
+        // separate `same_station_max_behavior`, so the two share one deployment
+        // ceiling. Matching it by kind name alone let an allowlisted
+        // `same_station` escape `explicit_address_max_behavior`, which §5.2
+        // forbids: a deployment constraint may only make the subject harder to
+        // reach, never easier.
+        "same_station" | "explicit_address" => {
             cap_receive_action(action, constraints.explicit_address_max_behavior.as_ref())
         }
         _ => action,
@@ -2670,6 +2665,74 @@ mod invite_locator_security_tests {
         let contact = evaluate_contact(&policy);
         assert_eq!(contact.action, InviteReceiveAction::Drop);
         assert!(contact.disclosed_outcome.is_none());
+    }
+
+    /// `invite-addressing.md` §5 — `holder_allowed_introduction_kinds` is an
+    /// allowlist and an evidence kind outside it MUST NOT reach a user
+    /// notification, however the holder configured that kind's own behavior.
+    /// The behavior field alone used to decide the outcome, so a holder who set
+    /// `explicit_address_behavior = notify` without allowlisting the kind was
+    /// notified anyway.
+    #[tokio::test]
+    async fn a_kind_outside_the_allowlist_never_notifies() {
+        let state = production_holder_state().await;
+        let holder_account = arkret_wire::AccountId::new(
+            DidCoreId::new(PRODUCTION_HOLDER.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        );
+        let mut policy = InviteReceivePolicy::spec_default(holder_account);
+        policy.explicit_address_behavior = InviteReceiveAction::Notify;
+        policy.handle_claim_behavior = Some(InviteReceiveAction::Notify);
+        let inviter_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new(PRODUCTION_INVITER.to_owned()).unwrap(),
+            state.service_core_id().clone(),
+        ));
+
+        // `spec_default` allowlists only the high-trust kinds, so the delivery
+        // downgrades to the low-trust tier and must stay out of the inbox.
+        let invite = evaluate_invite_receive(
+            &state,
+            &policy,
+            &IntroductionEvidence::ExplicitAddress,
+            &inviter_actor,
+            PRODUCTION_INVITER,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            state.service_id(),
+            true,
+        );
+        assert_eq!(invite.effective_kind, "same_station");
+        assert_eq!(invite.action, InviteReceiveAction::Quarantine);
+
+        let contact = evaluate_contact_receive(
+            &state,
+            &policy,
+            &ContactIntroductionEvidence::ExplicitAddress,
+            PRODUCTION_INVITER,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            state.service_id(),
+        );
+        assert_eq!(contact.effective_kind, "explicit_address");
+        assert_eq!(contact.action, InviteReceiveAction::Quarantine);
+
+        // Allowlisting the kind is what makes the holder's own `notify` choice
+        // effective.
+        policy
+            .holder_allowed_introduction_kinds
+            .push("same_station".to_owned());
+        let invite = evaluate_invite_receive(
+            &state,
+            &policy,
+            &IntroductionEvidence::ExplicitAddress,
+            &inviter_actor,
+            PRODUCTION_INVITER,
+            PRODUCTION_HOLDER,
+            state.service_id(),
+            state.service_id(),
+            true,
+        );
+        assert_eq!(invite.action, InviteReceiveAction::Notify);
     }
 
     #[tokio::test]
