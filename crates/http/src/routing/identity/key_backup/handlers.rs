@@ -70,31 +70,29 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
     if series_seq == 0 {
         validate_series_genesis_shape_typed(backup)?;
         if let Some(existing_seq) = max_existing_seq {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
+            return Err(crate::app_error!(
+                Conflict,
                 format!(
                     "series_seq_not_monotonic: genesis envelope for series already has seq={existing_seq} persisted"
                 ),
             )
-            .with_status(StatusCode::CONFLICT)
-            .with_wire_code("series_seq_not_monotonic"));
+            .with_reason_code(arkret_wire::ReasonCode::SERIES_SEQ_NOT_MONOTONIC));
         }
         return Ok(());
     }
 
     let supersedes_digest = backup.supersedes_digest.as_deref().unwrap_or_default();
     if supersedes.is_none() || supersedes_digest.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             "series_chain_broken: successor envelope requires `supersedes` + `supersedes_digest`",
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_chain_broken"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN));
     }
     let expected = max_existing_seq.map(|seq| seq + 1);
     if expected != Some(series_seq) {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             format!(
                 "series_seq_not_monotonic: expected series_seq={} but got {series_seq}",
                 expected
@@ -102,16 +100,14 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
                     .unwrap_or_else(|| "1 (no predecessor)".to_owned())
             ),
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_seq_not_monotonic"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_SEQ_NOT_MONOTONIC));
     }
     let Some(predecessor) = predecessor else {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             "series_predecessor_not_found: `supersedes` references a backup_id that is not persisted",
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_predecessor_not_found"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_PREDECESSOR_NOT_FOUND));
     };
     let expected_digest = key_backup_canonical_digest_without_signature(&predecessor)?;
     // SOL-SEC-05 — constant-time digest comparison so a timing side channel
@@ -123,12 +119,11 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         left.len() == right.len() && bool::from(left.ct_eq(right))
     };
     if !digests_equal {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             "series_chain_broken: supersedes_digest does not match predecessor canonical digest",
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_chain_broken"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN));
     }
     Ok(())
 }
@@ -141,10 +136,9 @@ pub(super) fn key_backup_idempotent_retry(
     if let Some(existing) = existing
         && !backup_actor_matches(existing, actor_id)
     {
-        return Err(
-            AppError::capability_denied("backup_id is already owned by a different actor")
-                .with_status(StatusCode::CONFLICT),
-        );
+        return Err(AppError::capability_denied(
+            "backup_id is already owned by a different actor",
+        ));
     }
     let Some(existing) = existing else {
         return Ok(false);
@@ -156,11 +150,10 @@ pub(super) fn key_backup_idempotent_retry(
         AppError::internal(format!("key backup canonicalization failed: {error}"))
     })?;
     if existing_bytes != incoming_bytes {
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "backup_id already exists with different canonical content",
-        )
-        .with_status(StatusCode::CONFLICT));
+        ));
     }
     Ok(true)
 }
@@ -267,11 +260,10 @@ pub(super) async fn put_key_backup(
             return json_ok(outcome);
         }
         Some(_) => {
-            return Err(AppError::new(
-                ErrorCode::DuplicateConflict,
+            return Err(crate::app_error!(
+                DuplicateConflict,
                 "Idempotency-Key was reused with a different key-backup body",
-            )
-            .with_status(StatusCode::CONFLICT));
+            ));
         }
         None => {}
     }
@@ -316,11 +308,10 @@ pub(super) async fn put_key_backup(
             // storage layer is now the authoritative race guard for §7.6
             // monotonicity; the loser is told the seq is already taken.
             if error.is_conflict_kind() {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
+                crate::app_error!(
+                    SchemaViolation,
                     format!("series_seq_not_monotonic: {}", error.detail()),
                 )
-                .with_status(StatusCode::CONFLICT)
                 .with_wire_code("series_seq_not_monotonic")
             } else {
                 AppError::internal(error.to_string())
@@ -529,8 +520,7 @@ pub(super) async fn unlock_key_backup(
             "rate_limited",
         )
         .await;
-        return Err(AppError::new(
-            ErrorCode::RateLimited,
+        return Err(crate::app_error!(RateLimited,
             format!(
                 "key backup download quota exceeded ({daily_limit} full-ciphertext reads per principal per 24h)"
             ),

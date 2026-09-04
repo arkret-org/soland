@@ -4,11 +4,9 @@
 //! that rewires or prunes signed predecessor references.
 
 use arkret_identifiers::RealmId;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use soland_contracts::admin::seal::{SealDagSnapshot, SealLeaf};
-use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -30,23 +28,17 @@ pub(crate) async fn admin_get_seal_dag(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let realm = RealmId::new(realm_id.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
-            format!("invalid realm_id: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let realm = RealmId::new(realm_id.clone())
+        .map_err(|error| crate::app_error!(ParamInvalid, format!("invalid realm_id: {error}"),))?;
     let leaf_ids = state
         .projections()
         .realm_seal_leaves(&realm)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("seal_store.list_leaves failed: {error}"),
             )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
         })?;
 
     let mut leaves = Vec::with_capacity(leaf_ids.len());

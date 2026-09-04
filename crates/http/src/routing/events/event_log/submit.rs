@@ -307,12 +307,16 @@ pub(in crate::routing) struct EventValidationError {
 }
 
 #[derive(Debug)]
-pub(in crate::routing) struct SubmitOneError {
-    pub status: StatusCode,
-    pub code: String,
-    pub message: String,
-    pub details: Option<Value>,
-    pub quarantine_event_id: Option<String>,
+pub(in crate::routing) enum SubmitOneError {
+    Rejected {
+        error: AppError,
+        details: Option<Value>,
+    },
+    Quarantined {
+        event_id: String,
+        reason_code: String,
+        message: String,
+    },
 }
 
 #[derive(Debug)]
@@ -934,17 +938,36 @@ impl SubmitOneError {
         code: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
-        Self {
-            status,
-            code: code.into(),
-            message: message.into(),
+        let code = code.into();
+        let message = message.into();
+        let error = if let Some(code) = ErrorCode::from_wire(&code) {
+            AppError::from_rejection(code, message)
+        } else {
+            let mapped = match status {
+                StatusCode::PRECONDITION_FAILED => ErrorCode::FailedPrecondition,
+                StatusCode::CONFLICT => ErrorCode::Conflict,
+                StatusCode::FORBIDDEN => ErrorCode::CapabilityDenied,
+                StatusCode::UNAUTHORIZED => ErrorCode::Unauthenticated,
+                StatusCode::BAD_REQUEST => ErrorCode::ParamInvalid,
+                StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
+                _ => ErrorCode::InternalError,
+            };
+            AppError::from_rejection(mapped, message).with_reason_code(code)
+        };
+        Self::Rejected {
+            error,
             details: None,
-            quarantine_event_id: None,
         }
     }
 
     pub(in crate::routing) fn with_details(mut self, details: impl serde::Serialize) -> Self {
-        self.details = serde_json::to_value(details).ok();
+        if let Self::Rejected {
+            details: wire_details,
+            ..
+        } = &mut self
+        {
+            *wire_details = serde_json::to_value(details).ok();
+        }
         self
     }
 
@@ -965,12 +988,55 @@ impl SubmitOneError {
         code: impl Into<String>,
         message: impl Into<String>,
     ) -> Self {
-        Self {
-            status: StatusCode::OK,
-            code: code.into(),
+        Self::Quarantined {
+            event_id: event_id.into(),
+            reason_code: code.into(),
             message: message.into(),
-            details: None,
-            quarantine_event_id: Some(event_id.into()),
+        }
+    }
+
+    pub(in crate::routing) fn rejection(&self) -> Option<&AppError> {
+        match self {
+            Self::Rejected { error, .. } => Some(error),
+            Self::Quarantined { .. } => None,
+        }
+    }
+
+    #[cfg(test)]
+    pub(in crate::routing) fn details(&self) -> Option<&Value> {
+        match self {
+            Self::Rejected { details, .. } => details.as_ref(),
+            Self::Quarantined { .. } => None,
+        }
+    }
+
+    pub(in crate::routing) fn quarantine_event_id(&self) -> Option<String> {
+        match self {
+            Self::Quarantined { event_id, .. } => Some(event_id.clone()),
+            Self::Rejected { .. } => None,
+        }
+    }
+
+    pub(in crate::routing) fn status(&self) -> StatusCode {
+        self.rejection()
+            .map_or(StatusCode::OK, AppError::http_status)
+    }
+
+    pub(in crate::routing) fn code(&self) -> String {
+        match self {
+            Self::Rejected { error, .. } => error
+                .reason_code
+                .as_deref()
+                .unwrap_or_else(|| error.wire_code())
+                .to_owned(),
+            Self::Quarantined { reason_code, .. } => reason_code.clone(),
+        }
+    }
+
+    pub(in crate::routing) fn message(&self) -> String {
+        match self {
+            Self::Rejected { error, .. } => error.message.to_string(),
+            Self::Quarantined { message, .. } => message.clone(),
         }
     }
 }
@@ -1003,27 +1069,26 @@ pub(super) fn validate_membership_compensation_semantics(
 pub(in crate::routing) fn submit_one_error_to_app_error(
     context: &str,
     status: StatusCode,
-    code: String,
+    code: impl Into<String>,
     detail: &str,
 ) -> AppError {
+    let code = code.into();
     let message = format!("{context}: {detail}");
     // The Circle subset invariant is a registered sub-reason of
     // `failed_precondition`, not a top-level error code. Preserve the 422
     // admission class and carry the exact reducer discriminator separately.
     if code == arkret_wire::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER {
-        return AppError::new(ErrorCode::FailedPrecondition, message)
-            .with_status(status)
-            .with_reason_code(code);
+        return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
     }
     // relation.md §4 and the error registry bind this reducer sub-reason to
     // top-level failed_precondition (HTTP 409). Do not preserve the internal
     // projection-preflight 412 carrier: 412 is reserved for HTTP/CBA
     // preconditions and is not the registered wire status for this verdict.
     if code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
-        return AppError::new(ErrorCode::FailedPrecondition, message).with_reason_code(code);
+        return crate::app_error!(FailedPrecondition, message).with_reason_code(code);
     }
     if let Some(mapped) = ErrorCode::from_wire(&code) {
-        return AppError::new(mapped, message).with_status(status);
+        return AppError::from_rejection(mapped, message);
     }
     let mapped = match status {
         StatusCode::PRECONDITION_FAILED => ErrorCode::FailedPrecondition,
@@ -1034,9 +1099,7 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
         StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
         _ => ErrorCode::InternalError,
     };
-    AppError::new(mapped, message)
-        .with_status(status)
-        .with_reason_code(code)
+    AppError::from_rejection(mapped, message).with_reason_code(code)
 }
 
 fn realm_already_exists_error() -> SubmitOneError {
@@ -1081,7 +1144,7 @@ pub(super) fn event_validation_error(
 }
 
 pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError) {
-    if let Some(event_id) = error.quarantine_event_id {
+    if let SubmitOneError::Quarantined { event_id, .. } = error {
         res.render(Json(events_submit_outcome(
             EventsSubmitStatus::Partial,
             Vec::new(),
@@ -1092,33 +1155,35 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         )));
         return;
     }
-    if error.code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
-        crate::error::render_error_with_reason_code(
-            res,
-            StatusCode::CONFLICT,
-            ErrorCode::FailedPrecondition.as_str(),
-            &error.message,
-            &error.code,
-            None,
-        );
-        return;
-    }
-    if let Some(details) = error.details {
-        let mut envelope =
-            arkret_wire::problem_details::ErrorEnvelope::new(error.code, error.message)
-                .with_request_id(crate::ids::generate_request_id());
-        if let Some(object) = details.as_object() {
-            for (key, value) in object {
-                envelope = envelope.with_detail(key.clone(), value.clone());
-            }
+    let SubmitOneError::Rejected { error, details } = error else {
+        unreachable!();
+    };
+    let mut envelope =
+        arkret_wire::problem_details::ErrorEnvelope::new(error.wire_code(), error.message.as_ref())
+            .with_request_id(crate::ids::generate_request_id());
+    if let Some(wire_details) = error.wire_details.as_deref() {
+        for (key, value) in wire_details {
+            envelope = envelope.with_detail(key.clone(), value.clone());
         }
-        crate::error::render_problem_envelope(res, error.status, envelope);
-    } else {
-        // api-conventions.md 5: the Problem `type` is the only machine
-        // discriminator. The human cause travels in `detail`; a duplicate
-        // free-form top-level `reason` would be a second dispatch track.
-        render_error(res, error.status, &error.code, &error.message);
     }
+    if let Some(object) = details.as_ref().and_then(Value::as_object) {
+        for (key, value) in object {
+            envelope = envelope.with_detail(key.clone(), value.clone());
+        }
+    }
+    if let Some(reason_code) = error.reason_code.as_deref() {
+        envelope = envelope.with_detail(
+            "reason_code",
+            serde_json::Value::String(reason_code.to_owned()),
+        );
+    }
+    if let Some(reason_detail) = error.reason_detail.as_deref() {
+        envelope = envelope.with_detail(
+            "reason_detail",
+            serde_json::Value::String(reason_detail.to_owned()),
+        );
+    }
+    crate::error::render_problem_envelope(res, error.http_status(), envelope);
 }
 
 pub(in crate::routing) fn submit_initial_event_batch_outcome<'a>(
@@ -1750,13 +1815,13 @@ async fn submit_event_batch_outcome_with_leases(
                 }
             }
             Err(error) => {
-                if let Some(event_id) = error.quarantine_event_id {
+                if let Some(event_id) = error.quarantine_event_id() {
                     quarantine.push(event_id);
                 } else {
                     rejected.push(rejected_item(
                         id,
-                        ReasonCode::from_wire(&error.code),
-                        Some(error.message),
+                        ReasonCode::from_wire(&error.code()),
+                        Some(error.message()),
                     ));
                 }
             }
@@ -2159,8 +2224,8 @@ async fn accept_federated_seal_prerequisite(
             continue;
         }
         if !seals.iter().any(|seal| &seal.id == root) {
-            return Err(AppError::new(
-                ErrorCode::DependencyMissing,
+            return Err(crate::app_error!(
+                DependencyMissing,
                 "Event Seal prerequisite is absent from local state and federation seals[]",
             ));
         }
@@ -2188,8 +2253,8 @@ async fn accept_federated_seal_prerequisite(
         .collect::<Vec<_>>();
     for seal in &relevant {
         if &seal.realm_id != realm_id {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
+            return Err(crate::app_error!(
+                SchemaViolation,
                 "federated Seal prerequisite belongs to another Realm",
             ));
         }
@@ -2211,8 +2276,8 @@ async fn accept_federated_seal_prerequisite(
                 })?
                 .is_none()
             {
-                return Err(AppError::new(
-                    ErrorCode::DependencyMissing,
+                return Err(crate::app_error!(
+                    DependencyMissing,
                     "federated Seal prerequisite has a non-local missing predecessor",
                 ));
             }
@@ -2220,8 +2285,8 @@ async fn accept_federated_seal_prerequisite(
     }
     let event =
         serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!(
                     "federated Event is invalid while checking Seal dependency cycles: {error}"
                 ),
@@ -2241,23 +2306,23 @@ async fn accept_federated_seal_prerequisite(
             event
                 .event_digest_with_digest_suite(digest_suite)
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::SchemaViolation,
+                    crate::app_error!(
+                        SchemaViolation,
                         format!("federated Event digest failed: {error}"),
                     )
                 })?,
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!("federated Event digest is not a canonical Move digest: {error}"),
             )
         })?;
         if relevant.iter().any(|seal| {
             seal.delta.contains(&event_digest) || seal.covered_event_digests.contains(&event_digest)
         }) {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
+            return Err(crate::app_error!(
+                SchemaViolation,
                 "federated Event Seal prerequisite transitively covers the Event itself",
             ));
         }
@@ -2278,8 +2343,8 @@ async fn accept_federated_seal_prerequisite(
             })?
             .is_none()
         {
-            return Err(AppError::new(
-                ErrorCode::DependencyMissing,
+            return Err(crate::app_error!(
+                DependencyMissing,
                 "federated Event referenced Seal was not projected",
             ));
         }
@@ -2407,6 +2472,103 @@ fn verify_federated_producer_event_proof(
     .map_err(|error| format!("admitted producer signature is invalid: {error}"))
 }
 
+type FederatedProducerAdmission = BTreeMap<String, (arkret_wire::DidUrl, arkret_wire::DidKey)>;
+
+/// Verify the typed transport, compensation carrier, producer proof and
+/// anchor-unit lease bindings before any local persistence or projection work.
+async fn validate_federation_batch_admission(
+    state: &AppState,
+    submit: &arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody,
+) -> Result<
+    (
+        Vec<arkret_canonical::DigestSuite>,
+        FederatedProducerAdmission,
+    ),
+    AppError,
+> {
+    let transport_events = submit.transported_events().collect::<Vec<_>>();
+    let digest_suites = trusted_federated_event_digest_suites(state, &transport_events)
+        .map_err(|error| crate::app_error!(SchemaViolation, error))?;
+    submit
+        .validate_federation_transport(&digest_suites)
+        .map_err(|error| {
+            tracing::debug!(%error, "federation transport contract rejected");
+            crate::app_error!(
+                SchemaViolation,
+                "invalid federation transport contract: {error}"
+            )
+        })?;
+    for submission in &submit.events {
+        validate_membership_compensation_semantics(
+            &submission.event,
+            submission.membership_compensation_evidence.as_ref(),
+        )
+        .map_err(|error| {
+            error.rejection().cloned().unwrap_or_else(|| {
+                crate::app_error!(
+                    InternalError,
+                    "validation unexpectedly quarantined an Event"
+                )
+            })
+        })?;
+    }
+
+    let events = submit
+        .events
+        .iter()
+        .map(|submission| &submission.event)
+        .collect::<Vec<_>>();
+    let mut admitted_producers = BTreeMap::new();
+    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
+        let (verification_method, signing_key) =
+            verify_federated_event_admission(state, event, digest_suite)
+                .await
+                .map_err(|error| {
+                    tracing::debug!(%error, event_id = %event.event_id, "federated Event admission proof rejected");
+                    crate::app_error!(
+                        SignatureInvalid,
+                        "federated Event does not carry a valid origin Station admission proof"
+                    )
+                    .with_reason_code("invalid_proof")
+                })?;
+        admitted_producers.insert(
+            event.event_id.as_str().to_owned(),
+            (verification_method, signing_key),
+        );
+    }
+
+    if events
+        .first()
+        .is_some_and(|event| event.kind == arkret_wire::EventKind::RealmCreate)
+    {
+        let leases = submit
+            .events
+            .iter()
+            .filter_map(|submission| submission.authorization_lease.clone())
+            .collect::<Vec<_>>();
+        if !leases.is_empty() && leases.len() != events.len() {
+            return Err(crate::app_error!(
+                SchemaViolation,
+                "a federated anchor unit cannot mix online and delayed submissions"
+            ));
+        }
+        if !leases.is_empty() {
+            arkret_wire::validate_anchor_unit_lease_bindings(
+                &events.into_iter().cloned().collect::<Vec<_>>(),
+                &leases,
+                &digest_suites,
+            )
+            .map_err(|error| {
+                crate::app_error!(
+                    SchemaViolation,
+                    "federated anchor-unit publication evidence is invalid: {error}"
+                )
+            })?;
+        }
+    }
+    Ok((digest_suites, admitted_producers))
+}
+
 pub(crate) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
@@ -2453,33 +2615,14 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     };
-    let transport_events = submit.transported_events().collect::<Vec<_>>();
-    let digest_suites = match trusted_federated_event_digest_suites(state, &transport_events) {
-        Ok(value) => value,
-        Err(error) => {
-            render_error(res, StatusCode::BAD_REQUEST, "schema_violation", &error);
-            return;
-        }
-    };
-    if let Err(error) = submit.validate_federation_transport(&digest_suites) {
-        tracing::debug!(%error, "federation transport contract rejected");
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            &format!("invalid federation transport contract: {error}"),
-        );
-        return;
-    }
-    for submission in &submit.events {
-        if let Err(error) = validate_membership_compensation_semantics(
-            &submission.event,
-            submission.membership_compensation_evidence.as_ref(),
-        ) {
-            render_error(res, error.status, &error.code, &error.message);
-            return;
-        }
-    }
+    let (digest_suites, admitted_producers) =
+        match validate_federation_batch_admission(state, &submit).await {
+            Ok(value) => value,
+            Err(error) => {
+                render_error(res, error.http_status(), error.wire_code(), &error.message);
+                return;
+            }
+        };
     let arkret_models_collaboration::event_sync::EventsSubmitFederationBatchRequestBody {
         service_binding_ref,
         events: submissions,
@@ -2543,63 +2686,12 @@ pub(crate) async fn submit_federation_events(
         .iter()
         .map(|submission| submission.event.clone())
         .collect();
-    let mut admitted_producers = BTreeMap::new();
-    for (event, digest_suite) in events.iter().zip(digest_suites.iter().copied()) {
-        match verify_federated_event_admission(state, event, digest_suite).await {
-            Ok((verification_method, signing_key)) => {
-                admitted_producers.insert(
-                    event.event_id.as_str().to_owned(),
-                    (verification_method, signing_key),
-                );
-            }
-            Err(error) => {
-                tracing::debug!(%error, event_id = %event.event_id, "federated Event admission proof rejected");
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "invalid_proof",
-                    "federated Event does not carry a valid origin Station admission proof",
-                );
-                return;
-            }
-        }
-    }
-    if events
-        .first()
-        .is_some_and(|event| event.kind == arkret_wire::EventKind::RealmCreate)
-    {
-        let leases = submissions
-            .iter()
-            .filter_map(|submission| submission.authorization_lease.clone())
-            .collect::<Vec<_>>();
-        if !leases.is_empty() && leases.len() != submissions.len() {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "a federated anchor unit cannot mix online and delayed submissions",
-            );
-            return;
-        }
-        if !leases.is_empty()
-            && let Err(error) =
-                arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases, &digest_suites)
-        {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                &format!("federated anchor-unit publication evidence is invalid: {error}"),
-            );
-            return;
-        }
-    }
     for submission in &submissions {
         if let Some(lease) = &submission.authorization_lease
             && let Err(error) =
                 validate_authorization_lease_for_event(state, None, &submission.event, lease).await
         {
-            render_error(res, error.status, &error.code, &error.message);
+            render_error(res, error.status(), &error.code(), &error.message());
             return;
         }
         if !submission.ingress_receipts.is_empty() {
@@ -2610,7 +2702,7 @@ pub(crate) async fn submit_federation_events(
             if let Err(error) =
                 validate_ingress_receipt_proofs(state, &submission.ingress_receipts, lease).await
             {
-                render_error(res, error.status, &error.code, &error.message);
+                render_error(res, error.status(), &error.code(), &error.message());
                 return;
             }
         }
@@ -2884,7 +2976,7 @@ pub(crate) async fn submit_federation_events(
             Ok(outcome) => {
                 res.render(Json(outcome));
             }
-            Err(error) if error.code == "dependency_missing" => render_error(
+            Err(error) if error.code() == "dependency_missing" => render_error(
                 res,
                 StatusCode::CONFLICT,
                 "dependency_missing",
@@ -3089,8 +3181,8 @@ pub(crate) async fn submit_federation_events(
         {
             rejected.push(rejected_item(
                 id,
-                ReasonCode::from_wire(&error.code),
-                Some(error.message.to_string()),
+                ReasonCode::from_wire(&error.code()),
+                Some(error.message().to_string()),
             ));
             continue;
         }
@@ -3173,7 +3265,7 @@ pub(crate) async fn submit_federation_events(
                 }
             }
             Err(error) => {
-                if error.code == "dependency_missing" {
+                if error.code() == "dependency_missing" {
                     let missing_event_ids = submissions
                         .iter()
                         .find(|submission| submission.event.event_id.as_str() == id)
@@ -3188,13 +3280,13 @@ pub(crate) async fn submit_federation_events(
                     rejected.push(item);
                     continue;
                 }
-                if let Some(event_id) = error.quarantine_event_id {
+                if let Some(event_id) = error.quarantine_event_id() {
                     quarantine.push(event_id);
                 } else {
                     rejected.push(rejected_item(
                         id,
-                        ReasonCode::from_wire(&error.code),
-                        Some(error.message),
+                        ReasonCode::from_wire(&error.code()),
+                        Some(error.message()),
                     ));
                 }
             }
@@ -3596,7 +3688,7 @@ async fn submit_direct_conversation_federation(
     .await
     {
         Ok(outcome) => res.render(Json(outcome)),
-        Err(error) if error.code == "dependency_missing" => render_error(
+        Err(error) if error.code() == "dependency_missing" => render_error(
             res,
             StatusCode::CONFLICT,
             "dependency_missing",

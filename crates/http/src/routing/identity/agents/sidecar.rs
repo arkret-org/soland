@@ -60,9 +60,7 @@ pub(super) fn sidecar_failed_precondition(
     reason: &'static str,
     message: impl Into<String>,
 ) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message.into())
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, message.into()).with_wire_code(reason)
 }
 
 async fn authorize_sidecar_ensure(
@@ -1223,9 +1221,7 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                AppError::new(ErrorCode::FailedPrecondition, error.message)
-                    .with_status(error.status)
-                    .with_wire_code(error.code)
+                crate::app_error!(FailedPrecondition, error.message()).with_wire_code(error.code())
             })?;
             finalize_sidecar_projection_records(
                 state,
@@ -1306,9 +1302,7 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                AppError::new(ErrorCode::FailedPrecondition, error.message)
-                    .with_status(error.status)
-                    .with_wire_code(error.code)
+                crate::app_error!(FailedPrecondition, error.message()).with_wire_code(error.code())
             })?;
             finalize_sidecar_projection_records(
                 state,

@@ -175,7 +175,7 @@ mod tests {
 //
 // `AppError` is the typed error returned by handlers. It carries
 // a canonical [`ErrorCode`] (registry-locked), a human-readable message, and
-// an optional HTTP status override. `Writer` is implemented so the same value drives runtime
+// an optional registry status context. `Writer` is implemented so the same value drives runtime
 // rendering.
 
 /// Typed error returned by handlers.
@@ -183,11 +183,8 @@ mod tests {
 pub struct AppError {
     pub code: ErrorCode,
     pub message: Box<str>,
-    /// When set, overrides the registry-derived HTTP status. Most call sites
-    /// should leave this `None` and let the registry decide; lifecycle paths
-    /// (`401` on missing token vs `403` on capability denial) sometimes need
-    /// the override.
-    pub status: Option<StatusCode>,
+    /// Registry context for codes whose status varies by trust surface.
+    pub status_context: Option<arkret_wire::ErrorStatusContext>,
     /// When set, overrides the wire-form `error.code` string. Use sparingly -
     /// only for handlers that emit a non-canonical code downstream
     /// clients (or tests) depend on (e.g. `unknown_schema`,
@@ -223,21 +220,32 @@ pub struct AppError {
 
 impl AppError {
     pub fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::from(arkret_server::ProtocolRejection::new(code, message))
+    }
+
+    /// Adapt a dynamically selected registry code through the shared SDK
+    /// rejection model. Static codes should use [`crate::app_error!`].
+    pub fn from_rejection(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self::from(arkret_server::ProtocolRejection::new(code, message))
+    }
+
+    pub fn with_status_context(mut self, context: arkret_wire::ErrorStatusContext) -> Self {
+        self.status_context = Some(context);
+        self
+    }
+
+    fn from_protocol_rejection(rejection: arkret_server::ProtocolRejection) -> Self {
         Self {
-            code,
-            message: message.into().into_boxed_str(),
-            status: None,
+            code: rejection.code(),
+            message: rejection.message().to_owned().into_boxed_str(),
+            status_context: rejection.status_context(),
             wire_code_override: None,
             reason_code: None,
             reason_detail: None,
             private_detail: None,
-            wire_details: None,
+            wire_details: (!rejection.details().is_empty())
+                .then(|| Box::new(rejection.details().clone())),
         }
-    }
-
-    pub fn with_status(mut self, status: StatusCode) -> Self {
-        self.status = Some(status);
-        self
     }
 
     /// Override the on-wire `error.code` string. See `wire_code_override` for
@@ -284,10 +292,13 @@ impl AppError {
         self
     }
 
-    /// Resolve the HTTP status to use when rendering this error: explicit
-    /// override first, then the registry binding.
+    /// Resolve the HTTP status from the canonical registry binding.
     pub fn http_status(&self) -> StatusCode {
-        self.status.unwrap_or_else(|| error_http_status(self.code))
+        let status = self.status_context.map_or_else(
+            || self.code.http_status(),
+            |context| self.code.http_status_in(context),
+        );
+        StatusCode::from_u16(status).expect("registry status codes are valid HTTP statuses")
     }
 
     /// Resolve the on-wire `error.code` string: explicit override first, then the
@@ -346,6 +357,12 @@ impl std::error::Error for AppError {}
 impl From<ErrorCode> for AppError {
     fn from(code: ErrorCode) -> Self {
         Self::new(code, "")
+    }
+}
+
+impl From<arkret_server::ProtocolRejection> for AppError {
+    fn from(rejection: arkret_server::ProtocolRejection) -> Self {
+        Self::from_protocol_rejection(rejection)
     }
 }
 

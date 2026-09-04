@@ -57,7 +57,7 @@ use super::events::peer::{
 };
 use super::now;
 use super::system::extract::AuthArgs;
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 use crate::result::{JsonResult, json_ok};
 use crate::state::AppState;
 
@@ -84,7 +84,7 @@ fn map_history_preparation_error(
 
     match error {
         HistoryPreparationError::FrontierUnavailable(detail) => {
-            AppError::new(ErrorCode::FrontierUnavailable, detail)
+            crate::app_error!(FrontierUnavailable, detail)
         }
         HistoryPreparationError::CapabilityDenied(detail) => AppError::capability_denied(detail),
         HistoryPreparationError::InvalidInput(detail) => AppError::param_invalid(detail),
@@ -378,8 +378,8 @@ async fn resolve_peer_mls_group_state_material(
     let group_info_bytes =
         load_mls_public_blob(state, request.group_info_ref.as_str(), limit).await?;
     let remaining = limit.checked_sub(group_info_bytes.len()).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::LimitExceeded,
+        crate::app_error!(
+            LimitExceeded,
             "MLS group-state material exceeds requested bound",
         )
     })?;
@@ -477,8 +477,8 @@ async fn load_mls_public_blob(
     let declared_size = usize::try_from(blob.size_bytes)
         .map_err(|_| AppError::not_found("MLS group-state material not found"))?;
     if declared_size > limit {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "MLS group-state material exceeds requested bound",
         ));
     }
@@ -617,8 +617,8 @@ fn seal_outcome(
     let encoded = arkret_canonical::canonical_json_bytes(&outcome)
         .map_err(|error| AppError::internal(format!("Seal resolve outcome: {error}")))?;
     if encoded.len() > 8 * 1024 * 1024 {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "Seal resolve outcome exceeds 8 MiB",
         ));
     }
@@ -939,8 +939,8 @@ async fn enqueue_member_history_request_replicas(
             .await
             .map_err(map_service_error)?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::DependencyMissing,
+                crate::app_error!(
+                    DependencyMissing,
                     "history request destination membership is unavailable",
                 )
             })?;
@@ -980,7 +980,7 @@ async fn enqueue_member_history_request_replicas(
             false,
         )
         .await
-        .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error))?;
+        .map_err(|error| crate::app_error!(DependencyMissing, error))?;
         let outbox_id = format!(
             "history-request-replica:{}:{}",
             record.write.request_digest.as_str(),
@@ -1135,14 +1135,14 @@ async fn send_history_key_response(
     };
     if request_record.write.request_replica.is_some() {
         let source_relay = source_relay.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "history source relay envelope is unavailable",
             )
         })?;
         enqueue_remote_history_response(state, &response, source_relay).await?;
-        return Err(AppError::new(
-            ErrorCode::DependencyMissing,
+        return Err(crate::app_error!(
+            DependencyMissing,
             "history response relay is pending destination acceptance",
         ));
     }
@@ -1373,14 +1373,14 @@ async fn resolve_history_source_signer_dependencies(
             )
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::DependencyMissing,
+                crate::app_error!(
+                    DependencyMissing,
                     format!("history source signer evidence resolution failed: {error}"),
                 )
             })?;
             if resolving_transitive_attesters && !outcome.missing_selectors.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::DependencyMissing,
+                return Err(crate::app_error!(
+                    DependencyMissing,
                     "transitive history source attester evidence is unavailable",
                 ));
             }
@@ -1411,8 +1411,8 @@ async fn resolve_history_source_signer_dependencies(
             }
         }
         if primary_resolved && !missing.is_empty() && peer_source_id.is_none() {
-            return Err(AppError::new(
-                ErrorCode::DependencyMissing,
+            return Err(crate::app_error!(
+                DependencyMissing,
                 "transitive history source attester evidence is unavailable",
             ));
         }
@@ -1431,8 +1431,8 @@ async fn resolve_history_source_signer_dependencies(
                 })
                 .collect::<Vec<_>>();
             let [primary] = primary.as_slice() else {
-                return Err(AppError::new(
-                    ErrorCode::DependencyMissing,
+                return Err(crate::app_error!(
+                    DependencyMissing,
                     "history source signer evidence is unavailable or ambiguous",
                 ));
             };
@@ -1445,7 +1445,7 @@ async fn resolve_history_source_signer_dependencies(
                 frontier = governance_attester_evidence_selectors(std::slice::from_ref(
                     authenticated_signer_resolution_evidence,
                 ))
-                .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?;
+                .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?;
                 if !frontier.is_empty() {
                     continue;
                 }
@@ -1462,7 +1462,7 @@ async fn resolve_history_source_signer_dependencies(
                 })
                 .collect::<Vec<_>>();
             frontier = governance_attester_evidence_selectors(&evidence)
-                .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?
+                .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?
                 .into_iter()
                 .filter(|selector| {
                     selector_key(selector).is_ok_and(|key| !resolved.contains_key(&key))
@@ -1526,8 +1526,8 @@ fn history_source_author_profile(
         }
     }
     profile.ok_or_else(|| {
-        AppError::new(
-            ErrorCode::DependencyMissing,
+        crate::app_error!(
+            DependencyMissing,
             "history source signer evidence root is unavailable",
         )
     })
@@ -1812,8 +1812,8 @@ async fn local_rhrk_source_authority(
         })
         .collect::<Vec<_>>();
     let [records] = covering_groups.as_mut_slice() else {
-        return Err(AppError::new(
-            ErrorCode::DependencyMissing,
+        return Err(crate::app_error!(
+            DependencyMissing,
             "history response is not covered by one exact RHRK tuple",
         ));
     };
@@ -1863,8 +1863,8 @@ async fn history_response_coverage_ranges(
                 )
                 .await?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
+                    crate::app_error!(
+                        DependencyMissing,
                         "history response manifest is unavailable for RHRK source authority",
                     )
                 })?,
@@ -1883,8 +1883,8 @@ async fn history_response_coverage_ranges(
             return if ranges.len() == 1 {
                 Ok(ranges)
             } else {
-                Err(AppError::new(
-                    ErrorCode::DependencyMissing,
+                Err(crate::app_error!(
+                    DependencyMissing,
                     "history chunk descriptor is unavailable for RHRK source authority",
                 ))
             };
@@ -1932,8 +1932,8 @@ async fn accepted_rhrk_for_ranges(
         }
     }
     if records.len() > 65_536 {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "RHRK archive authority query exceeds 65536 records",
         ));
     }
@@ -1955,8 +1955,8 @@ fn current_rhrk_holder_authority_observation(
         .realm_null_subject_cells
         .get(&(realm_id.as_str().to_owned(), RHRK_CELL.to_owned()))
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "current RHRK authority cell is unavailable",
             )
         })?;
@@ -2148,12 +2148,9 @@ async fn validate_history_request_bases(
                 .projections()
                 .seal_by_id(seal_id)
                 .await
-                .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
+                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
-                        "history bootstrap Seal is unavailable",
-                    )
+                    crate::app_error!(FrontierUnavailable, "history bootstrap Seal is unavailable",)
                 })?,
         );
     }
@@ -2219,8 +2216,8 @@ async fn build_member_history_retention(
         .cloned()
         .collect::<Vec<_>>();
     if cut.len() > 4_096 {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "history retained Seal cut exceeds 4096 objects",
         ));
     }
@@ -2232,7 +2229,7 @@ async fn build_member_history_retention(
             .seal_by_id(&seal_id)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
-            .ok_or_else(|| AppError::new(ErrorCode::DependencyMissing, "retained Seal missing"))?;
+            .ok_or_else(|| crate::app_error!(DependencyMissing, "retained Seal missing"))?;
         if seal.realm_id != *realm_id {
             return Err(AppError::internal(
                 "retained Seal cut crosses the Realm boundary",
@@ -2267,10 +2264,7 @@ async fn build_member_history_retention(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
-                        "retained Control Event missing",
-                    )
+                    crate::app_error!(DependencyMissing, "retained Control Event missing",)
                 })?;
             let event_bytes_digest = collect_history_dependencies(
                 state,
@@ -2282,8 +2276,8 @@ async fn build_member_history_retention(
             )
             .await?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::DependencyMissing,
+                crate::app_error!(
+                    DependencyMissing,
                     "retained Control Event availability receipt missing",
                 )
             })?;
@@ -2339,10 +2333,7 @@ async fn materialize_history_retained_objects(
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCode::DependencyMissing,
-                            "retained Seal bytes are unavailable",
-                        )
+                        crate::app_error!(DependencyMissing, "retained Seal bytes are unavailable",)
                     })?;
                 soland_storage::HistoryTraversalRetainedObject::Seal(seal)
             }
@@ -2353,8 +2344,8 @@ async fn materialize_history_retained_objects(
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCode::DependencyMissing,
+                        crate::app_error!(
+                            DependencyMissing,
                             "retained Control Event bytes are unavailable",
                         )
                     })?;
@@ -2368,8 +2359,8 @@ async fn materialize_history_retained_objects(
                     .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCode::DependencyMissing,
+                        crate::app_error!(
+                            DependencyMissing,
                             "retained governance dependency bytes are unavailable",
                         )
                     })?;
@@ -2397,8 +2388,8 @@ fn push_history_pin(
         pins.push(pin);
     }
     if pins.len() > 4_096 {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "history retained cut exceeds 4096 pinned objects",
         ));
     }
@@ -2442,7 +2433,7 @@ async fn collect_history_dependencies(
             } => governance_attester_evidence_selectors(std::slice::from_ref(
                 authenticated_signer_resolution_evidence,
             ))
-            .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?,
+            .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?,
             _ => Vec::new(),
         };
         cursor += 1;
@@ -2461,15 +2452,15 @@ async fn collect_history_dependencies(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
+                    crate::app_error!(
+                        DependencyMissing,
                         "transitive governance replay dependency is unavailable",
                     )
                 })?;
             dependencies.push(dependency);
             if dependencies.len() > 1_024 {
-                return Err(AppError::new(
-                    ErrorCode::LimitExceeded,
+                return Err(crate::app_error!(
+                    LimitExceeded,
                     "recursive governance dependency closure exceeds 1024 objects",
                 ));
             }
@@ -2589,8 +2580,8 @@ async fn accept_history_response_manifest(
             ));
         }
         let source_relay = source_relay.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "history manifest source relay is unavailable",
             )
         })?;
@@ -2730,7 +2721,7 @@ async fn validate_retained_history_cut(
         agent_history_key_verifier(state.clone()),
     )
     .await
-    .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
+    .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
     .checkpoint;
     Ok(checkpoint)
 }
@@ -2903,8 +2894,8 @@ async fn accept_history_response_chunk(
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "history chunk manifest admission is unavailable",
             )
         })?;
@@ -2923,8 +2914,8 @@ async fn accept_history_response_chunk(
             .ok_or_else(|| AppError::conflict("history chunk reservation omits T1 attestation"))?
     } else {
         let source_relay = source_relay.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "history chunk source relay is unavailable",
             )
         })?;
@@ -3050,26 +3041,23 @@ async fn build_history_release_attestation(
         .projections()
         .realm_seal_leaves(realm_id)
         .await
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
     let seal_basis = arkret_wire::SealBasis {
         leaves: current_leaves.clone(),
     };
     seal_basis
         .validate_protocol_bounds()
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let mut authority_sequence = 0_u64;
     for leaf in &current_leaves {
         let seal = state
             .projections()
             .seal_by_id(leaf)
             .await
-            .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
+            .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
-                    "current Seal leaf is unavailable",
-                )
+                crate::app_error!(FrontierUnavailable, "current Seal leaf is unavailable",)
             })?;
         authority_sequence = authority_sequence.max(seal.notary_seq);
     }
@@ -3082,8 +3070,8 @@ async fn build_history_release_attestation(
         let realm_history_access = snapshot
             .realm_history_access(realm_id.as_str())
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "current Realm history_access projection is unavailable",
                 )
             })?;
@@ -3274,9 +3262,7 @@ async fn validate_rhrk_release_coverage(
         .and_then(|distance| distance.checked_add(1))
         .and_then(|count| usize::try_from(count).ok())
         .filter(|count| *count <= 65_536)
-        .ok_or_else(|| {
-            AppError::new(ErrorCode::LimitExceeded, "RHRK release range is too large")
-        })?;
+        .ok_or_else(|| crate::app_error!(LimitExceeded, "RHRK release range is too large"))?;
     let records = accepted_rhrk_for_ranges(
         state,
         &response.effective_scope,
@@ -3332,14 +3318,14 @@ async fn validate_rhrk_release_coverage(
         || (released_range.from_epoch..=released_range.to_epoch)
             .any(|epoch| !by_epoch.contains_key(&epoch))
     {
-        return Err(AppError::new(
-            ErrorCode::DependencyMissing,
+        return Err(crate::app_error!(
+            DependencyMissing,
             "RHRK release range is not continuously archived",
         ));
     }
     let tuple = tuple.ok_or_else(|| {
-        AppError::new(
-            ErrorCode::DependencyMissing,
+        crate::app_error!(
+            DependencyMissing,
             "RHRK release authorization tuple is unavailable",
         )
     })?;
@@ -3390,8 +3376,8 @@ async fn build_history_recipient_authority_views(
             super::identity::agents::evidence::current_agent_signer_evidence(state, &selector)
                 .await
                 .map_err(|reason| {
-                    AppError::new(
-                        ErrorCode::DependencyMissing,
+                    crate::app_error!(
+                        DependencyMissing,
                         format!("recipient Agent signer evidence is unavailable: {reason:?}"),
                     )
                 })?;
@@ -3454,26 +3440,18 @@ async fn build_history_recipient_authority_views(
         .find_account_by_actor(soland_services::identity::FindAccountByActorQuery { account_id })
         .await
         .map_err(map_service_error)?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
-                "recipient account is unavailable",
-            )
-        })?;
+        .ok_or_else(|| crate::app_error!(DependencyMissing, "recipient account is unavailable",))?;
     let status = state
         .persistence()
         .current_account_status_record(local_service_id.as_str(), &account.account_id)
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
-                "recipient account status is unavailable",
-            )
+            crate::app_error!(DependencyMissing, "recipient account status is unavailable",)
         })?;
     status
         .validate_shape()
-        .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?;
+        .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?;
     if status.account_authority_id != local_service_id
         || status.account_id != account.account_id
         || request.requester_actor_id.as_account_id() != Some(&account.account_id)
@@ -3494,7 +3472,7 @@ async fn build_history_recipient_authority_views(
         requester_device_id.as_str(),
     )
     .await
-    .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error.to_string()))?;
+    .map_err(|error| crate::app_error!(DependencyMissing, error.to_string()))?;
     if selector.target_device_authorize_event_id != requester_device_authorize_event_id.as_str()
         || selector.target_device_generation_ref != *requester_device_generation_ref
     {
@@ -3509,8 +3487,8 @@ async fn build_history_recipient_authority_views(
         .await
         .map_err(map_service_error)?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DependencyMissing,
+            crate::app_error!(
+                DependencyMissing,
                 "recipient device authorize Event is unavailable",
             )
         })?;
@@ -3525,30 +3503,30 @@ async fn build_history_recipient_authority_views(
         .projections()
         .realm_seal_leaves(&pcr_realm_id)
         .await
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     pcr_leaves.sort();
     let pcr_closure = state
         .projections()
         .seal_closure(&pcr_leaves)
         .await
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let authorize_is_currently_accepted = state
         .projections()
         .seals_covering_event(&authorize_digest)
         .await
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?
         .iter()
         .any(|seal| pcr_closure.contains(&seal.id));
     if !authorize_is_currently_accepted {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "recipient device authorize Event is outside the current PCR Seal basis",
         ));
     }
     let pcr_seal_basis = arkret_wire::SealBasis { leaves: pcr_leaves };
     pcr_seal_basis
         .validate_protocol_bounds()
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let account_record_digest = arkret_wire::Hash::new(
         arkret_canonical::canonical_sha256(&status)
             .map_err(|error| AppError::internal(error.to_string()))?,
@@ -3750,15 +3728,15 @@ async fn validate_manifest_current_gate(
         .projections()
         .seal_closure(&target_basis.leaves)
         .await
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     if request
         .trusted_history_base_basis
         .leaves
         .iter()
         .any(|leaf| !target_closure.contains(leaf))
     {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "history request retained target no longer reaches its trusted base",
         ));
     }
@@ -3768,8 +3746,8 @@ async fn validate_manifest_current_gate(
             .snapshot()
             .realm_history_access(realm_id.as_str())
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "current Realm history_access projection is unavailable",
                 )
             })?,
@@ -4286,8 +4264,8 @@ async fn replicate_organization_recovery_archive(
         .ok_or_else(|| AppError::internal("pending RHRK acquisition disappeared"))?;
     match acquisition.accepted_outcome {
         Some(outcome) => json_ok(outcome),
-        None => Err(AppError::new(
-            ErrorCode::DependencyMissing,
+        None => Err(crate::app_error!(
+            DependencyMissing,
             "organization recovery archive traversal dependencies are pending",
         )),
     }
@@ -4461,7 +4439,7 @@ fn map_service_error(error: soland_services::ServiceError) -> AppError {
         soland_services::ServiceError::SchemaViolation(detail)
             if detail.starts_with("limit_exceeded:") =>
         {
-            AppError::new(ErrorCode::LimitExceeded, detail)
+            crate::app_error!(LimitExceeded, detail)
         }
         soland_services::ServiceError::SchemaViolation(detail) => AppError::param_invalid(detail),
         soland_services::ServiceError::NotFound(detail) => AppError::not_found(detail),

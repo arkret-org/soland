@@ -7,9 +7,8 @@ use arkret_signatures::http_signature::{
     Component, HttpMessageVerificationError, SignatureError, SignatureInput, SignaturePolicyError,
     SignatureVerificationPolicy,
 };
-use salvo::http::StatusCode;
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::http_signature;
 
 use super::record::{applet_id_param, applet_records};
@@ -262,7 +261,6 @@ async fn verify_inbound_applet_service_signature(
             AppError::capability_denied(
                 "Source-Service-ID has no active effective install on this edge",
             )
-            .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("applet_registration_unauthorized")
         })?;
     let verification_method = applet_registration_verification_method(&install, &header_source)?;
@@ -577,19 +575,19 @@ pub(super) fn applet_resolve_verifying_key(
 /// machine discriminator, so each signature failure carries its own registered
 /// top-level code rather than a generic code plus a `reason` extension.
 pub(super) fn applet_signature_error_required(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::HttpSignatureRequired, message)
+    crate::app_error!(HttpSignatureRequired, message)
 }
 
 /// 401 `http_signature_invalid` — signature present but verification, digest,
 /// or source binding failed.
 pub(super) fn applet_signature_error_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::HttpSignatureInvalid, message)
+    crate::app_error!(HttpSignatureInvalid, message)
 }
 
 /// 401 `signature_window_invalid` — `created` / `expires` outside the freshness
 /// window.
 pub(super) fn applet_signature_error_window(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SignatureWindowInvalid, message)
+    crate::app_error!(SignatureWindowInvalid, message)
 }
 
 #[cfg(test)]

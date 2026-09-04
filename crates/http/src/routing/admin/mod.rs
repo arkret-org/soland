@@ -18,7 +18,7 @@ mod settings;
 
 use audit::append_audit_log;
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::util;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
@@ -84,12 +84,11 @@ pub(super) fn require_admin_principal(
     if state.config().development_mode || state.is_admin_principal(&session.actor) {
         Ok(session)
     } else {
-        Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        Err(crate::app_error!(
+            CapabilityDenied,
             "admin API requires the caller principal ID to be listed in SOLAND_ADMIN_PRINCIPAL_IDS"
                 .to_owned(),
-        )
-        .with_status(salvo::http::StatusCode::FORBIDDEN))
+        ))
     }
 }
 

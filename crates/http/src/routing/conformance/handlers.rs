@@ -348,10 +348,10 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
     let body = body.into_inner();
     let vector = body.vector_id.as_str();
     if let Some((code, message)) = encode_reject_for_vector(vector) {
-        return Err(AppError::new(code, message));
+        return Err(AppError::from_rejection(code, message));
     }
     let canonical = canonical_json(&body.input)
-        .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
+        .map_err(|err| crate::app_error!(SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
     json_ok(CanonicalJsonDigestOutcome {
         canonical_json: canonical,
@@ -741,7 +741,7 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     // `event_id` is derived from this digest, so including it would make the
     // definition circular; reducer-stamped `actor_kind` is also excluded.
     let canonical = canonical_json(&canonical_event_digest_preimage(event))
-        .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
+        .map_err(|err| crate::app_error!(SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = sha256_digest(canonical.as_bytes());
     let signature = signing_key.sign(canonical.as_bytes());
 
@@ -781,8 +781,8 @@ pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcM
     if vector.contains("logical_overflow") {
         // error-code-registry.json binds `hlc_logical_overflow` to 503; the
         // registry-derived status renders verbatim, no handler-side override.
-        return Err(AppError::new(
-            ErrorCode::HlcLogicalOverflow,
+        return Err(crate::app_error!(
+            HlcLogicalOverflow,
             "vector requests logical-counter overflow reject",
         ));
     }
@@ -852,7 +852,7 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     };
     let cursor_token = shape
         .encode()
-        .map_err(|err| AppError::new(ErrorCode::InternalError, format!("encode cursor: {err}")))?;
+        .map_err(|err| crate::app_error!(InternalError, format!("encode cursor: {err}")))?;
     json_ok(CursorVectorOutcome {
         cursor: cursor_token,
     })
@@ -870,7 +870,7 @@ pub async fn envelope(
     let body = body.into_inner();
     let _vector = body.vector_id.as_str();
     let canonical = canonical_json(&body.envelope)
-        .map_err(|err| AppError::new(ErrorCode::SchemaViolation, format!("canonicalize: {err}")))?;
+        .map_err(|err| crate::app_error!(SchemaViolation, format!("canonicalize: {err}")))?;
     let digest = if let Some(ciphertext) = body.ciphertext_base64url.as_deref() {
         let ciphertext_bytes = URL_SAFE_NO_PAD
             .decode(ciphertext)
@@ -1090,12 +1090,11 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
         if let Some(declared) = declared_chunk_digest(manifest, chunks, index, chunk)
             && declared != digest
         {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
+            return Err(crate::app_error!(
+                SchemaViolation,
                 format!("snapshot chunk {index} digest mismatch"),
             )
-            .with_wire_code("snapshot_chunk_digest_mismatch")
-            .with_status(StatusCode::BAD_REQUEST));
+            .with_wire_code("snapshot_chunk_digest_mismatch"));
         }
         chunk_hashes.push(digest);
     }
@@ -1130,9 +1129,8 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
         || body.revoked_signer_dids.iter().any(|did| did == signer_did)
     {
         return Err(
-            AppError::new(ErrorCode::CapabilityDenied, "snapshot issuer is revoked")
-                .with_wire_code("snapshot_issuer_revoked")
-                .with_status(StatusCode::FORBIDDEN),
+            crate::app_error!(CapabilityDenied, "snapshot issuer is revoked")
+                .with_wire_code("snapshot_issuer_revoked"),
         );
     }
 
@@ -1252,14 +1250,14 @@ pub async fn chaos_operation(
         .event_queries()
         .canonical_events()
         .await
-        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
+        .map_err(|error| crate::app_error!(InternalError, error.to_string()))?
         .into_iter()
         .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
     let projection_event = state
         .event_queries()
         .projected_event_by_operation_id(&operation_id)
         .await
-        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?;
+        .map_err(|error| crate::app_error!(InternalError, error.to_string()))?;
     let canonical_json = canonical_event.as_ref().map(canonical_event_diagnostic);
     let projection_json = projection_event.as_ref().map(projection_event_diagnostic);
 
@@ -1587,12 +1585,11 @@ fn conformance_cursor_error(error: CursorAuthorityError) -> AppError {
         CursorAuthorityError::ParamInvalid(message) => AppError::param_invalid(message)
             .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         CursorAuthorityError::Expired => {
-            AppError::new(ErrorCode::CursorExpired, "cursor has expired")
+            crate::app_error!(CursorExpired, "cursor has expired")
         }
-        CursorAuthorityError::IntegrityInvalid => AppError::new(
-            ErrorCode::CursorIntegrityInvalid,
-            "cursor integrity check failed",
-        ),
+        CursorAuthorityError::IntegrityInvalid => {
+            crate::app_error!(CursorIntegrityInvalid, "cursor integrity check failed",)
+        }
     }
 }
 
@@ -1725,26 +1722,22 @@ fn string_array(value: Option<&Value>) -> impl Iterator<Item = &str> {
 }
 
 fn schema_error(error: anyhow::Error) -> AppError {
-    AppError::new(
-        ErrorCode::SchemaViolation,
+    crate::app_error!(
+        SchemaViolation,
         format!("canonicalize conformance vector: {error}"),
     )
 }
 
 fn query_schema_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, message).with_status(StatusCode::BAD_REQUEST)
+    crate::app_error!(SchemaViolation, message)
 }
 
 fn limit_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::QuotaExceeded, message)
-        .with_wire_code("quota_exceeded")
-        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
+    crate::app_error!(QuotaExceeded, message).with_wire_code("quota_exceeded")
 }
 
 fn payload_too_large_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::PayloadTooLarge, message)
-        .with_wire_code("payload_too_large")
-        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
+    crate::app_error!(PayloadTooLarge, message).with_wire_code("payload_too_large")
 }
 
 fn canonical_event_operation_id(record: &AcceptedEvent) -> Option<String> {
@@ -1899,7 +1892,10 @@ mod tests {
             .expect_err("secret projection must fail closed");
 
         assert_eq!(err.wire_code(), "schema_violation");
-        assert_eq!(err.http_status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            err.http_status(),
+            soland_http::error::error_http_status(err.code)
+        );
     }
 
     #[test]

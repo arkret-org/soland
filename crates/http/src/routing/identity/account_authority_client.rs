@@ -2,7 +2,7 @@ use arkret_models_collaboration::session_grant_bodies::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SessionGrantIntrospectByJwt,
 };
 use chrono::{DateTime, Utc};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use crate::state::AppState;
 use crate::wire::{SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody};
@@ -119,14 +119,14 @@ impl<'a> AccountAuthorityClient<'a> {
             .send()
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::TemporarilyUnavailable,
+                crate::app_error!(
+                    TemporarilyUnavailable,
                     format!("{operation} request failed: {error}"),
                 )
             })?;
         if !response.status().is_success() {
-            return Err(AppError::new(
-                ErrorCode::TemporarilyUnavailable,
+            return Err(crate::app_error!(
+                TemporarilyUnavailable,
                 format!(
                     "{operation} was rejected by the Account Authority process: {}",
                     response.status()
@@ -134,8 +134,8 @@ impl<'a> AccountAuthorityClient<'a> {
             ));
         }
         response.json::<Response>().await.map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
+            crate::app_error!(
+                TemporarilyUnavailable,
                 format!("invalid {operation} response: {error}"),
             )
         })

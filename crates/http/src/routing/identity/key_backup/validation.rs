@@ -1,13 +1,11 @@
 use super::*;
 
 pub(super) fn schema_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, message)
+    crate::app_error!(SchemaViolation, message)
 }
 
 fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code(reason)
+    crate::app_error!(FailedPrecondition, message).with_reason_code(reason)
 }
 
 pub(super) fn is_base64url_token(value: &str) -> bool {
@@ -46,8 +44,8 @@ pub(super) fn validate_key_backup_body_typed(
         .validate()
         .map_err(|error| schema_error(format!("invalid key backup: {error}")))?;
     if backup.backup_id.as_str() != backup_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "path backup_id must match body backup_id",
         ));
     }
@@ -367,20 +365,18 @@ pub(super) fn validate_key_backup_auth_data_typed(backup: &KeyBackup) -> Result<
 
 pub(super) fn validate_series_genesis_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
     if backup.supersedes_id.is_some() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes_id`",
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_chain_broken"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN));
     }
     if backup.supersedes_digest.is_some() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            Conflict,
             "series_chain_broken: genesis envelope (series_seq=0) must not carry `supersedes_digest`",
         )
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("series_chain_broken"));
+        .with_reason_code(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN));
     }
     Ok(())
 }
@@ -434,8 +430,8 @@ pub(super) async fn validate_current_recovery_recipient(
         .unwrap_or(arkret_wire::HPKE_SUITE_X25519_CHACHA20POLY1305_V1);
     let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
         .map_err(|_| {
-            AppError::new(
-                ErrorCode::UnsupportedHpkeSuite,
+            crate::app_error!(
+                UnsupportedHpkeSuite,
                 format!("key backup HPKE suite is unsupported: {suite_id}"),
             )
         })?;
@@ -453,8 +449,8 @@ pub(super) async fn validate_current_recovery_recipient(
         ));
     };
     if !agreement.hpke_suites.contains(&suite) {
-        return Err(AppError::new(
-            ErrorCode::UnsupportedHpkeSuite,
+        return Err(crate::app_error!(
+            UnsupportedHpkeSuite,
             format!(
                 "key backup HPKE suite {suite_id} is not allowed by recovery key agreement {recipient}"
             ),

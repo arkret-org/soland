@@ -123,7 +123,7 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
         .await
         .map_err(|error| {
             SubmitOneError::new(
-                error.status.unwrap_or(StatusCode::BAD_REQUEST),
+                error.http_status(),
                 error.wire_code(),
                 error.message.to_string(),
             )

@@ -1553,7 +1553,8 @@ async fn revoked_device_blocks_encrypted_writes_body() {
         .await;
     assert_eq!(blocked_send.status_code.unwrap().as_u16(), 400);
     let blocked_send_body: Value = blocked_send.take_json().await.unwrap();
-    assert_eq!(problem_code(&blocked_send_body), "invalid_proof");
+    assert_eq!(problem_code(&blocked_send_body), "param_invalid");
+    assert_eq!(blocked_send_body["reason_code"], "invalid_proof");
 
     let mut blocked_upload = TestClient::post("http://server/_arkret/self/keys/upload")
         .add_header("authorization", format!("Bearer {stale_session}"), true)

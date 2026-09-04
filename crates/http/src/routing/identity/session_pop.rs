@@ -30,7 +30,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::VerifyingKey;
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::util::{bearer_token, dpop_token};
 
 use crate::routing::federation::{signature_authority, signature_target_uri};
@@ -98,8 +98,8 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
         .payload()
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::JsonInvalid,
+            crate::app_error!(
+                JsonInvalid,
                 format!("unable to read request body for PoP verification: {error}"),
             )
         })?

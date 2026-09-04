@@ -6,13 +6,12 @@ use arkret_models_identity::{
     OrganizationRegistrationScope,
 };
 use arkret_signatures::Ed25519DetachedJwsSigner;
-use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::organization_registration::{
     OrganizationRegistrationError, OrganizationRegistrationErrorCode,
@@ -245,56 +244,51 @@ async fn parse_registration_body<T: DeserializeOwned>(req: &mut Request) -> Resu
     let body = req
         .parse_json::<Value>()
         .await
-        .map_err(|error| AppError::new(ErrorCode::SchemaViolation, error.to_string()))?;
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
     if let Some(scopes) = body.get("requested_scopes").and_then(Value::as_array) {
         for scope in scopes {
             if scope.is_string()
                 && serde_json::from_value::<OrganizationRegistrationScope>(scope.clone()).is_err()
             {
-                return Err(AppError::new(
-                    ErrorCode::UnsupportedOrganizationRegistrationScope,
+                return Err(crate::app_error!(
+                    UnsupportedOrganizationRegistrationScope,
                     "organization registration scope is unsupported",
                 ));
             }
         }
     }
     serde_json::from_value(body)
-        .map_err(|error| AppError::new(ErrorCode::SchemaViolation, error.to_string()))
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))
 }
 
 fn indistinguishable_not_found() -> AppError {
-    AppError::new(
-        ErrorCode::DidNotFound,
-        "organization registration was not found",
-    )
-    .with_status(StatusCode::NOT_FOUND)
+    crate::app_error!(DidNotFound, "organization registration was not found",)
 }
 
 fn map_error(error: OrganizationRegistrationError) -> AppError {
     let detail = error.detail;
     match error.code {
         OrganizationRegistrationErrorCode::SchemaViolation => {
-            AppError::new(ErrorCode::SchemaViolation, detail)
+            crate::app_error!(SchemaViolation, detail)
         }
         OrganizationRegistrationErrorCode::DidNotFound => indistinguishable_not_found(),
         OrganizationRegistrationErrorCode::ChallengeInvalid => {
-            AppError::new(ErrorCode::OrganizationRegistrationChallengeInvalid, detail)
+            crate::app_error!(OrganizationRegistrationChallengeInvalid, detail)
         }
-        OrganizationRegistrationErrorCode::ControlProofInvalid => AppError::new(
-            ErrorCode::OrganizationRegistrationControlProofInvalid,
-            detail,
-        ),
+        OrganizationRegistrationErrorCode::ControlProofInvalid => {
+            crate::app_error!(OrganizationRegistrationControlProofInvalid, detail,)
+        }
         OrganizationRegistrationErrorCode::QuorumNotMet => {
-            AppError::new(ErrorCode::OrganizationRegistrationQuorumNotMet, detail)
+            crate::app_error!(OrganizationRegistrationQuorumNotMet, detail)
         }
         OrganizationRegistrationErrorCode::ScopeUnsupported => {
-            AppError::new(ErrorCode::UnsupportedOrganizationRegistrationScope, detail)
+            crate::app_error!(UnsupportedOrganizationRegistrationScope, detail)
         }
         OrganizationRegistrationErrorCode::Revoked => {
-            AppError::new(ErrorCode::OrganizationRegistrationRevoked, detail)
+            crate::app_error!(OrganizationRegistrationRevoked, detail)
         }
         OrganizationRegistrationErrorCode::Stale => {
-            AppError::new(ErrorCode::OrganizationRegistrationStale, detail)
+            crate::app_error!(OrganizationRegistrationStale, detail)
         }
         OrganizationRegistrationErrorCode::Internal => AppError::internal(detail),
     }

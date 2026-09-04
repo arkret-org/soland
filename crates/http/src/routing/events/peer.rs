@@ -233,8 +233,8 @@ fn fit_sibling_positions_outcome_to_budget(
             return Ok(outcome);
         }
         let Some(disclosure) = outcome.disclosed_positions.pop() else {
-            return Err(AppError::new(
-                soland_http::error::ErrorCode::LimitExceeded,
+            return Err(crate::app_error!(
+                LimitExceeded,
                 "peer sibling-position accounting exceeds max_response_bytes",
             ));
         };
@@ -389,11 +389,7 @@ async fn peer_principal_genesis(
     }
     super::event_log::submit_peer_pcr_genesis(state, &request)
         .await
-        .map_err(|error| {
-            AppError::internal(error.message)
-                .with_status(error.status)
-                .with_wire_code(error.code)
-        })
+        .map_err(|error| AppError::internal(error.message()).with_wire_code(error.code()))
         .and_then(json_ok)
 }
 
@@ -523,8 +519,8 @@ async fn peer_account_status_submit(
             return json_ok(outcome);
         }
         soland_storage::AccountStatusReplicaAppend::Stale { current_record } => {
-            return Err(AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            return Err(crate::app_error!(
+                FailedPrecondition,
                 format!(
                     "account-status record is stale; current status_seq is {}",
                     current_record.status_seq
@@ -535,23 +531,23 @@ async fn peer_account_status_submit(
         soland_storage::AccountStatusReplicaAppend::Conflict { kind, .. } => {
             use soland_storage::AccountStatusReplicaConflictKind;
             return Err(match kind {
-                AccountStatusReplicaConflictKind::Fork => AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
-                    "account-status ledger fork",
-                )
-                .with_reason_code(arkret_wire::ReasonCode::ACCOUNT_STATUS_RECORD_FORK),
-                AccountStatusReplicaConflictKind::BindingRollback => AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                AccountStatusReplicaConflictKind::Fork => {
+                    crate::app_error!(FailedPrecondition, "account-status ledger fork",)
+                        .with_reason_code(arkret_wire::ReasonCode::ACCOUNT_STATUS_RECORD_FORK)
+                }
+                AccountStatusReplicaConflictKind::BindingRollback => crate::app_error!(
+                    FailedPrecondition,
                     "account-status binding version rollback",
                 )
                 .with_reason_code(arkret_wire::ReasonCode::ACCOUNT_STATUS_BINDING_ROLLBACK),
-                AccountStatusReplicaConflictKind::TransitionInvalid => AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
-                    "account-status transition is invalid",
-                )
-                .with_reason_code(arkret_wire::ReasonCode::ACCOUNT_STATUS_TRANSITION_INVALID),
-                AccountStatusReplicaConflictKind::ErasurePendingTerminal => AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                AccountStatusReplicaConflictKind::TransitionInvalid => {
+                    crate::app_error!(FailedPrecondition, "account-status transition is invalid",)
+                        .with_reason_code(
+                            arkret_wire::ReasonCode::ACCOUNT_STATUS_TRANSITION_INVALID,
+                        )
+                }
+                AccountStatusReplicaConflictKind::ErasurePendingTerminal => crate::app_error!(
+                    FailedPrecondition,
                     "account-status erasure_pending state is terminal",
                 )
                 .with_reason_code(arkret_wire::ReasonCode::ERASURE_PENDING_IS_TERMINAL),
@@ -934,15 +930,15 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
         .payload_with_max_size(maximum_body_bytes)
         .await
         .map_err(|error| match error {
-            salvo::http::ParseError::PayloadTooLarge => AppError::new(
-                soland_http::error::ErrorCode::PayloadTooLarge,
+            salvo::http::ParseError::PayloadTooLarge => crate::app_error!(
+                PayloadTooLarge,
                 "Signal relay request exceeds the body byte ceiling",
             ),
             _ => AppError::json_invalid("unable to read the Signal relay request body"),
         })?;
     if payload.len() > maximum_body_bytes {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::PayloadTooLarge,
+        return Err(crate::app_error!(
+            PayloadTooLarge,
             "Signal relay request exceeds the body byte ceiling",
         ));
     }
@@ -955,10 +951,7 @@ async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<S
     .await?;
     request.validate().map_err(|error| {
         if error.error_code() == Some(arkret_wire::ErrorCode::PayloadTooLarge) {
-            AppError::new(
-                soland_http::error::ErrorCode::PayloadTooLarge,
-                error.to_string(),
-            )
+            crate::app_error!(PayloadTooLarge, error.to_string(),)
         } else {
             schema_violation(error.to_string())
         }
@@ -1149,8 +1142,8 @@ async fn peer_events_resolve(
             .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
         let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
         if response_bytes.len() > budget {
-            return Err(AppError::new(
-                soland_http::error::ErrorCode::LimitExceeded,
+            return Err(crate::app_error!(
+                LimitExceeded,
                 "peer dependency response exceeds max_response_bytes",
             ));
         }
@@ -1197,8 +1190,8 @@ async fn peer_events_resolve(
         let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
             .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
         if response_bytes.len() > request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize {
-            return Err(AppError::new(
-                soland_http::error::ErrorCode::LimitExceeded,
+            return Err(crate::app_error!(
+                LimitExceeded,
                 "peer dependency response exceeds max_response_bytes",
             ));
         }
@@ -1270,8 +1263,8 @@ async fn peer_events_resolve(
         .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
     let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
     if response_bytes.len() > budget {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "peer dependency response exceeds max_response_bytes",
         ));
     }
@@ -2342,23 +2335,20 @@ async fn peer_events_query_cursor_event_id(
 
 fn peer_events_query_cursor_error(error: super::sync::SyncCursorError) -> AppError {
     match error {
-        super::sync::SyncCursorError::Expired => AppError::new(
-            soland_http::error::ErrorCode::CursorExpired,
-            "cursor has expired",
-        ),
+        super::sync::SyncCursorError::Expired => {
+            crate::app_error!(CursorExpired, "cursor has expired",)
+        }
         // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
         // `param_invalid` code with reason `invalid_cursor`.
         super::sync::SyncCursorError::Invalid(message) => AppError::param_invalid(message)
             .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         super::sync::SyncCursorError::Mismatch(message)
-        | super::sync::SyncCursorError::Integrity(message) => AppError::new(
-            soland_http::error::ErrorCode::CursorIntegrityInvalid,
-            message,
-        ),
-        super::sync::SyncCursorError::Revoked => AppError::new(
-            soland_http::error::ErrorCode::CursorRevoked,
-            "cursor authority has been revoked",
-        ),
+        | super::sync::SyncCursorError::Integrity(message) => {
+            crate::app_error!(CursorIntegrityInvalid, message,)
+        }
+        super::sync::SyncCursorError::Revoked => {
+            crate::app_error!(CursorRevoked, "cursor authority has been revoked",)
+        }
     }
 }
 
@@ -2657,15 +2647,11 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 pub(in crate::routing) fn schema_violation(message: impl Into<String>) -> AppError {
-    AppError::param_invalid(message)
-        .with_status(StatusCode::BAD_REQUEST)
-        .with_wire_code("schema_violation")
+    AppError::param_invalid(message).with_wire_code("schema_violation")
 }
 
 pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> AppError {
-    AppError::conflict(message)
-        .with_status(StatusCode::CONFLICT)
-        .with_wire_code("cross_domain_replay_rejected")
+    AppError::conflict(message).with_wire_code("cross_domain_replay_rejected")
 }
 
 fn render_app_error(res: &mut Response, error: AppError) {

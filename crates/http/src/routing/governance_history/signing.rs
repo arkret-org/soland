@@ -118,8 +118,8 @@ pub(super) async fn current_history_release_service_signer_evidence(
         signed_at,
     )
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::ServiceIdentityUnavailable,
+        crate::app_error!(
+            ServiceIdentityUnavailable,
             format!("history release service signer evidence is unavailable: {error}"),
         )
     })?;

@@ -41,7 +41,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::events::{CommitAccountDataCas, CommitConsentProjection};
 use soland_services::identity::{
     AccountDataState, ConsentCellRecord, ConsentGrantDot, SessionIdentityState as SessionRecord,
@@ -650,8 +650,8 @@ async fn get_consent_cell(
         // The binding addresses one cell per (holder, peer, consent_scope).
         // Two consent_ids on the same intent make this address ambiguous, and
         // answering with either one would report a partial view as the whole.
-        _ => Err(AppError::new(
-            ErrorCode::Conflict,
+        _ => Err(crate::app_error!(
+            Conflict,
             "more than one consent cell carries this intent",
         )),
     }
@@ -810,9 +810,9 @@ async fn submit_caller_signed_consent_event(
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
                 &format!("{kind} submit failed"),
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })
 }

@@ -22,7 +22,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
@@ -632,23 +632,20 @@ async fn get_device_messages(
                 cursor.to_device_position
             }
             Err(SyncCursorError::Expired) => {
-                return Err(AppError::new(
-                    ErrorCode::CursorExpired,
-                    "cursor has expired",
-                ));
+                return Err(crate::app_error!(CursorExpired, "cursor has expired",));
             }
             Err(SyncCursorError::Invalid(message)) => {
                 return Err(AppError::param_invalid(message));
             }
             Err(SyncCursorError::Mismatch(message)) => {
-                return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
+                return Err(crate::app_error!(CursorIntegrityInvalid, message));
             }
             Err(SyncCursorError::Integrity(message)) => {
-                return Err(AppError::new(ErrorCode::CursorIntegrityInvalid, message));
+                return Err(crate::app_error!(CursorIntegrityInvalid, message));
             }
             Err(SyncCursorError::Revoked) => {
-                return Err(AppError::new(
-                    ErrorCode::CursorRevoked,
+                return Err(crate::app_error!(
+                    CursorRevoked,
                     "cursor authority has been revoked",
                 ));
             }

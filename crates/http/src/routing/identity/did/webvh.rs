@@ -179,11 +179,10 @@ pub(in crate::routing::identity) fn require_embedded_webvh_registration_bearer(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             "embedded did:webvh registration requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
-        )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE));
+        ));
     };
     let Some(provided) = bearer_token(req)
         .map(str::trim)

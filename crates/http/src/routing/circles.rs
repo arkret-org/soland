@@ -36,7 +36,6 @@ use arkret_models_collaboration::governance::circle::{
     CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
 };
 use arkret_wire::{ActorId, Event};
-use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -44,7 +43,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use soland_domain::reducer::{CircleLifecycleState, CircleProjection, ProjectionState};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
@@ -185,9 +184,7 @@ fn is_ordinary_circle(circle: &CircleProjection) -> bool {
 }
 
 fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, detail.into())
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, detail.into()).with_wire_code(reason)
 }
 
 fn circle_projection_snapshot(
@@ -426,22 +423,20 @@ fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<Circ
     // present here; the request schema states the same requirement.
     let object = event.payload.get("object");
     if object.and_then(|object| object.get("id")).is_some() {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "create_event payload.object must not carry an id: it is derived from this Event",
         )
-        .with_status(StatusCode::UNPROCESSABLE_ENTITY)
         .with_wire_code(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED));
     }
     if object
         .and_then(|object| object.get("mls_group_ref"))
         .is_some()
     {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "create_event payload.object.mls_group_ref is reducer-derived and must not be supplied",
-        )
-        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
+        ));
     }
     let derived = arkret_schema::derived_object_id(event).ok_or_else(|| {
         AppError::param_invalid("create_event derives no Circle id from its event_id")
@@ -465,9 +460,9 @@ async fn submit_caller_signed_circle_event(
         .map_err(|error| {
             submit_one_error_to_app_error(
                 &format!("{kind} submit failed"),
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })
 }
@@ -666,11 +661,10 @@ async fn post_scope_rotate(
     for event in body.events {
         let event_id = event.event_id.clone();
         let envelope = serde_json::to_value(event).map_err(|e| {
-            AppError::new(
-                ErrorCode::ParamInvalid,
+            crate::app_error!(
+                ParamInvalid,
                 format!("event envelope cannot be encoded: {e}"),
             )
-            .with_status(StatusCode::BAD_REQUEST)
             .with_wire_code("json_invalid")
         })?;
         match submit_event_value(state, &session, envelope).await {
@@ -683,15 +677,15 @@ async fn post_scope_rotate(
                 }
             }
             Err(error) => {
-                if let Some(event_id) = error.quarantine_event_id {
+                if let Some(event_id) = error.quarantine_event_id() {
                     let typed_id = EventId::new(event_id)
                         .map_err(|e| AppError::internal(format!("event_id: {e}")))?;
                     quarantine.push(typed_id);
                 } else {
                     rejected.push(json!({
                         "id": event_id,
-                        "reason_code": error.code,
-                        "detail": error.message,
+                        "reason_code": error.code(),
+                        "detail": error.message(),
                     }));
                 }
             }
@@ -726,6 +720,7 @@ async fn post_scope_rotate(
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::DidCoreId;
+    use soland_http::error::ErrorCode;
 
     use super::*;
 

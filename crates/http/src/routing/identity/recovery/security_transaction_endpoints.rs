@@ -142,11 +142,10 @@ pub(super) async fn security_transaction_create(
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     if ActorId::account(transaction_account(&request).clone()) != session_actor {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "security transaction account_id does not match the authenticated account",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("security_transaction_principal_isolation"));
     }
     enforce_recovery_grant_transaction_binding(
@@ -431,10 +430,9 @@ async fn submit_rotation_event_unit(
     .map_err(|error| {
         AppError::conflict(format!(
             "prepared rotation Event unit was rejected: {}",
-            error.message
+            error.message()
         ))
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     if !outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
@@ -862,11 +860,10 @@ pub(crate) async fn backup_series_erase_command(
     if request.authorization_lease.authority_set_ref != expected_authority_ref
         || request.authorization_lease.authority_set_policy != expected_authority_policy
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "backup-series erase lease authority policy is not current for its basis",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("authorization_lease_basis_mismatch"));
     }
     for proof in &request.authorization_lease.proofs {
@@ -880,11 +877,10 @@ pub(crate) async fn backup_series_erase_command(
             None => false,
         };
         if !audience_covers_issuer {
-            return Err(AppError::new(
-                ErrorCode::CapabilityDenied,
+            return Err(crate::app_error!(
+                CapabilityDenied,
                 "backup-series erase lease proof audience does not cover its issuer",
             )
-            .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("invalid_proof"));
         }
         let binding_bytes = request
@@ -900,9 +896,7 @@ pub(crate) async fn backup_series_erase_command(
         )
         .await
         .map_err(|error| {
-            AppError::new(ErrorCode::CapabilityDenied, error)
-                .with_status(StatusCode::FORBIDDEN)
-                .with_wire_code("invalid_proof")
+            crate::app_error!(CapabilityDenied, error).with_wire_code("invalid_proof")
         })?;
     }
     for prepared in &plan.backup_rotations {
@@ -1271,11 +1265,10 @@ async fn continue_issue_terminal_receipt(
         .with_wire_code("schema_violation"));
     };
     if session.device_id != receipt.new_device_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "terminal recovery receipt must be submitted by the replacement device session",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let (
         binding,
@@ -1728,11 +1721,10 @@ async fn continue_submit_reanchor_unit(
     let binding = binding.clone();
     let plan = plan.clone();
     if session.device_id != binding.replacement_device_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "re-anchor unit must be submitted by the replacement device session",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let batch = plan.reanchor_unit.request.clone();
     let prepared_material_digest = plan.reanchor_unit.request_digest.clone();
@@ -1775,10 +1767,9 @@ async fn continue_submit_reanchor_unit(
     .map_err(|error| {
         AppError::conflict(format!(
             "re-anchor publication unit was rejected: {}",
-            error.message
+            error.message()
         ))
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     let expected_ids = [
         binding.reanchor_event_id.as_str(),

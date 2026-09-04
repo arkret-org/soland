@@ -41,18 +41,16 @@ pub(super) async fn issue_authorization_leases(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ParamMissing,
+            crate::app_error!(
+                ParamMissing,
                 "authorization lease issuance requires Idempotency-Key",
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?;
     let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("authorization lease request cannot be canonicalized: {error}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
     let authenticated_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
         arkret_wire::DidCoreId::new(session.actor.clone())
@@ -68,26 +66,25 @@ pub(super) async fn issue_authorization_leases(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("authorization lease idempotency lookup failed: {error}"),
             )
         })? {
         Some(record) if record.request_hash == request_hash => {
             let outcome = serde_json::from_value(record.response_body).map_err(|error| {
-                AppError::new(
-                    ErrorCode::InternalError,
+                crate::app_error!(
+                    InternalError,
                     format!("stored authorization lease outcome is invalid: {error}"),
                 )
             })?;
             return json_ok(outcome);
         }
         Some(_) => {
-            return Err(AppError::new(
-                ErrorCode::DuplicateConflict,
+            return Err(crate::app_error!(
+                DuplicateConflict,
                 "Idempotency-Key was reused with a different lease request",
-            )
-            .with_status(StatusCode::CONFLICT));
+            ));
         }
         None => {}
     }
@@ -96,13 +93,12 @@ pub(super) async fn issue_authorization_leases(
         || target_count > MAX_EVENT_SUBMIT_BATCH
         || (!request.events.is_empty() && !request.intents.is_empty())
     {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             format!(
                 "authorization lease issuance requires exactly one non-empty events or intents array with at most {MAX_EVENT_SUBMIT_BATCH} entries"
             ),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        ));
     }
 
     let issued_at = now();
@@ -116,8 +112,8 @@ pub(super) async fn issue_authorization_leases(
         authorization_leases: leases,
     };
     let response_body = serde_json::to_value(&outcome).map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
+        crate::app_error!(
+            InternalError,
             format!("authorization lease outcome cannot be encoded: {error}"),
         )
     })?;
@@ -136,8 +132,8 @@ pub(super) async fn issue_authorization_leases(
         })
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("authorization lease idempotency persist failed: {error}"),
             )
         })?;
@@ -156,11 +152,10 @@ async fn issue_event_leases(
         .as_ref()
         .is_some_and(|anchor| anchor.self_principal_pcr_bootstrap)
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "human self-principal PCR genesis MUST NOT carry an AuthorizationLease",
-        )
-        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
+        ));
     }
     let bootstrap_contexts = context
         .as_ref()
@@ -171,11 +166,10 @@ async fn issue_event_leases(
     let mut envelopes = Vec::with_capacity(events.len());
     for event in events {
         let envelope = serde_json::to_value(event).map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!("authorization lease Event cannot be encoded: {error}"),
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?;
         envelopes.push(envelope.clone());
         let parsed = validate_event_envelope_with_context(
@@ -188,11 +182,10 @@ async fn issue_event_leases(
         .await
         .map_err(event_validation_app_error)?;
         let operation = projection_operation_from_event(&parsed, &envelope).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 "authorization lease Event cannot be projected",
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?;
         projected_operations.push(operation);
         projected_cell_writes.push(
@@ -202,20 +195,15 @@ async fn issue_event_leases(
                 state.projections().project_cell_writes(event)
             }
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
+                crate::app_error!(
+                    SchemaViolation,
                     format!("authorization lease Event cell projection failed: {error}"),
                 )
-                .with_status(StatusCode::BAD_REQUEST)
             })?,
         );
     }
     crate::routing::events::operations::validate_operation_semantics(state, &projected_operations)
-        .map_err(|reason| {
-            AppError::new(ErrorCode::SchemaViolation, reason)
-                .with_status(StatusCode::BAD_REQUEST)
-                .with_reason_code(reason)
-        })?;
+        .map_err(|reason| crate::app_error!(SchemaViolation, reason).with_reason_code(reason))?;
     for operation in &projected_operations {
         crate::routing::events::operations::validate_single_operation_policy_in_batch(
             state,
@@ -236,9 +224,7 @@ async fn issue_event_leases(
                 StatusCode::CONFLICT => ErrorCode::Conflict,
                 _ => ErrorCode::PolicyViolation,
             };
-            AppError::new(code, reason)
-                .with_status(status)
-                .with_reason_code(wire_code)
+            AppError::from_rejection(code, reason).with_reason_code(wire_code)
         })?;
     }
     // Lease issuance performs the same reducer admission as a later submit,
@@ -267,9 +253,9 @@ async fn issue_event_leases(
                 let rendered = super::submit::realm_bootstrap::bootstrap_projection_error(error);
                 super::submit::submit_one_error_to_app_error(
                     "authorization lease Realm bootstrap preflight",
-                    rendered.status,
-                    rendered.code,
-                    &rendered.message,
+                    rendered.status(),
+                    rendered.code(),
+                    &rendered.message(),
                 )
             })?;
     } else if context.is_some() {
@@ -291,9 +277,9 @@ async fn issue_event_leases(
                 let rendered = super::submit::realm_bootstrap::bootstrap_projection_error(error);
                 super::submit::submit_one_error_to_app_error(
                     "authorization lease genesis preflight",
-                    rendered.status,
-                    rendered.code,
-                    &rendered.message,
+                    rendered.status(),
+                    rendered.code(),
+                    &rendered.message(),
                 )
             })?;
     } else {
@@ -323,9 +309,9 @@ async fn issue_event_leases(
             if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
                 staged.apply_via_lattice_registry(reducer_operation, cell_writes, &hlc, &registry)
             {
-                return Err(AppError::new(ErrorCode::FailedPrecondition, reason.clone())
-                    .with_status(StatusCode::UNPROCESSABLE_ENTITY)
-                    .with_reason_code(reason));
+                return Err(
+                    crate::app_error!(FailedPrecondition, reason.clone()).with_reason_code(reason)
+                );
             }
         }
     }
@@ -363,7 +349,7 @@ async fn issue_event_leases(
 /// `mls_governance_binding_stale` to schedule the protocol-mandated repair.
 fn event_validation_app_error(error: EventValidationError) -> AppError {
     let code = ErrorCode::from_wire(error.code).unwrap_or(ErrorCode::PolicyViolation);
-    let mut rendered = AppError::new(code, error.message).with_status(error.status);
+    let mut rendered = AppError::from_rejection(code, error.message);
     if let Some(reason_code) = error.reason_code {
         rendered = rendered.with_reason_code(reason_code);
     }
@@ -380,20 +366,18 @@ async fn issue_intent_leases(
     let actor_id =
         crate::routing::identity::session_actor::session_actor_from_credential(state, session)?;
     let device_id = arkret_wire::DeviceId::new(session.device_id.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::PolicyViolation,
+        crate::app_error!(
+            PolicyViolation,
             format!("session device id is invalid: {error}"),
         )
-        .with_status(StatusCode::FORBIDDEN)
     })?;
     let mut leases = Vec::with_capacity(intents.len());
     for intent in intents {
         let descriptor = arkret_schema::capability_action(&intent.action).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 "authorization lease intent action is not registered",
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?;
         let expected_risk = match descriptor.risk_tier {
             arkret_schema::CapabilityRiskTier::Low => RiskTier::Low,
@@ -411,11 +395,10 @@ async fn issue_intent_leases(
                     &actor_id.to_string(),
                 )
         {
-            return Err(AppError::new(
-                ErrorCode::CapabilityDenied,
+            return Err(crate::app_error!(
+                CapabilityDenied,
                 "authorization lease intent is not a matching principal-control non-Event action",
-            )
-            .with_status(StatusCode::FORBIDDEN));
+            ));
         }
         match &intent.basis_ref {
             LeaseBasisRef::Seal(seal_id) => {
@@ -436,11 +419,10 @@ async fn issue_intent_leases(
                 }
             }
             _ => {
-                return Err(AppError::new(
-                    ErrorCode::SchemaViolation,
+                return Err(crate::app_error!(
+                    SchemaViolation,
                     "non-Event authorization lease intent requires an accepted Seal basis",
-                )
-                .with_status(StatusCode::BAD_REQUEST));
+                ));
             }
         }
         let (authority_set_ref, authority_set_policy) = authority_for_scope(
@@ -492,11 +474,10 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             &genesis_cell_write_projector,
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!("invalid self-principal anchor unit: {error}"),
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?;
         (
             events[0].realm_id.as_str().to_owned(),
@@ -518,11 +499,10 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
     } else {
         let unit = arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(events).map_err(
             |error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
+                crate::app_error!(
+                    SchemaViolation,
                     format!("invalid Realm anchor unit: {error}"),
                 )
-                .with_status(StatusCode::BAD_REQUEST)
             },
         )?;
         (
@@ -533,10 +513,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
         )
     };
     let genesis_live_digest_suite = arkret::declared_genesis_live_digest_suite(&events[0])
-        .map_err(|error| {
-            AppError::new(ErrorCode::SchemaViolation, error.to_string())
-                .with_status(StatusCode::BAD_REQUEST)
-        })?;
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
     let event_digests = events
         .iter()
         .map(|event| {
@@ -548,39 +525,35 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             let digest = event
                 .event_digest_with_digest_suite(digest_suite)
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::SchemaViolation,
+                    crate::app_error!(
+                        SchemaViolation,
                         format!("anchor Event digest failed: {error}"),
                     )
-                    .with_status(StatusCode::BAD_REQUEST)
                 })?;
             arkret_identifiers::Hash::new(digest).map_err(|error| {
-                AppError::new(
-                    ErrorCode::SchemaViolation,
+                crate::app_error!(
+                    SchemaViolation,
                     format!("anchor Event digest is invalid: {error}"),
                 )
-                .with_status(StatusCode::BAD_REQUEST)
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut basis = AnchorUnitLeaseBasis {
         realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!("anchor realm_id is invalid: {error}"),
             )
-            .with_status(StatusCode::BAD_REQUEST)
         })?,
         event_digests,
         unit_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
             .expect("fixed digest is valid"),
     };
     basis.unit_digest = basis.expected_unit_digest().map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("anchor unit digest failed: {error}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
     Ok(Some(AnchorIssueContext {
         bootstrap_context: RealmBootstrapBatchContext {
@@ -588,11 +561,10 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             actor_id,
             digest_algorithm: Some(super::submit::staged_realm_digest_algorithm(
                 &serde_json::to_value(&events[0]).map_err(|error| {
-                    AppError::new(
-                        ErrorCode::SchemaViolation,
+                    crate::app_error!(
+                        SchemaViolation,
                         format!("anchor Realm-create Event cannot be encoded: {error}"),
                     )
-                    .with_status(StatusCode::BAD_REQUEST)
                 })?,
             )),
             identity_anchor_event_id: if self_principal_pcr_bootstrap {
@@ -617,11 +589,10 @@ fn event_basis(event: &Event) -> Result<LeaseBasisRef, AppError> {
     if let Some(seal_basis) = &event.seal_basis {
         return Ok(LeaseBasisRef::Joined(seal_basis.clone()));
     }
-    Err(AppError::new(
-        ErrorCode::SchemaViolation,
+    Err(crate::app_error!(
+        SchemaViolation,
         "non-anchor Event lease issuance requires seal_ref or seal_basis",
-    )
-    .with_status(StatusCode::BAD_REQUEST))
+    ))
 }
 
 fn publication_action(kind: &str) -> (String, RiskTier) {
@@ -699,15 +670,15 @@ pub(crate) fn authority_for_scope(
     // service verification method that performed the full pre-admission pass.
     let source_digest = arkret_identifiers::Hash::new(
         arkret_canonical::canonical_sha256(basis_ref).map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("lease authority basis digest failed: {error}"),
             )
         })?,
     )
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
+        crate::app_error!(
+            InternalError,
             format!("lease authority basis digest is invalid: {error}"),
         )
     })?;
@@ -716,8 +687,8 @@ pub(crate) fn authority_for_scope(
         state.service_resolution_commitment().did
     ))
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
+        crate::app_error!(
+            InternalError,
             format!("lease authority verification method is invalid: {error}"),
         )
     })?;
@@ -788,21 +759,19 @@ fn sign_lease(
             .then_some(event.actor_id.clone())
         })
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SignatureInvalid,
+            crate::app_error!(
+                SignatureInvalid,
                 "Event has no proof controller that projects to actor_id",
             )
-            .with_status(StatusCode::FORBIDDEN)
         })?;
     sign_lease_fields(
         state,
         actor_id,
         arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::PolicyViolation,
+            crate::app_error!(
+                PolicyViolation,
                 format!("session device id is invalid: {error}"),
             )
-            .with_status(StatusCode::FORBIDDEN)
         })?,
         event.scope_ref.clone(),
         basis_ref,
@@ -836,8 +805,8 @@ fn sign_lease_fields(
             crate::ids::generate("authorization_lease"),
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("minted authorization lease id is invalid: {error}"),
             )
         })?,
@@ -877,8 +846,8 @@ fn sign_lease_fields(
     proof.jws =
         arkret_signatures::jws::sign_jws_ed25519(&binding, state.notary_signing_key().as_ref())
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::InternalError,
+                crate::app_error!(
+                    InternalError,
                     format!("authorization lease signing failed: {error}"),
                 )
             })?;
@@ -888,8 +857,8 @@ fn sign_lease_fields(
 }
 
 fn lease_internal_error(error: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::InternalError,
+    crate::app_error!(
+        InternalError,
         format!("minted authorization lease is invalid: {error}"),
     )
 }
@@ -1026,7 +995,10 @@ mod tests {
         });
 
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(error.status, Some(StatusCode::CONFLICT));
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
         assert_eq!(
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE)

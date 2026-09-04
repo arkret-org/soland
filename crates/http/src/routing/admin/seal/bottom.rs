@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{CellRef, RealmId, SealId};
 use arkret_state::lattice::CellState;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::Value;
@@ -136,9 +135,8 @@ pub(crate) async fn admin_list_realm_bottom(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let _ = RealmId::new(realm_id.clone()).map_err(|e| {
-        app_error!(ParamInvalid, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let _ = RealmId::new(realm_id.clone())
+        .map_err(|e| app_error!(ParamInvalid, "invalid realm_id: {e}"))?;
     json_ok(collect_bottom_entries_for_realm(state, &realm_id).await)
 }
 
@@ -211,12 +209,10 @@ pub(crate) async fn admin_repair_bottom(
     .await?;
     let realm_id = realm_id.into_inner();
     let cell_id_str = cell_id.into_inner();
-    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
-        app_error!(ParamInvalid, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
-    })?;
-    let cell = CellRef::new(cell_id_str.clone()).map_err(|e| {
-        app_error!(ParamInvalid, "invalid cell_id: {e}").with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let realm = RealmId::new(realm_id.clone())
+        .map_err(|e| app_error!(ParamInvalid, "invalid realm_id: {e}"))?;
+    let cell = CellRef::new(cell_id_str.clone())
+        .map_err(|e| app_error!(ParamInvalid, "invalid cell_id: {e}"))?;
     let strategy = body.into_inner().strategy;
 
     match &strategy {
@@ -227,21 +223,19 @@ pub(crate) async fn admin_repair_bottom(
             state_witness_inclusion_proof_ref,
         } => {
             if head.event_id.is_empty() {
-                return Err(
-                    app_error!(ParamInvalid, "winning head must carry an event_id")
-                        .with_status(StatusCode::BAD_REQUEST),
-                );
+                return Err(app_error!(
+                    ParamInvalid,
+                    "winning head must carry an event_id"
+                ));
             }
             if recovery_capability_ref.trim().is_empty() {
-                return Err(
-                    app_error!(ParamInvalid, "recovery_capability_ref is required")
-                        .with_status(StatusCode::BAD_REQUEST),
-                );
+                return Err(app_error!(
+                    ParamInvalid,
+                    "recovery_capability_ref is required"
+                ));
             }
-            let state_witness_seal = SealId::new(state_witness_ref.clone()).map_err(|e| {
-                app_error!(ParamInvalid, "invalid state_witness_ref: {e}")
-                    .with_status(StatusCode::BAD_REQUEST)
-            })?;
+            let state_witness_seal = SealId::new(state_witness_ref.clone())
+                .map_err(|e| app_error!(ParamInvalid, "invalid state_witness_ref: {e}"))?;
             let witness_seal = state
                 .projections()
                 .seal_by_id(&state_witness_seal)
@@ -252,14 +246,12 @@ pub(crate) async fn admin_repair_bottom(
                         FailedPrecondition,
                         "state_witness_ref does not resolve to a Seal"
                     )
-                    .with_status(StatusCode::PRECONDITION_FAILED)
                 })?;
             if witness_seal.realm_id != realm {
                 return Err(app_error!(
                     FailedPrecondition,
                     "state_witness_ref belongs to a different Realm"
-                )
-                .with_status(StatusCode::PRECONDITION_FAILED));
+                ));
             }
             let current_bottom_heads = collect_bottom_entries_for_realm(state, &realm_id)
                 .await
@@ -268,10 +260,10 @@ pub(crate) async fn admin_repair_bottom(
                 .map(|entry| entry.event_ids)
                 .unwrap_or_default();
             if current_bottom_heads.len() < 2 {
-                return Err(
-                    app_error!(FailedPrecondition, "target cell is not currently Bottom")
-                        .with_status(StatusCode::PRECONDITION_FAILED),
-                );
+                return Err(app_error!(
+                    FailedPrecondition,
+                    "target cell is not currently Bottom"
+                ));
             }
             if !current_bottom_heads
                 .iter()
@@ -280,8 +272,7 @@ pub(crate) async fn admin_repair_bottom(
                 return Err(app_error!(
                     FailedPrecondition,
                     "winning head is not in current Bottom heads"
-                )
-                .with_status(StatusCode::PRECONDITION_FAILED));
+                ));
             }
             if witness_seal.covered_event_digests.iter().any(|covered| {
                 current_bottom_heads
@@ -291,8 +282,7 @@ pub(crate) async fn admin_repair_bottom(
                 return Err(app_error!(
                     FailedPrecondition,
                     "state_witness_ref must be pre-conflict"
-                )
-                .with_status(StatusCode::PRECONDITION_FAILED));
+                ));
             }
             let _ = (&cell, state_witness_inclusion_proof_ref);
             // Every §9.5 precondition above passed, but soland cannot mint
@@ -322,8 +312,7 @@ pub(crate) async fn admin_repair_bottom(
                  kind registered for this cell family, signed by the holder of \
                  {recovery_capability_ref} and carrying recovery_capability + state_witness refs. \
                  Submit it on POST /_arkret/self/events"
-            )
-            .with_status(StatusCode::PRECONDITION_FAILED))
+            ))
         }
     }
 }

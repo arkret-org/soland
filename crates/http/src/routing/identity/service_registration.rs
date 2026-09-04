@@ -5,12 +5,11 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationOutcome, ServiceRegistrationReceipt,
 };
 use arkret_wire::{DidCoreId, PayloadProof, ServiceKind, project_did_to_core_id, proof_kind};
-use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::{DidDocumentState, DidLogEvent, ServiceRegistrationCommitResult};
 
@@ -92,8 +91,8 @@ pub(crate) async fn ensure(
             json_ok(outcome)
         }
         ServiceRegistrationCommitResult::Existing(outcome) => json_ok(outcome),
-        ServiceRegistrationCommitResult::Conflict => Err(AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        ServiceRegistrationCommitResult::Conflict => Err(crate::app_error!(
+            ServiceIdentityConflict,
             "service registration key, DID, or control root is already bound differently",
         )),
     }
@@ -121,11 +120,10 @@ pub(crate) async fn get(
         .await
         .map_err(provider_unavailable)?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::DidNotFound,
+            crate::app_error!(
+                DidNotFound,
                 "service registration does not exist for the requested key",
             )
-            .with_status(StatusCode::NOT_FOUND)
         })?;
     outcome.validate_for(&key).map_err(|error| {
         AppError::internal(format!("stored service registration invalid: {error}"))
@@ -215,15 +213,15 @@ async fn sign_registration_receipt(
 }
 
 fn registration_rejected(error: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::ServiceRegistrationDenied,
+    crate::app_error!(
+        ServiceRegistrationDenied,
         format!("service registration rejected: {error}"),
     )
 }
 
 fn provider_unavailable(error: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::ServiceIdentityProviderUnavailable,
+    crate::app_error!(
+        ServiceIdentityProviderUnavailable,
         format!("service identity provider unavailable: {error}"),
     )
 }

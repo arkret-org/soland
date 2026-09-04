@@ -18,11 +18,10 @@
 
 use arkret_identifiers::{CellRef, RealmId};
 use arkret_state::lattice::CellState;
-use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use super::AuthArgs;
 use super::util::query_param;
@@ -99,21 +98,16 @@ fn state_response_from(
 
 fn parse_realm_scope(realm_str: &str) -> Result<RealmId, AppError> {
     RealmId::new(realm_str.to_owned()).map_err(|e| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
-            format!("invalid realm_id `{realm_str}`: {e}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
+        crate::app_error!(ParamInvalid, format!("invalid realm_id `{realm_str}`: {e}"),)
     })
 }
 
 fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
     let Some(realm_str) = query_param(req, "realm_id") else {
-        return Err(AppError::new(
-            ErrorCode::ParamMissing,
+        return Err(crate::app_error!(
+            ParamMissing,
             "realm_id query parameter is required".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        ));
     };
     parse_realm_scope(&realm_str)
 }
@@ -138,29 +132,26 @@ async fn admin_get_cell(
     let _session = aa.authenticated_session(state, req).await?;
 
     let Some(cell_id_str) = req.param::<String>("cell_id") else {
-        return Err(AppError::new(
-            ErrorCode::ParamMissing,
+        return Err(crate::app_error!(
+            ParamMissing,
             "cell_id path segment is required".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        ));
     };
     let cell_ref = CellRef::new(cell_id_str.clone()).map_err(|e| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
+        crate::app_error!(
+            ParamInvalid,
             format!("invalid cell_id `{cell_id_str}`: {e}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
 
     // Reject syntactically valid CellRef strings that fail the stricter
     // `ak:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
     let _ = arkret_wire::cell::CellId::parse(cell_ref.as_str()).map_err(|e| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
+        crate::app_error!(
+            ParamInvalid,
             format!("cell_id is not a parseable ak:cell:<family>:<subject>: {e}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
 
     let realm = required_realm_scope(req)?;
@@ -168,13 +159,7 @@ async fn admin_get_cell(
     let binding = state
         .projections()
         .resolve_cell(&realm, &cell_ref)
-        .map_err(|e| {
-            AppError::new(
-                ErrorCode::NotFound,
-                format!("cell family not registered: {e}"),
-            )
-            .with_status(StatusCode::NOT_FOUND)
-        })?;
+        .map_err(|e| crate::app_error!(NotFound, format!("cell family not registered: {e}"),))?;
     let lattice_kind = binding.lattice.kind().as_wire_str();
     let bottom_policy = match binding.bottom_mode {
         arkret_state::state::BottomMode::Reject => "reject",
@@ -193,11 +178,10 @@ async fn admin_get_cell(
         // above, so this is an absent cell — return 404 with the canonical
         // error envelope to match the deliverable spec ("GET unknown cell
         // → 404 with canonical error envelope").
-        return Err(AppError::new(
-            ErrorCode::NotFound,
+        return Err(crate::app_error!(
+            NotFound,
             format!("cell `{}` has no sealed state", cell_ref.as_str()),
-        )
-        .with_status(StatusCode::NOT_FOUND));
+        ));
     }
 
     json_ok(state_response_from(
@@ -247,11 +231,7 @@ async fn admin_list_cells(
         .unwrap_or(0);
 
     let all_cells = state.projections().realm_cells(&realm).await.map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("cell_store list_cells failed: {e}"),
-        )
-        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+        crate::app_error!(InternalError, format!("cell_store list_cells failed: {e}"),)
     })?;
 
     // Filter by family prefix (post-list to keep CellStore trait minimal).

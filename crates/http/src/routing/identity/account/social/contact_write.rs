@@ -148,26 +148,26 @@ pub(crate) fn verify_contact_service_signature_bytes(
         .as_str()
         .rsplit_once('#')
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("{evidence_field}.signature.verification_method is not a DID URL"),
             )
         })?;
     let controller = arkret_wire::Did::new(controller.to_owned()).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             format!("{evidence_field}.signature.verification_method controller is invalid"),
         )
     })?;
     let controller_core = arkret_wire::project_did_to_core_id(&controller).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             format!("{evidence_field}.signature.verification_method controller is invalid"),
         )
     })?;
     if controller_core.as_str() != expected_service_id || fragment != "federation-fanout-key" {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             format!(
                 "{evidence_field}.signature.verification_method is not the issuer's trusted service method"
             ),
@@ -179,8 +179,8 @@ pub(crate) fn verify_contact_service_signature_bytes(
         state
             .federation_peer_verification_method_key(signature.verification_method.as_str())
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     format!(
                         "{evidence_field}.signature historical verification key is unavailable"
                     ),
@@ -192,8 +192,8 @@ pub(crate) fn verify_contact_service_signature_bytes(
         .ok()
         .and_then(|bytes| Signature::from_slice(&bytes).ok())
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!(
                     "{evidence_field}.signature.jws must contain exactly 64 Ed25519 signature bytes"
                 ),
@@ -202,8 +202,8 @@ pub(crate) fn verify_contact_service_signature_bytes(
     verifying_key
         .verify_strict(signature_bytes, &signature)
         .map_err(|_| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("{evidence_field}.signature verification failed"),
             )
         })
@@ -215,8 +215,8 @@ pub(crate) fn validate_request_receipt_cryptography(
     evidence_field: &str,
 ) -> Result<(), AppError> {
     receipt.core.validate().map_err(|error| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             format!("{evidence_field}.core is invalid: {error}"),
         )
     })?;
@@ -225,8 +225,8 @@ pub(crate) fn validate_request_receipt_cryptography(
         &receipt.core,
     )?;
     if recomputed != receipt.receipt_digest {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             format!("{evidence_field}.receipt_digest does not match its canonical core"),
         ));
     }
@@ -292,8 +292,8 @@ async fn validate_request_acceptance_receipt(
         .map(arkret_wire::DidCoreId::as_str)
         .unwrap_or_else(|| state.service_id());
     if receipt.core.issuer_id.as_str() != expected_issuer {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "request_receipt.core.issuer does not match the durable request source service",
         ));
     }
@@ -303,8 +303,7 @@ async fn validate_request_acceptance_receipt(
         .await
         .map_err(|error| AppError::internal(format!("Contact request Event lookup: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(FailedPrecondition,
                 "request_receipt.core.request_event_ref cannot be verified: the durable accepted source Event is unavailable",
             )
         })?;
@@ -338,8 +337,8 @@ async fn validate_request_acceptance_receipt(
         || expected_checkpoint != receipt.core.source_checkpoint
         || receipt.core.accepted_at < request_event.created_at
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "request_receipt.core coordinates do not match the durable accepted Contact request",
         ));
     }
@@ -681,14 +680,14 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
         crate::notary::ensure_realm_seal_head(state, &realm_id)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("conformance fixture Seal head unavailable: {error}"),
                 )
             })?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "conformance fixture Realm has no accepted Seal head",
                 )
             })?
@@ -754,8 +753,8 @@ async fn contact_authority_realm(
     let realm_id = match holder {
         ContactPeer::Human { account_id } => {
             if account_id.station_id.as_str() != state.service_id() {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "Contact holder account does not belong to this Station",
                 ));
             }
@@ -770,14 +769,11 @@ async fn contact_authority_realm(
                     AppError::internal(format!("Contact holder device lookup: {error}"))
                 })?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
-                        "Contact holder device is unavailable",
-                    )
+                    crate::app_error!(FailedPrecondition, "Contact holder device is unavailable",)
                 })?;
             if device.revoked_at.is_some() || device.verification_state != "verified" {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "Contact holder device is not active",
                 ));
             }
@@ -788,8 +784,8 @@ async fn contact_authority_realm(
                 AppError::internal(format!("Contact holder device evidence: {error}"))
             })?;
             let authorize_event_id = payload.device_authorize_event_id.ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "Contact holder device has no accepted authorization Event",
                 )
             })?;
@@ -801,22 +797,22 @@ async fn contact_authority_realm(
                     AppError::internal(format!("Contact device authorization lookup: {error}"))
                 })?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         "Contact holder device authorization Event is unavailable",
                     )
                 })?;
             if !device_authorization_matches_contact_account(&authorize_event.actor_id, account_id)
                 || authorize_event.kind != arkret_wire::event_kind_str::DEVICE_AUTHORIZE
             {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "Contact holder device authorization is invalid",
                 ));
             }
             authorize_event.realm_id.ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "Contact holder device authorization has no PCR realm",
                 )
             })?
@@ -830,8 +826,8 @@ async fn contact_authority_realm(
                     AppError::internal(format!("Contact holder Agent lookup: {error}"))
                 })?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         "Contact holder Agent allocation is unavailable",
                     )
                 })?
@@ -847,8 +843,8 @@ async fn contact_authority_realm(
         .await
         .map_err(|error| AppError::internal(format!("Contact authority lookup: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Contact account authority pair is unavailable",
             )
         })?;
@@ -863,8 +859,8 @@ async fn contact_authority_realm(
         || authority.pcr_realm_id != realm_id
         || authority.account_id.station_id.as_str() != state.service_id()
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Contact account authority pair does not match the authenticated holder",
         ));
     }
@@ -983,8 +979,8 @@ fn next_request_slot_coordinates(
         ));
     }
     let next_sequence = current.accepted_sequence.checked_add(1).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Contact request-slot sequence is exhausted",
         )
     })?;
@@ -1345,9 +1341,8 @@ async fn commit(
     )
     .await
     .map_err(|error| {
-        AppError::new(ErrorCode::FailedPrecondition, error.message)
-            .with_status(error.status)
-            .with_wire_code(Box::leak(error.code.into_boxed_str()))
+        crate::app_error!(FailedPrecondition, error.message())
+            .with_wire_code(Box::leak(error.code().into_boxed_str()))
     })?;
     if let Some((account_id, policy)) = committed_invite_policy {
         state
@@ -1454,18 +1449,17 @@ async fn plan_contact_commit(
                             Vec::new(),
                         ),
                         None => {
-                            return Err(AppError::new(
-                                ErrorCode::ContinuityEvidenceUnavailable,
+                            return Err(crate::app_error!(
+                                ContinuityEvidenceUnavailable,
                                 "Contact continuity evidence is unavailable",
-                            )
-                            .with_status(StatusCode::CONFLICT));
+                            ));
                         }
                     },
                     Some(existing) if existing.status == "tombstoned" => {
                         let terminal =
                             existing.contact_round_evidence.clone().ok_or_else(|| {
-                                AppError::new(
-                                    ErrorCode::FailedPrecondition,
+                                crate::app_error!(
+                                    FailedPrecondition,
                                     "terminal Contact round evidence is unavailable",
                                 )
                             })?;
@@ -1486,11 +1480,9 @@ async fn plan_contact_commit(
                         &existing.contact_round_evidence_history,
                     )
                     .map_err(|error| {
-                        AppError::new(
-                            ErrorCode::ContinuityInvalid,
+                        crate::app_error!(ContinuityInvalid,
                             format!("terminal Contact continuity is invalid: {error}"),
                         )
-                        .with_status(StatusCode::CONFLICT)
                     })?;
                         let mut history = Vec::with_capacity(
                             existing
@@ -1512,11 +1504,10 @@ async fn plan_contact_commit(
                                 })
                                 .transpose()?
                                 .ok_or_else(|| {
-                                    AppError::new(
-                                        ErrorCode::ContinuityEvidenceUnavailable,
+                                    crate::app_error!(
+                                        ContinuityEvidenceUnavailable,
                                         "Contact continuity checkpoint is required",
                                     )
-                                    .with_status(StatusCode::CONFLICT)
                                 })?;
                         }
                         (
@@ -2020,25 +2011,16 @@ fn imported_contact_continuity_history(
     if evidence.uncompressed_tail_entries.is_empty()
         || evidence.uncompressed_tail_entries.len() > 64
     {
-        return Err(AppError::new(
-            ErrorCode::ContinuityEvidenceUnavailable,
+        return Err(crate::app_error!(
+            ContinuityEvidenceUnavailable,
             "portable Contact continuity tail is unavailable",
-        )
-        .with_status(StatusCode::CONFLICT));
+        ));
     }
     evidence.checkpoint.validate_contact_shape().map_err(|_| {
-        AppError::new(
-            ErrorCode::ContinuityInvalid,
-            "portable Contact continuity is invalid",
-        )
-        .with_status(StatusCode::CONFLICT)
+        crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",)
     })?;
     let signing_bytes = evidence.checkpoint.signing_bytes().map_err(|_| {
-        AppError::new(
-            ErrorCode::ContinuityInvalid,
-            "portable Contact continuity is invalid",
-        )
-        .with_status(StatusCode::CONFLICT)
+        crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",)
     })?;
     for checkpoint_signature in &evidence.checkpoint.signatures {
         verify_contact_service_signature_bytes(
@@ -2049,33 +2031,22 @@ fn imported_contact_continuity_history(
             "continuity_evidence.checkpoint",
         )
         .map_err(|_| {
-            AppError::new(
-                ErrorCode::ContinuityInvalid,
-                "portable Contact continuity is invalid",
-            )
-            .with_status(StatusCode::CONFLICT)
+            crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",)
         })?;
     }
     let mut tail = evidence.uncompressed_tail_entries.clone();
     if previous_terminal_contact_round_id != Some(&tail[0].contact_round_id) {
-        return Err(AppError::new(
-            ErrorCode::ContinuityInvalid,
+        return Err(crate::app_error!(
+            ContinuityInvalid,
             "portable Contact continuity is invalid",
-        )
-        .with_status(StatusCode::CONFLICT));
+        ));
     }
     tail[0].continuity_checkpoint = Some(evidence.checkpoint.clone());
     arkret_models_collaboration::contact_operations::validate_recontact_continuity(
         &tail[0],
         &tail[1..],
     )
-    .map_err(|_| {
-        AppError::new(
-            ErrorCode::ContinuityInvalid,
-            "portable Contact continuity is invalid",
-        )
-        .with_status(StatusCode::CONFLICT)
-    })?;
+    .map_err(|_| crate::app_error!(ContinuityInvalid, "portable Contact continuity is invalid",))?;
     Ok(tail)
 }
 

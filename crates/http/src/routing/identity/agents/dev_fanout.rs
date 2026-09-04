@@ -9,7 +9,7 @@ use arkret_wire::Event;
 #[cfg(test)]
 use chrono::Utc;
 use serde_json::Value;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use super::SessionRecord;
 use crate::routing::events::event_log::{
@@ -47,11 +47,10 @@ pub(super) async fn require_controller_principal_control_realm(
     if authority.principal_id != controller_principal_id
         || authority.station_id.as_str() != state.service_id()
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "controller authority does not bind this session and Station",
         )
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_reason_code("account_id_mismatch"));
     }
     let record = state
@@ -62,20 +61,18 @@ pub(super) async fn require_controller_principal_control_realm(
             AppError::internal(format!("controller authority lookup failed: {error}"))
         })?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "controller authority is not accepted by this Station",
             )
-            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
             .with_reason_code("account_id_mismatch")
         })?;
     let realm_id = record.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "controller Principal Control Realm must be initialized before provisioning an Agent",
         )
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_reason_code("principal_control_realm_missing"));
     }
 
@@ -91,11 +88,10 @@ pub(super) async fn require_controller_principal_control_realm(
         .await
         .map_err(|err| AppError::internal(format!("self Realm metadata lookup failed: {err}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "self Realm is indexed without durable metadata",
             )
-            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
             .with_reason_code("self_realm_metadata_missing")
         })?;
     reconcile_self_realm_owner_projection(state, &realm_id, authority, &meta)?;
@@ -111,11 +107,10 @@ fn reconcile_self_realm_owner_projection(
     let controller_actor = arkret_wire::ActorId::account(controller_account.clone());
     let controller_key = controller_actor.to_string();
     if meta.owner != controller_key {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "self Realm owner does not match the authenticated controller",
         )
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_reason_code("self_realm_owner_mismatch"));
     }
 
@@ -126,11 +121,10 @@ fn reconcile_self_realm_owner_projection(
         meta.created_at,
         meta.updated_at,
     ) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "self Realm projection owner does not match durable metadata",
         )
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
         .with_reason_code("self_realm_owner_mismatch"));
     }
     Ok(())
@@ -190,9 +184,9 @@ pub(super) async fn submit_provision_event(
         .map_err(|error| {
             agent_fanout_submit_error(
                 arkret_wire::EventKind::AgentProvision.as_str(),
-                error.status,
-                error.code,
-                error.message,
+                error.status(),
+                error.code(),
+                error.message(),
             )
         })?;
     Ok(event_id)
@@ -309,7 +303,7 @@ pub(super) async fn submit_signed_agent_event(
     crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
         .await
         .map_err(|error| {
-            agent_fanout_submit_error(&event_kind, error.status, error.code, error.message)
+            agent_fanout_submit_error(&event_kind, error.status(), error.code(), error.message())
         })?;
     Ok(event_id)
 }
@@ -344,6 +338,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
 #[cfg(test)]
 mod tests {
     use arkret_wire::{CapabilityActionId, ServiceOperationId};
+    use soland_http::error::ErrorCode;
     use soland_storage_postgres::Db;
 
     use super::*;
@@ -384,7 +379,7 @@ mod tests {
         );
         assert_eq!(
             error.http_status(),
-            salvo::http::StatusCode::PRECONDITION_FAILED
+            soland_http::error::error_http_status(error.code)
         );
     }
 

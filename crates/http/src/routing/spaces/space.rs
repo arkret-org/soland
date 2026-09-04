@@ -11,8 +11,12 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
+use std::collections::BTreeMap;
+
 use arkret_identifiers::{RealmId, SpaceId};
-use arkret_models_collaboration::governance::realm_governance::RealmLifecycleView;
+use arkret_models_collaboration::governance::realm_governance::{
+    RealmExport, RealmExportSchema, RealmLifecycleView,
+};
 use arkret_wire::PlaintextDataClassKind;
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::PathParam;
@@ -56,42 +60,6 @@ struct SpaceCellOutcome {
     lattice: String,
     value: Value,
     total: usize,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct RealmExportEvent {
-    event_id: String,
-    realm_id: String,
-    event_kind: String,
-    operation_kind: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    operation_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sender: Option<String>,
-    payload: Value,
-    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
-    created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct RealmExportOperation {
-    operation_id: String,
-    realm_id: String,
-    object_kind: String,
-    operation_kind: String,
-    payload: Value,
-    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
-    created_at: DateTime<Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct RealmExportOutcome {
-    schema: String,
-    realm_id: String,
-    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
-    generated_at: DateTime<Utc>,
-    operations: Vec<RealmExportOperation>,
-    events: Vec<RealmExportEvent>,
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.realm.resource.get", tags("spaces"))]
@@ -169,50 +137,83 @@ async fn export_realm(
     depot: &mut Depot,
     req: &mut Request,
     realm_id: PathParam<String>,
-) -> JsonResult<RealmExportOutcome> {
+) -> JsonResult<RealmExport> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    RealmId::new(realm_id.clone()).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
+    let typed_realm_id =
+        RealmId::new(realm_id.clone()).map_err(|_| AppError::param_invalid("invalid realm_id"))?;
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
         return Err(AppError::not_found("not found"));
     }
-    let events = state
+    let projected_events = state
         .event_queries()
         .projected_events_for_realm(&realm_id)
         .await
-        .map_err(|error| AppError::internal(format!("realm export failed: {error}")))?
-        .into_iter()
-        .map(|event| RealmExportEvent {
-            event_id: event.event_id,
-            realm_id: event.realm_id,
-            event_kind: event.event_kind.as_str().to_owned(),
-            operation_kind: event.operation_kind,
-            operation_id: event.operation_id,
-            sender: event.sender,
-            payload: event.payload,
-            created_at: event.created_at,
-        })
-        .collect::<Vec<_>>();
-    let operations = events
+        .map_err(|error| AppError::internal(format!("realm export failed: {error}")))?;
+    let operations = projected_events
         .iter()
         .filter_map(|event| {
-            event
-                .operation_id
-                .as_ref()
-                .map(|operation_id| RealmExportOperation {
-                    operation_id: operation_id.clone(),
-                    realm_id: event.realm_id.clone(),
-                    object_kind: event.event_kind.as_str().to_owned(),
-                    operation_kind: event.operation_kind.clone(),
-                    payload: event.payload.clone(),
-                    created_at: event.created_at,
-                })
+            event.operation_id.as_ref().map(|operation_id| {
+                BTreeMap::from([
+                    (
+                        "operation_id".to_owned(),
+                        Value::String(operation_id.clone()),
+                    ),
+                    ("realm_id".to_owned(), Value::String(event.realm_id.clone())),
+                    (
+                        "object_kind".to_owned(),
+                        Value::String(event.event_kind.as_str().to_owned()),
+                    ),
+                    (
+                        "operation_kind".to_owned(),
+                        Value::String(event.operation_kind.clone()),
+                    ),
+                    ("payload".to_owned(), event.payload.clone()),
+                    (
+                        "created_at".to_owned(),
+                        Value::String(arkret_canonical::format_timestamp_canonical(
+                            event.created_at,
+                        )),
+                    ),
+                ])
+            })
         })
         .collect::<Vec<_>>();
-    json_ok(RealmExportOutcome {
-        schema: "ak.export.realm.v1".to_owned(),
-        realm_id,
+    let events = projected_events
+        .into_iter()
+        .map(|event| {
+            let mut exported = BTreeMap::from([
+                ("event_id".to_owned(), Value::String(event.event_id)),
+                ("realm_id".to_owned(), Value::String(event.realm_id)),
+                (
+                    "event_kind".to_owned(),
+                    Value::String(event.event_kind.as_str().to_owned()),
+                ),
+                (
+                    "operation_kind".to_owned(),
+                    Value::String(event.operation_kind),
+                ),
+                ("payload".to_owned(), event.payload),
+                (
+                    "created_at".to_owned(),
+                    Value::String(arkret_canonical::format_timestamp_canonical(
+                        event.created_at,
+                    )),
+                ),
+            ]);
+            if let Some(operation_id) = event.operation_id {
+                exported.insert("operation_id".to_owned(), Value::String(operation_id));
+            }
+            if let Some(sender) = event.sender {
+                exported.insert("sender".to_owned(), Value::String(sender));
+            }
+            exported
+        })
+        .collect();
+    json_ok(RealmExport {
+        schema: RealmExportSchema::V1,
+        realm_id: typed_realm_id,
         generated_at: now(),
         operations,
         events,

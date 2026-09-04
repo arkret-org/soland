@@ -25,7 +25,6 @@ use arkret_models_collaboration::http_bodies::{
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -337,7 +336,6 @@ fn reject_device_pairing_query(req: &Request) -> Result<(), AppError> {
     Err(AppError::param_invalid(
         "device pairing inputs must be sent in the JSON body, never in URL path or query",
     )
-    .with_status(StatusCode::BAD_REQUEST)
     .with_wire_code("schema_violation"))
 }
 

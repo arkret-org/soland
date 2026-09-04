@@ -733,10 +733,10 @@ pub(crate) async fn authenticated_session_account_id(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<arkret_wire::AccountId, soland_http::error::AppError> {
-    use soland_http::error::{AppError, ErrorCode};
+    use soland_http::error::AppError;
     let unauthenticated = || {
-        AppError::new(
-            ErrorCode::Unauthenticated,
+        crate::app_error!(
+            Unauthenticated,
             "authenticated session has no exact account authority",
         )
     };

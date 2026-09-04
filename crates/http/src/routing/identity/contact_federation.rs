@@ -119,8 +119,8 @@ pub(crate) async fn prepare_peer_contact_carrier(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("recipient service has no verified route: {error}"),
             )
         })?;
@@ -628,8 +628,8 @@ async fn peer_contacts_submit(
             | arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone
     ) && current_proof.is_none()
     {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "accepted Contact lineage carrier has no recipient current proof",
         ));
     }
@@ -846,8 +846,7 @@ fn uncheckpointed_bundle(bundle: &ContactRoundEvidenceBundle) -> ContactRoundEvi
 }
 
 fn continuity_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(soland_http::error::ErrorCode::ContinuityInvalid, message)
-        .with_status(StatusCode::CONFLICT)
+    crate::app_error!(ContinuityInvalid, message)
 }
 
 fn contact_bundle_digest(bundle: &ContactRoundEvidenceBundle) -> Result<Hash, AppError> {
@@ -909,14 +908,11 @@ pub(crate) fn next_continuity_checkpoint_core(
     local_principal_id: &str,
 ) -> Result<BilateralContinuityCheckpointCore, AppError> {
     let current = record.contact_round_evidence.as_ref().ok_or_else(|| {
-        AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
-            "Contact round evidence is unavailable",
-        )
+        crate::app_error!(FailedPrecondition, "Contact round evidence is unavailable",)
     })?;
     if record.contact_round_evidence_history.is_empty() {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Contact continuity has no terminal prefix to compact",
         ));
     }
@@ -963,8 +959,8 @@ pub(crate) fn next_continuity_checkpoint_core(
                 .last()
                 .expect("non-empty history slice");
             if root.previous_terminal_contact_round_id.is_some() {
-                return Err(AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "Contact continuity root is unavailable",
                 ));
             }
@@ -1136,19 +1132,16 @@ pub(crate) async fn commit_same_service_continuity_checkpoint(
         .contact_any(&record.requester_id, &record.target_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
-                "same-service Contact disappeared",
-            )
-        })?;
+        .ok_or_else(
+            || crate::app_error!(FailedPrecondition, "same-service Contact disappeared",),
+        )?;
     let expected_updated_at = current.updated_at;
     current
         .contact_round_evidence
         .as_mut()
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "same-service Contact evidence disappeared",
             )
         })?
@@ -1232,8 +1225,8 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "outbound checkpoint Contact disappeared",
             )
         })?;
@@ -1271,8 +1264,8 @@ pub(crate) async fn accept_outbound_continuity_checkpoint_outcome(
         .contact_round_evidence
         .as_mut()
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "outbound checkpoint current evidence disappeared",
             )
         })?
@@ -1327,8 +1320,8 @@ async fn finalize_continuity_checkpoint(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "checkpoint Contact lineage is unavailable",
             )
         })?;
@@ -1402,8 +1395,8 @@ async fn finalize_continuity_checkpoint(
         .map_err(|error| AppError::internal(format!("completed checkpoint invalid: {error}")))?;
     let expected_updated_at = record.updated_at;
     let current = record.contact_round_evidence.as_mut().ok_or_else(|| {
-        AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "checkpoint current Contact evidence is unavailable",
         )
     })?;
@@ -1535,8 +1528,8 @@ async fn validate_proof_refresh_evidence(
                         == Some(current_proof.head_event_ref.as_str())))
     });
     if !durable_match {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "proof_refresh durable Contact round/head evidence is unavailable",
         ));
     }
@@ -1571,8 +1564,8 @@ async fn finalize_contact_proof_refresh(
                         .is_some_and(|account| account.station_id.as_str() == source_id))
         })
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "proof-refresh Contact round is unavailable",
             )
         })?;
@@ -1598,8 +1591,8 @@ async fn finalize_contact_proof_refresh(
         ));
     }
     let mut bundle = record.contact_round_evidence.clone().ok_or_else(|| {
-        AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "proof-refresh Contact round evidence is unavailable",
         )
     })?;
@@ -1859,8 +1852,8 @@ async fn finalize_glare_contact_round(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "glare Contact request slot is unavailable",
             )
         })?;
@@ -1898,8 +1891,8 @@ async fn finalize_glare_contact_round(
         .map(super::account::canonical_contact_digest)
         .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
     if retained.len() != 2 || retained != submitted {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "glare Contact request receipts are not durably complete",
         ));
     }
@@ -2392,8 +2385,8 @@ pub(crate) async fn persist_request_mirror_receipt(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                soland_http::error::ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Contact request slot is unavailable for mirror receipt",
             )
         })?;
@@ -2725,8 +2718,8 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        soland_http::error::ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         "outbound glare Contact slot is unavailable",
                     )
                 })?;
@@ -2798,8 +2791,8 @@ pub(crate) async fn accept_outbound_contact_control_outcome(
                 })
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::new(
-                        soland_http::error::ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         "durable local Contact proof is unavailable",
                     )
                 })?;
@@ -3010,8 +3003,8 @@ pub(crate) async fn accept_outbound_contact_event_outcome(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("outbound Contact projection disappeared"))?;
     let mut bundle = record.contact_round_evidence.clone().ok_or_else(|| {
-        AppError::new(
-            soland_http::error::ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "outbound Contact projection has no contact_round evidence",
         )
     })?;
@@ -3441,8 +3434,8 @@ async fn project_delivered_contact_fact(
             {
                 if existing.status == "tombstoned" {
                     let terminal = existing.contact_round_evidence.clone().ok_or_else(|| {
-                        AppError::new(
-                            soland_http::error::ErrorCode::FailedPrecondition,
+                        crate::app_error!(
+                            FailedPrecondition,
                             "terminal Contact round evidence is unavailable",
                         )
                     })?;
@@ -3462,8 +3455,8 @@ async fn project_delivered_contact_fact(
                         &existing.contact_round_evidence_history,
                     )
                     .map_err(|error| {
-                        AppError::new(
-                            soland_http::error::ErrorCode::FailedPrecondition,
+                        crate::app_error!(
+                            FailedPrecondition,
                             format!("terminal Contact continuity is invalid: {error}"),
                         )
                     })?;
@@ -3479,8 +3472,8 @@ async fn project_delivered_contact_fact(
                     history.extend(existing.contact_round_evidence_history);
                     let request_slot_states = existing.request_slot_states;
                     if history.len() > 64 {
-                        return Err(AppError::new(
-                            soland_http::error::ErrorCode::FailedPrecondition,
+                        return Err(crate::app_error!(
+                            FailedPrecondition,
                             "Contact round continuity exceeds 64 predecessors",
                         ));
                     }
@@ -3715,8 +3708,8 @@ async fn project_delivered_contact_fact(
                 )
             })?;
             let request_receipt = contact.request_receipts.first().cloned().ok_or_else(|| {
-                AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "pending Contact row has no durable request receipt",
                 )
             })?;
@@ -3850,8 +3843,8 @@ async fn project_delivered_contact_fact(
                 .iter()
                 .find(|receipt| receipt.core.request_event_ref == rejected.request_event_ref)
                 .ok_or_else(|| {
-                    AppError::new(
-                        soland_http::error::ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         "pending Contact row has no durable request receipt",
                     )
                 })?;
@@ -3934,8 +3927,8 @@ async fn project_delivered_contact_fact(
                 )
             })?;
             let mut bundle = contact.contact_round_evidence.clone().ok_or_else(|| {
-                AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "accepted Contact has no durable contact_round evidence",
                 )
             })?;
@@ -4015,8 +4008,8 @@ async fn project_delivered_contact_fact(
                 )
             })?;
             let mut bundle = row.contact_round_evidence.clone().ok_or_else(|| {
-                AppError::new(
-                    soland_http::error::ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "tombstoned Contact has no durable contact_round evidence",
                 )
             })?;

@@ -90,8 +90,8 @@ pub(super) async fn accepted_remote_history_response_retry(
         soland_storage::FederationOutboxState::Pending
         | soland_storage::FederationOutboxState::PendingRoute
         | soland_storage::FederationOutboxState::Leased
-        | soland_storage::FederationOutboxState::PolicySuppressed => Err(AppError::new(
-            ErrorCode::DependencyMissing,
+        | soland_storage::FederationOutboxState::PolicySuppressed => Err(crate::app_error!(
+            DependencyMissing,
             "history response relay is pending destination acceptance",
         )),
         soland_storage::FederationOutboxState::CancelledAuthorityLost
@@ -124,7 +124,7 @@ pub(super) async fn enqueue_remote_history_response(
         false,
     )
     .await
-    .map_err(|error| AppError::new(ErrorCode::DependencyMissing, error))?;
+    .map_err(|error| crate::app_error!(DependencyMissing, error))?;
     let outbox_id = history_response_relay_outbox_id(response);
     let delivery = soland_services::federation::FederationDeliveryRecord {
         id: outbox_id.clone(),
@@ -270,8 +270,8 @@ pub(super) async fn validate_remote_source_chunk_manifest(
     )
     .await?
     .ok_or_else(|| {
-        AppError::new(
-            ErrorCode::DependencyMissing,
+        crate::app_error!(
+            DependencyMissing,
             "history chunk manifest has not been accepted by the release service",
         )
     })?;

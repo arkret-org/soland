@@ -14,7 +14,6 @@ use arkret_models_collaboration::governance_dependencies::{
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{ActorId, DidCoreId, Event, NotarySig, Seal};
-use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -61,8 +60,8 @@ pub(crate) async fn verified_availability_dependency_writes(
             .get(&seal.realm_id, &selector)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("availability receipt lookup failed: {error}"),
                 )
             })?
@@ -100,8 +99,8 @@ pub(crate) async fn verified_availability_dependency_writes(
             .get(&seal.realm_id, &evidence_selector)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("availability signer evidence lookup failed: {error}"),
                 )
             })?
@@ -172,8 +171,8 @@ pub(crate) async fn validate_accepted_fork_resolution_records(
             .control_event(digest)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::InternalError,
+                crate::app_error!(
+                    InternalError,
                     format!("load accepted fork-resolution Move: {error}"),
                 )
             })?
@@ -227,14 +226,12 @@ async fn resolved_collision_variant_records(
             .get(&event.realm_id, &selector)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(FrontierUnavailable,
                     format!("collision variant record lookup failed: {error}"),
                 )
             })?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::DependencyMissing,
+                crate::app_error!(DependencyMissing,
                     "fork resolution references a collision variant record that is not durably                      available",
                 )
             })?;
@@ -303,7 +300,7 @@ async fn record_fork_resolution_normalization(
 /// `SchemaViolation` is `422`, but seal rejects are conceptually a causal /
 /// state-machine conflict, so `409` remains the wire status here. Call sites
 /// that need a different status can override after conversion via
-/// `.with_status(...)`.
+/// ``.
 fn app_error_from_seal_reject(reject: SealReject) -> AppError {
     let code = match &reject {
         SealReject::UnknownPredecessor
@@ -319,7 +316,7 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
         SealReject::Store(_) => ErrorCode::InternalError,
     };
-    AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
+    AppError::from_rejection(code, reject.to_string())
 }
 
 pub(super) fn api_admin_router() -> Router {
@@ -425,13 +422,11 @@ fn control_move_verification_method_matches_signer(
 }
 
 fn seal_admission_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, message.into()).with_status(StatusCode::CONFLICT)
+    crate::app_error!(SchemaViolation, message.into())
 }
 
 fn device_generation_fenced(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::PolicyViolation, message.into())
-        .with_status(StatusCode::FORBIDDEN)
-        .with_wire_code("device_generation_fenced")
+    crate::app_error!(PolicyViolation, message.into()).with_wire_code("device_generation_fenced")
 }
 
 async fn device_generation_event_seal_context(
@@ -443,8 +438,8 @@ async fn device_generation_event_seal_context(
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("canonical Event store unavailable: {error}"),
             )
         })?;
@@ -494,8 +489,8 @@ async fn device_generation_event_seal_context(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             format!("device generation state unavailable: {error}"),
         )
     })?;
@@ -572,8 +567,8 @@ async fn device_generation_event_seal_context(
         .realm_seal_leaves(realm_id)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("Seal frontier unavailable: {error}"),
             )
         })?;
@@ -765,12 +760,9 @@ async fn try_apply_device_generation_event_seal(
         .projections()
         .seal_by_id(&seal.id)
         .await
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("Seal lookup failed: {error}"),
-            )
-        })?
+        .map_err(
+            |error| crate::app_error!(InternalError, format!("Seal lookup failed: {error}"),),
+        )?
     {
         if existing != *seal {
             return Err(seal_admission_error(
@@ -790,8 +782,8 @@ async fn try_apply_device_generation_event_seal(
         .seal_predecessors_known(&seal.predecessor_refs)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("Seal predecessor lookup failed: {error}"),
             )
         })?
@@ -913,8 +905,8 @@ async fn try_apply_device_generation_event_seal(
                 .seal_by_id(predecessor)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::InternalError,
+                    crate::app_error!(
+                        InternalError,
                         format!("Seal predecessor lookup failed: {error}"),
                     )
                 })?
@@ -980,8 +972,8 @@ async fn try_apply_device_generation_event_seal(
         .devices_for_actor(context.principal_id.as_str())
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("device inventory unavailable: {error}"),
             )
         })?;
@@ -1064,8 +1056,8 @@ async fn try_apply_device_generation_event_seal(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("device generation quarantine state unavailable: {error}"),
             )
         })?;
@@ -1303,8 +1295,8 @@ async fn try_apply_device_generation_event_seal(
         }
         Err(StoreError::Conflict(error)) => return Err(seal_admission_error(error)),
         Err(error) => {
-            return Err(AppError::new(
-                ErrorCode::InternalError,
+            return Err(crate::app_error!(
+                InternalError,
                 format!("commit Event Seal atomically: {error}"),
             ));
         }
@@ -1384,8 +1376,8 @@ pub(crate) async fn apply_agent_event_seal(
         .seal_by_id(&seal.id)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("Agent PCR Seal lookup failed: {error}"),
             )
         })?
@@ -1403,8 +1395,8 @@ pub(crate) async fn apply_agent_event_seal(
         .realm_seal_leaves(&seal.realm_id)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("Agent PCR Seal frontier unavailable: {error}"),
             )
         })?;
@@ -1425,8 +1417,8 @@ pub(crate) async fn apply_agent_event_seal(
         .realm_events_newest_first(seal.realm_id.as_str())
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("Agent PCR Event history unavailable: {error}"),
             )
         })?;
@@ -1563,8 +1555,8 @@ pub(crate) async fn apply_agent_event_seal(
             .seal_by_id(leaf)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::InternalError,
+                crate::app_error!(
+                    InternalError,
                     format!("Agent PCR predecessor lookup failed: {error}"),
                 )
             })?
@@ -1608,8 +1600,8 @@ pub(crate) async fn apply_agent_event_seal(
         })
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 format!("controller device lookup failed: {error}"),
             )
         })?
@@ -1620,8 +1612,8 @@ pub(crate) async fn apply_agent_event_seal(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             format!("controller device generation unavailable: {error}"),
         )
     })?;
@@ -1684,8 +1676,8 @@ pub(crate) async fn apply_agent_event_seal(
         }
         Err(StoreError::Conflict(error)) => return Err(seal_admission_error(error)),
         Err(error) => {
-            return Err(AppError::new(
-                ErrorCode::InternalError,
+            return Err(crate::app_error!(
+                InternalError,
                 format!("commit Agent PCR Seal atomically: {error}"),
             ));
         }
@@ -1705,16 +1697,11 @@ pub(crate) async fn apply_inbound_seal(
         .iter()
         .map(|digest| digest.as_str().to_owned())
         .collect::<Vec<_>>();
-    validate_seal_delta_entries(&delta_entries).map_err(|(code, reason)| {
-        AppError::new(code, reason).with_status(StatusCode::BAD_REQUEST)
-    })?;
+    validate_seal_delta_entries(&delta_entries)
+        .map_err(|(code, reason)| AppError::from_rejection(code, reason))?;
     crate::jws_verify::verify_replay_window(&seal.hlc, state.config().jws_replay_window_seconds)
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
-                format!("seal replay_window: {error}"),
-            )
-            .with_status(StatusCode::CONFLICT)
+            crate::app_error!(SchemaViolation, format!("seal replay_window: {error}"),)
         })?;
     if let Some(effect) = try_apply_device_generation_event_seal(state, seal).await? {
         return Ok(effect);
@@ -1729,8 +1716,8 @@ pub(crate) async fn apply_inbound_seal(
                 .control_event(digest)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::InternalError,
+                    crate::app_error!(
+                        InternalError,
                         format!("load first-Seal Control Move: {error}"),
                     )
                 })?
@@ -1754,8 +1741,8 @@ pub(crate) async fn apply_inbound_seal(
         .realm_seal_leaves(&seal.realm_id)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("Seal frontier unavailable before atomic admission: {error}"),
             )
         })?;
@@ -1790,14 +1777,13 @@ pub(crate) async fn apply_inbound_seal(
             }
             Ok(prepared.effect)
         }
-        Ok(false) => Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        Ok(false) => Err(crate::app_error!(
+            FrontierUnavailable,
             "Seal frontier changed during atomic admission".to_owned(),
-        )
-        .with_status(StatusCode::CONFLICT)),
+        )),
         Err(StoreError::Conflict(error)) => Err(seal_admission_error(error)),
-        Err(error) => Err(AppError::new(
-            ErrorCode::InternalError,
+        Err(error) => Err(crate::app_error!(
+            InternalError,
             format!("commit inbound Seal atomically: {error}"),
         )),
     }
@@ -1814,14 +1800,14 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         .notary_value_for_seal(state, seal)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+            crate::app_error!(
+                DirectoryGovernanceProofSignatureInvalid,
                 format!("resolve Seal notary authority: {error}"),
             )
         })?;
     let canonical_bytes = seal.canonical_bytes_for_id().map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("derive Seal signature transcript: {error}"),
         )
     })?;
@@ -1836,8 +1822,8 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             multi.signatures.as_slice()
         }
         _ => {
-            return Err(AppError::new(
-                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+            return Err(crate::app_error!(
+                DirectoryGovernanceProofSignatureInvalid,
                 "Seal signature shape does not match the frozen notary value".to_owned(),
             ));
         }
@@ -1847,8 +1833,8 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         .map(|signature| signature.verification_method.clone())
         .collect::<BTreeSet<_>>();
     if !notary.proposal_quorum_met(&methods) {
-        return Err(AppError::new(
-            ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+        return Err(crate::app_error!(
+            DirectoryGovernanceProofSignatureInvalid,
             "Seal signatures do not satisfy the frozen notary quorum".to_owned(),
         ));
     }
@@ -1869,14 +1855,14 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
                 .control_event(digest)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::InternalError,
+                    crate::app_error!(
+                        InternalError,
                         format!("load recovery-Seal Control Move: {error}"),
                     )
                 })?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::SealSignerUnauthorized,
+                    crate::app_error!(
+                        SealSignerUnauthorized,
                         "a recovery-signed Seal must cover Control Moves this node can read"
                             .to_owned(),
                     )
@@ -1884,8 +1870,8 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             delta_kinds.push(event.kind);
         }
         if !notary.authorizes_seal_delta(&methods, &delta_kinds) {
-            return Err(AppError::new(
-                ErrorCode::SealSignerUnauthorized,
+            return Err(crate::app_error!(
+                SealSignerUnauthorized,
                 "a recovery-signed fork-resolution Seal must cover only ak.fork.resolution Moves"
                     .to_owned(),
             ));
@@ -1895,8 +1881,8 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
         let descriptor = notary
             .signer_descriptor(&signature.verification_method)
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::DirectoryGovernanceProofSignatureInvalid,
+                crate::app_error!(
+                    DirectoryGovernanceProofSignatureInvalid,
                     "Seal signature method is absent from the frozen notary value".to_owned(),
                 )
             })?;
@@ -1907,10 +1893,7 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             digest_suite,
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::DirectoryGovernanceProofSignatureInvalid,
-                error.to_string(),
-            )
+            crate::app_error!(DirectoryGovernanceProofSignatureInvalid, error.to_string(),)
         })?;
     }
     Ok(())
@@ -1975,10 +1958,8 @@ async fn admin_sign_seal(
         realm_id,
         max_control_moves,
     } = body.into_inner();
-    let realm = RealmId::new(realm_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::SchemaViolation, format!("invalid realm_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let realm = RealmId::new(realm_id.clone())
+        .map_err(|e| crate::app_error!(SchemaViolation, format!("invalid realm_id: {e}")))?;
     if device_generation_event_seal_context(state, &realm)
         .await?
         .is_some()
@@ -2019,13 +2000,11 @@ async fn admin_sign_seal(
             rejected_events: vec![],
             post_state_root: None,
         }),
-        Err(crate::notary::NotaryError::NotAuthorized(_)) => Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        Err(crate::notary::NotaryError::NotAuthorized(_)) => Err(crate::app_error!(
+            PolicyViolation,
             "not authorized to sign seals for this realm".to_owned(),
-        )
-        .with_status(StatusCode::FORBIDDEN)),
-        Err(e) => Err(AppError::new(ErrorCode::InternalError, e.to_string())
-            .with_status(StatusCode::CONFLICT)),
+        )),
+        Err(e) => Err(crate::app_error!(InternalError, e.to_string())),
     }
 }
 

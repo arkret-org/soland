@@ -69,8 +69,8 @@ pub(super) async fn resolve_realm(
                 seal_basis,
             } => (Some(realm_id), Some(seal_basis)),
             InviteTokenRealmResolution::FrontierUnavailable => {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                return Err(crate::app_error!(
+                    FrontierUnavailable,
                     "invite lifecycle is not yet covered by the current accepted Realm Seal",
                 ));
             }

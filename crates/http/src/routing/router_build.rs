@@ -68,8 +68,8 @@ impl Handler for OperationSelectorMiddleware {
         let mut header_values = req.headers().get_all(ARKRET_OPERATION_HEADER).iter();
         let first = header_values.next();
         if first.is_none() {
-            let error = soland_http::error::AppError::new(
-                soland_http::error::ErrorCode::OperationSelectorRequired,
+            let error = crate::app_error!(
+                OperationSelectorRequired,
                 "canonical Arkret HTTP requests require Arkret-Operation",
             );
             error.write(req, depot, res).await;
@@ -81,8 +81,8 @@ impl Handler for OperationSelectorMiddleware {
             .and_then(arkret_wire::ServiceOperationId::from_wire);
         let duplicate_selector = header_values.next().is_some();
         let Some(selected) = supplied.filter(|operation| candidates.contains(operation)) else {
-            let error = soland_http::error::AppError::new(
-                soland_http::error::ErrorCode::UnsupportedOperationVersion,
+            let error = crate::app_error!(
+                UnsupportedOperationVersion,
                 "Arkret-Operation does not select an advertised operation version for this method and path",
             );
             error.write(req, depot, res).await;
@@ -90,8 +90,8 @@ impl Handler for OperationSelectorMiddleware {
             return;
         };
         if duplicate_selector {
-            let error = soland_http::error::AppError::new(
-                soland_http::error::ErrorCode::UnsupportedOperationVersion,
+            let error = crate::app_error!(
+                UnsupportedOperationVersion,
                 "Arkret-Operation must occur exactly once",
             );
             error.write(req, depot, res).await;

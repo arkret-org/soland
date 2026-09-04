@@ -139,11 +139,10 @@ pub(crate) async fn contact_continuity_checkpoint(
         .map_err(|error| AppError::internal(format!("checkpoint replay lookup: {error}")))?
     {
         if stored.request_hash != request_hash {
-            return Err(AppError::new(
-                ErrorCode::DuplicateConflict,
+            return Err(crate::app_error!(
+                DuplicateConflict,
                 "checkpoint idempotency key was used for different canonical bytes",
-            )
-            .with_status(salvo::http::StatusCode::CONFLICT));
+            ));
         }
         let mut outcome: ContactContinuityCheckpointOutcome =
             serde_json::from_value(stored.response_body).map_err(|error| {
@@ -172,7 +171,7 @@ pub(crate) async fn contact_continuity_checkpoint(
         .contact_any(&holder, &peer)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .ok_or_else(|| AppError::new(ErrorCode::NotFound, "Contact lineage not found"))?;
+        .ok_or_else(|| crate::app_error!(NotFound, "Contact lineage not found"))?;
     let (outcome, delivery) = if record
         .peer_host_id
         .as_ref()
@@ -198,8 +197,8 @@ pub(crate) async fn contact_continuity_checkpoint(
             .peer_service_resolution
             .clone()
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "Contact peer service resolution is unavailable",
                 )
             })
@@ -210,8 +209,8 @@ pub(crate) async fn contact_continuity_checkpoint(
             })?;
         let peer_id = peer_id.clone();
         let peer_account_id = peer.as_account_id().cloned().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Contact peer address requires an accepted account participant binding",
             )
         })?;
@@ -806,9 +805,7 @@ pub(crate) fn direct_resolve_precondition(reason: &'static str, message: &'stati
 }
 
 fn contact_failed_precondition(reason: &'static str, message: &'static str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, message).with_wire_code(reason)
 }
 
 fn direct_summary(

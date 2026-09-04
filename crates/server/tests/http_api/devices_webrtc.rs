@@ -1323,7 +1323,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         })))
         .send(&app_from_state(state))
         .await;
-    assert_eq!(post_ban.status_code, Some(StatusCode::FORBIDDEN));
+    assert_eq!(post_ban.status_code, Some(StatusCode::CONFLICT));
     let body: Value = post_ban.take_json().await.unwrap();
     assert_eq!(problem_code(&body), "call_participant_removed");
 }

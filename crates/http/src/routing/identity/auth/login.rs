@@ -6,9 +6,8 @@ use soland_services::identity::{
 use super::*;
 
 fn account_new_session_error(state: &AppState, actor: &str) -> Option<AppError> {
-    account_new_session_tuple(state, actor).map(|(status, code, reason_detail, message)| {
+    account_new_session_tuple(state, actor).map(|(_status, code, reason_detail, message)| {
         AppError::capability_denied(message)
-            .with_status(status)
             .with_wire_code(code)
             .with_reason_detail(reason_detail)
     })

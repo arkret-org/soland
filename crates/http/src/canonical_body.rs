@@ -10,7 +10,7 @@ use arkret_wire::{SERVICE_OPERATION_DESCRIPTORS, WireBodyClass, WireError};
 use salvo::prelude::*;
 
 use crate::content_encoding::is_canonical_json_request;
-use crate::error::{AppError, ErrorCode};
+use crate::error::AppError;
 
 fn operation_canonical_body_limit(method: &str, path: &str) -> Option<usize> {
     SERVICE_OPERATION_DESCRIPTORS
@@ -148,8 +148,8 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
                     WireError::BodyWireBytesExceeded { .. }
                     | WireError::BodyCanonicalBytesExceeded { .. },
                 ) => {
-                    let error = AppError::new(
-                        ErrorCode::PayloadTooLarge,
+                    let error = crate::app_error!(
+                        PayloadTooLarge,
                         "canonical JSON operation body exceeds its registered byte limit",
                     )
                     .with_wire_code("payload_too_large");
@@ -158,8 +158,8 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
                     return;
                 }
                 Err(error) => {
-                    let error = AppError::new(
-                        ErrorCode::SchemaViolation,
+                    let error = crate::app_error!(
+                        SchemaViolation,
                         format!("canonical JSON operation body is invalid: {error}"),
                     )
                     .with_wire_code("schema_violation");
@@ -174,8 +174,8 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
 }
 
 async fn write_payload_too_large(req: &mut Request, depot: &mut Depot, res: &mut Response) {
-    let error = AppError::new(
-        ErrorCode::PayloadTooLarge,
+    let error = crate::app_error!(
+        PayloadTooLarge,
         "request body exceeds the transport wire limit",
     )
     .with_wire_code("payload_too_large");

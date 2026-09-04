@@ -1476,7 +1476,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         .json(&invalid_encrypted_event)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 400);
+    assert_eq!(invalid_encrypted.status_code.unwrap().as_u16(), 422);
 
     let encrypted_message = submit_message_event(
         state.clone(),
@@ -1545,7 +1545,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         false,
     )
     .await;
-    assert_eq!(invalid_block_message.as_u16(), 400);
+    assert_eq!(invalid_block_message.as_u16(), 422);
 
     let non_canonical_message = post_message_event(
         state.clone(),
@@ -1561,7 +1561,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         false,
     )
     .await;
-    assert_eq!(non_canonical_message.as_u16(), 400);
+    assert_eq!(non_canonical_message.as_u16(), 422);
 
     let invalid_mention_message = post_message_event(
         state.clone(),
@@ -1573,7 +1573,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
         false,
     )
     .await;
-    assert_eq!(invalid_mention_message.as_u16(), 400);
+    assert_eq!(invalid_mention_message.as_u16(), 422);
 
     let block_message = submit_message_event(
         state.clone(),

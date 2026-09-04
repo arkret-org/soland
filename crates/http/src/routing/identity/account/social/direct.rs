@@ -134,8 +134,8 @@ pub(crate) async fn direct_group_state_for_realm(
             AppError::internal(format!("MLS group-state Event lookup failed: {error}"))
         })?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
+            crate::app_error!(
+                TemporarilyUnavailable,
                 "current MLS group-state Event is unavailable",
             )
         })?;
@@ -144,8 +144,8 @@ pub(crate) async fn direct_group_state_for_realm(
         || (record.kind != arkret_wire::EventKind::MlsGenesis.as_str()
             && record.kind != arkret_wire::EventKind::MlsCommit.as_str())
     {
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             "current MLS group-state Event binding is invalid",
         ));
     }

@@ -36,9 +36,7 @@ pub(super) fn participation_from_value(row: &Value) -> ParticipationBits {
 }
 
 pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, reason)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, reason).with_wire_code(reason)
 }
 
 #[endpoint(

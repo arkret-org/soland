@@ -201,10 +201,8 @@ pub(crate) async fn embedded_webvh_register(
         normalize_webvh_key_fragment(body.update_key_id.as_deref().unwrap_or("update-key-1"))
             .ok_or_else(|| AppError::param_invalid("invalid update_key_id"))?;
     let (method_authority, https_authority) =
-        embedded_webvh_authority(&state.config().public_base_url).map_err(|message| {
-            AppError::new(ErrorCode::TemporarilyUnavailable, message)
-                .with_status(StatusCode::SERVICE_UNAVAILABLE)
-        })?;
+        embedded_webvh_authority(&state.config().public_base_url)
+            .map_err(|message| crate::app_error!(TemporarilyUnavailable, message))?;
     if state
         .dids()
         .embedded_document(&local_id)
@@ -213,8 +211,8 @@ pub(crate) async fn embedded_webvh_register(
         .flatten()
         .is_some()
     {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "embedded did:webvh local_id is already registered",
         ));
     }
@@ -279,8 +277,7 @@ pub(crate) async fn embedded_webvh_register(
         .cloned()
         .unwrap_or_else(|| json!({"id": location.did}));
     if let Err(message) = verify_webvh_log_proof(&log_entry) {
-        return Err(AppError::new(ErrorCode::SignatureInvalid, message)
-            .with_status(StatusCode::UNAUTHORIZED));
+        return Err(crate::app_error!(SignatureInvalid, message));
     }
     let inception = [WebvhLogEntry::new(log_entry.clone())];
     validate_log_chain(&inception)?;
@@ -325,8 +322,8 @@ pub(crate) async fn embedded_webvh_register(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if commit != WebvhLogCommitOutcome::Accepted {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "embedded did:webvh inception conflicts with existing history",
         ));
     }
@@ -513,8 +510,8 @@ fn require_requested_webvh_evidence(
     evidence: Option<&IdentityMethodEvidence>,
 ) -> Result<(), AppError> {
     if required && !matches!(evidence, Some(IdentityMethodEvidence::DidWebvh { .. })) {
-        return Err(AppError::new(
-            ErrorCode::CurrentDidAuthorityUnavailable,
+        return Err(crate::app_error!(
+            CurrentDidAuthorityUnavailable,
             "requested did_webvh method evidence is unavailable from a fully verified history",
         ));
     }
@@ -731,8 +728,8 @@ pub(crate) async fn identity_submit_did_operation(
         .and_then(|sequence| sequence.parse::<u64>().ok())
         .ok_or_else(|| AppError::param_invalid("operation.versionId must be <seq>-<hash>"))?;
     if operation_seq != next_seq {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "request seq must equal the native operation versionId sequence",
         ));
     }
@@ -767,23 +764,20 @@ pub(crate) async fn identity_submit_did_operation(
                 existing_event.created_at,
             );
         }
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "DID operation conflicts with an existing sequence or versionId",
         ));
     }
     let expected_next_seq = match events.last() {
         None => 1,
         Some(event) => event.seq.checked_add(1).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::CasConflict,
-                "current DID operation sequence cannot advance",
-            )
+            crate::app_error!(CasConflict, "current DID operation sequence cannot advance",)
         })?,
     };
     if next_seq != expected_next_seq {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "DID operation seq must advance the current log head exactly once",
         ));
     }
@@ -792,8 +786,8 @@ pub(crate) async fn identity_submit_did_operation(
         .as_ref()
         .is_some_and(|expected| current_head.as_ref() != Some(expected))
     {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "prev_event_digest does not match the current log head",
         ));
     }
@@ -806,8 +800,8 @@ pub(crate) async fn identity_submit_did_operation(
         _ => false,
     };
     if !stored_state_matches_log {
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
+        return Err(crate::app_error!(
+            CasConflict,
             "stored DID document and native log head are inconsistent",
         ));
     }
@@ -818,8 +812,7 @@ pub(crate) async fn identity_submit_did_operation(
         .collect();
     candidate.push(WebvhLogEntry::new(operation.clone()));
     if let Err(message) = verify_webvh_log_proof(&operation) {
-        return Err(AppError::new(ErrorCode::SignatureInvalid, message)
-            .with_status(StatusCode::UNAUTHORIZED));
+        return Err(crate::app_error!(SignatureInvalid, message));
     }
     validate_log_chain(&candidate)?;
     verify_scid_against_did(&did, &candidate[0])?;
@@ -861,8 +854,8 @@ pub(crate) async fn identity_submit_did_operation(
         .map_err(|error| AppError::internal(error.to_string()))?;
     match commit {
         WebvhLogCommitOutcome::Conflict => {
-            return Err(AppError::new(
-                ErrorCode::CasConflict,
+            return Err(crate::app_error!(
+                CasConflict,
                 "DID operation lost a concurrent head comparison",
             ));
         }

@@ -43,7 +43,6 @@ use arkret_models_collaboration::objects::query_projection::{
 };
 use arkret_models_collaboration::objects::relation::RelationEndpoint;
 use chrono::{DateTime, Utc};
-use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -51,7 +50,7 @@ use soland_domain::reducer::{
     MessageState, MorphProjection, ObjectLifecycleState, ProjectionState, SolandRelationState,
     SpaceContainerLifecycleState,
 };
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::morph_document_body;
@@ -915,11 +914,10 @@ async fn list_space_container_projections(
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Space not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let proj = state.projections().snapshot();
     let spaces: Vec<ProjectionSpaceRow> = proj
@@ -989,11 +987,10 @@ async fn list_strand_projections(
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Space not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let proj = state.projections().snapshot();
     // COT-06-004 — the Realm's default-Strand pointer drives each row's
@@ -1194,11 +1191,10 @@ async fn get_strand_projection(
         strand.realm_id.clone()
     };
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Strand not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();
@@ -1216,11 +1212,10 @@ async fn get_strand_projection(
         strand.scope_circle_id.as_deref(),
         &history_access,
     ) {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Strand not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &strand_id)?;
     let rsvps = if strand.state == ObjectLifecycleState::Redacted {
@@ -1646,11 +1641,10 @@ async fn get_document_projection(
         }
     };
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Document not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let history_access = realm_history_access(state, &realm_id).await;
     let (document, versions, comments) = {
@@ -1672,11 +1666,10 @@ async fn get_document_projection(
             morph.scope_circle_id.as_deref(),
             &history_access,
         ) {
-            return Err(AppError::new(
-                ErrorCode::CapabilityDenied,
+            return Err(crate::app_error!(
+                CapabilityDenied,
                 "Document not visible to this actor",
-            )
-            .with_status(StatusCode::FORBIDDEN));
+            ));
         }
         let body = morph_document_body(&morph.fields).unwrap_or(Value::Null);
         let document = document_projection_document(&morph, body.clone())?;
@@ -1712,11 +1705,10 @@ async fn list_morph_projections(
         .map_err(|_| AppError::param_invalid("invalid realm_id format"))?;
     let include_terminal = include_terminal.into_inner().unwrap_or(false);
     if !realm_id_accessible(state, &realm_id, Some(&session)).await {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Space not visible to this actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let history_access = realm_history_access(state, &realm_id).await;
     let proj = state.projections().snapshot();

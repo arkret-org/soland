@@ -606,26 +606,26 @@ impl FrontierExchangeWorker {
                         admitted.insert(submission.event.event_id.to_string());
                         progress = true;
                     }
-                    Err(error) if error.code == "dependency_missing" => retry.push(submission),
+                    Err(error) if error.code() == "dependency_missing" => retry.push(submission),
                     Err(error) => {
-                        if error.quarantine_event_id.is_some() {
+                        if error.quarantine_event_id().is_some() {
                             let subject = self
                                 .confirmed_evidence_subject(
                                     &submission.event,
                                     existing.as_ref(),
-                                    &error.code,
+                                    &error.code(),
                                 )
                                 .await?;
                             self.record_confirmed_evidence(
                                 peer_id,
                                 remote.realm_id.as_str(),
-                                &error.code,
+                                &error.code(),
                                 subject,
                             )
                             .await?;
                             return Err("confirmed_evidence_recorded".to_owned());
                         }
-                        return Err(format!("{}:{}", error.code, error.message));
+                        return Err(format!("{}:{}", error.code(), error.message()));
                     }
                 }
             }

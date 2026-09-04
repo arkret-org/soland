@@ -36,7 +36,7 @@ use soland_contracts::admin::{
     AdminActor, AdminActorList, AdminAuditEntry, AdminAuditList, AdminCapabilityList, AdminDevice,
     AdminDeviceList, CapabilityGrantState, CapabilitySummary,
 };
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
@@ -65,11 +65,10 @@ fn paginate_by_id<T>(
             .iter()
             .position(|row| id_of(row) == cursor)
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::CursorExpired,
+                crate::app_error!(
+                    CursorExpired,
                     "pagination cursor no longer resolves; restart from the first page".to_owned(),
                 )
-                .with_status(salvo::http::StatusCode::GONE)
             })?;
         rows.drain(..=position);
     }
@@ -766,7 +765,10 @@ mod tests {
     fn paginate_by_id_expired_cursor_is_gone() {
         let error = paginate_by_id(vec!["a", "b"], Some("zz"), 2, |row| row)
             .expect_err("unresolvable cursor must fail");
-        assert_eq!(error.status, Some(salvo::http::StatusCode::GONE));
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
     }
 
     #[test]
@@ -822,7 +824,10 @@ mod tests {
         let denied =
             super::require_admin_principal(&state, session("ak:did_core:web:nobody.example"))
                 .expect_err("non-admin principal must be rejected in production");
-        assert_eq!(denied.status, Some(salvo::http::StatusCode::FORBIDDEN));
+        assert_eq!(
+            denied.http_status(),
+            soland_http::error::error_http_status(denied.code)
+        );
 
         super::require_admin_principal(&state, session("ak:did_core:web:op.example"))
             .expect("listed admin principal must be admitted");

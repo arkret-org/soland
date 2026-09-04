@@ -5,7 +5,6 @@ use arkret_signatures::http_signature::{
     SignatureVerificationPolicy,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::http_signature;
@@ -289,11 +288,10 @@ pub(super) fn validate_signature_input(
 fn federation_verification_error(error: HttpMessageVerificationError, label: &str) -> AppError {
     match error {
         HttpMessageVerificationError::ContentEncodingNotAllowed
-        | HttpMessageVerificationError::NonCanonicalJson(_) => AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
+        | HttpMessageVerificationError::NonCanonicalJson(_) => crate::app_error!(
+            SchemaViolation,
             format!("peer signed JSON request is invalid: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST),
+        ),
         HttpMessageVerificationError::Signature(SignatureError::ContentDigestMismatch) => {
             crate::metrics::record_digest_mismatch("peer_request_content_digest");
             signature_error("Content-Digest does not match peer canonical request body")

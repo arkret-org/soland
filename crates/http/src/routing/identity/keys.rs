@@ -649,11 +649,10 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             "device signing-key directory read requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
-        )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE));
+        ));
     };
     let Some(provided) = bearer_token(req)
         .map(str::trim)

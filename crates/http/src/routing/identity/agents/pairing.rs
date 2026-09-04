@@ -16,7 +16,6 @@ pub(super) async fn resolve_agent_pairing(
         return Err(AppError::param_invalid(
             "pairing_token must be sent in the JSON body, never in URL path or query",
         )
-        .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation"));
     }
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -141,11 +140,10 @@ pub(super) async fn submit_agent_runtime_key_request(
     .map_err(|error| AppError::param_invalid(format!("runtime key binding invalid: {error}")))?;
     let existing_binding = agent_record.runtime_key_binding_digest.as_deref();
     if existing_binding.is_some_and(|existing| existing != binding_digest.as_str()) {
-        return Err(AppError::new(
-            ErrorCode::Conflict,
+        return Err(crate::app_error!(
+            Conflict,
             "a different runtime key binding is already pending for this pairing request",
         )
-        .with_status(StatusCode::CONFLICT)
         .with_wire_code("agent_runtime_request_conflict"));
     }
 
@@ -198,11 +196,10 @@ pub(super) async fn submit_agent_runtime_key_request(
         .await
         .map_err(|err| AppError::internal(format!("runtime approval request save failed: {err}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::Conflict,
+            crate::app_error!(
+                Conflict,
                 "a different runtime key binding is already pending for this pairing request",
             )
-            .with_status(StatusCode::CONFLICT)
             .with_wire_code("agent_runtime_request_conflict")
         })?;
     let approval_request_id = stored.approval_request_id.clone().ok_or_else(|| {
@@ -1190,8 +1187,8 @@ async fn validate_requested_scope_disclosure(
         ));
     }
     let stored_scope = agent_record.requested_scope.as_ref().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent record is missing its immutable requested_scope",
         )
     })?;
@@ -1460,10 +1457,9 @@ pub(super) async fn submit_production_key_authorize_event(
     .map_err(|error| {
         AppError::param_invalid(format!(
             "ak.agent.key.authorize submit failed: {}",
-            error.message
+            error.message()
         ))
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     Ok(outcome.event_id)
 }
@@ -1847,9 +1843,7 @@ fn verify_runtime_key_proof_of_possession(
 }
 
 pub(super) fn pairing_failed_precondition(reason: &'static str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, reason)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_reason_detail(reason)
+    crate::app_error!(FailedPrecondition, reason).with_reason_detail(reason)
 }
 
 fn required_pairing_request_id(record: &AgentPrincipalRecord) -> Result<&str, AppError> {

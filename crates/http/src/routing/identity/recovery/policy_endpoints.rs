@@ -13,11 +13,10 @@ pub(super) async fn resolve_recovery_read_account(
     let session_actor =
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     let account_id = session_actor.as_account_id().cloned().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::CapabilityDenied,
+        crate::app_error!(
+            CapabilityDenied,
             "recovery policy requires an account actor",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_account_isolation")
     })?;
     if let Some(requested) = account_id_param.filter(|value| !value.trim().is_empty()) {
@@ -26,11 +25,10 @@ pub(super) async fn resolve_recovery_read_account(
                 .with_wire_code("schema_violation")
         })?;
         if requested != account_id {
-            return Err(AppError::new(
-                ErrorCode::CapabilityDenied,
+            return Err(crate::app_error!(
+                CapabilityDenied,
                 "account_id does not match the authenticated account",
             )
-            .with_status(StatusCode::FORBIDDEN)
             .with_wire_code("recovery_account_isolation"));
         }
     }
@@ -107,12 +105,11 @@ fn recovery_policy_publish_outcome(
 }
 
 fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FrontierUnavailable, message.into())
-        // `frontier_unavailable` has one canonical HTTP binding (503) in the
-        // error-code registry. This publication endpoint is retry-safe while
-        // it waits for Seal coverage, but that does not make the condition a
-        // resource-specific HTTP precondition failure.
-        .with_status(StatusCode::SERVICE_UNAVAILABLE)
+    crate::app_error!(FrontierUnavailable, message.into())
+    // `frontier_unavailable` has one canonical HTTP binding (503) in the
+    // error-code registry. This publication endpoint is retry-safe while
+    // it waits for Seal coverage, but that does not make the condition a
+    // resource-specific HTTP precondition failure.
 }
 
 pub(super) async fn recovery_policy_acceptance_basis(
@@ -268,19 +265,17 @@ pub(super) async fn recovery_policy_put(
         crate::routing::identity::session_actor::session_actor_from_credential(state, &session)?;
     if validated.account_id
         != *session_actor.as_account_id().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::CapabilityDenied,
+            crate::app_error!(
+                CapabilityDenied,
                 "recovery policy requires an account actor",
             )
-            .with_status(StatusCode::FORBIDDEN)
         })?
         || request.event.actor_id != session_actor
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "Event actor and recovery policy account must match the authenticated account",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
     let realm_id = request.event.realm_id.clone();
@@ -293,11 +288,10 @@ pub(super) async fn recovery_policy_put(
                 realm_id: realm_id.clone(),
             })
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "recovery policy Event must target the principal's Principal Control Realm",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_control_realm_mismatch"));
     }
     let existing = state
@@ -348,10 +342,8 @@ pub(super) async fn recovery_policy_put(
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
         .map_err(|error| {
-            let code = ErrorCode::from_wire(&error.code).unwrap_or(ErrorCode::ParamInvalid);
-            AppError::new(code, error.message)
-                .with_status(error.status)
-                .with_wire_code(error.code)
+            let code = ErrorCode::from_wire(&error.code()).unwrap_or(ErrorCode::ParamInvalid);
+            AppError::from_rejection(code, error.message()).with_wire_code(error.code())
         })?;
     let accepted_event = state
         .event_queries()

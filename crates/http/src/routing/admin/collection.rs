@@ -78,9 +78,8 @@ pub(super) async fn admin_collection(
     let grant = super::introspect_admin_scopes(state, req, &session)
         .await
         .map_err(|error| {
-            let http = error.http_status();
+            let _http = error.http_status();
             AppError::capability_denied(format!("admin scope check failed: {error}"))
-                .with_status(http)
         })?;
     if !grant.has_admin_scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ) {
         return Err(AppError::capability_denied(

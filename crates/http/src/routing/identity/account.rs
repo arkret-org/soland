@@ -55,7 +55,6 @@ use arkret_models_identity::{
     PrincipalResolutionAuditRequest,
 };
 use arkret_state::lattice::CellState;
-use arkret_wire::ErrorCode;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -266,11 +265,10 @@ fn require_account_localparts_bearer(state: &AppState, req: &Request) -> Result<
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             "account localparts sync requires SOLAND_EMBEDDED_WEBVH_REGISTRATION_BEARER",
-        )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE));
+        ));
     };
     let Some(provided) = bearer_token(req)
         .map(str::trim)
@@ -318,10 +316,7 @@ fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError
     if error.is_not_found() {
         AppError::not_found(error.detail())
     } else if error.is_conflict_kind() {
-        AppError::new(
-            soland_http::error::ErrorCode::DuplicateConflict,
-            error.detail(),
-        )
+        crate::app_error!(DuplicateConflict, error.detail(),)
     } else {
         AppError::internal(error.to_string())
     }
@@ -420,7 +415,7 @@ async fn reject_account_registration(
     message: &'static str,
 ) -> AppError {
     append_account_registration_audit(state, did, handle, &audit).await;
-    AppError::new(code, message).with_reason_detail(audit.outcome.as_str())
+    AppError::from_rejection(code, message).with_reason_detail(audit.outcome.as_str())
 }
 
 fn digest_registration_secret(value: &str) -> Result<Hash, AppError> {
@@ -763,8 +758,8 @@ async fn local_account_register(
         .map_err(localpart_persistence_error)?
         .is_some();
     if account_exists || localpart_exists {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "account already exists",
         ));
     }
@@ -1189,9 +1184,9 @@ async fn update_profile(
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
                 "account profile Event submit failed",
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })?;
     let covering_seal_found = state
@@ -1245,14 +1240,11 @@ fn profile_context_validation_basis<'a>(
 }
 
 fn profile_projection_precondition(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("failed_precondition")
+    crate::app_error!(FailedPrecondition, message).with_wire_code("failed_precondition")
 }
 
 fn profile_frontier_unavailable(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FrontierUnavailable, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
+    crate::app_error!(FrontierUnavailable, message)
 }
 
 fn require_profile_event_settled(covering_seal_found: bool) -> Result<(), AppError> {
@@ -1389,11 +1381,10 @@ async fn accepted_account_profile_in_realm(
     let cell_value = match effective_state.get(&cell) {
         Some(CellState::Value(value)) => value.clone(),
         Some(CellState::Bottom(_)) => {
-            return Err(AppError::new(
-                ErrorCode::FailedPrecondition,
+            return Err(crate::app_error!(
+                FailedPrecondition,
                 "accepted account profile cell is in Bottom",
             )
-            .with_status(StatusCode::CONFLICT)
             .with_wire_code("failed_bottom"));
         }
         None => {
@@ -2352,6 +2343,8 @@ fn device_revocation_gate_record(
 
 #[cfg(test)]
 mod tests {
+    use soland_http::error::ErrorCode;
+
     use super::*;
 
     fn projection_body_json() -> Value {
@@ -2450,7 +2443,10 @@ mod tests {
 
         let error = require_profile_event_settled(false).unwrap_err();
         assert_eq!(error.code, ErrorCode::FrontierUnavailable);
-        assert_eq!(error.status, Some(StatusCode::PRECONDITION_FAILED));
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
         assert!(error.wire_code_override.is_none());
     }
 

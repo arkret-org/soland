@@ -74,9 +74,7 @@ pub(super) fn agent_runtime_scope_error(
     reason: arkret_wire::ReasonCode,
     message: impl Into<String>,
 ) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_reason_code(reason.as_str())
+    crate::app_error!(FailedPrecondition, message).with_reason_code(reason.as_str())
 }
 
 fn validate_registered_agent_scope_actions(

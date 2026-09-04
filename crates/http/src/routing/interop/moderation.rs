@@ -16,7 +16,9 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
+#[cfg(test)]
+use soland_http::error::ErrorCode;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 
@@ -65,11 +67,10 @@ pub(crate) async fn prepare_franking_proof_event(
     let actor_seq = max_actor_seq
         .map(|value| {
             value.checked_add(1).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierSequenceExhausted,
+                crate::app_error!(
+                    FrontierSequenceExhausted,
                     "franking Event actor sequence is exhausted",
                 )
-                .with_status(StatusCode::CONFLICT)
             })
         })
         .transpose()?
@@ -123,11 +124,10 @@ pub(crate) async fn prepare_franking_proof_event(
     .await
     .map_err(|error| AppError::internal(format!("franking Realm Seal lookup failed: {error}")))?
     .ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             "franking target Realm has no accepted Seal",
         )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE)
     })?;
     let auth_context = arkret_wire::AuthContext {
         key_id: arkret_wire::OpaqueLocalId::new("notary-key").expect("notary key id is opaque"),
@@ -188,12 +188,11 @@ pub(crate) async fn prepare_franking_proof_event(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
-            format!("franking Event admission failed: {}", error.message),
+        crate::app_error!(
+            ParamInvalid,
+            format!("franking Event admission failed: {}", error.message()),
         )
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })
 }
 
@@ -248,18 +247,16 @@ pub(super) async fn validate_moderation_report_safety(
         target_ref,
     );
     if rate.rate_limited {
-        return Err(AppError::new(
-            ErrorCode::RateLimited,
-            "moderation report rate limit exceeded",
-        )
-        .with_status(StatusCode::TOO_MANY_REQUESTS)
-        .with_reason_detail(format!(
-            "bucket={} count={} limit={} retry_after_ms={}",
-            rate.bucket.as_deref().unwrap_or("unknown"),
-            rate.count,
-            rate.limit,
-            rate.retry_after_ms
-        )));
+        return Err(
+            crate::app_error!(RateLimited, "moderation report rate limit exceeded",)
+                .with_reason_detail(format!(
+                    "bucket={} count={} limit={} retry_after_ms={}",
+                    rate.bucket.as_deref().unwrap_or("unknown"),
+                    rate.count,
+                    rate.limit,
+                    rate.retry_after_ms
+                )),
+        );
     }
 
     validate_moderation_report_content_safety(
@@ -452,11 +449,10 @@ fn validate_moderation_evidence_package(
             ))
         })?;
     if canonical_bytes.len() > MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES {
-        return Err(AppError::new(
-            ErrorCode::PayloadTooLarge,
+        return Err(crate::app_error!(
+            PayloadTooLarge,
             "evidence_package exceeds max_total_blob_bytes",
         )
-        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
         .with_reason_detail(format!(
             "max_total_blob_bytes={}",
             MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES
@@ -1113,9 +1109,9 @@ async fn moderation_report(
     .map_err(|error| {
         crate::routing::events::event_log::submit_one_error_to_app_error(
             "moderation report Event submit failed",
-            error.status,
-            error.code,
-            &error.message,
+            error.status(),
+            error.code(),
+            &error.message(),
         )
     })?;
     crate::routing::events::projection::materialize_moderation_report_record(

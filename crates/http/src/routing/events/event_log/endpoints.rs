@@ -289,22 +289,20 @@ async fn wait_for_availability_idempotency_outcome(
                 AppError::internal(format!("availability idempotency lookup failed: {error}"))
             })?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::TemporarilyUnavailable,
+                crate::app_error!(
+                    TemporarilyUnavailable,
                     "availability preparation reservation expired before completion",
                 )
-                .with_status(StatusCode::SERVICE_UNAVAILABLE)
             })?;
         if let Some(outcome) = availability_idempotency_outcome(record, request, request_hash)? {
             return Ok(outcome);
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    Err(AppError::new(
-        ErrorCode::TemporarilyUnavailable,
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
         "availability preparation is still being completed by the first writer",
-    )
-    .with_status(StatusCode::SERVICE_UNAVAILABLE))
+    ))
 }
 
 #[salvo::oapi::endpoint(
@@ -328,16 +326,14 @@ async fn issue_seal_availability_receipts(
         arkret_wire::ServiceOperationId::SELF_SEALS_COMMAND_ISSUE_AVAILABILITY_RECEIPTS_V1,
     )?;
     let request = body.into_inner();
-    request.validate().map_err(|error| {
-        AppError::new(ErrorCode::SchemaViolation, error.to_string())
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    request
+        .validate()
+        .map_err(|error| crate::app_error!(SchemaViolation, error.to_string()))?;
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::PolicyViolation,
+        crate::app_error!(
+            PolicyViolation,
             format!("availability requester_id DID core id is invalid: {error}"),
         )
-        .with_status(StatusCode::FORBIDDEN)
     })?;
     let own_pcr = state
         .projections()
@@ -360,19 +356,17 @@ async fn issue_seal_availability_receipts(
         .await?
     };
     if !own_pcr && agent.is_none() {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        return Err(crate::app_error!(
+            PolicyViolation,
             "availability preparation is limited to the caller's own or delegated Agent principal-control Realm",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
 
     let request_hash = canonical::canonical_sha256(&request).map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("availability request is not canonical-hashable: {error}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
     let idempotency_key =
         format!("ak.self.seals.command.issue_availability_receipts.v1:{request_hash}");
@@ -426,41 +420,32 @@ async fn issue_seal_availability_receipts(
         .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
     current.sort();
     if current != request.predecessor_refs {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "availability preparation predecessor_refs are not the exact current Seal frontier",
-        )
-        .with_status(StatusCode::CONFLICT));
+        ));
     }
     let predecessor_covered = state
         .projections()
         .predecessor_covered_events(&request.predecessor_refs)
         .await
-        .map_err(|error| {
-            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                .with_status(StatusCode::CONFLICT)
-        })?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let mut events = Vec::with_capacity(request.event_digests.len());
     for digest in &request.event_digests {
         if predecessor_covered.contains(digest) {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "availability preparation Event is already covered by the predecessor frontier",
-            )
-            .with_status(StatusCode::CONFLICT));
+            ));
         }
         let event = crate::notary::durable_control_event_by_digest(state, digest)
             .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                    .with_status(StatusCode::CONFLICT)
-            })?;
+            .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
         if event.realm_id != request.realm_id {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "availability preparation contains a cross-Realm Control Event",
-            )
-            .with_status(StatusCode::CONFLICT));
+            ));
         }
         events.push((digest.clone(), event));
     }
@@ -468,10 +453,7 @@ async fn issue_seal_availability_receipts(
         .projections()
         .effective_state_at(&request.predecessor_refs, &request.realm_id)
         .await
-        .map_err(|error| {
-            AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-                .with_status(StatusCode::CONFLICT)
-        })?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let digest_suites = state
         .projections()
         .seal_digest_suites_for_delta(
@@ -480,10 +462,7 @@ async fn issue_seal_availability_receipts(
             &request.event_digests,
         )
         .await
-        .map_err(|error| {
-            AppError::new(ErrorCode::StateMismatch, error.to_string())
-                .with_status(StatusCode::CONFLICT)
-        })?;
+        .map_err(|error| crate::app_error!(StateMismatch, error.to_string()))?;
     let reservation_at =
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
             .ok_or_else(|| AppError::internal("availability reservation time is invalid"))?;
@@ -555,11 +534,9 @@ async fn issue_seal_availability_receipts(
         .await
         .map_err(|error| match error {
             crate::notary::NotaryError::NotAuthorized(message) => {
-                AppError::new(ErrorCode::SealSignerUnauthorized, message)
-                    .with_status(StatusCode::FORBIDDEN)
+                crate::app_error!(SealSignerUnauthorized, message)
             }
-            other => AppError::new(ErrorCode::StateMismatch, other.to_string())
-                .with_status(StatusCode::CONFLICT),
+            other => crate::app_error!(StateMismatch, other.to_string()),
         })?;
     for dependency in &dependencies {
         state
@@ -673,11 +650,10 @@ async fn submit_event_seal(
     )?;
     let seal = body.into_inner();
     let session_core_id = arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
-        AppError::new(
-            ErrorCode::PolicyViolation,
+        crate::app_error!(
+            PolicyViolation,
             format!("Seal submitter DID core id is invalid: {error}"),
         )
-        .with_status(StatusCode::FORBIDDEN)
     })?;
     let own_pcr = state
         .projections()
@@ -700,29 +676,26 @@ async fn submit_event_seal(
         .await?
     };
     if !own_pcr && agent.is_none() {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        return Err(crate::app_error!(
+            PolicyViolation,
             "Seal submission is limited to the caller's own or delegated Agent principal-control Realm",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let NotarySig::Single(signature) = &seal.notary_signature else {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        return Err(crate::app_error!(
+            PolicyViolation,
             "principal-control Seal submission requires one bound device signature",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     };
     if !crate::routing::federation::move_seal::session_device_verification_method_matches(
         session_core_id.as_str(),
         &session.device_id,
         &signature.verification_method,
     ) {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        return Err(crate::app_error!(
+            PolicyViolation,
             "Seal signer does not match the authenticated session device",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
 
     let effect = if let Some(agent_record) = agent.as_ref() {
@@ -1118,7 +1091,7 @@ fn submit_outcome_value(
 /// `render_submit_one_error` writes: a quarantine error becomes a 200 `partial`
 /// outcome, every other error becomes the standard error envelope.
 fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
-    if let Some(event_id) = error.quarantine_event_id {
+    if let SubmitOneError::Quarantined { event_id, .. } = error {
         let outcome = events_submit_outcome(
             arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial,
             Vec::new(),
@@ -1129,16 +1102,22 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         );
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
+    let SubmitOneError::Rejected { error, details } = error else {
+        unreachable!();
+    };
     let mut body = json!(
-        arkret_wire::problem_details::ErrorEnvelope::new(error.code.clone(), error.message.clone())
+        arkret_wire::problem_details::ErrorEnvelope::new(
+            error.wire_code(),
+            error.message.as_ref(),
+        )
             .with_request_id(crate::ids::generate_request_id())
     );
-    if let Some(details) = error.details.as_ref().and_then(Value::as_object)
+    if let Some(details) = details.as_ref().and_then(Value::as_object)
         && let Some(problem) = body.as_object_mut()
     {
         problem.extend(details.clone());
     }
-    (error.status, body)
+    (error.http_status(), body)
 }
 
 /// Persist the FIRST response under an `Idempotency-Key`. Best-effort: a failed
@@ -1440,8 +1419,8 @@ async fn resolve_events(
         ));
     }
     if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "too many events requested",
         ));
     }
@@ -1498,8 +1477,8 @@ async fn resolve_events(
             .map_err(|error| AppError::internal(format!("events resolve outcome: {error}")))?;
         let byte_limit = body.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
         if encoded.len() > byte_limit {
-            return Err(AppError::new(
-                ErrorCode::LimitExceeded,
+            return Err(crate::app_error!(
+                LimitExceeded,
                 "events resolve outcome exceeds max_response_bytes",
             ));
         }
@@ -1596,8 +1575,8 @@ async fn resolve_events(
         .map_err(|error| AppError::internal(format!("events resolve outcome: {error}")))?;
     let byte_limit = body.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
     if encoded.len() > byte_limit {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "events resolve outcome exceeds max_response_bytes",
         ));
     }
@@ -1653,11 +1632,10 @@ async fn seals_frontier(
             crate::routing::identity::agent_pcr::agent_event_seal_head(state, realm_id.as_str())
                 .await?
         else {
-            return Err(AppError::new(
-                ErrorCode::FrontierUnavailable,
+            return Err(crate::app_error!(
+                FrontierUnavailable,
                 "Agent PCR has no accepted device-signed Seal",
-            )
-            .with_status(StatusCode::SERVICE_UNAVAILABLE));
+            ));
         };
         let governance_policy =
             crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
@@ -2221,11 +2199,7 @@ pub(crate) async fn load_realm_actor_frontier(
     let (next_actor_seq, frontier_event_ids) =
         if let Some(max_seq) = records.iter().map(|record| record.actor_seq).max() {
             let next_actor_seq = max_seq.checked_add(1).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierSequenceExhausted,
-                    "actor sequence is exhausted",
-                )
-                .with_status(StatusCode::CONFLICT)
+                crate::app_error!(FrontierSequenceExhausted, "actor sequence is exhausted",)
             })?;
             let mut ids = records
                 .iter()

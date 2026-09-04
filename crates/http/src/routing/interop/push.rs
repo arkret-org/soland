@@ -143,8 +143,11 @@ pub(super) async fn push_register(
     let body = body.into_inner();
     let session = match auth_result.await {
         Ok(session) => session,
-        Err((status, code, message)) => {
-            return Err(AppError::new(canonical_error_code(code), message).with_status(status));
+        Err((_status, code, message)) => {
+            return Err(AppError::from_rejection(
+                canonical_error_code(code),
+                message,
+            ));
         }
     };
     if body.device_id.as_str().trim().is_empty() {

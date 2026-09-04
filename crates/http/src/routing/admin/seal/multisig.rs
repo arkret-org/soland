@@ -1,11 +1,10 @@
 //! Read-only multi-signature aggregation status endpoint.
 
 use arkret_identifiers::RealmId;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -25,10 +24,8 @@ pub(crate) async fn admin_list_multisig_pending(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let _realm_id = RealmId::new(realm_id.clone()).map_err(|e| {
-        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let _realm_id = RealmId::new(realm_id.clone())
+        .map_err(|e| crate::app_error!(ParamInvalid, format!("invalid realm_id: {e}")))?;
 
     let rows = state
         .governance()

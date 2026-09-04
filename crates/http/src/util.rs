@@ -93,7 +93,12 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("Bearer "))
+        .and_then(|value| {
+            arkret_server::authorization_credential(
+                value,
+                arkret_server::AuthorizationScheme::Bearer,
+            )
+        })
 }
 
 /// Extract an RFC 9449 DPoP-bound access token from `Authorization`.
@@ -103,7 +108,9 @@ pub fn dpop_token(req: &Request) -> Option<&str> {
     req.headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.strip_prefix("DPoP "))
+        .and_then(|value| {
+            arkret_server::authorization_credential(value, arkret_server::AuthorizationScheme::Dpop)
+        })
 }
 
 #[cfg(test)]

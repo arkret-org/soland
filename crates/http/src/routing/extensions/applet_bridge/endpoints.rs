@@ -173,12 +173,11 @@ async fn install_preview_endpoint(
         )
         .await
         .map_err(|error| {
-            AppError::new(
+            AppError::from_rejection(
                 soland_http::error::ErrorCode::from_wire(error.code)
                     .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
                 error.message,
             )
-            .with_status(error.status)
             .with_wire_code(error.code)
         })?;
     }
@@ -550,7 +549,6 @@ fn require_first_install_commit_fresh(
     }
     Err(
         AppError::param_invalid("install authoring request is expired")
-            .with_status(StatusCode::GONE)
             .with_wire_code("authoring_request_expired"),
     )
 }
@@ -753,12 +751,12 @@ async fn revoke_install_endpoint(
             Err(error) => {
                 outcome.steps[index].status = AppletRevokeStepStatus::Rejected;
                 outcome.steps[index].reason_code =
-                    Some(arkret_wire::ReasonCode::from_wire(&error.code));
+                    Some(arkret_wire::ReasonCode::from_wire(&error.code()));
                 outcome
                     .rejections
                     .push(arkret_models_integration::AppletRejectedItem {
                         requested_scope: Some(outcome.steps[index].effect_ref.clone()),
-                        reason_code: arkret_wire::ReasonCode::from_wire(&error.code),
+                        reason_code: arkret_wire::ReasonCode::from_wire(&error.code()),
                     });
                 outcome.status = AppletRevokeSagaStatus::PartiallyCompleted;
                 persist_revoke_execution(
@@ -1732,7 +1730,7 @@ async fn provision_ghost_actor_endpoint(
         // above. Re-read the durable first response so an exact retry still
         // receives replay semantics; a different body remains a conflict.
         if matches!(
-            error.code.as_str(),
+            error.code().as_str(),
             "duplicate" | "duplicate_conflict" | "cas_conflict"
         ) && let Some(replay) = state
             .jobs()
@@ -1761,13 +1759,12 @@ async fn provision_ghost_actor_endpoint(
             res.status_code(StatusCode::OK);
             return json_ok(replayed);
         }
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::from_wire(&error.code)
+        return Err(AppError::from_rejection(
+            soland_http::error::ErrorCode::from_wire(&error.code())
                 .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            error.message,
+            error.message(),
         )
-        .with_status(error.status)
-        .with_wire_code(error.code));
+        .with_wire_code(error.code()));
     }
 
     crate::routing::append_audit_log(
@@ -2332,7 +2329,10 @@ mod revoke_saga_tests {
         let now = chrono::Utc::now();
         let expired = require_first_install_commit_fresh(now - chrono::Duration::seconds(1), now)
             .unwrap_err();
-        assert_eq!(expired.status, Some(StatusCode::GONE));
+        assert_eq!(
+            expired.http_status(),
+            soland_http::error::error_http_status(expired.code)
+        );
         assert_eq!(
             expired.wire_code_override.as_deref(),
             Some("authoring_request_expired")

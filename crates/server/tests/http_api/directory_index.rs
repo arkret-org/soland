@@ -182,7 +182,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes_body() {
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
                 "account_id": alice_account,
-                "intent": "display",
+                "intent": "lookup",
                 "limit": 10
             }))
             .send(&app())
@@ -277,7 +277,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
                 "account_id": subject_account,
-                "intent": "display",
+                "intent": "lookup",
                 "limit": 10
             }))
             .send(&app_from_state(state.clone()))
@@ -308,7 +308,7 @@ async fn account_primary_handle_claim_is_listed_for_webvh_service_id_body() {
     let mut foreign_response = TestClient::post(
         "http://server/_arkret/find/directory/list-handles-for-subject",
     )
-    .json(&serde_json::json!({"account_id": foreign_account, "intent": "display", "limit": 10}))
+    .json(&serde_json::json!({"account_id": foreign_account, "intent": "lookup", "limit": 10}))
     .send(&app_from_state(state))
     .await;
     assert_eq!(foreign_response.status_code, Some(StatusCode::OK));
@@ -363,14 +363,15 @@ async fn device_only_subject_does_not_publish_an_unbound_synthetic_handle_body()
         TestClient::post("http://server/_arkret/find/directory/list-handles-for-subject")
             .json(&serde_json::json!({
                 "account_id": subject_account,
-                "intent": "display",
+                "intent": "lookup",
                 "limit": 10
             }))
             .send(&app_from_state(state))
             .await;
 
-    assert_eq!(response.status_code.unwrap().as_u16(), 200);
+    let status = response.status_code.unwrap().as_u16();
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, 200);
     assert_eq!(body["account_id"], serde_json::json!(subject_account));
     assert!(body["claims"].as_array().unwrap().is_empty());
     assert!(body["primary_handle"].is_null());

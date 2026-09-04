@@ -792,6 +792,60 @@ async fn validate_event_envelope_with_ingress(
         }
     }
 
+    finalize_validated_event_envelope(
+        state,
+        session,
+        envelope,
+        object,
+        realm_bootstrap_contexts,
+        internal_admission,
+        EnvelopeValidationCore {
+            event_id,
+            actor,
+            actor_id,
+            actor_seq,
+            realm_id,
+            kind,
+            schema_id,
+            canonical_digest,
+            digest_suite: typed_digest_suite,
+            canonical_bytes,
+        },
+        is_identity_anchor_authorize,
+        is_direct_conversation_founding,
+        bootstrap_unit_member,
+        is_applet_managed_pcr_genesis && is_verified_applet_formal_aggregate,
+    )
+    .await
+}
+
+struct EnvelopeValidationCore {
+    event_id: EventId,
+    actor: arkret_wire::ActorId,
+    actor_id: arkret_wire::DidCoreId,
+    actor_seq: u64,
+    realm_id: RealmId,
+    kind: String,
+    schema_id: String,
+    canonical_digest: String,
+    digest_suite: arkret_canonical::DigestSuite,
+    canonical_bytes: Vec<u8>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finalize_validated_event_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+    object: &serde_json::Map<String, Value>,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    internal_admission: Option<&InternalEventAdmission>,
+    core: EnvelopeValidationCore,
+    is_identity_anchor_authorize: bool,
+    is_direct_conversation_founding: bool,
+    bootstrap_unit_member: bool,
+    privileged_bootstrap: bool,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?
         .into_iter()
         .map(|event_id| {
@@ -806,15 +860,15 @@ async fn validate_event_envelope_with_ingress(
         .collect::<Result<Vec<_>, _>>()?;
     validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     event_semantic_refs(object, MAX_EVENT_REFS)?;
-    validate_strand_watch_manage_others_levels(&kind, object, &actor)?;
+    validate_strand_watch_manage_others_levels(&core.kind, object, &core.actor)?;
     let producer_signing_key = validate_event_proofs(
         object,
         state,
         session,
-        actor_id.as_str(),
-        &canonical_digest,
-        typed_digest_suite,
-        &canonical_bytes,
+        core.actor_id.as_str(),
+        &core.canonical_digest,
+        core.digest_suite,
+        &core.canonical_bytes,
         realm_bootstrap_contexts,
         internal_admission,
     )
@@ -823,32 +877,29 @@ async fn validate_event_envelope_with_ingress(
         state,
         session,
         object,
-        actor_id.as_str(),
+        core.actor_id.as_str(),
         is_identity_anchor_authorize,
         internal_admission,
     )
     .await?;
-    reject_revoked_actor_device_signature(object, state, session, actor_id.as_str()).await?;
+    reject_revoked_actor_device_signature(object, state, session, core.actor_id.as_str()).await?;
     let sidecar_bootstrap = internal_admission.is_some_and(|admission| {
-        kind == arkret_wire::EventKind::SidecarCreate.as_str()
+        core.kind == arkret_wire::EventKind::SidecarCreate.as_str()
             && admission.is_sidecar_ensure(session, object)
     });
     let cba_context = if is_direct_conversation_founding {
         arkret_schema::EventCellContractContext::DirectConversationFounding
-    } else if bootstrap_unit_member
-        || sidecar_bootstrap
-        || (is_applet_managed_pcr_genesis && is_verified_applet_formal_aggregate)
-    {
+    } else if bootstrap_unit_member || sidecar_bootstrap || privileged_bootstrap {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard
     };
-    enforce_registered_cell_contract(envelope, &kind, cba_context, typed_digest_suite)?;
+    enforce_registered_cell_contract(envelope, &core.kind, cba_context, core.digest_suite)?;
     enforce_ordered_log_cell_contract(
         state,
         envelope,
-        &kind,
-        realm_id.as_str(),
+        &core.kind,
+        core.realm_id.as_str(),
         object,
         realm_bootstrap_contexts,
     )
@@ -872,18 +923,18 @@ async fn validate_event_envelope_with_ingress(
     };
 
     Ok(ValidatedEventEnvelope {
-        event_id,
-        actor,
-        actor_id,
+        event_id: core.event_id,
+        actor: core.actor,
+        actor_id: core.actor_id,
         device_id,
-        actor_seq,
-        realm_id,
-        kind,
-        schema_id,
+        actor_seq: core.actor_seq,
+        realm_id: core.realm_id,
+        kind: core.kind,
+        schema_id: core.schema_id,
         prev_refs,
-        canonical_digest,
-        digest_suite: typed_digest_suite,
-        canonical_bytes,
+        canonical_digest: core.canonical_digest,
+        digest_suite: core.digest_suite,
+        canonical_bytes: core.canonical_bytes,
         producer_signing_key: Some(producer_signing_key),
     })
 }

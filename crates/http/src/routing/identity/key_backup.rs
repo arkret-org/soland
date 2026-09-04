@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::append_audit_log;
@@ -84,6 +84,7 @@ fn backup_actor_matches(backup: &Value, actor_id: &arkret_wire::ActorId) -> bool
 mod tests {
     use arkret_identifiers::DidCoreId;
     use serde_json::json;
+    use soland_http::error::ErrorCode;
 
     use super::*;
 
@@ -344,7 +345,10 @@ mod tests {
                 .expect_err("other actor must not overwrite backup_id");
 
         assert_eq!(err.code, ErrorCode::CapabilityDenied);
-        assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(
+            err.http_status(),
+            soland_http::error::error_http_status(err.code)
+        );
     }
 
     #[test]
@@ -521,11 +525,12 @@ mod tests {
         let backup = typed_key_backup_body(&body).expect("typed key backup");
         let err = validate_series_genesis_shape_typed(&backup)
             .expect_err("genesis envelope carrying `supersedes_id` must be series_chain_broken");
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert_eq!(err.code, ErrorCode::Conflict);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(err.wire_code_override, None);
         assert_eq!(
-            err.wire_code_override.as_deref(),
-            Some("series_chain_broken")
+            err.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN)
         );
         assert!(err.message.contains("`supersedes_id`"));
     }
@@ -542,11 +547,12 @@ mod tests {
         let err = validate_series_genesis_shape_typed(&backup).expect_err(
             "genesis envelope carrying `supersedes_digest` must be series_chain_broken",
         );
-        assert_eq!(err.code, ErrorCode::SchemaViolation);
+        assert_eq!(err.code, ErrorCode::Conflict);
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
+        assert_eq!(err.wire_code_override, None);
         assert_eq!(
-            err.wire_code_override.as_deref(),
-            Some("series_chain_broken")
+            err.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::SERIES_CHAIN_BROKEN)
         );
         assert!(err.message.contains("supersedes_digest"));
     }

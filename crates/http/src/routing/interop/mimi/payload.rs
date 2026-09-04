@@ -37,11 +37,10 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let actor_seq = max_actor_seq
         .map(|value| {
             value.checked_add(1).ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierSequenceExhausted,
+                crate::app_error!(
+                    FrontierSequenceExhausted,
                     "MIMI service actor sequence is exhausted",
                 )
-                .with_status(StatusCode::CONFLICT)
             })
         })
         .transpose()?
@@ -66,11 +65,10 @@ pub(super) async fn persist_mimi_canonical_message_event(
         .await
         .map_err(|error| AppError::internal(format!("MIMI Realm Seal lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 "MIMI target Realm has no accepted Seal",
             )
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     let digest_suite = state.projections().realm_digest_suite(realm.as_str());
     // The CBA basis is a producer-signed envelope member, so it belongs on the
@@ -148,12 +146,11 @@ pub(super) async fn persist_mimi_canonical_message_event(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            soland_http::error::ErrorCode::ParamInvalid,
-            format!("MIMI Event admission failed: {}", error.message),
+        crate::app_error!(
+            ParamInvalid,
+            format!("MIMI Event admission failed: {}", error.message()),
         )
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     Ok(event_id)
 }

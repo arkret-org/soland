@@ -39,12 +39,11 @@ use arkret_signatures::http_signature::{
 };
 use arkret_wire::{Audience, MimiRoomUri, MimiUri, MlsGroupId};
 use chrono::Duration;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::http_signature;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::MimiConsentCorrelation;

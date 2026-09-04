@@ -1,11 +1,10 @@
 use super::*;
 
 fn key_backup_untrusted_signature() -> AppError {
-    AppError::new(
-        ErrorCode::SignatureInvalid,
+    crate::app_error!(
+        SignatureInvalid,
         "key backup auth_data.signature is not anchored to the actor device trust root",
     )
-    .with_status(StatusCode::UNAUTHORIZED)
     .with_wire_code("untrusted_backup_signature")
 }
 
@@ -73,11 +72,10 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         device_public_key,
         verification_method,
     ) {
-        return Err(AppError::new(
-            ErrorCode::SignatureInvalid,
+        return Err(crate::app_error!(
+            SignatureInvalid,
             "key backup verification method does not match the authorized device key",
         )
-        .with_status(StatusCode::UNAUTHORIZED)
         .with_wire_code("untrusted_backup_signature"));
     }
     verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)
@@ -145,8 +143,8 @@ pub(super) fn required_proof_string<'a>(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 format!("key backup unlock proof `{field}` is required"),
             )
         })

@@ -13,16 +13,16 @@ pub(super) async fn replay_derived_history_join_epoch(
         .local_traversal
         .as_ref()
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 "history join epoch requires the local retained cut",
             )
         })?;
     let HistoryGovernanceTraversalIntent::MemberHistoryDelivery { mls_group_id, .. } =
         &traversal.retention.traversal_intent
     else {
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "history join epoch has no member-delivery intent",
         ));
     };
@@ -39,8 +39,8 @@ pub(super) async fn replay_derived_history_join_epoch(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "retained history Control Event is unavailable",
                     )
                 })?,
@@ -49,12 +49,11 @@ pub(super) async fn replay_derived_history_join_epoch(
     derive_history_join_epoch(
         &retained_events,
         &HistoryJoinEpochSubject {
-            mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.clone()).map_err(|error| {
-                AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
-            })?,
+            mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.clone())
+                .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?,
             requester_actor_id: request.requester_actor_id.clone(),
             authorization_incarnation: request.requester_authorization_incarnation.clone(),
         },
     )
-    .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))
+    .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))
 }

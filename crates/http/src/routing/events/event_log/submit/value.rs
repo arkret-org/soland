@@ -3022,7 +3022,7 @@ mod cas_write_guard_tests {
         assert_eq!(
             validate_cas_write_guards(&state, &operation, &writes, &frozen)
                 .unwrap_err()
-                .code,
+                .code(),
             "failed_precondition"
         );
         operation.context.preconditions = serde_json::from_value(json!([{
@@ -3032,7 +3032,7 @@ mod cas_write_guard_tests {
         assert_eq!(
             validate_cas_write_guards(&state, &operation, &writes, &frozen)
                 .unwrap_err()
-                .code,
+                .code(),
             "failed_precondition"
         );
         operation.context.preconditions[0].predicate.value = Some(current.clone());
@@ -3102,7 +3102,7 @@ mod cas_write_guard_tests {
         assert_eq!(
             validate_cas_write_guards(&state, &operation, &writes, &frozen)
                 .unwrap_err()
-                .code,
+                .code(),
             "failed_precondition",
             "a real child predecessor still requires whole-value CAS"
         );
@@ -3160,7 +3160,7 @@ mod account_data_cas_tests {
             preflight_account_data_cas(&state, &operation)
                 .await
                 .unwrap_err()
-                .code,
+                .code(),
             "cas_conflict"
         );
         operation.payload["expected_revision"] = json!(0);
@@ -3172,7 +3172,7 @@ mod account_data_cas_tests {
             preflight_account_data_cas(&state, &operation)
                 .await
                 .unwrap_err()
-                .code,
+                .code(),
             "schema_violation"
         );
     }
@@ -3415,8 +3415,8 @@ mod local_device_authorization_tests {
         let error = local_device_authorization_error(ServiceError::NotFound(
             "device authorization is not active".to_owned(),
         ));
-        assert_eq!(error.status, StatusCode::FORBIDDEN);
-        assert_eq!(error.code, "device_unauthorized");
+        assert_eq!(error.status(), StatusCode::FORBIDDEN);
+        assert_eq!(error.code(), "device_unauthorized");
     }
 
     /// A malformed verified projection row is a projection integrity failure,
@@ -3428,8 +3428,8 @@ mod local_device_authorization_tests {
         let error = local_device_authorization_error(ServiceError::SchemaViolation(
             "device authorization omits its generation binding".to_owned(),
         ));
-        assert_eq!(error.status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(error.code, "internal_error");
-        assert_ne!(error.code, "device_unauthorized");
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(), "internal_error");
+        assert_ne!(error.code(), "device_unauthorized");
     }
 }

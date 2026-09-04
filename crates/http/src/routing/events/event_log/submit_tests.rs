@@ -11,9 +11,9 @@ mod event_collision_reason_tests {
         )
         .expect("storage collision must be externally quarantined");
 
-        assert_eq!(error.code, "witness_disagreement");
+        assert_eq!(error.code(), "witness_disagreement");
         assert_eq!(
-            error.quarantine_event_id.as_deref(),
+            error.quarantine_event_id().as_deref(),
             Some("ak:event:fixture")
         );
     }
@@ -22,11 +22,10 @@ mod event_collision_reason_tests {
     fn semantic_schema_violation_keeps_machine_reason_in_details() {
         let error = SubmitOneError::semantic_schema_violation("private_view_requires_account_data");
 
-        assert_eq!(error.code, "schema_violation");
+        assert_eq!(error.code(), "schema_violation");
         assert_eq!(
             error
-                .details
-                .as_ref()
+                .details()
                 .and_then(|details| details.get("reason_code"))
                 .and_then(Value::as_str),
             Some("private_view_requires_account_data")
@@ -47,7 +46,10 @@ mod circle_error_mapping_tests {
         );
 
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(error.status, Some(StatusCode::UNPROCESSABLE_ENTITY));
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
         assert_eq!(
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::CIRCLE_MEMBER_MUST_BE_REALM_MEMBER)
@@ -64,7 +66,7 @@ mod circle_error_mapping_tests {
         );
 
         assert_eq!(error.code, ErrorCode::CapabilityDenied);
-        assert_eq!(error.status, Some(StatusCode::FORBIDDEN));
+        assert_eq!(error.http_status(), StatusCode::FORBIDDEN);
         assert_eq!(
             error.reason_code.as_deref(),
             Some("circle_member_manage_capability_required")
@@ -85,7 +87,10 @@ mod relation_error_mapping_tests {
         );
 
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
-        assert_eq!(error.status, None);
+        assert_eq!(
+            error.http_status(),
+            soland_http::error::error_http_status(error.code)
+        );
         assert_eq!(
             error.reason_code.as_deref(),
             Some(arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION)

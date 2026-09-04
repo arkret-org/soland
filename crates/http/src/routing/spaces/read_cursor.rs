@@ -50,9 +50,9 @@ pub(super) async fn set_read_cursor(
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
                 "ak.read_cursor.advance submit failed",
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })?;
     let marker = {

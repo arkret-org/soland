@@ -29,9 +29,8 @@ use arkret_models_identity::admin_grant::{
     SessionGrantAdminIntrospectionStatus, SessionGrantIntrospection,
 };
 use parking_lot::Mutex;
-use salvo::http::StatusCode;
 use salvo::prelude::Request;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use crate::state::AppState;
@@ -98,22 +97,20 @@ fn admin_grant_from_introspection_outcome(
     outcome: SessionGrantIntrospectOutcome,
 ) -> Result<SessionGrantIntrospection, AppError> {
     if !outcome.active || outcome.status != SessionGrantIntrospectStatus::Active {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             format!(
                 "admin scope introspection returned inactive grant: {}",
                 session_grant_status_wire(outcome.status)
             ),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
 
     let grant = outcome.grant.ok_or_else(|| {
-        AppError::new(
-            ErrorCode::CapabilityDenied,
+        crate::app_error!(
+            CapabilityDenied,
             "admin scope introspection omitted grant metadata".to_owned(),
         )
-        .with_status(StatusCode::FORBIDDEN)
     })?;
     let principal_id = grant.account_id.principal_id;
 
@@ -194,12 +191,10 @@ pub(crate) async fn introspect_admin_scopes(
     }
 
     let Some(url) = state.config().session_grant_introspection_url.as_deref() else {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(CapabilityDenied,
             "admin scope check requires SOLAND_SESSION_GRANT_INTROSPECTION_URL outside development mode"
                 .to_owned(),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     };
 
     // Cache hit — short-circuit the network call. The token_hash is
@@ -209,11 +204,10 @@ pub(crate) async fn introspect_admin_scopes(
     }
 
     let token = bearer_token_from_request(req).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::Unauthenticated,
+        crate::app_error!(
+            Unauthenticated,
             "missing or malformed Authorization header for admin scope check".to_owned(),
         )
-        .with_status(StatusCode::UNAUTHORIZED)
     })?;
     let audience = DidCoreId::new(state.service_id().clone()).map_err(|error| {
         AppError::internal(format!(
@@ -232,8 +226,8 @@ pub(crate) async fn introspect_admin_scopes(
         .session_grant_introspection_bearer
         .as_deref()
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::InternalError,
+            crate::app_error!(
+                InternalError,
                 "session grant introspection requires SOLAND_SESSION_GRANT_INTROSPECTION_BEARER"
                     .to_owned(),
             )
@@ -257,27 +251,26 @@ pub(crate) async fn introspect_admin_scopes(
     .send()
     .await
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        crate::app_error!(
+            TemporarilyUnavailable,
             format!("admin scope introspection request failed: {error}"),
         )
     })?;
     if !response.status().is_success() {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             format!(
                 "admin scope introspection rejected by IdP: HTTP {}",
                 response.status()
             ),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let outcome = response
         .json::<SessionGrantIntrospectOutcome>()
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
+            crate::app_error!(
+                TemporarilyUnavailable,
                 format!("invalid admin scope introspection response: {error}"),
             )
         })?;
@@ -285,11 +278,10 @@ pub(crate) async fn introspect_admin_scopes(
 
     let now_unix = chrono::Utc::now().timestamp();
     if !grant.is_currently_active(now_unix) {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "admin scope introspection returned an inactive grant".to_owned(),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
 
     cache_grant(session.token_hash.clone(), grant.clone());
@@ -307,14 +299,13 @@ pub(crate) async fn require_admin_scope(
 ) -> Result<SessionGrantIntrospection, AppError> {
     let grant = introspect_admin_scopes(state, req, session).await?;
     if !grant.has_admin_scope(scope) {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             format!(
                 "admin scope `{scope}` not granted to {}",
                 grant.principal_id
             ),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     Ok(grant)
 }

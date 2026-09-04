@@ -16,10 +16,9 @@
 //! config (bind address, `DATABASE_URL`, service DID, TLS paths, signing
 //! seeds). Those are secrets or pre-DB bootstrap and stay in env.
 
-use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Map, Value};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use super::AuthArgs;
 use crate::runtime_settings::RuntimeSettings;
@@ -51,28 +50,24 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
     let session = AuthArgs.authenticated_session(state, req).await?;
 
     let patch: Map<String, Value> = req.parse_json().await.map_err(|error| {
-        AppError::new(
-            ErrorCode::ParamInvalid,
+        crate::app_error!(
+            ParamInvalid,
             format!("settings body must be a JSON object of key -> value: {error}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
     if patch.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::ParamInvalid,
+        return Err(crate::app_error!(
+            ParamInvalid,
             "settings patch must set at least one key".to_owned(),
-        )
-        .with_status(StatusCode::BAD_REQUEST));
+        ));
     }
 
     // Validate the whole patch against a working copy before touching the DB,
     // so an unknown key or bad shape rejects the entire request atomically.
     let mut next = (*state.settings()).clone();
     for (key, value) in &patch {
-        next.apply_key(key, value.clone()).map_err(|error| {
-            AppError::new(ErrorCode::ParamInvalid, error.to_string())
-                .with_status(StatusCode::BAD_REQUEST)
-        })?;
+        next.apply_key(key, value.clone())
+            .map_err(|error| crate::app_error!(ParamInvalid, error.to_string()))?;
     }
 
     // Persist each changed key as its own row, using the post-normalization

@@ -26,7 +26,7 @@ use salvo::http::{Method, ParseError, StatusCode};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::BlobState as BlobRecord;
 use soland_services::identity::SessionIdentityState as SessionRecord;
@@ -1538,26 +1538,26 @@ pub enum PresignBlobBlock {
 impl PresignBlobBlock {
     pub fn as_error(self) -> AppError {
         match self {
-            Self::E2ee => AppError::new(
-                ErrorCode::CapabilityDenied,
+            Self::E2ee => crate::app_error!(
+                CapabilityDenied,
                 "blob is end-to-end encrypted; presign is refused fail-closed",
             ),
-            Self::LegalHold => AppError::new(
-                ErrorCode::FailedPrecondition,
+            Self::LegalHold => crate::app_error!(
+                FailedPrecondition,
                 "blob is currently subject to a legal hold; presign refused",
             )
             .with_wire_code(arkret_wire::ReasonCode::LEGAL_HOLD_ACTIVE),
-            Self::Redacted => AppError::new(
-                ErrorCode::FailedPrecondition,
+            Self::Redacted => crate::app_error!(
+                FailedPrecondition,
                 "blob has been redacted; presign refused",
             )
             .with_wire_code(arkret_wire::ReasonCode::BLOB_REDACTED),
-            Self::ActorPrivate => AppError::new(
-                ErrorCode::CapabilityDenied,
+            Self::ActorPrivate => crate::app_error!(
+                CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",
             ),
-            Self::DeviceBound => AppError::new(
-                ErrorCode::CapabilityDenied,
+            Self::DeviceBound => crate::app_error!(
+                CapabilityDenied,
                 "blob is device_bound; direct download is refused fail-closed",
             ),
         }

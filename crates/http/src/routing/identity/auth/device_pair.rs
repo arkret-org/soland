@@ -218,9 +218,9 @@ async fn authorize_account_device_pair(
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
                 "ak.gate.account.command.pair_device.v1 authorize Event submit failed",
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })?;
     let authorized_event_ref = submitted.event_id;
@@ -366,7 +366,7 @@ fn device_pairing_not_found() -> AppError {
 fn device_pairing_proof_failed(
     error: arkret_signatures::device_pairing::DevicePairingProofError,
 ) -> AppError {
-    AppError::new(
+    AppError::from_rejection(
         arkret_wire::ErrorCode::FailedPrecondition,
         "device pairing challenge proof is invalid",
     )

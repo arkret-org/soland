@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::events_payloads::RealmMediaServicePayload;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -82,8 +81,7 @@ async fn admin_get_realm_media_service(
     if RealmId::new(realm_id.clone()).is_err() {
         return Err(AppError::param_invalid(format!(
             "invalid realm_id `{realm_id}`: must be a typed ak:realm: id"
-        ))
-        .with_status(StatusCode::BAD_REQUEST));
+        )));
     }
     let cell_id = CellRef::new(arkret_wire::null_subject_cell(
         arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,

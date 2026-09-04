@@ -48,24 +48,24 @@ pub(super) async fn run_webvh_resolution_checks(
     // these proofs prove who is allowed to change the DID.
     validate_rotation_authorization_for_log(&log)?;
     let head = log.last().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::CurrentDidAuthorityUnavailable,
+        crate::app_error!(
+            CurrentDidAuthorityUnavailable,
             "verified did:webvh history has no current head",
         )
     })?;
     let version_id = NonEmptyString::new(
         head.version_id()
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::CurrentDidAuthorityUnavailable,
+                crate::app_error!(
+                    CurrentDidAuthorityUnavailable,
                     "verified did:webvh head has no versionId",
                 )
             })?
             .to_owned(),
     )
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::CurrentDidAuthorityUnavailable,
+        crate::app_error!(
+            CurrentDidAuthorityUnavailable,
             format!("verified did:webvh head has invalid versionId: {error}"),
         )
     })?;
@@ -75,14 +75,14 @@ pub(super) async fn run_webvh_resolution_checks(
     )
     .map_err(|error| AppError::internal(format!("invalid WebVH head digest: {error}")))?;
     let persisted_head = events.last().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::CurrentDidAuthorityUnavailable,
+        crate::app_error!(
+            CurrentDidAuthorityUnavailable,
             "verified did:webvh history has no durable head",
         )
     })?;
     if persisted_head.event_digest != log_head_digest.as_str() {
-        return Err(AppError::new(
-            ErrorCode::CurrentDidAuthorityUnavailable,
+        return Err(crate::app_error!(
+            CurrentDidAuthorityUnavailable,
             "durable did:webvh head digest does not match the verified log entry",
         ));
     }
@@ -91,16 +91,16 @@ pub(super) async fn run_webvh_resolution_checks(
         .pointer("/parameters/updateKeys/0")
         .and_then(Value::as_str)
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::CurrentDidAuthorityUnavailable,
+            crate::app_error!(
+                CurrentDidAuthorityUnavailable,
                 "verified did:webvh head has no active updateKeys[0]",
             )
         })?;
     let update_key = update_key.strip_prefix("did:key:").unwrap_or(update_key);
     let control_key_bytes =
         arkret_canonical::decode_ed25519_multibase(update_key).map_err(|error| {
-            AppError::new(
-                ErrorCode::CurrentDidAuthorityUnavailable,
+            crate::app_error!(
+                CurrentDidAuthorityUnavailable,
                 format!("verified did:webvh active update key is invalid: {error}"),
             )
         })?;

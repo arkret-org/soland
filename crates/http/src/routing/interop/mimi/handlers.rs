@@ -439,9 +439,9 @@ pub(super) async fn mimi_consent_update(
     .map_err(|error| {
         crate::routing::events::event_log::submit_one_error_to_app_error(
             "MIMI consent Event submit failed",
-            error.status,
-            error.code,
-            &error.message,
+            error.status(),
+            error.code(),
+            &error.message(),
         )
     })?;
     json_ok(MimiUpdateConsentOutcome {
@@ -1103,9 +1103,9 @@ pub(super) async fn mimi_report_abuse(
     .map_err(|error| {
         crate::routing::events::event_log::submit_one_error_to_app_error(
             "MIMI moderation report Event submit failed",
-            error.status,
-            error.code,
-            &error.message,
+            error.status(),
+            error.code(),
+            &error.message(),
         )
     })?;
 

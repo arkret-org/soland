@@ -140,11 +140,11 @@ pub(super) async fn logout(
 fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> AppError {
     let (status, code, message) = error;
     if let Some(error_code) = ErrorCode::from_wire(code) {
-        return AppError::new(error_code, message);
+        return AppError::from_rejection(error_code, message);
     }
     match status {
         StatusCode::SERVICE_UNAVAILABLE => {
-            AppError::new(ErrorCode::TemporarilyUnavailable, message)
+            crate::app_error!(TemporarilyUnavailable, message)
         }
         StatusCode::INTERNAL_SERVER_ERROR => AppError::internal(message),
         StatusCode::BAD_REQUEST | StatusCode::UNPROCESSABLE_ENTITY => {
@@ -243,8 +243,8 @@ fn classify_logout_introspection(
 }
 
 fn invalid_logout_introspection(status: crate::wire::SessionGrantIntrospectStatus) -> AppError {
-    AppError::new(
-        ErrorCode::TemporarilyUnavailable,
+    crate::app_error!(
+        TemporarilyUnavailable,
         format!("invalid session grant logout introspection outcome for status {status:?}"),
     )
 }
@@ -270,8 +270,8 @@ fn confirm_auth_side_logout(body: AuthSessionLogoutOutcome) -> Result<(), AppErr
     if body.grant_chain_terminated && body.auth_session_logged_out {
         return Ok(());
     }
-    Err(AppError::new(
-        ErrorCode::TemporarilyUnavailable,
+    Err(crate::app_error!(
+        TemporarilyUnavailable,
         "Auth-side session logout did not confirm grant-chain termination",
     ))
 }
@@ -427,8 +427,8 @@ pub(super) async fn session_revoke(
         + usize::from(body.all_sessions == Some(true))
         + usize::from(session_revoke_has_applet_selector(&body));
     if selector_count > 1 {
-        return Err(AppError::new(
-            ErrorCode::SessionRevokeSelectorConflict,
+        return Err(crate::app_error!(
+            SessionRevokeSelectorConflict,
             "target_session_grant_id, target_device_id, all_sessions and applet selector are mutually exclusive",
         ));
     }
@@ -584,8 +584,7 @@ async fn verify_cross_session_revoke_proof(
 }
 
 fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SignatureInvalid, message)
-        .with_status(StatusCode::UNAUTHORIZED)
+    crate::app_error!(SignatureInvalid, message)
         .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 

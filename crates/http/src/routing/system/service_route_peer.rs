@@ -6,9 +6,8 @@ use arkret_models_identity::{
 use arkret_wire::{Did, DidCoreId, Hash};
 use chrono::Utc;
 use ed25519_dalek::{Signature, Verifier as _};
-use salvo::http::StatusCode;
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_storage::{
     ServiceResolutionForkEvidence, ServiceResolutionMirrorCommit, ServiceResolutionMirrorEntry,
@@ -448,9 +447,7 @@ fn required_header(req: &Request, name: &'static str) -> Result<String, AppError
 }
 
 fn protocol_violation(error: impl std::fmt::Display) -> AppError {
-    AppError::param_invalid(error.to_string())
-        .with_status(StatusCode::BAD_REQUEST)
-        .with_wire_code("schema_violation")
+    AppError::param_invalid(error.to_string()).with_wire_code("schema_violation")
 }
 
 fn duplicate_conflict(message: impl Into<String>) -> AppError {
@@ -458,7 +455,7 @@ fn duplicate_conflict(message: impl Into<String>) -> AppError {
 }
 
 fn limit_exceeded(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::LimitExceeded, message)
+    crate::app_error!(LimitExceeded, message)
 }
 
 fn blinded_not_found() -> AppError {

@@ -30,12 +30,12 @@ use arkret_wire::{
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
-use salvo::http::{HeaderValue, StatusCode};
+use salvo::http::HeaderValue;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 use soland_services::events::{
@@ -158,8 +158,8 @@ async fn issue_invite_locator(
             set_invite_locator_secret_response_headers(res);
             json_ok(locator_issue_outcome(&record, token)?)
         }
-        InviteLocatorInsertOutcome::ActiveLimitReached => Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        InviteLocatorInsertOutcome::ActiveLimitReached => Err(crate::app_error!(
+            FailedPrecondition,
             "active invite locator limit reached",
         )
         .with_wire_code("failed_precondition")),
@@ -429,9 +429,7 @@ async fn receive_private_invite_delivery(
             )
             .await
             .map_err(|error| {
-                AppError::new(ErrorCode::SchemaViolation, error.message)
-                    .with_status(error.status)
-                    .with_wire_code(error.code)
+                crate::app_error!(SchemaViolation, error.message).with_wire_code(error.code)
             })?;
             let duplicate = persist_private_invite_projection(
                 state,
@@ -649,7 +647,7 @@ async fn require_dispatchable_invite_event(
 }
 
 fn invite_event_precondition(reason_code: &'static str, message: &'static str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
+    crate::app_error!(FailedPrecondition, message)
         .with_wire_code("failed_precondition")
         .with_reason_code(reason_code)
 }
@@ -682,8 +680,8 @@ async fn enqueue_remote_invite_delivery(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("recipient service has no verified route: {error}"),
             )
         })?;
@@ -835,8 +833,8 @@ async fn persist_private_invite_projection(
         if exact_replay {
             return Ok(true);
         }
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
+        return Err(crate::app_error!(
+            DuplicateConflict,
             "invite_id is already bound to a different private invite delivery",
         )
         .with_wire_code("duplicate_conflict"));
@@ -985,8 +983,8 @@ async fn deliver_invite_credential(
             AccountDataCasOutcome::Conflict(_) => {
                 attempt += 1;
                 if attempt >= INVITE_DELIVERY_CAS_ATTEMPTS {
-                    return Err(AppError::new(
-                        ErrorCode::CasConflict,
+                    return Err(crate::app_error!(
+                        CasConflict,
                         "invite delivery account data changed concurrently",
                     ));
                 }
@@ -1061,7 +1059,6 @@ async fn resolve_invite_locator(
         return Err(AppError::param_invalid(
             "locator_token must be sent in the JSON body, never in URL path or query",
         )
-        .with_status(StatusCode::BAD_REQUEST)
         .with_wire_code("schema_violation"));
     }
     let body = req

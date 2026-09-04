@@ -122,8 +122,8 @@ pub(super) fn enforce_history_response_limit(
     let bytes = arkret_canonical::canonical_json_bytes(value)
         .map_err(|error| AppError::internal(format!("history response encoding: {error}")))?;
     if bytes.len() > limit {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "history response exceeds its canonical byte limit",
         ));
     }

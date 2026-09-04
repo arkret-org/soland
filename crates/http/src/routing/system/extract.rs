@@ -58,13 +58,12 @@ impl AuthArgs {
     ) -> Result<SessionRecord, AppError> {
         match authenticated_session_inner(state, req).await {
             Ok(session) => Ok(session),
-            Err((status, code, message)) => {
+            Err((_status, code, message)) => {
                 let typed = soland_http::error::ErrorCode::from_wire(code);
-                let mut error = AppError::new(
+                let mut error = AppError::from_rejection(
                     typed.unwrap_or(soland_http::error::ErrorCode::Unauthenticated),
                     message,
-                )
-                .with_status(status);
+                );
                 if typed.is_none() {
                     error = error.with_wire_code(code);
                 }

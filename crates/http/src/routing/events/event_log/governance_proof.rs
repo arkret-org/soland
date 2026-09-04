@@ -193,8 +193,8 @@ async fn apply_authoritative_event_seal_path(
             .iter()
             .any(|digest| !available_control_digests.contains(digest))
         {
-            return Err(AppError::new(
-                ErrorCode::DependencyMissing,
+            return Err(crate::app_error!(
+                DependencyMissing,
                 "authoritative Event Seal delta references a Control Event that is not accepted",
             ));
         }
@@ -379,8 +379,8 @@ async fn materialize_realm_control_with_transported_seals(
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("canonical Realm Event store unavailable: {error}"),
             )
         })?;
@@ -420,8 +420,8 @@ async fn materialize_realm_control_with_transported_seals(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("device generation state unavailable: {error}"),
             )
         })?
@@ -437,8 +437,8 @@ async fn materialize_realm_control_with_transported_seals(
             .devices_for_actor(principal_id.signing_principal_id().as_str())
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("device generation inventory unavailable: {error}"),
                 )
             })?
@@ -453,8 +453,8 @@ async fn materialize_realm_control_with_transported_seals(
             .seal_leaf_union_proof(&requirement.accepted_frontier_refs)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("accepted generation Seal coverage unavailable: {error}"),
                 )
             })?
@@ -479,8 +479,8 @@ async fn materialize_realm_control_with_transported_seals(
             )
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("device generation quarantine state unavailable: {error}"),
                 )
             })?,
@@ -498,8 +498,8 @@ async fn materialize_realm_control_with_transported_seals(
         .realm_cells(realm_id)
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("read sealed Realm cells for governance replay: {error}"),
             )
         })?
@@ -509,8 +509,8 @@ async fn materialize_realm_control_with_transported_seals(
             .sealed_ops_for_cell(realm_id, &cell)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("read sealed governance pre-state for {cell}: {error}"),
                 )
             })?;
@@ -595,8 +595,8 @@ async fn materialize_realm_control_with_transported_seals(
             }
         }
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Event {} is not a canonical envelope: {error}",
                     record.event_id
@@ -623,20 +623,20 @@ async fn materialize_realm_control_with_transported_seals(
         let digest = event
             .event_digest_with_digest_suite(record.digest_suite)
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     format!("stored Event {} digest failed: {error}", event.event_id),
                 )
             })?;
         if digest != record.canonical_digest {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 format!("stored Event {} canonical digest mismatch", event.event_id),
             ));
         }
         let move_id = Hash::new(digest).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Event {} has an invalid digest: {error}",
                     event.event_id
@@ -644,8 +644,8 @@ async fn materialize_realm_control_with_transported_seals(
             )
         })?;
         if !covered.insert(move_id.clone()) {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
@@ -677,8 +677,8 @@ async fn materialize_realm_control_with_transported_seals(
                         .projections()
                         .resolve_cell(realm_id, &member_cell)
                         .map_err(|error| {
-                            AppError::new(
-                                ErrorCode::UnsupportedProfile,
+                            crate::app_error!(
+                                UnsupportedProfile,
                                 format!(
                                     "no lattice registered for governance cell \
                                          {member_cell}: {error}"
@@ -688,16 +688,16 @@ async fn materialize_realm_control_with_transported_seals(
                     match arkret_state::join_cell(binding.lattice.as_ref(), &member_cell, ops) {
                         CellState::Value(serde_json::Value::String(value)) => Some(value),
                         CellState::Value(_) => {
-                            return Err(AppError::new(
-                                ErrorCode::StateMismatch,
+                            return Err(crate::app_error!(
+                                StateMismatch,
                                 format!(
                                     "governance member cell {member_cell} is not a string state"
                                 ),
                             ));
                         }
                         CellState::Bottom(_) => {
-                            return Err(AppError::new(
-                                ErrorCode::StateMismatch,
+                            return Err(crate::app_error!(
+                                StateMismatch,
                                 format!("governance member cell {member_cell} is in Bottom state"),
                             ));
                         }
@@ -733,8 +733,8 @@ async fn materialize_realm_control_with_transported_seals(
         if let Some(head) = crate::notary::ensure_realm_seal_head(state, realm_id)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("accepted Realm Seal frontier is unavailable: {error}"),
                 )
             })?
@@ -742,15 +742,15 @@ async fn materialize_realm_control_with_transported_seals(
             let seal_view = crate::notary::materialized_event_seal_view(state, head)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         format!("accepted Realm Seal path is unavailable: {error}"),
                     )
                 })?;
             return Ok(MaterializedRealmControl { seal_view });
         }
-        return Err(AppError::new(
-            ErrorCode::FrontierUnavailable,
+        return Err(crate::app_error!(
+            FrontierUnavailable,
             "Realm has no accepted Control Event material",
         ));
     }
@@ -764,8 +764,8 @@ async fn materialize_realm_control_with_transported_seals(
         .map(|record| {
             let event =
                 serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                    AppError::new(
-                        ErrorCode::StateMismatch,
+                    crate::app_error!(
+                        StateMismatch,
                         format!(
                             "covered Event {} is not a canonical envelope: {error}",
                             record.event_id
@@ -779,8 +779,8 @@ async fn materialize_realm_control_with_transported_seals(
     let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let state_root = compute_state_root(&joined, digest_suite).map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
+        crate::app_error!(
+            StateMismatch,
             format!("governance state root failed: {error}"),
         )
     })?;
@@ -814,8 +814,8 @@ async fn materialize_realm_control_with_transported_seals(
         generation_fence.as_ref(),
     );
     let seal_view = seal_view.await.map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             format!("accepted Event Seal materialization failed: {error}"),
         )
     })?;
@@ -833,8 +833,8 @@ async fn materialize_agent_realm_control(
     let mut event_digest_suites = BTreeMap::new();
     for record in records {
         let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Agent PCR Event {} is not canonical: {error}",
                     record.event_id
@@ -848,8 +848,8 @@ async fn materialize_agent_realm_control(
         // for this one.
         let event_realm_id = event.scope_ref.realm_id_opt().unwrap_or(&event.realm_id);
         if event_realm_id != realm_id {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Agent PCR Event {} is scoped to another Realm",
                     record.event_id
@@ -859,8 +859,8 @@ async fn materialize_agent_realm_control(
         let digest = event
             .event_digest_with_digest_suite(record.digest_suite)
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     format!(
                         "stored Agent PCR Event {} digest failed: {error}",
                         record.event_id
@@ -868,8 +868,8 @@ async fn materialize_agent_realm_control(
                 )
             })?;
         if digest != record.canonical_digest {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Agent PCR Event {} canonical digest mismatch",
                     record.event_id
@@ -890,14 +890,14 @@ async fn materialize_agent_realm_control(
             .map_err(|error| error.to_string())
     })
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
+        crate::app_error!(
+            StateMismatch,
             format!("Agent PCR control material is invalid: {error}"),
         )
     })?;
     if &material.realm_id != realm_id {
-        return Err(AppError::new(
-            ErrorCode::StateMismatch,
+        return Err(crate::app_error!(
+            StateMismatch,
             "Agent PCR material resolved to a different Realm",
         ));
     }
@@ -936,8 +936,8 @@ async fn materialize_agent_realm_control(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
+        crate::app_error!(
+            FrontierUnavailable,
             format!("accepted Agent PCR Seal materialization failed: {error}"),
         )
     })?;
@@ -1003,14 +1003,14 @@ async fn load_governance_checkpoint(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "requested target Seal closure is unavailable",
                 )
             })?;
         if seal.realm_id != *realm_id {
-            return Err(AppError::new(
-                ErrorCode::MlsGovernanceAnchorUnreachable,
+            return Err(crate::app_error!(
+                MlsGovernanceAnchorUnreachable,
                 "requested Seal closure crosses the Realm boundary",
             ));
         }
@@ -1028,8 +1028,8 @@ async fn load_governance_checkpoint(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "requested target checkpoint has a missing Control Event",
                     )
                 })?;
@@ -1063,7 +1063,7 @@ pub(crate) async fn load_verified_governance_checkpoint(
 ) -> Result<MlsGovernanceVerificationCheckpoint, AppError> {
     basis
         .validate_protocol_bounds()
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     let mut seals = BTreeMap::new();
     let mut pending = basis.leaves.clone();
     while let Some(seal_id) = pending.pop() {
@@ -1076,14 +1076,14 @@ pub(crate) async fn load_verified_governance_checkpoint(
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "trusted RHRK base Seal closure is unavailable locally",
                 )
             })?;
         if seal.realm_id != *realm_id {
-            return Err(AppError::new(
-                ErrorCode::MlsGovernanceAnchorUnreachable,
+            return Err(crate::app_error!(
+                MlsGovernanceAnchorUnreachable,
                 "trusted RHRK base Seal closure crosses the Realm boundary",
             ));
         }
@@ -1099,8 +1099,8 @@ pub(crate) async fn load_verified_governance_checkpoint(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "trusted RHRK base checkpoint has a missing local Control Event",
                     )
                 })?;
@@ -1149,22 +1149,22 @@ fn ensure_target_dominates_base(
             continue;
         }
         let seal = seals.get(&seal_id).ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 "requested target Seal closure is incomplete",
             )
         })?;
         if seal.predecessor_refs.is_empty() {
-            return Err(AppError::new(
-                ErrorCode::MlsGovernanceAnchorUnreachable,
+            return Err(crate::app_error!(
+                MlsGovernanceAnchorUnreachable,
                 "proof target basis does not dominate proof base basis",
             ));
         }
         pending.extend(seal.predecessor_refs.iter().cloned());
     }
     if reached != base {
-        return Err(AppError::new(
-            ErrorCode::MlsGovernanceAnchorUnreachable,
+        return Err(crate::app_error!(
+            MlsGovernanceAnchorUnreachable,
             "proof target basis does not reach every proof base leaf",
         ));
     }
@@ -1211,8 +1211,8 @@ async fn load_checkpoint_dependencies(
             _ => Ok(Vec::new()),
         }
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("governance dependency closure is invalid: {error}"),
             )
         })?;
@@ -1225,8 +1225,8 @@ async fn load_checkpoint_dependencies(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "transitive governance replay dependency is unavailable",
                     )
                 })?;
@@ -1274,8 +1274,8 @@ fn insert_checkpoint_dependency(
         return Ok(());
     }
     if dependencies.len() >= MAX_GOVERNANCE_DEPENDENCY_SELECTORS {
-        return Err(AppError::new(
-            ErrorCode::MlsGovernanceProofBoundsExceeded,
+        return Err(crate::app_error!(
+            MlsGovernanceProofBoundsExceeded,
             "governance dependency closure exceeds the protocol object limit",
         ));
     }
@@ -1297,8 +1297,8 @@ fn group_genesis_binding(
     let binding = match accepted {
         Some(epoch) => {
             if request.proposed_group_genesis_binding.is_some() {
-                return Err(AppError::new(
-                    ErrorCode::MlsGenesisBindingProposalMismatch,
+                return Err(crate::app_error!(
+                    MlsGenesisBindingProposalMismatch,
                     "accepted MLS Genesis exists; retry 0 -> 0 without a proposal",
                 ));
             }
@@ -1308,15 +1308,15 @@ fn group_genesis_binding(
                     .get("content_scheme")
                     .cloned()
                     .ok_or_else(|| {
-                        AppError::new(
-                            ErrorCode::FrontierUnavailable,
+                        crate::app_error!(
+                            FrontierUnavailable,
                             "accepted MLS Genesis omits content_scheme",
                         )
                     })?,
             )
             .map_err(|_| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     "accepted MLS Genesis content_scheme is not registered",
                 )
             })?;
@@ -1328,8 +1328,8 @@ fn group_genesis_binding(
                 .map(serde_json::from_value::<DurabilityPolicy>)
                 .transpose()
                 .map_err(|_| {
-                    AppError::new(
-                        ErrorCode::FrontierUnavailable,
+                    crate::app_error!(
+                        FrontierUnavailable,
                         "accepted MLS Genesis durability_policy is not registered",
                     )
                 })?;
@@ -1340,8 +1340,8 @@ fn group_genesis_binding(
         }
         None => {
             if request.previous_epoch != 0 || request.next_epoch != 0 {
-                return Err(AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                return Err(crate::app_error!(
+                    FrontierUnavailable,
                     "MLS governance successor has no accepted Genesis binding",
                 ));
             }
@@ -1349,22 +1349,19 @@ fn group_genesis_binding(
                 .proposed_group_genesis_binding
                 .as_ref()
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::MlsGenesisBindingProposalRequired,
+                    crate::app_error!(
+                        MlsGenesisBindingProposalRequired,
                         "pre-Genesis 0 -> 0 query requires proposed_group_genesis_binding",
                     )
                 })?;
             MlsGroupGenesisBinding::from_proposal(proposal).map_err(|error| {
-                AppError::new(
-                    ErrorCode::MlsGenesisBindingProposalMismatch,
-                    error.to_string(),
-                )
+                crate::app_error!(MlsGenesisBindingProposalMismatch, error.to_string(),)
             })?
         }
     };
     binding
         .validate()
-        .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
+        .map_err(|error| crate::app_error!(FrontierUnavailable, error.to_string()))?;
     Ok(binding)
 }
 
@@ -1381,15 +1378,12 @@ fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
         }
         _ => ErrorCode::StateMismatch,
     };
-    AppError::new(code, error.to_string())
+    AppError::from_rejection(code, error.to_string())
 }
 
 fn canonical_actor(value: &str) -> Result<arkret_wire::ActorId, AppError> {
     serde_json::from_str(value).map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
-            format!("stored ActorId is invalid: {error}"),
-        )
+        crate::app_error!(StateMismatch, format!("stored ActorId is invalid: {error}"),)
     })
 }
 
@@ -1445,22 +1439,22 @@ pub(crate) async fn first_generation_event_seal_requirement(
         )
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FrontierUnavailable,
+            crate::app_error!(
+                FrontierUnavailable,
                 format!("device generation state unavailable: {error}"),
             )
         })?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 "device re-anchor history has no B-model generation state",
             )
         })?;
         if generation.status
             == crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted
         {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "device_reanchor_conflict: generation Seal materialization is quarantined",
             ));
         }
@@ -1480,8 +1474,8 @@ pub(crate) async fn first_generation_event_seal_requirement(
             continue;
         }
         if candidates.len() != 1 || requirement.is_some() {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "canonical Realm history has ambiguous active device re-anchor units",
             ));
         }
@@ -1496,15 +1490,15 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 .unwrap_or(serde_json::Value::Null),
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!("stored device re-anchor payload is invalid: {error}"),
             )
         })?;
         let authorize = soland_services::events::paired_replacement_authorize(reanchor, records)
             .ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     "active device re-anchor replacement authorization is missing",
                 )
             })?;
@@ -1518,8 +1512,8 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 .unwrap_or(serde_json::Value::Null),
         )
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!("stored replacement device authorization payload is invalid: {error}"),
             )
         })?;
@@ -1528,16 +1522,16 @@ pub(crate) async fn first_generation_event_seal_requirement(
                 &authorize.envelope,
                 &authorize.canonical_digest,
             )
-            .map_err(|message| AppError::new(ErrorCode::StateMismatch, message))?;
+            .map_err(|message| crate::app_error!(StateMismatch, message))?;
         if replacement_payload_digest != payload.replacement_authorize_payload_digest {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "stored replacement device authorization does not match the re-anchor payload digest",
             ));
         }
         if authorize.actor_id != actor {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "replacement device authorization principal differs from the re-anchor actor",
             ));
         }
@@ -1550,20 +1544,20 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .map(|leaf| SealId::new(leaf.to_string()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     format!("stored pre-fence Seal leaf is invalid: {error}"),
                 )
             })?;
         let realm_id = RealmId::new(reanchor.realm_id.clone().ok_or_else(|| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 "stored re-anchor is missing its principal-control Realm",
             )
         })?)
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!("stored re-anchor Realm id is invalid: {error}"),
             )
         })?;
@@ -1575,21 +1569,21 @@ pub(crate) async fn first_generation_event_seal_requirement(
             )
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("accepted generation Seal frontier unavailable: {error}"),
                 )
             })?;
         let reanchor_digest = Hash::new(reanchor.canonical_digest.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!("stored re-anchor digest is invalid: {error}"),
             )
         })?;
         let replacement_authorize_digest =
             Hash::new(authorize.canonical_digest.clone()).map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     format!("stored re-anchor unit digest is invalid: {error}"),
                 )
             })?;
@@ -1625,8 +1619,8 @@ async fn join_control_state_batches(
             .sealed_op_batches_for_cell(realm_id, cell)
             .await
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::FrontierUnavailable,
+                crate::app_error!(
+                    FrontierUnavailable,
                     format!("read governance cell {cell} Seal batches: {error}"),
                 )
             })?;
@@ -1662,8 +1656,8 @@ async fn join_control_state_batches(
             .projections()
             .resolve_cell(realm_id, cell)
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::UnsupportedProfile,
+                crate::app_error!(
+                    UnsupportedProfile,
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;
@@ -1677,8 +1671,8 @@ async fn join_control_state_batches(
         // Rejecting every Bottom here lets one ambiguous, unrelated selector
         // poison all later controller-PCR authorization and Seal material.
         if matches!(resolved, CellState::Bottom(_)) && bottom_mode != BottomMode::Expose {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 format!("governance cell {cell} is in Bottom state"),
             ));
         }
@@ -1782,8 +1776,8 @@ fn frozen_governance_pre_state(
             .projections()
             .resolve_cell(realm_id, cell)
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::UnsupportedProfile,
+                crate::app_error!(
+                    UnsupportedProfile,
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;
@@ -1811,8 +1805,8 @@ fn canonical_event_sealed_ops(
         .projections()
         .project_accepted_cell_writes_with_digest_suite(event, digest_suite)
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 format!(
                     "stored Event {} does not project its registered cell writes: {error}",
                     event.event_id
@@ -1836,8 +1830,8 @@ fn canonical_event_sealed_ops(
             .projections()
             .resolve_projected_write(write, realm_id, &pre_state)
             .map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
+                crate::app_error!(
+                    StateMismatch,
                     format!(
                         "stored Event {} cannot resolve its registered write on {}: {error:?}",
                         event.event_id, write.cell_id
@@ -1854,8 +1848,8 @@ fn canonical_event_sealed_ops(
 
     if event.kind == arkret_wire::EventKind::InviteAccept {
         let from = invite_accept_from.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::StateMismatch,
+            crate::app_error!(
+                StateMismatch,
                 "invite acceptance proof material is missing prior membership state",
             )
         })?;
@@ -1879,8 +1873,8 @@ fn canonical_event_sealed_ops(
             || member_ops[0].1.op.from.as_ref() != Some(&expected_from)
             || member_ops[0].1.op.to.as_ref() != Some(&expected_to)
         {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "invite acceptance member transition does not match prior membership state",
             ));
         }
@@ -1893,8 +1887,8 @@ fn canonical_event_sealed_ops(
             .map(|(cell, _)| cell.as_str().to_owned())
             .collect();
         if resolved.len() != expected.len() || actual != expected {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
+            return Err(crate::app_error!(
+                StateMismatch,
                 "Realm create proof material does not derive the canonical registered genesis cells",
             ));
         }
@@ -1904,8 +1898,8 @@ fn canonical_event_sealed_ops(
 }
 
 fn proof_state_error(error: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::StateMismatch,
+    crate::app_error!(
+        StateMismatch,
         format!("MLS governance proof state mismatch: {error}"),
     )
 }

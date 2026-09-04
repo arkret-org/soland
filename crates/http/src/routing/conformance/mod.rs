@@ -50,7 +50,7 @@ pub(crate) mod handlers;
 pub(crate) mod realm_fixture;
 pub(crate) mod util;
 
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use crate::config::AppConfig;
 
@@ -96,8 +96,8 @@ pub(crate) fn ensure_enabled() -> Result<(), AppError> {
     if HARNESS_ENABLED.get().copied().unwrap_or(false) {
         Ok(())
     } else {
-        Err(AppError::new(
-            ErrorCode::NotFound,
+        Err(crate::app_error!(
+            NotFound,
             "conformance endpoints require development_mode=true",
         ))
     }

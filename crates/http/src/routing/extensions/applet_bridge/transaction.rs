@@ -5,7 +5,6 @@ use arkret_models_integration::{
     namespace_pattern_matches,
 };
 use arkret_wire::Event;
-use salvo::http::StatusCode;
 use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_services::identity::SessionIdentityState as SessionRecord;
@@ -88,14 +87,14 @@ pub(super) async fn process_verified_transaction(
             Err(error) => {
                 tracing::warn!(
                     event_id = %event_id,
-                    code = %error.code,
-                    message = %error.message,
+                    code = %error.code(),
+                    message = %error.message(),
                     "applet transaction event rejected"
                 );
                 rejected.push(rejected_event_with_detail(
                     &event_id,
-                    error.code,
-                    error.message,
+                    error.code(),
+                    error.message(),
                 ));
             }
         }
@@ -147,7 +146,6 @@ fn replayed_transaction_outcome(
     let Some(outcome) = existing.outcome else {
         return Err(
             AppError::conflict("applet transaction is already in progress")
-                .with_status(StatusCode::CONFLICT)
                 .with_wire_code("applet_transaction_in_progress"),
         );
     };

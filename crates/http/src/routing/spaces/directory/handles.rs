@@ -607,10 +607,7 @@ pub(super) async fn signed_handle_claim(
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
         &json!({ "subject_id": principal_id }),
     ) {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
-            rejection.message,
-        ));
+        return Err(crate::app_error!(SchemaViolation, rejection.message,));
     }
     let service_id = state.service_id().clone();
     let default_domain = service_handle_domain(state);
@@ -797,10 +794,7 @@ pub(super) async fn list_handles_for_subject(
     if let Err(rejection) = soland_http::wire_validators::handle_claim_subject::validate_subject(
         &json!({ "subject_id": subject.as_str() }),
     ) {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
-            rejection.message,
-        ));
+        return Err(crate::app_error!(SchemaViolation, rejection.message,));
     }
 
     let limit = checked_limit(body.limit.map(|limit| limit as usize))?;
@@ -1000,14 +994,10 @@ fn cursor_app_error(error: CursorAuthorityError) -> AppError {
     match error {
         CursorAuthorityError::ParamInvalid(message) => AppError::param_invalid(message)
             .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
-        CursorAuthorityError::Expired => AppError::new(
-            soland_http::error::ErrorCode::CursorExpired,
-            "cursor has expired",
-        ),
-        CursorAuthorityError::IntegrityInvalid => AppError::new(
-            soland_http::error::ErrorCode::CursorIntegrityInvalid,
-            "cursor integrity check failed",
-        ),
+        CursorAuthorityError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),
+        CursorAuthorityError::IntegrityInvalid => {
+            crate::app_error!(CursorIntegrityInvalid, "cursor integrity check failed",)
+        }
     }
 }
 

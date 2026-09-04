@@ -682,8 +682,8 @@ pub(crate) async fn authorize_actor_only_selectors(
 ) -> Result<(), soland_http::error::AppError> {
     use soland_http::error::AppError;
     let unauthorized = || {
-        AppError::new(
-            soland_http::error::ErrorCode::CapabilityDenied,
+        crate::app_error!(
+            CapabilityDenied,
             "actor-only selectors require an exact holder-owned ActorId",
         )
         .with_wire_code("unauthorized")
@@ -859,24 +859,17 @@ fn events_query_scope_digest(
 
 fn events_query_cursor_error(error: SyncCursorError) -> soland_http::error::AppError {
     match error {
-        SyncCursorError::Expired => soland_http::error::AppError::new(
-            soland_http::error::ErrorCode::CursorExpired,
-            "cursor has expired",
-        ),
+        SyncCursorError::Expired => crate::app_error!(CursorExpired, "cursor has expired",),
         // encoding.md §8.3 closed set: syntax/schema failures pin the top-level
         // `param_invalid` code with reason `invalid_cursor`.
         SyncCursorError::Invalid(message) => soland_http::error::AppError::param_invalid(message)
             .with_reason_code(arkret_wire::ReasonCode::INVALID_CURSOR),
         SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
-            soland_http::error::AppError::new(
-                soland_http::error::ErrorCode::CursorIntegrityInvalid,
-                message,
-            )
+            crate::app_error!(CursorIntegrityInvalid, message,)
         }
-        SyncCursorError::Revoked => soland_http::error::AppError::new(
-            soland_http::error::ErrorCode::CursorRevoked,
-            "cursor authority has been revoked",
-        ),
+        SyncCursorError::Revoked => {
+            crate::app_error!(CursorRevoked, "cursor authority has been revoked",)
+        }
     }
 }
 
@@ -976,10 +969,10 @@ async fn events_query_impl(
         Some(
             authenticated_session(state, req)
                 .await
-                .map_err(|(status, code, message)| {
-                    soland_http::error::AppError::param_invalid(message)
-                        .with_status(status)
-                        .with_wire_code(code)
+                .map_err(|(_status, code, message)| {
+                    let typed = soland_http::error::ErrorCode::from_wire(code)
+                        .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
+                    soland_http::error::AppError::from_rejection(typed, message)
                 })?,
         )
     } else {
@@ -988,11 +981,11 @@ async fn events_query_impl(
         // `subscribe_session_or_render` for the cursor-masking rationale.
         match authenticated_session(state, req).await {
             Ok(session) => Some(session),
-            Err((status, code, message)) => {
+            Err((_status, code, message)) => {
                 if request_presents_auth_material(req) {
-                    return Err(soland_http::error::AppError::param_invalid(message)
-                        .with_status(status)
-                        .with_wire_code(code));
+                    let typed = soland_http::error::ErrorCode::from_wire(code)
+                        .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
+                    return Err(soland_http::error::AppError::from_rejection(typed, message));
                 }
                 None
             }
@@ -2424,10 +2417,10 @@ pub(super) async fn snapshot_head(
     let realm_id = scope_selector_to_realm_id(&realm_id)?;
     let session = authenticated_session(state, req)
         .await
-        .map_err(|(status, code, message)| {
-            soland_http::error::AppError::param_invalid(message)
-                .with_status(status)
-                .with_wire_code(code)
+        .map_err(|(_status, code, message)| {
+            let typed = soland_http::error::ErrorCode::from_wire(code)
+                .unwrap_or(soland_http::error::ErrorCode::Unauthenticated);
+            soland_http::error::AppError::from_rejection(typed, message)
         })?;
     if is_realm_deleted(state, &realm_id).await
         || !realm_id_accessible(state, &realm_id, Some(&session)).await
@@ -2444,10 +2437,7 @@ pub(super) async fn snapshot_head(
             ) {
                 error
             } else {
-                soland_http::error::AppError::new(
-                    soland_http::error::ErrorCode::SnapshotUnavailable,
-                    error.message,
-                )
+                crate::app_error!(SnapshotUnavailable, error.message,)
             }
         })?;
     soland_http::result::json_ok(manifest)

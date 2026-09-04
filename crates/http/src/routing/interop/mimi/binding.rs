@@ -429,9 +429,9 @@ pub(super) async fn admit_mimi_room_binding_event(
         .map_err(|error| {
             crate::routing::events::event_log::submit_one_error_to_app_error(
                 "MIMI room binding Event submit failed",
-                error.status,
-                error.code,
-                &error.message,
+                error.status(),
+                error.code(),
+                &error.message(),
             )
         })?;
     Ok(event_id)

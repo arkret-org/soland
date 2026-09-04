@@ -6,7 +6,7 @@ use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_wire::{AccountId, ActorId, DidCoreId, DidUrl, Seal};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::events::ActiveAgentAccountabilityQuery;
 use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, PinnedDidVersionStatus,
@@ -927,13 +927,11 @@ pub(crate) fn requested_scope_digest_for_record(
 }
 
 fn schema_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SchemaViolation, message)
+    crate::app_error!(SchemaViolation, message)
 }
 
 fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-        .with_reason_code(reason)
+    crate::app_error!(FailedPrecondition, message).with_reason_code(reason)
 }
 
 #[cfg(test)]

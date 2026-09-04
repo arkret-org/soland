@@ -1808,11 +1808,8 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
 
     let provision_status = response.status_code;
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(
-        provision_status,
-        Some(StatusCode::PRECONDITION_FAILED),
-        "{body}"
-    );
+    assert_eq!(provision_status, Some(StatusCode::CONFLICT), "{body}");
+    assert_eq!(problem_code(&body), "failed_precondition", "{body}");
     assert_eq!(
         body["reason_code"], "agent_provision_allocation_missing",
         "{body}"

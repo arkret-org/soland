@@ -19,7 +19,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::{AccountDataState, FindAgentControllerQuery, IdentityService};
 
 use super::AuthArgs;
@@ -249,8 +249,8 @@ fn account_data_cas_conflict(
     current: Option<&AccountDataState>,
 ) -> AppError {
     let details = account_data_conflict_details(account_data_key, current);
-    let mut error = AppError::new(
-        ErrorCode::CasConflict,
+    let mut error = crate::app_error!(
+        CasConflict,
         "expected_revision does not match current account data revision",
     );
     for (key, value) in details.as_object().expect("details is an object") {
@@ -328,8 +328,8 @@ async fn admit_caller_signed_account_data_set(
     validate_account_data_holder(event, &session_actor)?;
     let account_key = session_actor.to_string();
     if event.kind != arkret_wire::EventKind::AccountDataSet {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             format!(
                 "set_event.event.kind must be {}",
                 arkret_wire::EventKind::AccountDataSet
@@ -344,8 +344,8 @@ async fn admit_caller_signed_account_data_set(
             .map(str::to_owned)
     };
     if payload_str("key").as_deref() != Some(account_data_key) {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "set_event payload.key must equal the path account_data_key",
         ));
     }
@@ -354,8 +354,8 @@ async fn admit_caller_signed_account_data_set(
         .get("tombstone")
         .is_some_and(|value| value != &Value::Bool(false));
     if expect_tombstone != has_tombstone {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             if expect_tombstone {
                 "set_event payload must carry tombstone on this endpoint"
             } else {
@@ -368,8 +368,8 @@ async fn admit_caller_signed_account_data_set(
         .get("expected_revision")
         .and_then(Value::as_u64)
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 "set_event payload.expected_revision is required",
             )
         })?;
@@ -387,8 +387,8 @@ async fn admit_caller_signed_account_data_set(
         ));
     }
     let revision = expected_revision.checked_add(1).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::CasConflict,
+        crate::app_error!(
+            CasConflict,
             "account data revision high-water mark is exhausted",
         )
     })?;
@@ -398,8 +398,8 @@ async fn admit_caller_signed_account_data_set(
         .snapshot()
         .realm_is_principal_control_for_actor(realm_id.as_str(), &session_actor.to_string())
     {
-        return Err(AppError::new(
-            ErrorCode::SchemaViolation,
+        return Err(crate::app_error!(
+            SchemaViolation,
             "set_event.event.realm_id must be the holder's principal-control Realm",
         ));
     }
@@ -419,12 +419,11 @@ async fn admit_caller_signed_account_data_set(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            soland_http::error::ErrorCode::ParamInvalid,
-            format!("account_data Event admission failed: {}", error.message),
+        crate::app_error!(
+            ParamInvalid,
+            format!("account_data Event admission failed: {}", error.message()),
         )
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     Ok(revision)
 }
@@ -434,11 +433,10 @@ fn validate_account_data_holder(
     authenticated_actor: &arkret_wire::ActorId,
 ) -> Result<(), AppError> {
     if event.actor_id != *authenticated_actor {
-        return Err(AppError::new(
-            ErrorCode::PolicyViolation,
+        return Err(crate::app_error!(
+            PolicyViolation,
             "set_event.event.actor_id must be the authenticated Account Actor",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     Ok(())
 }
@@ -492,8 +490,8 @@ async fn put_account_data(
         .or_else(|| body.set_event.event.payload.get("encrypted_payload"))
         .cloned()
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
+            crate::app_error!(
+                SchemaViolation,
                 "set_event payload must carry body or encrypted_payload",
             )
         })?;
@@ -506,8 +504,8 @@ async fn put_account_data(
         .unwrap_or(usize::MAX)
         > MAX_PAYLOAD_BYTES
     {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::PayloadTooLarge,
+        return Err(crate::app_error!(
+            PayloadTooLarge,
             "account_data payload exceeds 64 KiB",
         ));
     }
@@ -659,8 +657,8 @@ async fn delete_account_data(
     if arkret_schema::account_data_pattern(&account_data_key)
         .is_some_and(|descriptor| descriptor.deletion_mode == "value_tombstone")
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "this account data type requires an in-value tombstone",
         )
         .with_reason_code("physical_delete_forbidden"));

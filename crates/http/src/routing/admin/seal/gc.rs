@@ -1,11 +1,9 @@
 //! MAL-13 GC candidates admin endpoint.
 
 use arkret_identifiers::RealmId;
-use salvo::http::StatusCode;
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -34,10 +32,8 @@ pub(crate) async fn admin_list_gc_candidates(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id_str = realm_id.into_inner();
-    let realm = RealmId::new(realm_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
+    let realm = RealmId::new(realm_id_str.clone())
+        .map_err(|e| crate::app_error!(ParamInvalid, format!("invalid realm_id: {e}")))?;
     let candidates = crate::gc::scan_gc_candidates(state, &realm).await;
     let total = candidates.len();
     json_ok(GcCandidatesOutcome {

@@ -17,11 +17,9 @@
 //! the handler runs; rate limiting comes from the global RateLimiter
 //! middleware. Audit-log and replay protection remain future work.
 
-use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
-use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use crate::state::{AppState, EventNotification, EventNotificationKind};
@@ -97,10 +95,10 @@ async fn admin_emit_resync_required(
         reconnect_after_ms,
     } = body.into_inner();
     if realm_id.is_empty() {
-        return Err(
-            AppError::new(ErrorCode::ParamInvalid, "realm_id is required".to_owned())
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(crate::app_error!(
+            ParamInvalid,
+            "realm_id is required".to_owned()
+        ));
     }
     let reason = reason.unwrap_or_else(|| "admin_triggered".to_owned());
 
@@ -145,10 +143,10 @@ async fn admin_emit_unauthorized(
         realm_id, reason, ..
     } = body.into_inner();
     if realm_id.is_empty() {
-        return Err(
-            AppError::new(ErrorCode::ParamInvalid, "realm_id is required".to_owned())
-                .with_status(StatusCode::BAD_REQUEST),
-        );
+        return Err(crate::app_error!(
+            ParamInvalid,
+            "realm_id is required".to_owned()
+        ));
     }
     let reason = reason.unwrap_or_else(|| "session_revoked".to_owned());
 

@@ -54,7 +54,7 @@ use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::Value;
 use soland_domain::reducer::mls::KeyPackageTrustBinding;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     MlsKeyPackageState as MlsKeyPackageRow,
@@ -166,7 +166,7 @@ fn trust_binding_from_parts(
         pairwise_verification_method,
     )
     .map_err(|reason_code| {
-        AppError::new(ErrorCode::FailedPrecondition, message).with_wire_code(reason_code)
+        crate::app_error!(FailedPrecondition, message).with_wire_code(reason_code)
     })
 }
 
@@ -2093,9 +2093,7 @@ fn peer_claim_duplicate_conflict() -> AppError {
 }
 
 fn peer_claim_failed() -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, "KeyPackage claim failed")
-        .with_status(StatusCode::BAD_REQUEST)
-        .with_wire_code("claim_failed")
+    crate::app_error!(FailedPrecondition, "KeyPackage claim failed").with_wire_code("claim_failed")
 }
 
 #[salvo::oapi::endpoint(
@@ -2226,8 +2224,8 @@ async fn claim_keypackage(
             crate::routing::federation::resolved_peer_target(state, destination, "station", false)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
+                    crate::app_error!(
+                        FailedPrecondition,
                         format!("remote KeyPackage authority route unavailable: {error}"),
                     )
                     .with_wire_code("dependency_unavailable")
@@ -2246,11 +2244,10 @@ async fn claim_keypackage(
         )
         .await
         .map_err(|error| AppError::internal(format!("remote claim durable relay: {error}")))?;
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "remote KeyPackage claim has been durably accepted for relay",
         )
-        .with_status(StatusCode::SERVICE_UNAVAILABLE)
         .with_wire_code("dependency_unavailable"));
     }
     claim_keypackage_at_destination(state, &peer_body, authorization)
@@ -2831,14 +2828,14 @@ async fn consume_last_resort_keypackage(
         .await
         .map_err(|error| AppError::internal(format!("last-resort claim lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "last-resort consume has no exact durable claim audit",
             )
         })?;
     if ledger.keypackage_id.as_deref() != Some(record.id.as_str()) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "last-resort claim audit names another KeyPackage",
         ));
     }
@@ -2866,8 +2863,8 @@ async fn consume_last_resort_keypackage(
         body.claim_id.as_str(),
         durable.key_package_ref.as_str(),
     ) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "last-resort claim audit differs from the accepted Welcome claim",
         ));
     }
@@ -2890,8 +2887,8 @@ async fn consume_last_resort_keypackage(
         });
     }
     if ledger.state != "last_resort_claimed" {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "last-resort claim audit is not consumable",
         ));
     }
@@ -2982,8 +2979,8 @@ async fn validate_recipient_durable_receipt(
     if receipt.domain.as_str() != arkret_wire::DomainSeparationId::MLS_RECIPIENT_DURABLE_RECEIPT_V1
         || receipt.recipient_id.as_str() != state.service_id()
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "recipient durable receipt differs from the consume coordinates",
         ));
     }
@@ -2993,8 +2990,8 @@ async fn validate_recipient_durable_receipt(
         .await
         .map_err(|error| AppError::internal(format!("Welcome lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "recipient durable receipt references an unaccepted Welcome",
             )
         })?;
@@ -3003,8 +3000,8 @@ async fn validate_recipient_durable_receipt(
     if event.kind != arkret_wire::EventKind::MlsWelcome
         || event.realm_id.as_str() != receipt.realm_id.as_str()
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "recipient durable receipt does not identify the accepted Welcome",
         ));
     }
@@ -3023,8 +3020,8 @@ async fn validate_recipient_durable_receipt(
         || welcome.epoch != receipt.mls_epoch
         || receipt.welcome_digest.as_str() != welcome_digest
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "recipient durable receipt does not match the accepted Welcome payload",
         ));
     }
@@ -3123,8 +3120,8 @@ async fn verify_keypackage_consumer_signature(
             .map_err(|_| AppError::capability_denied("pairwise consume endpoint mismatch"))?;
             let _ = endpoint;
             let realm_id = realm_id.ok_or_else(|| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
+                crate::app_error!(
+                    FailedPrecondition,
                     "pairwise consume requires exact Realm affinity",
                 )
             })?;
@@ -3365,8 +3362,8 @@ async fn validate_direct_keypackage_consume(
             crate::routing::identity::account::direct_binding_matches_projection(state, binding)
         })
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Direct Conversation binding is not canonical and active",
             )
         })?;
@@ -3376,8 +3373,8 @@ async fn validate_direct_keypackage_consume(
         .await
         .map_err(|error| AppError::internal(format!("direct binding lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "canonical direct binding Event is missing",
             )
         })?;
@@ -3391,34 +3388,33 @@ async fn validate_direct_keypackage_consume(
         })?,
     )
     .map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(FailedPrecondition,
             "canonical direct binding payload is invalid",
         )
     })?;
     let realm_scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(realm_id.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("direct conversation Realm id is invalid: {error}"),
             )
         })?,
     };
     let group_id = realm_scope.canonical_mls_group_id().map_err(|error| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             format!("direct conversation MLS group id derivation failed: {error}"),
         )
     })?;
     if body.recipient_durable_receipt.mls_group_id.as_str() != group_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "KeyPackage consume does not reference the scope-derived direct conversation MLS group",
         ));
     }
     if binding_payload.realm_id.as_str() != realm_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "canonical direct binding belongs to another Realm",
         ));
     }
@@ -3434,8 +3430,8 @@ async fn validate_direct_keypackage_consume(
             welcome.claim_id.as_str(),
         )
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "KeyPackage consume claim differs from the canonical direct Welcome",
         ));
     }
@@ -3523,8 +3519,8 @@ async fn validate_sidecar_keypackage_consume(
         .governance_binding
         .sidecar_binding()
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Sidecar Welcome omits Sidecar governance binding",
             )
         })?;
@@ -3568,8 +3564,8 @@ async fn validate_sidecar_keypackage_consume(
             .accepted_mls_commit_refs
             .contains(welcome.commit_ref.as_str())
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Sidecar consume differs from the accepted Welcome evidence",
         ));
     }
@@ -3594,8 +3590,8 @@ async fn validate_sidecar_keypackage_consume(
                 && row.delivered_at.is_some()
         });
     if !delivered {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Sidecar Welcome has not been delivered to this device",
         ));
     }
@@ -3883,15 +3879,15 @@ async fn keypackage_device_revocation_gate(
         )
         .await
         .map_err(|_| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "KeyPackage device authorization is unavailable",
             )
             .with_wire_code("claim_failed")
         })?;
     if selector.target_device_authorize_event_id != device_authorize_event_id {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "KeyPackage device authorization is not current",
         )
         .with_wire_code("claim_failed"));
@@ -4141,8 +4137,8 @@ async fn ensure_pairwise_realm_affinity(
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some_and(|record| record.minimal_metadata_realm);
     if !minimal_metadata_realm {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "pairwise endpoint requires the current minimal-metadata Realm profile",
         )
         .with_wire_code("claim_generation_mismatch"));
@@ -4157,8 +4153,8 @@ async fn ensure_pairwise_realm_affinity(
         .member(realm_id.as_str(), &membership_actor.to_string())
         .is_none_or(|membership| membership.state != "join")
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "pairwise endpoint has no current Realm membership affinity",
         )
         .with_wire_code("claim_generation_mismatch"));
@@ -4225,15 +4221,15 @@ async fn verify_device_keypackage_signature(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "accepted device authorization is required for KeyPackage signature",
             )
             .with_wire_code("claim_generation_mismatch")
         })?;
     if device.verification_state != "verified" || device.revoked_at.is_some() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "KeyPackage signature requires a verified, non-revoked device",
         )
         .with_wire_code("claim_generation_mismatch"));
@@ -4324,8 +4320,8 @@ async fn verify_session_keypackage_write_signature(
                 || record.device_id.as_deref() != Some(session.device_id.as_str())
                 || record.agent_key_authorize_event_id.as_deref() != Some(authorize_event_id)
             {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "Agent KeyPackage write binding differs from current authorization",
                 )
                 .with_wire_code("claim_generation_mismatch"));
@@ -4385,15 +4381,15 @@ async fn current_agent_keypackage_trust_binding(
         return Ok(None);
     };
     if agent.state != AgentLifecycleState::Active {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Agent must be active before publishing or claiming a KeyPackage",
         )
         .with_wire_code("claim_generation_mismatch"));
     }
     let event_ref = agent.authorized_event_ref.as_deref().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent has no accepted key authorization",
         )
         .with_wire_code("claim_generation_mismatch")
@@ -4402,11 +4398,8 @@ async fn current_agent_keypackage_trust_binding(
         .authorized_verification_method
         .as_deref()
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "Agent key authorization is incomplete",
-            )
-            .with_wire_code("claim_generation_mismatch")
+            crate::app_error!(FailedPrecondition, "Agent key authorization is incomplete",)
+                .with_wire_code("claim_generation_mismatch")
         })?;
     let active_event = state
         .projections()
@@ -4415,8 +4408,8 @@ async fn current_agent_keypackage_trust_binding(
         .into_iter()
         .any(|(_, active_event_ref)| active_event_ref == event_ref);
     if !active_event {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Agent key authorization is no longer active",
         )
         .with_wire_code("claim_generation_mismatch"));
@@ -4429,8 +4422,8 @@ async fn current_agent_keypackage_trust_binding(
             AppError::internal(format!("Agent key authorization lookup failed: {error}"))
         })?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Agent key authorization Event is unavailable",
             )
             .with_wire_code("claim_generation_mismatch")
@@ -4454,8 +4447,8 @@ async fn current_agent_keypackage_trust_binding(
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
         || expired
     {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Agent key authorization does not match current accepted state",
         )
         .with_wire_code("claim_generation_mismatch"));
@@ -4516,15 +4509,15 @@ async fn current_keypackage_trust_binding(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "accepted device authorization is required for KeyPackage publish",
             )
             .with_wire_code("claim_generation_mismatch")
         })?;
     device_authorize_trust_binding(&device).ok_or_else(|| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "accepted device authorization is required for KeyPackage publish",
         )
         .with_wire_code("claim_generation_mismatch")
@@ -4540,11 +4533,8 @@ async fn current_keypackage_claim_trust_selector(
 ) -> Result<KeyPackageTrustSelector, AppError> {
     if let Some(verification_method) = pairwise_verification_method {
         let realm_id = intended_realm_id.ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
-                "pairwise claim requires Realm affinity",
-            )
-            .with_wire_code("claim_generation_mismatch")
+            crate::app_error!(FailedPrecondition, "pairwise claim requires Realm affinity",)
+                .with_wire_code("claim_generation_mismatch")
         })?;
         let method = arkret_wire::DidUrl::new(verification_method.to_owned())
             .map_err(|_| AppError::param_invalid("pairwise verification method is invalid"))?;
@@ -4565,11 +4555,8 @@ async fn current_keypackage_claim_trust_selector(
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
-                        "Agent membership is unavailable",
-                    )
-                    .with_wire_code("claim_generation_mismatch")
+                    crate::app_error!(FailedPrecondition, "Agent membership is unavailable",)
+                        .with_wire_code("claim_generation_mismatch")
                 })?;
             crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
                 state,
@@ -4579,11 +4566,8 @@ async fn current_keypackage_claim_trust_selector(
             )
             .await
             .map_err(|_| {
-                AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    "Agent is not an effective Realm member",
-                )
-                .with_wire_code("claim_generation_mismatch")
+                crate::app_error!(FailedPrecondition, "Agent is not an effective Realm member",)
+                    .with_wire_code("claim_generation_mismatch")
             })?;
         }
         return Ok(KeyPackageTrustSelector::Principal(binding));

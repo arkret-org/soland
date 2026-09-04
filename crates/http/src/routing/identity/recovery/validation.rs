@@ -125,17 +125,14 @@ pub(super) fn validate_recovery_policy(
 }
 
 pub(super) fn recovery_signature_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SignatureInvalid, message.into())
-        .with_status(StatusCode::UNAUTHORIZED)
+    crate::app_error!(SignatureInvalid, message.into())
         .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 /// A recovery proof is not bound to the expected (recovery policy, session,
 /// recovery key entry) tuple. Registry-canonical `recovery_evidence_unbound`.
 pub(super) fn recovery_evidence_unbound_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SignatureInvalid, message.into())
-        .with_status(StatusCode::UNAUTHORIZED)
-        .with_wire_code("recovery_evidence_unbound")
+    crate::app_error!(SignatureInvalid, message.into()).with_wire_code("recovery_evidence_unbound")
 }
 
 // ── Small helpers ─────────────────────────────────────────────────────

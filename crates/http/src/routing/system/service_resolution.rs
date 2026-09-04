@@ -8,7 +8,7 @@ use arkret_wire::{DidCoreId, DidUrl, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 
 use crate::AppResult;
 use crate::state::AppState;
@@ -33,8 +33,8 @@ pub(crate) fn service_id_and_did(
 ) -> Result<(DidCoreId, arkret_wire::Did), AppError> {
     let commitment = state.service_resolution_commitment();
     let core = arkret_wire::project_did_to_core_id(&commitment.did).map_err(|error| {
-        AppError::new(
-            ErrorCode::ServiceIdentityUnavailable,
+        crate::app_error!(
+            ServiceIdentityUnavailable,
             format!("service DID cannot be projected: {error}"),
         )
     })?;
@@ -53,9 +53,8 @@ fn canonical_base_url(state: &AppState) -> Result<String, AppError> {
     let url = CanonicalServiceUrl::canonicalize(&state.config().public_base_url)
         .map_err(|error| AppError::internal(format!("public base URL is invalid: {error}")))?;
     if !state.config().development_mode {
-        url.require_https().map_err(|error| {
-            AppError::new(ErrorCode::ServiceIdentityConflict, error.to_string())
-        })?;
+        url.require_https()
+            .map_err(|error| crate::app_error!(ServiceIdentityConflict, error.to_string()))?;
     }
     Ok(url.to_string())
 }
@@ -81,15 +80,15 @@ fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError>
         .find(|binding| binding.kind() == arkret_wire::BindingKind::HttpJson)
         .map(arkret_models_discovery::TransportBinding::base_url)
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ServiceIdentityConflict,
+            crate::app_error!(
+                ServiceIdentityConflict,
                 "ServiceDescribe has no http_json base URL",
             )
         })?;
     let http_json_base_url = CanonicalServiceUrl::canonicalize(binding_base)
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::ServiceIdentityConflict,
+            crate::app_error!(
+                ServiceIdentityConflict,
                 format!("ServiceDescribe http_json base URL is invalid: {error}"),
             )
         })?
@@ -100,19 +99,19 @@ fn route_binding_digest(description: &ServiceDescribe) -> Result<Hash, AppError>
         &description.service_resolution,
         &http_json_base_url,
     )
-    .map_err(|error| AppError::new(ErrorCode::ServiceIdentityConflict, error.to_string()))
+    .map_err(|error| crate::app_error!(ServiceIdentityConflict, error.to_string()))
 }
 
 fn webvh_resolution_event_ref(log_head_digest: &str) -> Result<String, AppError> {
     let digest = log_head_digest.strip_prefix("sha256:").ok_or_else(|| {
-        AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        crate::app_error!(
+            ServiceIdentityConflict,
             "service WebVH log head is not a sha256 digest",
         )
     })?;
     if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        return Err(crate::app_error!(
+            ServiceIdentityConflict,
             "service WebVH log head is not a 32-byte hex digest",
         ));
     }
@@ -138,8 +137,8 @@ pub(crate) fn service_assertion_method(
                 && stored.did_document.assertion_method.contains(&method.id)
         })
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ServiceIdentityUnavailable,
+            crate::app_error!(
+                ServiceIdentityUnavailable,
                 "runtime signer is not a current service assertion method",
             )
         })?;
@@ -154,22 +153,22 @@ pub(crate) async fn ensure_current_record(
     let (service_id, did) = service_id_and_did(state)?;
     let commitment = state.service_resolution_commitment();
     if description.service_id != service_id || description.service_resolution != *commitment {
-        return Err(AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        return Err(crate::app_error!(
+            ServiceIdentityConflict,
             "ServiceDescribe does not carry the runtime service resolution commitment",
         ));
     }
     let stored = state
         .stored_service_identity()
         .await
-        .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
+        .map_err(|error| crate::app_error!(ServiceIdentityUnavailable, error))?;
     if stored.identity.service_id != service_id
         || stored.identity.did != did
         || stored.identity.version_id != commitment.version_id
         || stored.registration_receipt.log_head_digest != commitment.method_history_head
     {
-        return Err(AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        return Err(crate::app_error!(
+            ServiceIdentityConflict,
             "durable service identity does not match the runtime resolution commitment",
         ));
     }
@@ -202,8 +201,8 @@ pub(crate) async fn ensure_current_record(
         if current.as_ref().is_some_and(|record| {
             record.record.service_id != service_id || record.record.did != did
         }) {
-            return Err(AppError::new(
-                ErrorCode::ServiceIdentityConflict,
+            return Err(crate::app_error!(
+                ServiceIdentityConflict,
                 "durable service resolution belongs to another service identity",
             ));
         }
@@ -247,8 +246,8 @@ pub(crate) async fn ensure_current_record(
             return Ok(record);
         }
     }
-    Err(AppError::new(
-        ErrorCode::CasConflict,
+    Err(crate::app_error!(
+        CasConflict,
         "service resolution changed concurrently",
     ))
 }
@@ -273,8 +272,8 @@ async fn open_service_resolution(
         ))
     })?;
     if body.len() > MAX_AUTHENTICATED_RESOLUTION_BYTES {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "authenticated service resolution exceeds 1 MiB",
         ));
     }
@@ -297,10 +296,10 @@ async fn authenticated_current_resolution(
     let stored = state
         .stored_service_identity()
         .await
-        .map_err(|error| AppError::new(ErrorCode::ServiceIdentityUnavailable, error))?;
+        .map_err(|error| crate::app_error!(ServiceIdentityUnavailable, error))?;
     if stored.identity.did != record.record.did {
-        return Err(AppError::new(
-            ErrorCode::ServiceIdentityConflict,
+        return Err(crate::app_error!(
+            ServiceIdentityConflict,
             "durable service identity does not match the resolution record",
         ));
     }
@@ -309,8 +308,8 @@ async fn authenticated_current_resolution(
             AppError::internal(format!("service DID document encoding failed: {error}"))
         })?)
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::ServiceIdentityUnavailable,
+            crate::app_error!(
+                ServiceIdentityUnavailable,
                 format!("service DID document normalization failed: {error}"),
             )
         })?;
@@ -319,8 +318,8 @@ async fn authenticated_current_resolution(
         .log_events(record.record.did.as_str())
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::ServiceIdentityUnavailable,
+            crate::app_error!(
+                ServiceIdentityUnavailable,
                 format!("durable service WebVH history unavailable: {error}"),
             )
         })?;
@@ -338,8 +337,8 @@ async fn authenticated_current_resolution(
                     == Some(record.record.version_id.as_str())
         })
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::ServiceIdentityUnavailable,
+            crate::app_error!(
+                ServiceIdentityUnavailable,
                 "durable service WebVH history does not contain the resolution record head",
             )
         })?;
@@ -360,9 +359,9 @@ async fn authenticated_current_resolution(
     .map_err(|error| {
         let detail = error.to_string();
         if detail.contains("exceeds 1 MiB") {
-            AppError::new(ErrorCode::LimitExceeded, detail)
+            crate::app_error!(LimitExceeded, detail)
         } else {
-            AppError::new(ErrorCode::ServiceIdentityUnavailable, detail)
+            crate::app_error!(ServiceIdentityUnavailable, detail)
         }
     })
 }

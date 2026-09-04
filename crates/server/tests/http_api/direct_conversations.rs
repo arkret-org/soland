@@ -757,7 +757,7 @@ async fn direct_resolve_fails_closed_without_accepted_contact_body() {
 
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status.as_u16(), 412, "body: {body}");
+    assert_eq!(status.as_u16(), 409, "body: {body}");
     assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(
         body["reason_detail"],
@@ -792,7 +792,7 @@ async fn direct_resolve_private_detail_stays_redacted_in_production_body() {
     )
     .await;
 
-    assert_eq!(response.status_code.unwrap().as_u16(), 412);
+    assert_eq!(response.status_code.unwrap().as_u16(), 409);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert!(body["reason_detail"].is_null());
@@ -841,7 +841,7 @@ async fn direct_resolve_uses_accepted_contact_scope_body() {
     .await;
     let status = response.status_code;
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, Some(StatusCode::PRECONDITION_FAILED), "{body}");
+    assert_eq!(status, Some(StatusCode::CONFLICT), "{body}");
     assert_eq!(problem_code(&body), "direct_conversation_unavailable");
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }

@@ -34,7 +34,7 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::AcceptedEvent;
 use soland_services::identity::SessionIdentityState as SessionRecord;
@@ -367,8 +367,8 @@ impl MediaProviderKind {
         match value.trim() {
             "arkret_native" => Ok(Self::ArkretNative),
             "livekit" => Ok(Self::LiveKit),
-            _ => Err(AppError::new(
-                ErrorCode::ParamInvalid,
+            _ => Err(crate::app_error!(
+                ParamInvalid,
                 format!("media focus provider `{value}` has no normative v1 binding"),
             )
             .with_wire_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
@@ -499,8 +499,6 @@ async fn handle_rtc_token(
     session: &SessionRecord,
     body: CallMediaTokenExchangeRequestBody,
 ) -> JsonResult<CallMediaTokenExchangeOutcome> {
-    use soland_http::error::ErrorCode;
-
     // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
     // `device_id` arrive already validated as the corresponding scalar id types,
     // and the response binding carries the same typed ids — so the wire outcome
@@ -575,11 +573,10 @@ async fn handle_rtc_token(
     // call moderation effective OR-Set; an absent cell carries
     // no bans (everyone passes).
     if call_cells.actor_is_banned(&body.actor_id) {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "actor was removed from the call (ban) and cannot re-issue a join token",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code(arkret_wire::ReasonCode::CALL_PARTICIPANT_REMOVED));
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
@@ -593,8 +590,8 @@ async fn handle_rtc_token(
     // committed focus remains the binding decision).
     let session_focus = session_focus_for_call(&call_cells, &media_epoch, body.focus_id.as_str())?;
     if body.focus_id != session_focus {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             format!(
                 "focus_id `{}` does not match committed session_focus `{}`",
                 body.focus_id, session_focus
@@ -1257,12 +1254,12 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 }
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
+    crate::app_error!(FailedPrecondition, message)
         .with_wire_code(arkret_wire::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
 }
 
 fn focus_unavailable_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
+    crate::app_error!(FailedPrecondition, message)
         .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 

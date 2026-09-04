@@ -400,11 +400,10 @@ pub(super) async fn load_owned_recovery_session(
         || record.session_grant_id != grant_id
         || record.session_grant_cnf_jkt != grant_jkt
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "recovery session belongs to a different principal",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
     Ok(record)
@@ -420,11 +419,10 @@ fn recovery_grant_coordinates(
         != arkret_models_identity::SessionGrantCredentialClass::RecoverySession
         || grant.device_binding.is_some()
     {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "recovery operation requires a restricted recovery_session grant",
-        )
-        .with_status(StatusCode::FORBIDDEN));
+        ));
     }
     let arkret_models_identity::SessionGrantHolderBinding::RecoveryCandidateDevice { device_id } =
         &grant.holder_binding
@@ -471,11 +469,10 @@ pub(super) async fn recovery_session_create(
     )?)
     .map_err(|error| AppError::internal(format!("recovery create digest failed: {error}")))?;
     if payload.requesting_device_id.as_str() != candidate_device_id {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "requesting_device_id does not match the recovery grant holder",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_evidence_unbound"));
     }
     if let Some(existing) = state
@@ -507,20 +504,17 @@ pub(super) async fn recovery_session_create(
 
     let account_id = payload.account_id;
     if account_id.principal_id.as_str() != principal {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "account_id.principal_id does not match the authenticated principal",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
     if account_id.station_id.as_str() != state.service_id() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "account_id does not bind this Station",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("account_id_mismatch"));
+        return Err(
+            crate::app_error!(FailedPrecondition, "account_id does not bind this Station",)
+                .with_reason_code("account_id_mismatch"),
+        );
     }
     let authority_record = state
         .persistence()
@@ -528,11 +522,10 @@ pub(super) async fn recovery_session_create(
         .await
         .map_err(|error| AppError::internal(format!("principal authority lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "principal authority is not accepted by this Station",
             )
-            .with_status(StatusCode::PRECONDITION_FAILED)
             .with_reason_code("account_id_mismatch")
         })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
@@ -845,11 +838,10 @@ pub(super) async fn recovery_session_proof_submit(
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::param_invalid("proof.challenge is required"))?;
     if !constant_time_str_eq(echoed, &record.challenge) {
-        return Err(AppError::new(
-            ErrorCode::SignatureInvalid,
+        return Err(crate::app_error!(
+            SignatureInvalid,
             "proof.challenge does not match the session challenge",
         )
-        .with_status(StatusCode::CONFLICT)
         .with_wire_code("recovery_session_challenge_mismatch"));
     }
 
@@ -871,7 +863,6 @@ pub(super) async fn recovery_session_proof_submit(
             return Err(AppError::unsupported_feature(format!(
                 "proof.kind `{other}` verification not yet implemented (C-P3)"
             ))
-            .with_status(StatusCode::NOT_IMPLEMENTED)
             .with_wire_code("recovery_proof_kind_unimplemented"));
         }
     }
@@ -1418,8 +1409,7 @@ fn value_requires_attestation(value: &Value) -> bool {
 }
 
 fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::SignatureInvalid, message.into())
-        .with_status(StatusCode::UNAUTHORIZED)
+    crate::app_error!(SignatureInvalid, message.into())
         .with_wire_code("recovery_proof_authority_invalid")
 }
 

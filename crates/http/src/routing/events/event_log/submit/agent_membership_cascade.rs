@@ -1546,7 +1546,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             && let Err(error) =
                 validate_authorization_lease_for_event(state, None, event, lease).await
         {
-            render_error(res, error.status, &error.code, &error.message);
+            render_error(res, error.status(), &error.code(), &error.message());
             return;
         }
         let transition = transitions
@@ -1561,7 +1561,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
             if let Err(error) =
                 validate_ingress_receipt_proofs(state, &transition.ingress_receipts, lease).await
             {
-                render_error(res, error.status, &error.code, &error.message);
+                render_error(res, error.status(), &error.code(), &error.message());
                 return;
             }
         }
@@ -1653,7 +1653,7 @@ pub(super) async fn submit_agent_membership_cascade_federation(
     .await
     {
         Ok(outcome) => res.render(Json(outcome)),
-        Err(error) if error.code == "dependency_missing" => render_error(
+        Err(error) if error.code() == "dependency_missing" => render_error(
             res,
             StatusCode::CONFLICT,
             "dependency_missing",

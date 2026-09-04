@@ -86,52 +86,46 @@ fn verify_allocation_handle(
     let (Some(nonce), Some(encoded_public_key), Some(encoded_signature), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle is malformed",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch"));
     };
     let public_key_bytes = URL_SAFE_NO_PAD.decode(encoded_public_key).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle public key is malformed",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })?;
     let public_key_bytes: [u8; 32] = public_key_bytes.try_into().map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle public key is malformed",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })?;
     let verifying_key =
         ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes).map_err(|_| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 "Agent provision allocation handle public key is malformed",
             )
-            .with_status(StatusCode::PRECONDITION_FAILED)
             .with_reason_code("agent_provision_allocation_mismatch")
         })?;
     let signature_bytes = URL_SAFE_NO_PAD.decode(encoded_signature).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle signature is malformed",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })?;
     let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle signature is malformed",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })?;
     let binding = allocation_binding(
@@ -141,11 +135,10 @@ fn verify_allocation_handle(
         nonce,
     )?;
     verifying_key.verify(&binding, &signature).map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
+        crate::app_error!(
+            FailedPrecondition,
             "Agent provision allocation handle signature is invalid",
         )
-        .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch")
     })
 }
@@ -174,20 +167,18 @@ async fn lookup_provision_allocation(
 }
 
 fn allocation_missing() -> AppError {
-    AppError::new(
-        ErrorCode::FailedPrecondition,
+    crate::app_error!(
+        FailedPrecondition,
         "Agent provision commit has no active server allocation",
     )
-    .with_status(StatusCode::PRECONDITION_FAILED)
     .with_reason_code("agent_provision_allocation_missing")
 }
 
 fn allocation_mismatch() -> AppError {
-    AppError::new(
-        ErrorCode::FailedPrecondition,
+    crate::app_error!(
+        FailedPrecondition,
         "Agent provision commit differs from its server allocation",
     )
-    .with_status(StatusCode::PRECONDITION_FAILED)
     .with_reason_code("agent_provision_allocation_mismatch")
 }
 
@@ -285,11 +276,10 @@ pub(super) async fn provision_agent(
                     AppError::internal(format!("controller recovery policy lookup failed: {error}"))
                 })?;
             if active_recovery_policy.is_none() {
-                return Err(AppError::new(
-                    ErrorCode::FailedPrecondition,
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "controller must accept a recovery policy before provisioning a Agent",
                 )
-                .with_status(StatusCode::PRECONDITION_FAILED)
                 .with_reason_code("recovery_policy_required"));
             }
             let controller_realm =

@@ -21,17 +21,15 @@ fn proposal_not_found() -> AppError {
 }
 
 fn failed_precondition(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message)
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("failed_precondition")
+    crate::app_error!(FailedPrecondition, message).with_wire_code("failed_precondition")
 }
 
 fn decision_commit_error(error: StoreError) -> AppError {
     match error {
         StoreError::NotFound(_) => proposal_not_found(),
-        StoreError::Conflict(message) => AppError::conflict(message)
-            .with_status(StatusCode::CONFLICT)
-            .with_wire_code("duplicate_conflict"),
+        StoreError::Conflict(message) => {
+            AppError::conflict(message).with_wire_code("duplicate_conflict")
+        }
         StoreError::Backend(message) => AppError::internal(format!(
             "control proposal decision commit failed: {message}"
         )),
@@ -253,11 +251,10 @@ pub(super) async fn submit_control_proposal_decision(
     super::super::super::require_agent_session_scope(&session, SUBMIT_OPERATION)?;
     let request = body.into_inner();
     request.validate_structural().map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
+        crate::app_error!(
+            SchemaViolation,
             format!("invalid Control Proposal decision request: {error}"),
         )
-        .with_status(StatusCode::BAD_REQUEST)
     })?;
     let decision = &request.decision;
     require_visible_proposal(
@@ -296,11 +293,10 @@ pub(super) async fn submit_control_proposal_decision(
     let policy = crate::control_proposal::control_proposal_policy(state, decision.realm_id(), &[])
         .await
         .map_err(|error| {
-            AppError::new(
-                ErrorCode::FailedPrecondition,
+            crate::app_error!(
+                FailedPrecondition,
                 format!("proposal decision policy is unavailable: {error}"),
             )
-            .with_status(StatusCode::SERVICE_UNAVAILABLE)
             .with_wire_code("failed_precondition")
         })?;
     crate::control_proposal::verify_control_proposal_decision(

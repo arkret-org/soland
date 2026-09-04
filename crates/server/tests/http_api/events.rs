@@ -1150,7 +1150,10 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild_body() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "resume response: {resumed}");
-    assert_eq!(resumed["kind"], "frontier");
+    assert_eq!(
+        resumed["kind"], "frontier",
+        "a valid quiet resume advances the cursor without fabricating a delta"
+    );
     assert!(
         resumed["cursor"]
             .as_str()
@@ -1413,7 +1416,8 @@ async fn events_describe_and_single_event_submit_work_body() {
         StatusCode::BAD_REQUEST
     );
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
-    assert_eq!(problem_code(&unknown_schema_body), "unknown_schema");
+    assert_eq!(problem_code(&unknown_schema_body), "param_invalid");
+    assert_eq!(unknown_schema_body["reason_code"], "unknown_schema");
 
     let missing_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")
@@ -1689,7 +1693,10 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis_body()
         .json(&serde_json::json!({"events": mismatch_submissions}))
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(mismatch_response.status_code, Some(StatusCode::BAD_REQUEST));
+    assert_eq!(
+        mismatch_response.status_code,
+        Some(StatusCode::UNPROCESSABLE_ENTITY)
+    );
     let mismatch_body: Value = mismatch_response.take_json().await.unwrap();
     assert_eq!(problem_code(&mismatch_body), "schema_violation");
     assert!(

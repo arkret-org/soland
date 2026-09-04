@@ -411,6 +411,102 @@ enum CommitTransactionOutcome {
     Collision,
 }
 
+/// Lock and inspect every Event identity before the transaction writes any
+/// ordinary row. Collision evidence deliberately wins over later admission
+/// checks so a batch can never commit a valid prefix before item N collides.
+async fn preflight_event_batch(
+    conn: &mut AsyncPgConnection,
+    events: &[EventCommitRequest],
+) -> Result<Option<CommitTransactionOutcome>, PgTransactionError> {
+    let mut ordered = events.iter().collect::<Vec<_>>();
+    ordered.sort_by(|left, right| left.event.event_id.cmp(&right.event.event_id));
+    for item in &ordered {
+        let identity = ids::validated_event_identity_parts_for_suite(
+            &item.event.event_id,
+            &item.event.canonical_digest,
+            &item.event.canonical_bytes,
+            item.event.digest_suite,
+        )?;
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
+            .bind::<Binary, _>(identity.id.to_vec())
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+    }
+    let mut incoming = std::collections::BTreeMap::<String, &CanonicalEventRecord>::new();
+    for item in &ordered {
+        let identity = ids::validated_event_identity_parts_for_suite(
+            &item.event.event_id,
+            &item.event.canonical_digest,
+            &item.event.canonical_bytes,
+            item.event.digest_suite,
+        )?;
+        let stored =
+            sql_query("SELECT pk, canonical_bytes, state FROM canonical_events WHERE id = $1")
+                .bind::<Binary, _>(identity.id.to_vec())
+                .get_result::<EventPreflightRow>(&mut *conn)
+                .await
+                .optional()
+                .map_err(PersistenceError::database)?;
+        if let Some(stored) = stored {
+            if stored.canonical_bytes != item.event.canonical_bytes {
+                let outcome = insert_canonical_event(conn, &item.event).await?;
+                debug_assert_eq!(outcome, CanonicalInsertOutcome::Collision);
+                return Ok(Some(CommitTransactionOutcome::Collision));
+            }
+            if stored.state == "quarantined" {
+                return Ok(Some(CommitTransactionOutcome::Collision));
+            }
+            commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
+            continue;
+        }
+        if let Some(previous) = incoming.get(&item.event.event_id) {
+            if previous.canonical_bytes != item.event.canonical_bytes {
+                let inserted = insert_canonical_event(conn, previous).await?;
+                debug_assert!(matches!(inserted, CanonicalInsertOutcome::Inserted(_)));
+                let collision = insert_canonical_event(conn, &item.event).await?;
+                debug_assert_eq!(collision, CanonicalInsertOutcome::Collision);
+                return Ok(Some(CommitTransactionOutcome::Collision));
+            }
+        } else {
+            incoming.insert(item.event.event_id.clone(), &item.event);
+        }
+    }
+
+    let mut admission_realms = std::collections::BTreeSet::new();
+    for item in &ordered {
+        let event = serde_json::from_value::<arkret_wire::Event>(item.event.envelope.clone())
+            .map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: accepted Event envelope is not canonical wire: {error}"
+                ))
+            })?;
+        admission_realms.insert(event.realm_id.as_str().to_owned());
+    }
+    for realm_id in admission_realms {
+        sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind::<Text, _>(&realm_id)
+            .execute(&mut *conn)
+            .await
+            .map_err(PersistenceError::database)?;
+        let quarantined = sql_query(
+            "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms \
+             WHERE realm_id = $1) AS present",
+        )
+        .bind::<Text, _>(&realm_id)
+        .get_result::<ExistsRow>(&mut *conn)
+        .await
+        .map_err(PersistenceError::database)?;
+        if quarantined.present {
+            return Err(PersistenceError::Conflict(format!(
+                "seal_collision_quarantine: Realm {realm_id} is blocked"
+            ))
+            .into());
+        }
+    }
+    Ok(None)
+}
+
 impl PgEventCommitUnitOfWork {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
@@ -720,102 +816,8 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
         )?;
         let mut conn = pg_conn(&self.pool).await?;
         let transaction_outcome = conn.transaction::<_, PgTransactionError, _>(async move |conn| {
-            // Inspect the whole batch before inserting any of its ordinary
-            // rows. A collision in item N may commit quarantine evidence for
-            // that identity, but must never commit items 0..N-1 as a prefix.
-            let mut ordered = request.events.iter().collect::<Vec<_>>();
-            ordered.sort_by(|left, right| left.event.event_id.cmp(&right.event.event_id));
-            for item in &ordered {
-                let identity = ids::validated_event_identity_parts_for_suite(
-                    &item.event.event_id,
-                    &item.event.canonical_digest,
-                    &item.event.canonical_bytes,
-                    item.event.digest_suite,
-                )?;
-                sql_query("SELECT pg_advisory_xact_lock(hashtextextended(encode($1, 'hex'), 0))")
-                    .bind::<Binary, _>(identity.id.to_vec())
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(PersistenceError::database)?;
-            }
-            let mut incoming = std::collections::BTreeMap::<
-                String,
-                &CanonicalEventRecord,
-            >::new();
-            for item in &ordered {
-                let identity = ids::validated_event_identity_parts_for_suite(
-                    &item.event.event_id,
-                    &item.event.canonical_digest,
-                    &item.event.canonical_bytes,
-                    item.event.digest_suite,
-                )?;
-                let stored = sql_query(
-                    "SELECT pk, canonical_bytes, state FROM canonical_events WHERE id = $1",
-                )
-                .bind::<Binary, _>(identity.id.to_vec())
-                .get_result::<EventPreflightRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(PersistenceError::database)?;
-                if let Some(stored) = stored {
-                    if stored.canonical_bytes != item.event.canonical_bytes {
-                        let outcome = insert_canonical_event(conn, &item.event).await?;
-                        debug_assert_eq!(outcome, CanonicalInsertOutcome::Collision);
-                        return Ok(CommitTransactionOutcome::Collision);
-                    }
-                    if stored.state == "quarantined" {
-                        return Ok(CommitTransactionOutcome::Collision);
-                    }
-                    commit_membership_compensation_evidence(conn, stored.pk, item, true).await?;
-                    continue;
-                }
-                if let Some(previous) = incoming.get(&item.event.event_id) {
-                    if previous.canonical_bytes != item.event.canonical_bytes {
-                        let inserted = insert_canonical_event(conn, previous).await?;
-                        debug_assert!(matches!(inserted, CanonicalInsertOutcome::Inserted(_)));
-                        let collision = insert_canonical_event(conn, &item.event).await?;
-                        debug_assert_eq!(collision, CanonicalInsertOutcome::Collision);
-                        return Ok(CommitTransactionOutcome::Collision);
-                    }
-                } else {
-                    incoming.insert(item.event.event_id.clone(), &item.event);
-                }
-            }
-            // Identity collision evidence takes precedence over parsing or
-            // admitting the incoming envelope. Only collision-free bytes may
-            // name Realms whose quarantine gates are then locked and checked.
-            let mut admission_realms = std::collections::BTreeSet::new();
-            for item in &ordered {
-                let event = serde_json::from_value::<arkret_wire::Event>(
-                    item.event.envelope.clone(),
-                )
-                .map_err(|error| {
-                    PersistenceError::Conflict(format!(
-                        "schema_violation: accepted Event envelope is not canonical wire: {error}"
-                    ))
-                })?;
-                admission_realms.insert(event.realm_id.as_str().to_owned());
-            }
-            for realm_id in admission_realms {
-                sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-                    .bind::<Text, _>(&realm_id)
-                    .execute(&mut *conn)
-                    .await
-                    .map_err(PersistenceError::database)?;
-                let quarantined = sql_query(
-                    "SELECT EXISTS (SELECT 1 FROM state_seal_quarantine_realms \
-                     WHERE realm_id = $1) AS present",
-                )
-                .bind::<Text, _>(&realm_id)
-                .get_result::<ExistsRow>(&mut *conn)
-                .await
-                .map_err(PersistenceError::database)?;
-                if quarantined.present {
-                    return Err(PersistenceError::Conflict(format!(
-                        "seal_collision_quarantine: Realm {realm_id} is blocked"
-                    ))
-                    .into());
-                }
+            if let Some(outcome) = preflight_event_batch(conn, &request.events).await? {
+                return Ok(outcome);
             }
             let mut event_inserted = false;
             let mut projections_inserted = 0;

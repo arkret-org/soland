@@ -21,7 +21,7 @@ use arkret_models_collaboration::http_bodies::SignalSubmitOutcome;
 use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::SessionIdentityState;
 
 use super::events_query::ndjson_line;
@@ -311,8 +311,8 @@ async fn verify_signal_scope_authority(
                 arkret_wire::CapabilityActionId::CALL_MODERATE,
             )
         {
-            return Err(AppError::new(
-                ErrorCode::SignalClassDenied,
+            return Err(crate::app_error!(
+                SignalClassDenied,
                 format!("signal sender lacks ak.call.moderate in the {label} signed Seal basis"),
             ));
         }
@@ -1006,26 +1006,26 @@ fn structural_error(error: arkret_wire::WireError) -> AppError {
     let error_code = error.error_code();
     let message = error.to_string();
     if error_code == Some(arkret_wire::ErrorCode::SignalTtlOutOfRange) {
-        return AppError::new(ErrorCode::SignalTtlOutOfRange, message);
+        return crate::app_error!(SignalTtlOutOfRange, message);
     }
     if error_code == Some(arkret_wire::ErrorCode::PayloadTooLarge) {
-        return AppError::new(ErrorCode::PayloadTooLarge, message);
+        return crate::app_error!(PayloadTooLarge, message);
     }
     signal_invalid(message)
 }
 
 fn signal_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::ParamInvalid, message)
+    crate::app_error!(ParamInvalid, message)
 }
 
 fn signal_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::ParamInvalid, message)
+    crate::app_error!(ParamInvalid, message)
         .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn signal_rail_unavailable(what: &str) -> AppError {
-    AppError::new(
-        ErrorCode::SignalRailUnavailable,
+    crate::app_error!(
+        SignalRailUnavailable,
         format!("the signal rail could not {what}"),
     )
 }

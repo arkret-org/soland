@@ -920,13 +920,12 @@ pub(super) async fn register_package_install(
     )
     .await
     .map_err(|error| {
-        AppError::new(
-            soland_http::error::ErrorCode::from_wire(&error.code)
+        AppError::from_rejection(
+            soland_http::error::ErrorCode::from_wire(&error.code())
                 .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
-            error.message,
+            error.message(),
         )
-        .with_status(error.status)
-        .with_wire_code(error.code)
+        .with_wire_code(error.code())
     })?;
     crate::routing::append_audit_log(
         state,

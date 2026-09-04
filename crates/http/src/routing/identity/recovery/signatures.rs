@@ -73,11 +73,10 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     if session.actor != record.account_id.principal_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
+        return Err(crate::app_error!(
+            CapabilityDenied,
             "session actor does not match recovery policy principal",
         )
-        .with_status(StatusCode::FORBIDDEN)
         .with_wire_code("recovery_principal_isolation"));
     }
     let auth_data = payload

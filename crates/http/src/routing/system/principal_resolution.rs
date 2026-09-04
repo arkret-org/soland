@@ -8,7 +8,7 @@ use arkret_models_identity::{
 use arkret_wire::{AccountId, Did, DidCoreId, Hash};
 use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
-use soland_http::error::{AppError, ErrorCode};
+use soland_http::error::AppError;
 use soland_services::identity::PinnedDidVersionStatus;
 
 use crate::state::AppState;
@@ -100,8 +100,8 @@ pub(crate) async fn current_public_principal_resolution(
         AppError::internal(format!("principal resolution encoding failed: {error}"))
     })?;
     if response_bytes.len() > 1_048_576 {
-        return Err(AppError::new(
-            ErrorCode::LimitExceeded,
+        return Err(crate::app_error!(
+            LimitExceeded,
             "principal resolution evidence exceeds 1 MiB",
         ));
     }
@@ -133,14 +133,14 @@ async fn principal_method_history_evidence(
                 .resolve_pinned_webvh_state(&did, &projection.version_id, &history_head)
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::TemporarilyUnavailable,
+                    crate::app_error!(
+                        TemporarilyUnavailable,
                         format!("current principal did:webvh history is unverifiable: {error}"),
                     )
                 })?;
             if pinned.status != PinnedDidVersionStatus::Current {
-                return Err(AppError::new(
-                    ErrorCode::TemporarilyUnavailable,
+                return Err(crate::app_error!(
+                    TemporarilyUnavailable,
                     "principal did:webvh commitment is not the current verified method head",
                 ));
             }
@@ -156,8 +156,8 @@ async fn principal_method_history_evidence(
                 .log_events(did.as_str())
                 .await
                 .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::TemporarilyUnavailable,
+                    crate::app_error!(
+                        TemporarilyUnavailable,
                         format!("durable principal WebVH history unavailable: {error}"),
                     )
                 })?;
@@ -176,8 +176,8 @@ async fn principal_method_history_evidence(
                             == Some(projection.version_id.as_str())
                 })
                 .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::TemporarilyUnavailable,
+                    crate::app_error!(
+                        TemporarilyUnavailable,
                         "durable principal WebVH history does not contain the projected head",
                     )
                 })?;
@@ -188,22 +188,22 @@ async fn principal_method_history_evidence(
                 .collect::<Vec<_>>();
             for entry in &log_entries {
                 let parameters = entry.get("parameters").ok_or_else(|| {
-                    AppError::new(
-                        ErrorCode::TemporarilyUnavailable,
+                    crate::app_error!(
+                        TemporarilyUnavailable,
                         "durable principal WebVH history has invalid parameters",
                     )
                 })?;
                 if arkret_identity::parse_did_webvh_witness_policy(parameters)
                     .map_err(|error| {
-                        AppError::new(
-                            ErrorCode::TemporarilyUnavailable,
+                        crate::app_error!(
+                            TemporarilyUnavailable,
                             format!("principal WebVH witness policy is invalid: {error}"),
                         )
                     })?
                     .is_some()
                 {
-                    return Err(AppError::new(
-                        ErrorCode::TemporarilyUnavailable,
+                    return Err(crate::app_error!(
+                        TemporarilyUnavailable,
                         "principal WebVH witness records are unavailable",
                     ));
                 }
@@ -231,8 +231,8 @@ async fn principal_method_history_evidence(
         }
         "web" | "key" => {
             let resolved = state.dids().resolve_did(&did).await.map_err(|error| {
-                AppError::new(
-                    ErrorCode::TemporarilyUnavailable,
+                crate::app_error!(
+                    TemporarilyUnavailable,
                     format!("current principal DID document is unverifiable: {error}"),
                 )
             })?;
@@ -266,8 +266,8 @@ async fn principal_method_history_evidence(
                 ))
             }
         }
-        method => Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        method => Err(crate::app_error!(
+            TemporarilyUnavailable,
             format!("principal DID method {method:?} has no active resolution evidence adapter"),
         )),
     }
@@ -318,8 +318,8 @@ fn validate_synthetic_coordinates(
     if projection.method_history_head != digest.as_str()
         || projection.version_id != format!("{version_prefix}{hex}")
     {
-        return Err(AppError::new(
-            ErrorCode::TemporarilyUnavailable,
+        return Err(crate::app_error!(
+            TemporarilyUnavailable,
             format!("stored {method} commitment does not match the active adapter"),
         ));
     }
