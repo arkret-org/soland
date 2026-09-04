@@ -65,7 +65,7 @@ impl AuthArgs {
                     message,
                 );
                 if typed.is_none() {
-                    error = error.with_wire_code(code);
+                    error = error.with_rejection_code(code);
                 }
                 Err(error)
             }

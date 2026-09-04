@@ -430,7 +430,7 @@ fn select_one_signed_scope_candidate<T>(
         return Err(AppError::conflict(
             "signed Applet request realm selects multiple active effective scopes",
         )
-        .with_wire_code("applet_effective_scope_ambiguous"));
+        .with_internal_reason("applet_effective_scope_ambiguous"));
     }
     Ok(selected)
 }
@@ -676,6 +676,10 @@ mod tests {
                 .map(|(_, key)| *key),
         )
         .expect_err("realm-only signed carrier must fail closed across two keys");
-        assert_eq!(error.wire_code(), "applet_effective_scope_ambiguous");
+        assert_eq!(error.wire_code(), "conflict");
+        assert_eq!(
+            error.reason_detail.as_deref(),
+            Some("applet_effective_scope_ambiguous")
+        );
     }
 }

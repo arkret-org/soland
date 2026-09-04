@@ -956,7 +956,8 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
         &state,
         &scope_keys,
     )
-    .await;
+    .await
+    .expect("ceiling rows resolve");
     assert!(!ceiling.accept_third_party_mention);
     let selection =
         arkret_models_collaboration::governance::agent_participation::ParticipationBits {

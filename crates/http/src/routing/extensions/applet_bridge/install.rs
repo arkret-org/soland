@@ -98,7 +98,7 @@ pub(super) fn validate_hosted_applet_pcr_notary(
         return Err(AppError::param_invalid(
             "Applet-managed PCR genesis notary must equal the exact hosting Station notary",
         )
-        .with_wire_code("applet_managed_pcr_genesis_invalid"));
+        .with_reason_code("applet_managed_pcr_genesis_invalid"));
     }
     Ok(())
 }
@@ -316,7 +316,7 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "bot_actor_provision_event does not match the installed Applet service and scope",
         )
-        .with_wire_code("applet_managed_actor_provision_invalid"));
+        .with_reason_code("applet_managed_actor_provision_invalid"));
     }
     let provision: AppletManagedActorProvisionPayload = serde_json::from_value(
         serde_json::to_value(&provision_event.payload).map_err(|error| {
@@ -327,11 +327,11 @@ fn validate_bot_managed_actor_unit(
     )
     .map_err(|error| {
         AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-            .with_wire_code("applet_managed_actor_provision_invalid")
+            .with_reason_code("applet_managed_actor_provision_invalid")
     })?;
     provision.validate().map_err(|error| {
         AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-            .with_wire_code("applet_managed_actor_provision_invalid")
+            .with_reason_code("applet_managed_actor_provision_invalid")
     })?;
     if provision.actor_role != AppletManagedActorRole::Bot
         || provision.applet_id != expected_applet_id
@@ -345,7 +345,7 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Bot provision authority does not exactly bind the staged registration, grant, actor, or hosting Station",
         )
-        .with_wire_code("applet_managed_actor_provision_invalid"));
+        .with_reason_code("applet_managed_actor_provision_invalid"));
     }
     validate_managed_actor_method_evidence(&provision)?;
 
@@ -361,7 +361,7 @@ fn validate_bot_managed_actor_unit(
         )
         .map_err(|error| {
             AppError::param_invalid(format!("Bot PCR genesis object is invalid: {error}"))
-                .with_wire_code("applet_managed_pcr_genesis_invalid")
+                .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
     let expected_host_notary = arkret_wire::NotaryValue::single_signer(
         state
@@ -398,7 +398,7 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Bot PCR genesis does not exactly cross-bind its immutable provision authority",
         )
-        .with_wire_code("applet_managed_pcr_genesis_invalid"));
+        .with_reason_code("applet_managed_pcr_genesis_invalid"));
     }
     let accountability = &bundle.accountability_grant_event;
     let profile = &bundle.profile_event;
@@ -442,7 +442,7 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Bot accountability/profile Events do not close the managed actor creation unit",
         )
-        .with_wire_code("applet_managed_actor_profile_invalid"));
+        .with_internal_reason("applet_managed_actor_profile_invalid"));
     }
 
     let grant: AccountabilityGrantPayload = serde_json::from_value(
@@ -454,7 +454,7 @@ fn validate_bot_managed_actor_unit(
     )
     .map_err(|error| {
         AppError::param_invalid(format!("Bot accountability payload is invalid: {error}"))
-            .with_wire_code("applet_managed_actor_profile_invalid")
+            .with_internal_reason("applet_managed_actor_profile_invalid")
     })?;
     if grant.issuer_id != package.service_id
         || grant.subject_id != *package.bot_actor_id.signing_principal_id()
@@ -466,19 +466,19 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Bot accountability payload must be an active contracted-service grant from the Applet service to the canonical Bot",
         )
-        .with_wire_code("applet_managed_actor_profile_invalid"));
+        .with_internal_reason("applet_managed_actor_profile_invalid"));
     }
     grant
         .validate_lifecycle_at(chrono::Utc::now())
         .map_err(|error| {
             AppError::param_invalid(format!("Bot accountability payload is invalid: {error}"))
-                .with_wire_code("applet_managed_actor_profile_invalid")
+                .with_internal_reason("applet_managed_actor_profile_invalid")
         })?;
     let proof_binding = grant.canonical_proof_binding_bytes().map_err(|error| {
         AppError::param_invalid(format!(
             "Bot accountability proof binding is invalid: {error}"
         ))
-        .with_wire_code("applet_managed_actor_profile_invalid")
+        .with_internal_reason("applet_managed_actor_profile_invalid")
     })?;
     verify_install_registration_epoch_payload_jws(
         state,
@@ -494,7 +494,7 @@ fn validate_bot_managed_actor_unit(
         })?)
         .map_err(|error| {
             AppError::param_invalid(format!("Bot profile payload is invalid: {error}"))
-                .with_wire_code("applet_managed_actor_profile_invalid")
+                .with_internal_reason("applet_managed_actor_profile_invalid")
         })?;
     let actor_profile = profile_payload.object;
     let has_exact_accountable_principal = actor_profile.accountable_principal_ids.len() == 1
@@ -512,7 +512,7 @@ fn validate_bot_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Bot profile payload must bind the canonical Bot to exactly the installed Applet service",
         )
-        .with_wire_code("applet_managed_actor_profile_invalid"));
+        .with_internal_reason("applet_managed_actor_profile_invalid"));
     }
     Ok(provision)
 }
@@ -528,7 +528,7 @@ fn verify_install_registration_epoch_payload_jws(
         return Err(AppError::capability_denied(
             "Bot accountability proof key is outside the installed registration epoch",
         )
-        .with_wire_code("invalid_proof"));
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
     }
     let document =
         crate::jws_verify::resolve_did_document(state, &evidence.did).map_err(|reason| {
@@ -548,7 +548,7 @@ fn verify_install_registration_epoch_payload_jws(
             AppError::param_invalid(format!(
                 "Bot accountability proof verification method is invalid: {error}"
             ))
-            .with_wire_code("invalid_proof")
+            .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
         })?;
     arkret_identity::verify_jws_with_document(
         canonical_bytes,
@@ -561,7 +561,7 @@ fn verify_install_registration_epoch_payload_jws(
         AppError::param_invalid(format!(
             "Bot accountability payload proof JWS verification failed: {error}"
         ))
-        .with_wire_code("invalid_proof")
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
     })
 }
 
@@ -587,7 +587,7 @@ pub(super) fn validate_managed_actor_method_evidence(
     )
     .map_err(|error| {
         AppError::param_invalid(format!("Applet-managed DID evidence invalid: {error}"))
-            .with_wire_code(error.reason_code())
+            .with_rejection_code(error.reason_code())
     })?;
     let terminal = verified
         .log
@@ -603,7 +603,7 @@ pub(super) fn validate_managed_actor_method_evidence(
         return Err(AppError::param_invalid(
             "Applet-managed WebVH evidence terminal differs from initial_resolution",
         )
-        .with_wire_code("identity_method_evidence_invalid"));
+        .with_reason_code("identity_method_evidence_invalid"));
     }
     Ok(())
 }
@@ -619,7 +619,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
             AppError::param_invalid(
                 "Applet-managed WebVH evidence lacks a fresh trusted current resolution",
             )
-            .with_wire_code("identity_method_evidence_invalid")
+            .with_reason_code("identity_method_evidence_invalid")
             .with_reason_detail(error)
         })?;
     let history_head = Hash::new(provision.initial_resolution.method_history_head.clone())
@@ -627,7 +627,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
             AppError::param_invalid(format!(
                 "Applet-managed WebVH history head is invalid: {error}"
             ))
-            .with_wire_code("identity_method_evidence_invalid")
+            .with_reason_code("identity_method_evidence_invalid")
         })?;
     let pinned = state
         .dids()
@@ -637,7 +637,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
             AppError::param_invalid(format!(
                 "Applet-managed WebVH evidence is not an accepted trusted history state: {error}"
             ))
-            .with_wire_code("identity_method_evidence_invalid")
+            .with_reason_code("identity_method_evidence_invalid")
         })?;
     if !managed_actor_pinned_resolution_is_current(
         &pinned,
@@ -648,7 +648,7 @@ pub(super) async fn validate_managed_actor_current_method_evidence(
         return Err(AppError::param_invalid(
             "Applet-managed WebVH evidence is a historical prefix rather than the current trusted head",
         )
-        .with_wire_code("identity_method_evidence_invalid"));
+        .with_reason_code("identity_method_evidence_invalid"));
     }
     Ok(())
 }
@@ -732,7 +732,7 @@ pub(super) async fn register_package_install(
                 return Err(AppError::conflict(
                     "applet identity already exists; install another scope with reuse_existing_managed_actor",
                 )
-                .with_wire_code("applet_managed_actor_reuse_required"));
+                .with_internal_reason("applet_managed_actor_reuse_required"));
             }
             let bot_provision = validated_events.bot_provision.as_ref().ok_or_else(|| {
                 AppError::internal("validated create install has no Bot provision")
@@ -766,7 +766,7 @@ pub(super) async fn register_package_install(
         AppletInstallRequestBody::Reuse(reuse) => {
             let existing = existing_identity.ok_or_else(|| {
                 AppError::conflict("applet identity does not exist; first install must create it")
-                    .with_wire_code("applet_managed_actor_reuse_invalid")
+                    .with_internal_reason("applet_managed_actor_reuse_invalid")
             })?;
             if existing.globally_fenced_at.is_some() {
                 return Err(
@@ -791,7 +791,7 @@ pub(super) async fn register_package_install(
                 return Err(AppError::conflict(
                     "reuse_existing_managed_actor does not match the first accepted Applet identity",
                 )
-                .with_wire_code("applet_managed_actor_reuse_invalid"));
+                .with_internal_reason("applet_managed_actor_reuse_invalid"));
             }
             let provision: AppletManagedActorProvisionPayload = serde_json::from_value(
                 serde_json::to_value(&existing.bot_actor_provision_event.payload).map_err(
@@ -925,7 +925,7 @@ pub(super) async fn register_package_install(
                 .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
             error.message(),
         )
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     crate::routing::append_audit_log(
         state,
@@ -1146,7 +1146,7 @@ pub(super) fn validate_applet_package(
     if proof.payload_digest != expected_payload_digest {
         return Err(
             AppError::param_invalid("applet package proof payload_digest mismatch")
-                .with_wire_code("proof_invalid"),
+                .with_reason_code("proof_invalid"),
         );
     }
     // applet-integration.md §4.1 line 193/199 + §4b line 229: the controller
@@ -1247,7 +1247,7 @@ fn validate_controller_proof(
     )
     .map_err(|reason| {
         AppError::param_invalid("applet package proof is not anchored to controller_principal_id")
-            .with_wire_code("proof_invalid")
+            .with_reason_code("proof_invalid")
             .with_reason_detail(reason)
     })?;
     let verify_result = if state.config().development_mode {
@@ -1268,7 +1268,7 @@ fn validate_controller_proof(
     };
     verify_result.map_err(|reason| {
         AppError::param_invalid("applet package controller proof signature is invalid")
-            .with_wire_code("proof_invalid")
+            .with_reason_code("proof_invalid")
             .with_reason_detail(reason)
     })
 }
@@ -1785,7 +1785,11 @@ mod tests {
         let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("wrong-key controller proof must be rejected");
-        assert_eq!(error.wire_code(), "proof_invalid");
+        assert_eq!(error.wire_code(), "param_invalid");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
     }
 
     #[test]
@@ -1829,7 +1833,11 @@ mod tests {
         let error = validate_controller_proof(&state, &package, &bytes).expect_err(
             "controller proof not anchored to controller_principal_id must be rejected",
         );
-        assert_eq!(error.wire_code(), "proof_invalid");
+        assert_eq!(error.wire_code(), "param_invalid");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
     }
 
     #[test]

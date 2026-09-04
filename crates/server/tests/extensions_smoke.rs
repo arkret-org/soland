@@ -1799,7 +1799,12 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     .unwrap();
     assert_eq!(
         rejected["type"],
-        json!("https://arkret.org/problems/applet_namespace_mismatch"),
+        json!("https://arkret.org/problems/capability_denied"),
+        "rejection: {rejected}"
+    );
+    assert_eq!(
+        rejected["reason_code"],
+        json!("applet_namespace_mismatch"),
         "rejection: {rejected}"
     );
 }

@@ -260,7 +260,14 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         )
     {
         Ok(())
+    } else if kind.as_str() == arkret_wire::event_kind_str::DEVICE_AUTHORIZE {
+        Err(arkret_wire::ReasonCode::DEVICE_AUTHORIZED_PRINCIPAL_CONTROL_REALM_MISMATCH)
     } else {
+        // device.list_update / device.revoke landing off the bound principal
+        // control Realm has no registered reason code (the registered
+        // principal_control_event_kind_forbidden covers non-control event
+        // kinds, the opposite direction); keep it on the unstable
+        // reason_detail channel.
         Err("principal_control_realm_mismatch")
     }
 }

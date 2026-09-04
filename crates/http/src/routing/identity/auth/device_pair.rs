@@ -370,7 +370,7 @@ fn device_pairing_proof_failed(
         arkret_wire::ErrorCode::FailedPrecondition,
         "device pairing challenge proof is invalid",
     )
-    .with_reason_code("proof_invalid")
+    .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
     .with_private_detail(error.to_string())
 }
 

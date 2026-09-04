@@ -111,30 +111,34 @@ use crate::artifacts;
 // ancestor chain per the inheritance declaration. Outstanding
 // follow-up: rich `link_kind`-specific authz constraints (TODO(P2B.x)).
 pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static str> {
+    // All governance-binding failures collapse onto the registered
+    // `governance_binding_mismatch` (binding fields disagree with the
+    // payload / accepted state); the former per-check discriminator tokens
+    // were never registered protocol reason codes.
     let binding = payload
         .get("governance_binding")
-        .ok_or("mls_governance_binding_missing")?;
+        .ok_or(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)?;
     if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
-        return Err("mls_governance_binding_version_invalid");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("encoding_profile").and_then(Value::as_str)
         != Some("cbor-deterministic-rfc8949-v1")
     {
-        return Err("mls_governance_binding_encoding_profile_invalid");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("binding_profile").and_then(Value::as_str)
         != Some(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)
     {
-        return Err("mls_governance_binding_profile_invalid");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
-        return Err("mls_governance_binding_reducer_profile_invalid");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     let Some(group_id) = payload.get("mls_group_id").and_then(Value::as_str) else {
         return Err("mls_commit_group_missing");
     };
     if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
-        return Err("mls_governance_binding_group_mismatch");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     let expected_prev_epoch = payload
         .get("base_epoch")
@@ -145,46 +149,46 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         .and_then(Value::as_u64)
         .ok_or("mls_commit_next_epoch_missing")?;
     if expected_prev_epoch.checked_add(1) != Some(expected_next_epoch) {
-        return Err("mls_governance_binding_next_epoch_mismatch");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("previous_epoch").and_then(Value::as_u64) != Some(expected_prev_epoch) {
-        return Err("mls_governance_binding_previous_epoch_mismatch");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     if binding.get("next_epoch").and_then(Value::as_u64) != Some(expected_next_epoch) {
-        return Err("mls_governance_binding_next_epoch_mismatch");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     let Some(realm_id) = binding.get("realm_id").and_then(Value::as_str) else {
-        return Err("mls_governance_binding_realm_missing");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     };
     let Some(scope) = binding.get("effective_scope").and_then(Value::as_object) else {
-        return Err("mls_governance_binding_scope_missing");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     };
     if scope.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return Err("mls_governance_binding_scope_mismatch");
+        return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
     }
     match scope.get("kind").and_then(Value::as_str) {
         Some("realm") => {
             if binding.get("circle_id").is_some() {
-                return Err("mls_governance_binding_scope_mismatch");
+                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
             }
         }
         Some("circle") => {
             let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str) else {
-                return Err("mls_governance_binding_scope_mismatch");
+                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
             };
             if binding.get("circle_id").and_then(Value::as_str) != Some(circle_id) {
-                return Err("mls_governance_binding_scope_mismatch");
+                return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
             }
         }
-        _ => return Err("mls_governance_binding_scope_missing"),
+        _ => return Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH),
     }
     let parsed = serde_json::from_value::<arkret_models_crypto::MlsGovernanceBindingPayload>(
         binding.clone(),
     )
-    .map_err(|_| "mls_governance_binding_invalid")?;
+    .map_err(|_| arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)?;
     parsed
         .validate()
-        .map_err(|_| "mls_governance_binding_invalid")
+        .map_err(|_| arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)
 }
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<EventKind> {
@@ -349,7 +353,7 @@ mod tests {
         });
         assert_eq!(
             validate_mls_governance_binding(&stale),
-            Err("mls_governance_binding_previous_epoch_mismatch")
+            Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)
         );
 
         let scope_mismatch = json!({
@@ -374,7 +378,7 @@ mod tests {
         });
         assert_eq!(
             validate_mls_governance_binding(&scope_mismatch),
-            Err("mls_governance_binding_scope_mismatch")
+            Err(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH)
         );
     }
 }

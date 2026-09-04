@@ -296,7 +296,7 @@ pub(super) async fn fanout_projection_effect_private_update(
                 sender_device_id: marker.device_id.clone(),
             },
             content: ActorPrivateReadCursorUpdate {
-                schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
+                schema: arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1.to_owned(),
                 actor_id: marker.actor_id.clone(),
                 device_id: marker.device_id.clone(),
                 realm_id: marker.realm_id.clone(),

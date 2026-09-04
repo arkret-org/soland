@@ -39,6 +39,62 @@ pub(crate) fn strand_position_from_create_payload(
     Ok(None)
 }
 
+/// Forbidden-wire fields (`registry/forbidden-wire-fields.json`, context
+/// `strand_payload`) are rejected at create, even on reducer replay paths
+/// that bypass schema validation: no registered object-root key (for example
+/// `discussion_space_ref`) and no registered `metadata.fields` key may
+/// appear. The reason is the registered `unknown_field`, whose description
+/// names the forbidden-wire registry.
+pub(crate) fn strand_forbidden_wire_field_in_create_payload(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for key in object.keys() {
+        if arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject("strand_payload", key) {
+            return Err(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        }
+    }
+    let Some(fields) = object
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("fields"))
+        .and_then(Value::as_object)
+    else {
+        return Ok(());
+    };
+    for key in fields.keys() {
+        let path = format!("metadata.fields.{key}");
+        if arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject("strand_payload", &path) {
+            return Err(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        }
+    }
+    Ok(())
+}
+
+/// Forbidden-wire fields (`registry/forbidden-wire-fields.json`, context
+/// `morph_payload`) are rejected at create: no registered object-root key and
+/// no registered `fields` key (`fields.stage`, `fields.stage_note`, ...) may
+/// appear. The reason is the registered `unknown_field`, whose description
+/// names the forbidden-wire registry.
+pub(crate) fn morph_forbidden_wire_field_in_create_payload(
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    for key in object.keys() {
+        if arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject("morph_payload", key) {
+            return Err(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        }
+    }
+    let Some(fields) = object.get("fields").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for key in fields.keys() {
+        let path = format!("fields.{key}");
+        if arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject("morph_payload", &path) {
+            return Err(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn strand_position_from_lifecycle_payload(
     payload: &Value,
 ) -> Option<(String, String, Option<String>)> {
@@ -109,6 +165,9 @@ pub fn validate_patch_semantic_safety(
         if patch_op_removes_value(value) && patch_path_targets_redactable_unset(path) {
             return Err(arkret_wire::ReasonCode::PATCH_UNSET_REDACTABLE_FIELD);
         }
+        if patch_entry_targets_forbidden_wire(path, value, object_kind) {
+            return Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED);
+        }
     }
     Ok(())
 }
@@ -119,23 +178,106 @@ pub fn validate_patch_semantic_safety(
 /// The path set is the canonical projection of
 /// `registry/reducer-managed-path-registry.json` and is owned by
 /// `arkret_wire::patch::reducer_managed_patch_reason`; this module never spells
-/// its own list. `None` means the object kind was not proven, so the
-/// conservative object-agnostic superset applies and no registered carve-out is
-/// honoured (`event-and-patch.md` 4.2.5).
+/// its own list. The full normalized dotted path is handed over (never just
+/// the root segment) so registered dotted paths and their descendants match.
+/// `None` means the object kind was not proven, so the conservative
+/// object-agnostic superset applies with the same descendant-cover rule and no
+/// registered carve-out is honoured (`event-and-patch.md` 4.2.5).
 fn patch_path_targets_reducer_managed(path: &str, object_kind: Option<&str>) -> bool {
-    let root = patch_segment_head(path.split('.').next().unwrap_or_default());
-    let field = if root == Some("object") {
-        patch_segment_head(path.split('.').nth(1).unwrap_or_default())
-    } else {
-        root
-    };
-    let Some(field) = field else {
+    let Some(subject) = normalized_patch_subject(path) else {
         return false;
     };
     if let Some(object_kind) = object_kind {
-        return arkret_wire::patch::reducer_managed_patch_reason(object_kind, field).is_some();
+        return arkret_wire::patch::reducer_managed_patch_reason(object_kind, &subject).is_some();
     }
-    arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS.contains(&field)
+    arkret_wire::generated::REDUCER_MANAGED_ANY_OBJECT_PATCH_PATHS
+        .iter()
+        .any(|registered| arkret_wire::patch::patch_path_covers(registered, &subject))
+}
+
+/// Normalize a wire patch path to the dotted subject the registries address:
+/// selector suffixes are stripped per segment, a backtick-quoted segment cannot
+/// match a registered snake_case path and voids the match, and a leading
+/// `object.` wrapper addresses the same fields one segment deeper.
+fn normalized_patch_subject(path: &str) -> Option<String> {
+    let mut segments = Vec::new();
+    for segment in path.split('.') {
+        segments.push(patch_segment_head(segment)?);
+    }
+    if segments.first() == Some(&"object") {
+        segments.remove(0);
+    }
+    if segments.is_empty() {
+        return None;
+    }
+    Some(segments.join("."))
+}
+
+/// The forbidden-wire contexts the generic object-patch surface enforces per
+/// object kind: the payload context (dotted ids naming create-time forbidden
+/// fields) plus the patch payload context (`patch:`-prefixed ids naming
+/// forbidden patch paths). The sets are read from the SDK projection of
+/// `registry/forbidden-wire-fields.json`; this module never spells its own
+/// list.
+fn forbidden_wire_contexts(object_kind: Option<&str>) -> &'static [&'static str] {
+    match object_kind {
+        Some("strand") => &["strand_payload", "strand_patch_payload"],
+        Some("morph") => &["morph_payload", "morph_update_payload"],
+        _ => &[],
+    }
+}
+
+/// Whether one patch entry hits a `hard_reject` forbidden-wire entry, in any
+/// representation: the dotted path itself, or a key inside a whole-object set
+/// value (which the dotted path grammar cannot name).
+fn patch_entry_targets_forbidden_wire(
+    path: &str,
+    value: &Value,
+    object_kind: Option<&str>,
+) -> bool {
+    let contexts = forbidden_wire_contexts(object_kind);
+    if contexts.is_empty() {
+        return false;
+    }
+    let Some(subject) = normalized_patch_subject(path) else {
+        return false;
+    };
+    if forbidden_wire_path_hit(contexts, &subject) {
+        return true;
+    }
+    if let PatchAction::Set(Value::Object(object)) = patch_action(value) {
+        return object
+            .iter()
+            .any(|(key, nested)| forbidden_wire_set_value_hit(contexts, &subject, key, nested));
+    }
+    false
+}
+
+/// Descend a whole-object set value: `{"metadata": {"fields": {"status": _}}}`
+/// is judged by the same registry entries as the dotted
+/// `metadata.fields.status` form.
+fn forbidden_wire_set_value_hit(
+    contexts: &[&'static str],
+    prefix: &str,
+    key: &str,
+    value: &Value,
+) -> bool {
+    let path = format!("{prefix}.{key}");
+    if forbidden_wire_path_hit(contexts, &path) {
+        return true;
+    }
+    match value {
+        Value::Object(object) => object
+            .iter()
+            .any(|(key, nested)| forbidden_wire_set_value_hit(contexts, &path, key, nested)),
+        _ => false,
+    }
+}
+
+fn forbidden_wire_path_hit(contexts: &[&'static str], path: &str) -> bool {
+    contexts
+        .iter()
+        .any(|context| arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(context, path))
 }
 
 /// Whether a patch path addresses a registered redactable content-carrier slot.
@@ -383,4 +525,147 @@ pub(crate) fn redaction_human_reason(payload: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn patch(value: Value) -> serde_json::Map<String, Value> {
+        value.as_object().expect("patch object").clone()
+    }
+
+    #[test]
+    fn forbidden_wire_dotted_path_is_rejected_for_strand() {
+        let patch = patch(json!({"metadata.fields.status": "done"}));
+        assert_eq!(
+            validate_patch_semantic_safety(&patch, Some("strand")),
+            Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+        );
+    }
+
+    #[test]
+    fn forbidden_wire_whole_fields_set_is_rejected_for_strand() {
+        let patch = patch(json!({
+            "metadata.fields": {"jira_status": "open", "status": "done"}
+        }));
+        assert_eq!(
+            validate_patch_semantic_safety(&patch, Some("strand")),
+            Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+        );
+    }
+
+    #[test]
+    fn forbidden_wire_nested_metadata_set_is_rejected_for_strand() {
+        let patch = patch(json!({
+            "metadata": {"fields": {"stage_reason": "because"}}
+        }));
+        assert_eq!(
+            validate_patch_semantic_safety(&patch, Some("strand")),
+            Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+        );
+    }
+
+    #[test]
+    fn forbidden_wire_patch_only_paths_are_rejected_for_strand() {
+        for value in [
+            json!({"fields.assignee": "ak:actor:someone"}),
+            json!({"fields": {"assignees": ["ak:actor:someone"]}}),
+        ] {
+            let patch = patch(value);
+            assert_eq!(
+                validate_patch_semantic_safety(&patch, Some("strand")),
+                Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_strand_patch_paths_are_accepted() {
+        for value in [
+            json!({"metadata.title": "renamed"}),
+            json!({"metadata.fields.jira_status": "open"}),
+            json!({"metadata": {"fields": {"jira_status": "open"}}}),
+        ] {
+            let patch = patch(value);
+            assert_eq!(
+                validate_patch_semantic_safety(&patch, Some("strand")),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn forbidden_wire_paths_are_rejected_for_morph() {
+        for value in [
+            json!({"fields.stage": "seedling"}),
+            json!({"fields": {"stage_note": "note", "title": "kept"}}),
+        ] {
+            let patch = patch(value);
+            assert_eq!(
+                validate_patch_semantic_safety(&patch, Some("morph")),
+                Err(arkret_wire::ReasonCode::PATCH_PATH_REDUCER_MANAGED)
+            );
+        }
+        let patch = patch(json!({"fields": {"title": "kept"}}));
+        assert_eq!(
+            validate_patch_semantic_safety(&patch, Some("morph")),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn forbidden_wire_check_is_a_no_op_without_a_proven_object_kind() {
+        // `metadata.fields.status` is forbidden for strands only; with no
+        // proven kind the conservative reducer-managed superset still applies
+        // but the forbidden-wire contexts do not.
+        let patch = patch(json!({"metadata.fields.status": "done"}));
+        assert_eq!(validate_patch_semantic_safety(&patch, None), Ok(()));
+    }
+
+    #[test]
+    fn strand_create_payload_rejects_registered_forbidden_fields() {
+        for object in [
+            json!({"metadata": {"fields": {"status": "done"}}}),
+            json!({"metadata": {"fields": {"assigned_to": "ak:actor:someone"}}}),
+            json!({"discussion_space_ref": "ak:space:some"}),
+        ] {
+            let object = object.as_object().expect("create object");
+            assert_eq!(
+                strand_forbidden_wire_field_in_create_payload(object),
+                Err(arkret_wire::ReasonCode::UNKNOWN_FIELD)
+            );
+        }
+        let object = json!({"metadata": {"title": "t", "fields": {"jira_status": "open"}}});
+        let object = object.as_object().expect("create object");
+        assert_eq!(
+            strand_forbidden_wire_field_in_create_payload(object),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn morph_create_payload_rejects_registered_forbidden_fields() {
+        for leaf in [
+            "lifecycle",
+            "progress_state",
+            "stage",
+            "stage_changed_at",
+            "stage_note",
+            "stage_reason",
+        ] {
+            let object = json!({"fields": {leaf: "x"}});
+            let object = object.as_object().expect("create object");
+            assert_eq!(
+                morph_forbidden_wire_field_in_create_payload(object),
+                Err(arkret_wire::ReasonCode::UNKNOWN_FIELD),
+                "fields.{leaf} is hard_reject in morph_payload"
+            );
+        }
+        let object = json!({"fields": {"title": "kept"}, "morph_kind": "document"});
+        let object = object.as_object().expect("create object");
+        assert_eq!(morph_forbidden_wire_field_in_create_payload(object), Ok(()));
+    }
 }

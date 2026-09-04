@@ -192,7 +192,7 @@ pub(crate) async fn prepare_franking_proof_event(
             ParamInvalid,
             format!("franking Event admission failed: {}", error.message()),
         )
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })
 }
 
@@ -658,7 +658,7 @@ async fn validate_franking_event_time_anchor(
 // `reason_code`, so it is sourced from the SDK as `arkret_wire::ReasonCode::PROOF_INVALID`
 // rather than a local literal.
 fn franking_proof_invalid(message: impl Into<String>) -> AppError {
-    AppError::param_invalid(message).with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
+    AppError::param_invalid(message).with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn required_string_field<'a>(
@@ -1545,7 +1545,11 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
+        assert_eq!(error.wire_code(), "param_invalid");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
     }
 
     #[tokio::test]
@@ -1556,7 +1560,11 @@ mod report_safety_tests {
         let error = validate_moderation_franking_proof(&state, REALM, &proof)
             .await
             .unwrap_err();
-        assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
+        assert_eq!(error.wire_code(), "param_invalid");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
+        );
     }
 
     #[test]

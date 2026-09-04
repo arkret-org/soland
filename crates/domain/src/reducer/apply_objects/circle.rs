@@ -119,6 +119,18 @@ impl ProjectionState {
             .get("durability_policy")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
+        // realm-and-space.md §2.3.1: a non-`none` durability binding is only
+        // defined on an mls_exporter_aead_v1 scope; any other pairing is a
+        // registered durability_scheme_incompatible rejection.
+        if durability_policy
+            .as_deref()
+            .is_some_and(|mode| mode != "none")
+            && content_scheme.as_deref() != Some("mls_exporter_aead_v1")
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE.to_owned(),
+            };
+        }
         let scheme_valid = match (encryption_profile.as_str(), content_scheme.as_deref()) {
             ("none", None) => durability_policy.is_none(),
             ("mls_rfc9420", Some("mls_rfc9420")) => durability_policy.is_none(),
@@ -130,7 +142,9 @@ impl ProjectionState {
         };
         if !scheme_valid {
             return ProjectionEffect::Rejected {
-                reason: "circle_content_scheme_invalid".to_owned(),
+                reason: "circle create encryption_profile/content_scheme combination is not a \
+                         registered v1 pairing"
+                    .to_owned(),
             };
         }
         if content_scheme.as_deref() == Some("mls_rfc9420") && history_access != "since_join" {

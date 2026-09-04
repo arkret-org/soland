@@ -184,7 +184,7 @@ fn is_ordinary_circle(circle: &CircleProjection) -> bool {
 }
 
 fn scope_rotate_failed(reason: &'static str, detail: impl Into<String>) -> AppError {
-    crate::app_error!(FailedPrecondition, detail.into()).with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, detail.into()).with_rejection_code(reason)
 }
 
 fn circle_projection_snapshot(
@@ -427,7 +427,7 @@ fn caller_signed_circle_create_id(actor: &ActorId, event: &Event) -> Result<Circ
             SchemaViolation,
             "create_event payload.object must not carry an id: it is derived from this Event",
         )
-        .with_wire_code(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED));
+        .with_reason_code(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED));
     }
     if object
         .and_then(|object| object.get("mls_group_ref"))

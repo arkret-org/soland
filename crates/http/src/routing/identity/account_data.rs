@@ -423,7 +423,7 @@ async fn admit_caller_signed_account_data_set(
             ParamInvalid,
             format!("account_data Event admission failed: {}", error.message()),
         )
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     Ok(revision)
 }
@@ -661,7 +661,7 @@ async fn delete_account_data(
             FailedPrecondition,
             "this account data type requires an in-value tombstone",
         )
-        .with_reason_code("physical_delete_forbidden"));
+        .with_internal_reason("physical_delete_forbidden"));
     }
 
     let revision = admit_caller_signed_account_data_set(

@@ -186,7 +186,7 @@ async fn member_identity_tampered_payload_fails_closed() {
     let err = validate_member_identity_proof(&state, &payload)
         .await
         .expect_err("tampered MemberIdentity payload must fail");
-    assert_eq!(err.code, "proof_event_digest_mismatch");
+    assert_eq!(err.code, "member_identity_proof_invalid");
 }
 
 #[tokio::test(flavor = "multi_thread")]

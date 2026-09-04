@@ -389,7 +389,16 @@ async fn peer_principal_genesis(
     }
     super::event_log::submit_peer_pcr_genesis(state, &request)
         .await
-        .map_err(|error| AppError::internal(error.message()).with_wire_code(error.code()))
+        // Adopt the admission rejection verbatim: it already carries the
+        // registered top-level code, its registry HTTP status and any reason
+        // code. Re-wrapping it as `internal_error` and overriding the wire
+        // string put an unregistered discriminator on `error.code` and
+        // reported every rejection as a server fault.
+        .map_err(|error| {
+            error.rejection().cloned().unwrap_or_else(|| {
+                crate::app_error!(Quarantine, error.message()).with_internal_reason(error.code())
+            })
+        })
         .and_then(json_ok)
 }
 
@@ -2411,12 +2420,9 @@ pub(in crate::routing) async fn validate_peer_request(
 ) -> Result<(), AppError> {
     let expected_destination = state.config().trust_domain.clone();
     if has_body {
-        let trust_headers = crate::routing::federation::FederationTrustHeaders::from_salvo_request(
-            req,
-        )
-        .map_err(|violation| {
-            schema_violation(violation.message()).with_wire_code(violation.error_code())
-        })?;
+        let trust_headers =
+            crate::routing::federation::FederationTrustHeaders::from_salvo_request(req)
+                .map_err(|violation| schema_violation(violation.message()))?;
         trust_headers
             .verify_destination(&expected_destination)
             .map_err(|_| {
@@ -2651,7 +2657,7 @@ pub(in crate::routing) fn schema_violation(message: impl Into<String>) -> AppErr
 }
 
 pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> AppError {
-    AppError::conflict(message).with_wire_code("cross_domain_replay_rejected")
+    AppError::conflict(message).with_reason_code("cross_domain_replay_rejected")
 }
 
 fn render_app_error(res: &mut Response, error: AppError) {

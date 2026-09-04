@@ -386,60 +386,14 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
     if patch.contains_key("metadata") && patch.contains_key("encrypted_metadata") {
         return Err("morph_metadata_carrier_conflict");
     }
-    reject_forbidden_morph_update_patch(patch)?;
+    // Forbidden-wire and reducer-managed patch paths (`morph.md` §2 / §4:
+    // create-locked `morph_kind` / `schema_refs`, the `ak.morph.stage.set`-owned
+    // stage axis, and the reserved `fields.*` business-field set) are enforced
+    // by `validate_operation_patch_semantics` against the SDK projections of
+    // `registry/forbidden-wire-fields.json` and
+    // `registry/reducer-managed-path-registry.json`; no hand-copied list lives
+    // here.
     Ok(())
-}
-
-/// `morph.md` §2 / §4 forbidden-wire guard for `ak.morph.update`:
-/// - `morph_kind` and `schema_refs` are immutable after `ak.morph.create`.
-/// - the stage axis (`stage` / `stage_changed_at`) changes only via `ak.morph.stage.set`; writing
-///   it through an update patch is `schema_violation`.
-/// - the reserved business-field set (`fields.stage` / `fields.lifecycle` / `fields.progress_state`
-///   / `fields.stage_reason`) is forbidden-wire in any representation (dotted `fields.<name>` path
-///   or whole-`fields` object replace).
-fn reject_forbidden_morph_update_patch(
-    patch: &serde_json::Map<String, Value>,
-) -> Result<(), &'static str> {
-    const FORBIDDEN_FIELD: &[&str] = &["stage", "lifecycle", "progress_state", "stage_reason"];
-    for (path, value) in patch {
-        if path == "morph_kind" {
-            return Err("morph_kind_immutable");
-        }
-        if path == "schema_refs" {
-            return Err("morph update cannot modify create-locked schema_refs");
-        }
-        if path == "stage" || path == "stage_changed_at" {
-            return Err("morph_stage_patch_forbidden");
-        }
-        if let Some(field) = path.strip_prefix("fields.")
-            && FORBIDDEN_FIELD.contains(&field)
-        {
-            return Err("morph_forbidden_field_patch");
-        }
-        if path == "fields"
-            && let Some(map) = patch_set_value(value).and_then(Value::as_object)
-            && FORBIDDEN_FIELD.iter().any(|field| map.contains_key(*field))
-        {
-            return Err("morph_forbidden_field_patch");
-        }
-    }
-    Ok(())
-}
-
-/// Decode a field-patch entry to the value it sets, or `None` for unset /
-/// unknown ops. Mirrors the reducer's `patch_action`: a bare value (no `$op`
-/// envelope) is itself the set value; `{"$op":"set"|"add","value":…}` carries
-/// it explicitly; `unset`/`remove`/unknown set nothing. Kept inline so the
-/// admission layer does not depend on reducer-internal helpers.
-fn patch_set_value(value: &Value) -> Option<&Value> {
-    match value
-        .as_object()
-        .and_then(|object| object.get("$op").and_then(Value::as_str))
-    {
-        None => Some(value),
-        Some("set" | "add") => value.get("value"),
-        Some(_) => None,
-    }
 }
 
 pub(crate) fn validate_morph_create_payload(operation: &Operation) -> Result<(), &'static str> {

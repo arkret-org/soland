@@ -17,7 +17,7 @@ pub(super) async fn resolve_recovery_read_account(
             CapabilityDenied,
             "recovery policy requires an account actor",
         )
-        .with_wire_code("recovery_account_isolation")
+        .with_internal_reason("recovery_account_isolation")
     })?;
     if let Some(requested) = account_id_param.filter(|value| !value.trim().is_empty()) {
         let requested: arkret_wire::AccountId = serde_json::from_str(&requested).map_err(|_| {
@@ -29,7 +29,7 @@ pub(super) async fn resolve_recovery_read_account(
                 CapabilityDenied,
                 "account_id does not match the authenticated account",
             )
-            .with_wire_code("recovery_account_isolation"));
+            .with_internal_reason("recovery_account_isolation"));
         }
     }
     Ok(account_id)
@@ -276,7 +276,7 @@ pub(super) async fn recovery_policy_put(
             CapabilityDenied,
             "Event actor and recovery policy account must match the authenticated account",
         )
-        .with_wire_code("recovery_principal_isolation"));
+        .with_reason_code("recovery_principal_isolation"));
     }
     let realm_id = request.event.realm_id.clone();
     if !state
@@ -292,7 +292,7 @@ pub(super) async fn recovery_policy_put(
             CapabilityDenied,
             "recovery policy Event must target the principal's Principal Control Realm",
         )
-        .with_wire_code("recovery_principal_control_realm_mismatch"));
+        .with_internal_reason("recovery_principal_control_realm_mismatch"));
     }
     let existing = state
         .recovery_policies()
@@ -316,7 +316,8 @@ pub(super) async fn recovery_policy_put(
                     "policy_version {} is not strictly greater than current {}",
                     validated.version, current.version
                 ))
-                .with_wire_code("recovery_policy_version_not_monotonic"));
+                .with_wire_code("recovery_policy_conflict")
+                .with_reason_code("recovery_policy_version_not_monotonic"));
             }
             Some(current)
                 if validated.supersedes_id.as_deref() != Some(current.policy_id.as_str()) =>
@@ -325,14 +326,15 @@ pub(super) async fn recovery_policy_put(
                     "supersedes_id {:?} does not match current policy_id `{}`",
                     validated.supersedes_id, current.policy_id
                 ))
-                .with_wire_code("recovery_policy_supersedes_invalid"));
+                .with_wire_code("recovery_policy_conflict")
+                .with_reason_code("recovery_policy_supersedes_invalid"));
             }
             None if validated.version != 1 => {
                 return Err(AppError::param_invalid(format!(
                     "genesis policy MUST have version=1; got {}",
                     validated.version
                 ))
-                .with_wire_code("recovery_policy_genesis_not_v1"));
+                .with_reason_code("recovery_policy_genesis_not_v1"));
             }
             _ => {}
         }
@@ -343,7 +345,7 @@ pub(super) async fn recovery_policy_put(
         .await
         .map_err(|error| {
             let code = ErrorCode::from_wire(&error.code()).unwrap_or(ErrorCode::ParamInvalid);
-            AppError::from_rejection(code, error.message()).with_wire_code(error.code())
+            AppError::from_rejection(code, error.message()).with_rejection_code(error.code())
         })?;
     let accepted_event = state
         .event_queries()
@@ -392,7 +394,7 @@ pub(super) async fn recovery_policy_put(
             return Err(AppError::param_invalid(format!(
                 "genesis policy MUST have version=1; got {actual}"
             ))
-            .with_wire_code("recovery_policy_genesis_not_v1"));
+            .with_reason_code("recovery_policy_genesis_not_v1"));
         }
         soland_services::identity::PublishRecoveryPolicyResult::VersionNotMonotonic {
             actual,
@@ -401,7 +403,8 @@ pub(super) async fn recovery_policy_put(
             return Err(AppError::conflict(format!(
                 "policy_version {actual} is not strictly greater than current {current}"
             ))
-            .with_wire_code("recovery_policy_version_not_monotonic"));
+            .with_wire_code("recovery_policy_conflict")
+            .with_reason_code("recovery_policy_version_not_monotonic"));
         }
         soland_services::identity::PublishRecoveryPolicyResult::SupersedesInvalid {
             actual,
@@ -410,7 +413,8 @@ pub(super) async fn recovery_policy_put(
             return Err(AppError::conflict(format!(
                 "supersedes {actual:?} does not match current policy_id `{current_policy_id}`"
             ))
-            .with_wire_code("recovery_policy_supersedes_invalid"));
+            .with_wire_code("recovery_policy_conflict")
+            .with_reason_code("recovery_policy_supersedes_invalid"));
         }
     };
 

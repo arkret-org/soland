@@ -214,7 +214,7 @@ fn recovery_policy_basis_leaves(
         LeaseBasisRef::AnchorUnit(_) => Err(AppError::conflict(
             "recovery policy authority cannot use a bootstrap anchor-unit basis",
         )
-        .with_wire_code("recovery_publication_authority_invalid")),
+        .with_internal_reason("recovery_publication_authority_invalid")),
     }
 }
 
@@ -232,7 +232,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .find(|rule| rule.proof_kind == RecoveryProofKind::DeviceQuorum)
         .ok_or_else(|| {
             AppError::conflict("device quorum policy has no publication authorization rule")
-                .with_wire_code("recovery_publication_authority_invalid")
+                .with_internal_reason("recovery_publication_authority_invalid")
         })?;
     let expected_methods = quorum
         .member_ids
@@ -248,7 +248,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
         return Err(AppError::conflict(
             "device quorum publication issuers do not match the policy member devices",
         )
-        .with_wire_code("recovery_publication_authority_invalid"));
+        .with_internal_reason("recovery_publication_authority_invalid"));
     }
 
     let leaves = recovery_policy_basis_leaves(&active.acceptance_basis)?;
@@ -260,7 +260,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             AppError::conflict(format!(
                 "recovery policy acceptance basis cannot be resolved: {error}"
             ))
-            .with_wire_code("recovery_publication_authority_invalid")
+            .with_internal_reason("recovery_publication_authority_invalid")
         })?
         .into_iter()
         .flat_map(|proof| proof.covered_event_digests)
@@ -297,7 +297,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             return Err(AppError::conflict(format!(
                 "device quorum member `{member}` was not active at policy acceptance basis"
             ))
-            .with_wire_code("recovery_publication_authority_invalid"));
+            .with_internal_reason("recovery_publication_authority_invalid"));
         }
     }
     Ok(())
@@ -316,7 +316,7 @@ async fn pcr_policy_recovery_publication_authority_context(
         AppError::conflict(format!(
             "stored recovery policy cannot define publication authority: {error}"
         ))
-        .with_wire_code("recovery_publication_authority_invalid")
+        .with_internal_reason("recovery_publication_authority_invalid")
     })?;
     verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
 
@@ -368,7 +368,7 @@ async fn pcr_policy_recovery_publication_authority_context(
             AppError::conflict(format!(
                 "recovery publication authority context is invalid: {error}"
             ))
-            .with_wire_code("recovery_publication_authority_invalid")
+            .with_internal_reason("recovery_publication_authority_invalid")
         })?;
     Ok(context)
 }
@@ -404,7 +404,7 @@ pub(super) async fn load_owned_recovery_session(
             CapabilityDenied,
             "recovery session belongs to a different principal",
         )
-        .with_wire_code("recovery_principal_isolation"));
+        .with_reason_code("recovery_principal_isolation"));
     }
     Ok(record)
 }
@@ -473,7 +473,7 @@ pub(super) async fn recovery_session_create(
             CapabilityDenied,
             "requesting_device_id does not match the recovery grant holder",
         )
-        .with_wire_code("recovery_evidence_unbound"));
+        .with_reason_code("recovery_evidence_unbound"));
     }
     if let Some(existing) = state
         .recovery_sessions()
@@ -508,12 +508,12 @@ pub(super) async fn recovery_session_create(
             CapabilityDenied,
             "account_id.principal_id does not match the authenticated principal",
         )
-        .with_wire_code("recovery_principal_isolation"));
+        .with_reason_code("recovery_principal_isolation"));
     }
     if account_id.station_id.as_str() != state.service_id() {
         return Err(
             crate::app_error!(FailedPrecondition, "account_id does not bind this Station",)
-                .with_reason_code("account_id_mismatch"),
+                .with_internal_reason("account_id_mismatch"),
         );
     }
     let authority_record = state
@@ -526,7 +526,7 @@ pub(super) async fn recovery_session_create(
                 FailedPrecondition,
                 "principal authority is not accepted by this Station",
             )
-            .with_reason_code("account_id_mismatch")
+            .with_internal_reason("account_id_mismatch")
         })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {
@@ -653,7 +653,7 @@ pub(super) async fn recovery_session_create(
     } else {
         return Err(
             AppError::conflict("recovery requires an accepted device generation")
-                .with_wire_code("device_generation_missing"),
+                .with_internal_reason("device_generation_missing"),
         );
     };
 
@@ -817,7 +817,7 @@ pub(super) async fn recovery_session_proof_submit(
         return Err(AppError::param_invalid(
             format!("proof.kind `{proof_kind}` not in spec enum",),
         )
-        .with_wire_code("recovery_proof_kind_unknown"));
+        .with_reason_code("recovery_proof_kind_unknown"));
     }
     // The proof kind MUST be one the bound policy snapshot permits.
     let policy_allows = record
@@ -842,7 +842,7 @@ pub(super) async fn recovery_session_proof_submit(
             SignatureInvalid,
             "proof.challenge does not match the session challenge",
         )
-        .with_wire_code("recovery_session_challenge_mismatch"));
+        .with_reason_code("recovery_session_challenge_mismatch"));
     }
 
     // C-P3 — verify the proof by kind. Only `did_root` is implemented;

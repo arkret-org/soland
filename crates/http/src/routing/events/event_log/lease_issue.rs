@@ -203,7 +203,9 @@ async fn issue_event_leases(
         );
     }
     crate::routing::events::operations::validate_operation_semantics(state, &projected_operations)
-        .map_err(|reason| crate::app_error!(SchemaViolation, reason).with_reason_code(reason))?;
+        .map_err(|reason| {
+            crate::app_error!(SchemaViolation, reason).with_internal_reason(reason)
+        })?;
     for operation in &projected_operations {
         crate::routing::events::operations::validate_single_operation_policy_in_batch(
             state,
@@ -224,7 +226,7 @@ async fn issue_event_leases(
                 StatusCode::CONFLICT => ErrorCode::Conflict,
                 _ => ErrorCode::PolicyViolation,
             };
-            AppError::from_rejection(code, reason).with_reason_code(wire_code)
+            AppError::from_rejection(code, reason).with_internal_reason(wire_code)
         })?;
     }
     // Lease issuance performs the same reducer admission as a later submit,
@@ -317,9 +319,8 @@ async fn issue_event_leases(
                     tracing::info!(internal_reason = %reason, "third-party invite claim rejected");
                     return Err(crate::app_error!(NotFound, "invite claim not found"));
                 }
-                return Err(
-                    crate::app_error!(FailedPrecondition, reason.clone()).with_reason_code(reason)
-                );
+                return Err(crate::app_error!(FailedPrecondition, reason.clone())
+                    .with_internal_reason(reason));
             }
         }
     }
@@ -417,13 +418,13 @@ async fn issue_intent_leases(
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         AppError::conflict("authorization lease intent basis is not accepted")
-                            .with_wire_code("authorization_lease_basis_mismatch")
+                            .with_internal_reason("authorization_lease_basis_mismatch")
                     })?;
                 if seal.realm_id != *intent.scope_ref.realm_id() {
                     return Err(AppError::conflict(
                         "authorization lease intent basis is in another Realm",
                     )
-                    .with_wire_code("authorization_lease_basis_mismatch"));
+                    .with_internal_reason("authorization_lease_basis_mismatch"));
                 }
             }
             _ => {

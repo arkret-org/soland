@@ -5,7 +5,7 @@ fn key_backup_untrusted_signature() -> AppError {
         SignatureInvalid,
         "key backup auth_data.signature is not anchored to the actor device trust root",
     )
-    .with_wire_code("untrusted_backup_signature")
+    .with_reason_code("untrusted_backup_signature")
 }
 
 /// key-management.md §7.4.1 (normative): a device signature alone cannot defend
@@ -76,7 +76,7 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
             SignatureInvalid,
             "key backup verification method does not match the authorized device key",
         )
-        .with_wire_code("untrusted_backup_signature"));
+        .with_reason_code("untrusted_backup_signature"));
     }
     verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)
 }
@@ -325,7 +325,7 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
             return Err(AppError::conflict(
                 "key backup unlock proof recovery session record is missing for a recovery-ceremony proof_kind",
             )
-            .with_wire_code("recovery_evidence_unbound"));
+            .with_reason_code("recovery_evidence_unbound"));
         }
         return Ok(());
     };
@@ -359,7 +359,7 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         return Err(AppError::conflict(
             "key backup unlock proof recovery session must be verified or completed",
         )
-        .with_wire_code("recovery_evidence_unbound"));
+        .with_reason_code("recovery_evidence_unbound"));
     }
     if let Some((kind, digest)) =
         super::super::recovery::recovery_session_proof_kind_and_digest(&record)

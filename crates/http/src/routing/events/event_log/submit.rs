@@ -952,7 +952,7 @@ impl SubmitOneError {
                 StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
                 _ => ErrorCode::InternalError,
             };
-            AppError::from_rejection(mapped, message).with_reason_code(code)
+            AppError::from_rejection(mapped, message).with_internal_reason(code)
         };
         Self::Rejected {
             error: Box::new(error),
@@ -975,10 +975,17 @@ impl SubmitOneError {
     /// at the top level, while its stable machine discriminator belongs in
     /// `error.details.reason_code`. Keeping this mapping here prevents each
     /// admission lane from silently flattening the reason back into prose.
+    /// Discriminators that are not registered reason codes are routed to the
+    /// unstable `reason_detail` key instead.
     pub(in crate::routing) fn semantic_schema_violation(reason_code: &'static str) -> Self {
+        let detail_key = if arkret_wire::ReasonCode::is_registered(reason_code) {
+            "reason_code"
+        } else {
+            "reason_detail"
+        };
         Self::new(StatusCode::BAD_REQUEST, "schema_violation", reason_code).with_details(
             serde_json::json!({
-                "reason_code": reason_code,
+                detail_key: reason_code,
             }),
         )
     }
@@ -1064,8 +1071,10 @@ pub(super) fn validate_membership_compensation_semantics(
 /// `context` names the surface that submitted it. Reducer rejection reasons (for
 /// example `circle_realm_mismatch` or `grant_exceeds_issuer_authority`) are
 /// stable *reason* codes, not top-level error codes: one that is not a registered
-/// error code keeps its semantic HTTP class and travels in `reason_code`, rather
-/// than being flattened into a misleading 500 internal_error.
+/// error code keeps its semantic HTTP class and travels in `reason_code` when it
+/// is a registered reason code (internal discriminators fall back to the unstable
+/// `reason_detail`), rather than being flattened into a misleading 500
+/// internal_error.
 pub(in crate::routing) fn submit_one_error_to_app_error(
     context: &str,
     status: StatusCode,
@@ -1099,7 +1108,7 @@ pub(in crate::routing) fn submit_one_error_to_app_error(
         StatusCode::UNPROCESSABLE_ENTITY => ErrorCode::SchemaViolation,
         _ => ErrorCode::InternalError,
     };
-    AppError::from_rejection(mapped, message).with_reason_code(code)
+    AppError::from_rejection(mapped, message).with_internal_reason(code)
 }
 
 fn realm_already_exists_error() -> SubmitOneError {
@@ -1122,11 +1131,17 @@ impl From<EventValidationError> for SubmitOneError {
     fn from(error: EventValidationError) -> Self {
         let mut rendered = Self::new(error.status, error.code, error.message);
         if let Some(reason_code) = error.reason_code {
+            let registered = arkret_wire::ReasonCode::is_registered(reason_code);
             if let Self::Rejected { error, .. } = &mut rendered {
-                error.reason_code = Some(reason_code.to_owned().into_boxed_str());
+                error.attach_internal_reason(reason_code);
             }
+            let detail_key = if registered {
+                "reason_code"
+            } else {
+                "reason_detail"
+            };
             rendered = rendered.with_details(serde_json::json!({
-                "reason_code": reason_code,
+                detail_key: reason_code,
             }));
         }
         rendered
@@ -2532,7 +2547,7 @@ async fn validate_federation_batch_admission(
                         SignatureInvalid,
                         "federated Event does not carry a valid origin Station admission proof"
                     )
-                    .with_reason_code("invalid_proof")
+                    .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
                 })?;
         admitted_producers.insert(
             event.event_id.as_str().to_owned(),

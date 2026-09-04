@@ -144,7 +144,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             Conflict,
             "a different runtime key binding is already pending for this pairing request",
         )
-        .with_wire_code("agent_runtime_request_conflict"));
+        .with_reason_code("agent_runtime_request_conflict"));
     }
 
     let controller_principal_id = agent_record.controller_principal_id.clone();
@@ -200,7 +200,7 @@ pub(super) async fn submit_agent_runtime_key_request(
                 Conflict,
                 "a different runtime key binding is already pending for this pairing request",
             )
-            .with_wire_code("agent_runtime_request_conflict")
+            .with_reason_code("agent_runtime_request_conflict")
         })?;
     let approval_request_id = stored.approval_request_id.clone().ok_or_else(|| {
         pairing_failed_precondition("agent pairing metadata is incomplete")
@@ -1459,7 +1459,7 @@ pub(super) async fn submit_production_key_authorize_event(
             "ak.agent.key.authorize submit failed: {}",
             error.message()
         ))
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     Ok(outcome.event_id)
 }

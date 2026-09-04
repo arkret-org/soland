@@ -903,7 +903,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .send(&app_from_state(state.clone()))
         .await;
     let focus_mismatch_body: Value = focus_mismatch.take_json().await.unwrap();
-    assert_eq!(problem_code(&focus_mismatch_body), "focus_mismatch");
+    assert_eq!(problem_code(&focus_mismatch_body), "failed_precondition");
+    assert_eq!(focus_mismatch_body["reason_code"], "focus_mismatch");
 
     // A cell sealed to somebody else's media service: this deployment's signing
     // key does not project onto that `service_id`, so it must refuse to mint.
@@ -932,8 +933,9 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches_body() {
         .send(&app_from_state(state))
         .await;
     let issuer_mismatch_body: Value = issuer_mismatch.take_json().await.unwrap();
+    assert_eq!(problem_code(&issuer_mismatch_body), "failed_precondition");
     assert_eq!(
-        problem_code(&issuer_mismatch_body),
+        issuer_mismatch_body["reason_code"],
         "token_issuer_unauthorised"
     );
 }
@@ -1325,7 +1327,8 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue_body() {
         .await;
     assert_eq!(post_ban.status_code, Some(StatusCode::CONFLICT));
     let body: Value = post_ban.take_json().await.unwrap();
-    assert_eq!(problem_code(&body), "call_participant_removed");
+    assert_eq!(problem_code(&body), "failed_precondition");
+    assert_eq!(body["reason_code"], "call_participant_removed");
 }
 
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared

@@ -345,6 +345,25 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
+            // forbidden-wire-fields.json — create payloads carrying a
+            // registered forbidden field fail admission with the same
+            // registered reason the reducer would reject with.
+            if let Err(reason) = proj.check_strand_create_forbidden_wire_fields(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    reason,
+                )
+                .with_details(serde_json::json!({"reason_code": reason})));
+            }
+            if let Err(reason) = proj.check_morph_create_forbidden_wire_fields(operation) {
+                return Err(SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    reason,
+                )
+                .with_details(serde_json::json!({"reason_code": reason})));
+            }
             if let Err(reason) = proj.check_child_scope_policy_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

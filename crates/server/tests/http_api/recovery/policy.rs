@@ -74,7 +74,8 @@ async fn recovery_policy_rejects_tampered_signature_body_body() {
 
     let body =
         post_recovery_policy(state, &token, &policy, &signing, StatusCode::UNAUTHORIZED).await;
-    assert_eq!(problem_code(&body), "proof_invalid");
+    assert_eq!(problem_code(&body), "signature_invalid");
+    assert_eq!(body["reason_code"], "proof_invalid");
 }
 
 #[test]
@@ -215,7 +216,8 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart_body() {
         StatusCode::CONFLICT,
     )
     .await;
-    assert_eq!(problem_code(&body), "recovery_policy_supersedes_invalid");
+    assert_eq!(problem_code(&body), "recovery_policy_conflict");
+    assert_eq!(body["reason_code"], "recovery_policy_supersedes_invalid");
 }
 
 // ── REC-1 read APIs (C-P1) ─────────────────────────────────────────────────

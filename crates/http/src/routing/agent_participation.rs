@@ -8,6 +8,12 @@ use crate::state::AppState;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedAgentParticipation {
     pub(crate) effective: ParticipationBits,
+    /// True when a required policy layer (deployment/Realm/Circle/Strand
+    /// ceiling) could not be resolved and was folded to all-false; the wire
+    /// reason for the resulting rejection is
+    /// `agent_participation_ceiling_unresolved`, distinct from a resolved
+    /// policy whose bit is false.
+    pub(crate) ceiling_unresolved: bool,
 }
 
 pub(crate) fn realm_scope_key(realm_id: &str) -> String {
@@ -83,13 +89,15 @@ pub(crate) fn scope_keys_for_message(
 pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     state: &AppState,
     scope_keys: &[String],
-) -> ParticipationBits {
+) -> Option<ParticipationBits> {
     let Ok(rows) = state.agent_participations().ceilings(scope_keys).await else {
-        return ParticipationBits::NONE;
+        return None;
     };
-    rows.iter()
-        .map(participation_from_value)
-        .fold(ParticipationBits::ALL, |acc, row| acc.intersect(row))
+    Some(
+        rows.iter()
+            .map(participation_from_value)
+            .fold(ParticipationBits::ALL, |acc, row| acc.intersect(row)),
+    )
 }
 
 fn selection_for_scope_keys<'a>(
@@ -116,7 +124,8 @@ pub(crate) async fn resolve_agent_participation_for_scope_keys(
     let selection = participation_from_value(selection_for_scope_keys(&selections, scope_keys)?);
     let ceiling = resolve_effective_ceiling_for_scope_keys(state, scope_keys).await;
     Some(ResolvedAgentParticipation {
-        effective: effective_participation(ceiling, selection),
+        effective: effective_participation(ceiling.unwrap_or(ParticipationBits::NONE), selection),
+        ceiling_unresolved: ceiling.is_none(),
     })
 }
 

@@ -686,7 +686,6 @@ pub(crate) async fn authorize_actor_only_selectors(
             CapabilityDenied,
             "actor-only selectors require an exact holder-owned ActorId",
         )
-        .with_wire_code("unauthorized")
     };
     let session = session.ok_or_else(unauthorized)?;
     let account_id =
@@ -1550,7 +1549,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(error.wire_code(), "unauthorized");
+        assert_eq!(error.wire_code(), "capability_denied");
     }
 
     fn stream_test_state() -> AppState {

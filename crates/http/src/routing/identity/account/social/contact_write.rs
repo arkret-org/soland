@@ -1341,8 +1341,7 @@ async fn commit(
     )
     .await
     .map_err(|error| {
-        crate::app_error!(FailedPrecondition, error.message())
-            .with_wire_code(Box::leak(error.code().into_boxed_str()))
+        crate::app_error!(FailedPrecondition, error.message()).with_rejection_code(error.code())
     })?;
     if let Some((account_id, policy)) = committed_invite_policy {
         state

@@ -371,7 +371,7 @@ impl MediaProviderKind {
                 ParamInvalid,
                 format!("media focus provider `{value}` has no normative v1 binding"),
             )
-            .with_wire_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
+            .with_reason_code(arkret_wire::ReasonCode::UNKNOWN_FOCUS_TYPE)),
         }
     }
 
@@ -577,7 +577,7 @@ async fn handle_rtc_token(
             FailedPrecondition,
             "actor was removed from the call (ban) and cannot re-issue a join token",
         )
-        .with_wire_code(arkret_wire::ReasonCode::CALL_PARTICIPANT_REMOVED));
+        .with_reason_code(arkret_wire::ReasonCode::CALL_PARTICIPANT_REMOVED));
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
@@ -597,7 +597,7 @@ async fn handle_rtc_token(
                 body.focus_id, session_focus
             ),
         )
-        .with_wire_code(arkret_wire::ReasonCode::FOCUS_MISMATCH));
+        .with_reason_code(arkret_wire::ReasonCode::FOCUS_MISMATCH));
     }
     let focus = media_epoch.focus(&session_focus).ok_or_else(|| {
         focus_unavailable_error("selected focus is not present in media_service epoch")
@@ -1255,12 +1255,12 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
     crate::app_error!(FailedPrecondition, message)
-        .with_wire_code(arkret_wire::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
+        .with_reason_code(arkret_wire::ReasonCode::TOKEN_ISSUER_UNAUTHORISED)
 }
 
 fn focus_unavailable_error(message: impl Into<String>) -> AppError {
     crate::app_error!(FailedPrecondition, message)
-        .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
+        .with_reason_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
 #[endpoint(

@@ -39,11 +39,11 @@ async fn submit(
         return Err(AppError::capability_denied(
             "erasure receipt issuer must equal Source-Service-ID",
         )
-        .with_wire_code("erasure_receipt_authority_invalid"));
+        .with_reason_code("erasure_receipt_authority_invalid"));
     }
     body.package.validate_bindings().map_err(|error| {
         AppError::param_invalid(format!("invalid erasure receipt package: {error}"))
-            .with_wire_code("erasure_receipt_stub_binding_mismatch")
+            .with_reason_code("erasure_receipt_stub_binding_mismatch")
     })?;
     let receipt_digest = body
         .package
@@ -55,14 +55,14 @@ async fn submit(
         .canonical_proof_input()
         .map_err(|error| {
             AppError::param_invalid(format!("invalid erasure receipt proof input: {error}"))
-                .with_wire_code("erasure_receipt_proof_invalid")
+                .with_reason_code("erasure_receipt_proof_invalid")
         })?;
     body.package
         .receipt
         .validate_proof_payload_digests()
         .map_err(|error| {
             AppError::param_invalid(format!("invalid erasure receipt proof digest: {error}"))
-                .with_wire_code("erasure_receipt_proof_invalid")
+                .with_reason_code("erasure_receipt_proof_invalid")
         })?;
     // `identity/account-lifecycle.md` requires every `proofs[]` entry to verify
     // and at least one of them to come from the issuer's currently valid
@@ -77,7 +77,7 @@ async fn submit(
         )
         .map_err(|error| {
             AppError::param_invalid(format!("erasure receipt proof method is invalid: {error}"))
-                .with_wire_code("erasure_receipt_proof_invalid")
+                .with_reason_code("erasure_receipt_proof_invalid")
         })?;
         crate::jws_verify::verify_did_controlled_jws_async(
             &proof_input,
@@ -91,7 +91,7 @@ async fn submit(
             AppError::param_invalid(format!(
                 "erasure receipt proof verification failed: {reason}"
             ))
-            .with_wire_code("erasure_receipt_proof_invalid")
+            .with_reason_code("erasure_receipt_proof_invalid")
         })?;
         issuer_signed |= crate::jws_verify::validate_verification_method_controller(
             body.package.receipt.issuer_id.as_str(),
@@ -103,7 +103,7 @@ async fn submit(
         return Err(AppError::param_invalid(
             "erasure receipt has no proof signed by the issuer's verification method",
         )
-        .with_wire_code("erasure_receipt_authority_invalid"));
+        .with_reason_code("erasure_receipt_authority_invalid"));
     }
 
     let request_hash = arkret_canonical::canonical_sha256(&body)

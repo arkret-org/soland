@@ -119,6 +119,11 @@ pub fn render_error_with_reason_code(
     reason_code: &str,
     reason_detail: Option<&str>,
 ) {
+    debug_assert!(
+        arkret_wire::ReasonCode::is_registered(reason_code),
+        "unregistered reason code `{reason_code}`; internal discriminators belong on the \
+         `reason_detail` channel"
+    );
     let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message)
         .with_request_id(request_id())
         .with_detail(
@@ -169,6 +174,71 @@ mod tests {
             StatusCode::FORBIDDEN,
         );
     }
+
+    #[test]
+    fn with_wire_code_accepts_registered_top_level_codes() {
+        let error =
+            AppError::new(ErrorCode::Conflict, "bad").with_wire_code(ErrorCode::CAS_CONFLICT);
+        assert_eq!(error.wire_code(), "cas_conflict");
+    }
+
+    #[test]
+    #[should_panic(expected = "unregistered top-level error code")]
+    fn with_wire_code_rejects_reason_codes_in_debug_builds() {
+        // `proof_invalid` is a registered reason code, never a top-level one:
+        // `error.code` is the RFC 9457 `type` tail and is bound to `codes[]`.
+        let _ = AppError::new(ErrorCode::ParamInvalid, "bad")
+            .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID);
+    }
+
+    #[test]
+    #[should_panic(expected = "unregistered top-level error code")]
+    fn with_wire_code_rejects_internal_discriminators_in_debug_builds() {
+        let _ = AppError::new(ErrorCode::Conflict, "bad").with_wire_code("some_internal_state");
+    }
+
+    #[test]
+    fn with_reason_code_accepts_registered_reason_codes() {
+        let error = AppError::new(ErrorCode::SchemaViolation, "bad")
+            .with_reason_code(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        assert_eq!(error.reason_code.as_deref(), Some("unknown_field"));
+    }
+
+    #[test]
+    #[should_panic(expected = "unregistered reason code")]
+    fn with_reason_code_rejects_unregistered_strings_in_debug_builds() {
+        let _ = AppError::new(ErrorCode::SchemaViolation, "bad")
+            .with_reason_code("some_internal_discriminator");
+    }
+
+    #[test]
+    fn with_internal_reason_routes_by_registry_membership() {
+        // Registered reason code → reason_code channel.
+        let error = AppError::new(ErrorCode::SchemaViolation, "bad")
+            .with_internal_reason(arkret_wire::ReasonCode::UNKNOWN_FIELD);
+        assert_eq!(error.reason_code.as_deref(), Some("unknown_field"));
+        assert_eq!(error.reason_detail, None);
+        // Registered error code equal to error.code → dropped; error.code
+        // already classifies it.
+        let error = AppError::new(ErrorCode::SchemaViolation, "bad")
+            .with_internal_reason("schema_violation");
+        assert_eq!(error.reason_code, None);
+        assert_eq!(error.reason_detail, None);
+        // A *different* registered error code keeps its classifying value on
+        // the unstable channel instead of being silently dropped.
+        let error = AppError::new(ErrorCode::CapabilityDenied, "denied")
+            .with_internal_reason(arkret_wire::ErrorCode::REALM_FROZEN);
+        assert_eq!(error.reason_code, None);
+        assert_eq!(error.reason_detail.as_deref(), Some("realm_frozen"));
+        // Unregistered internal discriminator → unstable reason_detail.
+        let error = AppError::new(ErrorCode::SchemaViolation, "bad")
+            .with_internal_reason("some_internal_discriminator");
+        assert_eq!(error.reason_code, None);
+        assert_eq!(
+            error.reason_detail.as_deref(),
+            Some("some_internal_discriminator")
+        );
+    }
 }
 
 // ── AppError + typed-endpoint integration ────────────────────────────────
@@ -192,6 +262,8 @@ pub struct AppError {
     /// a canonical `ErrorCode` variant.
     pub wire_code_override: Option<Box<str>>,
     /// Stable protocol reason code rendered as `error.details.reason_code`.
+    /// Registry-locked to `registry/reason-code-registry.json`;
+    /// [`AppError::with_reason_code`] enforces the lock in debug builds.
     pub reason_code: Option<Box<str>>,
     /// Free-form diagnostic explaining *why* this error fired.
     ///
@@ -250,15 +322,87 @@ impl AppError {
 
     /// Override the on-wire `error.code` string. See `wire_code_override` for
     /// the rationale + caveats.
+    ///
+    /// The value MUST be a registered member of
+    /// `registry/error-code-registry.json` `codes[]`: `error.code` is the tail
+    /// of the RFC 9457 `type` URI, and api-conventions.md 5.1 binds that tail
+    /// to the registry. A registered `reason_codes[]` member is NOT a
+    /// top-level code - route it through [`Self::with_reason_code`]; an
+    /// internal discriminator belongs on [`Self::with_internal_reason`].
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
-        self.wire_code_override = Some(wire_code.into().into_boxed_str());
+        let wire_code = wire_code.into();
+        debug_assert!(
+            ErrorCode::is_registered(&wire_code),
+            "unregistered top-level error code `{wire_code}`; a registered reason code belongs \
+             on `with_reason_code` and an internal discriminator on `with_internal_reason`"
+        );
+        self.wire_code_override = Some(wire_code.into_boxed_str());
         self
     }
 
     /// Attach a stable protocol reason code without replacing `error.code`.
+    ///
+    /// The value MUST be a registered member of the `reason_codes[]` section of
+    /// `registry/error-code-registry.json`; the SDK projection enforces this
+    /// in debug builds so an unregistered string cannot silently reach the
+    /// wire. Route strings of unknown provenance through
+    /// [`Self::with_internal_reason`] instead.
     pub fn with_reason_code(mut self, reason_code: impl Into<String>) -> Self {
-        self.reason_code = Some(reason_code.into().into_boxed_str());
+        self.attach_reason_code(reason_code);
         self
+    }
+
+    /// `&mut` variant of [`Self::with_reason_code`] for sites that build the
+    /// error in place.
+    pub(crate) fn attach_reason_code(&mut self, reason_code: impl Into<String>) {
+        let reason_code = reason_code.into();
+        debug_assert!(
+            arkret_wire::ReasonCode::is_registered(&reason_code),
+            "unregistered reason code `{reason_code}`; internal discriminators belong on \
+             `with_internal_reason`"
+        );
+        self.reason_code = Some(reason_code.into_boxed_str());
+    }
+
+    /// Route a downstream rejection's discriminator across all three channels.
+    ///
+    /// A rejection that crosses a module boundary arrives as a bare string
+    /// whose registry membership is only known at runtime: reducer and
+    /// admission lanes mix registered top-level codes, registered reason codes
+    /// and internal discriminators in one `&str`. Dispatching on membership
+    /// here keeps a registered top-level code on `error.code` (its previous
+    /// behaviour) while an unregistered discriminator can no longer reach that
+    /// field.
+    pub fn with_rejection_code(mut self, value: impl AsRef<str>) -> Self {
+        let value = value.as_ref();
+        if ErrorCode::is_registered(value) {
+            self.wire_code_override = Some(value.into());
+        } else {
+            self.attach_internal_reason(value);
+        }
+        self
+    }
+
+    /// Route a reason string of unknown provenance onto the right channel: a
+    /// registered reason code is attached as `error.details.reason_code`; a
+    /// registered error code equal to this error's own code is dropped (the
+    /// top-level `error.code` already classifies the rejection); anything
+    /// else — an internal discriminator or a *different* registered error
+    /// code — lands on the unstable `reason_detail` diagnostic channel rather
+    /// than masquerading as a stable protocol reason code.
+    pub fn with_internal_reason(mut self, reason: impl AsRef<str>) -> Self {
+        self.attach_internal_reason(reason);
+        self
+    }
+
+    /// `&mut` variant of [`Self::with_internal_reason`].
+    pub(crate) fn attach_internal_reason(&mut self, reason: impl AsRef<str>) {
+        let reason = reason.as_ref();
+        if arkret_wire::ReasonCode::is_registered(reason) {
+            self.attach_reason_code(reason);
+        } else if ErrorCode::from_wire(reason) != Some(self.code) {
+            self.reason_detail = Some(reason.into());
+        }
     }
 
     /// Attach a free-form diagnostic. See [`AppError::reason_detail`].
