@@ -112,14 +112,6 @@ async fn send_device_messages(
     let sender_account_id =
         super::auth_grant_dpop::authenticated_session_account_id(state, &session).await?;
     let body = body.into_inner();
-    let restricted_fresh_device_verification = state.config().development_mode
-        && session.session_grant.is_none()
-        && body.messages.iter().all(|(principal_id, targets)| {
-            principal_id.as_str() == session.actor
-                && targets
-                    .values()
-                    .all(|target| target.kind.as_str().starts_with("ak.key.verification."))
-        });
     let sender_revocation_gate =
         match super::device_generation::active_device_revocation_gate_selector(
             state,
@@ -129,7 +121,6 @@ async fn send_device_messages(
         .await
         {
             Ok(selector) => Some(selector),
-            Err(_) if restricted_fresh_device_verification => None,
             Err(error) if error.is_not_found() => {
                 return Err(
                     AppError::capability_denied("device authorization is not active")
@@ -233,11 +224,7 @@ async fn send_device_messages(
     } else {
         false
     };
-    // A restricted fresh-device session (development-mode, grant-less,
-    // same-principal, `ak.key.verification.*` only — device-lifecycle.md §7)
-    // may bootstrap without an accepted sender device; every other fresh send
-    // requires one.
-    if has_fresh_targets && !sender_verified && !restricted_fresh_device_verification {
+    if has_fresh_targets && !sender_verified {
         return Err(AppError::capability_denied(
             "to-device send requires an accepted current sender device",
         )
@@ -267,15 +254,6 @@ async fn send_device_messages(
             let target_active = device_is_active(target_record.as_ref()) || target_agent_endpoint;
             let target_verified =
                 device_is_active_verified(target_record.as_ref()) || target_agent_endpoint;
-            // The fresh-device bootstrap exemption reaches only authorized
-            // same-principal devices (the kind/principal restriction is pinned
-            // by `restricted_fresh_device_verification` above).
-            if !sender_verified && !target_verified {
-                return Err(AppError::capability_denied(
-                    "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
-                )
-                .with_wire_code("fresh_device_scope_violation"));
-            }
             if secret_message && !target_verified {
                 return Err(AppError::capability_denied(
                     "secret to-device messages require authorized sender and recipient devices",

@@ -97,70 +97,42 @@ async fn authorize_account_device_pair(
     let authorized_at = now();
     let staged_new_device_pubkey = serde_json::to_value(&body.new_device_pubkey)
         .map_err(|error| AppError::param_invalid(format!("new_device_pubkey invalid: {error}")))?;
-    match (
-        body.device_pairing_request_id.as_ref(),
-        body.challenge_transcript.as_ref(),
-    ) {
-        (Some(request_id), None) => {
-            let record = state
-                .device_pairings()
-                .get(request_id.as_str())
-                .await
-                .map_err(|error| AppError::internal(error.to_string()))?
-                .ok_or_else(device_pairing_not_found)?;
-            if record.state
-                != arkret_models_collaboration::http_bodies::DevicePairingState::PendingAuthorization
-                || record.expires_at <= authorized_at
-                || record.pairing_code != pairing_code
-                || record.new_device_pubkey != staged_new_device_pubkey
-            {
-                return Err(device_pairing_not_found());
-            }
-            let challenge = arkret_signatures::device_pairing::ServerDevicePairingChallenge {
-                client_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
-                    record.client_nonce,
-                )
-                .map_err(|error| {
-                    AppError::internal(format!("stored client_nonce invalid: {error}"))
-                })?,
-                device_pairing_request_id: request_id.clone(),
-                expires_at: record.expires_at,
-                gate_audience_uri: record.gate_audience,
-                pairing_code: body.pairing_code.clone(),
-                server_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
-                    record.server_nonce,
-                )
-                .map_err(|error| {
-                    AppError::internal(format!("stored server_nonce invalid: {error}"))
-                })?,
-            };
-            arkret_signatures::device_pairing::verify_server_device_pairing_challenge(
-                &body.new_device_pubkey,
-                &challenge,
-                &body.challenge_proof,
-                authorized_at,
-            )
-            .map_err(device_pairing_proof_failed)?;
-        }
-        (None, Some(challenge)) => {
-            let gate_audience = device_pairing_gate_audience(&state.config().public_base_url)?;
-            arkret_signatures::device_pairing::verify_to_device_pairing_challenge(
-                &body.new_device_pubkey,
-                &body.pairing_code,
-                &gate_audience,
-                challenge,
-                &body.challenge_proof,
-                authorized_at,
-            )
-            .map_err(device_pairing_proof_failed)?;
-        }
-        _ => {
-            return Err(AppError::param_invalid(
-                "exactly one of device_pairing_request_id or challenge_transcript is required",
-            )
-            .with_wire_code("schema_violation"));
-        }
+    let request_id = &body.device_pairing_request_id;
+    let record = state
+        .device_pairings()
+        .get(request_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(device_pairing_not_found)?;
+    if record.state
+        != arkret_models_collaboration::http_bodies::DevicePairingState::PendingAuthorization
+        || record.expires_at <= authorized_at
+        || record.pairing_code != pairing_code
+        || record.new_device_pubkey != staged_new_device_pubkey
+    {
+        return Err(device_pairing_not_found());
     }
+    let challenge = arkret_signatures::device_pairing::ServerDevicePairingChallenge {
+        client_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
+            record.client_nonce,
+        )
+        .map_err(|error| AppError::internal(format!("stored client_nonce invalid: {error}")))?,
+        device_pairing_request_id: request_id.clone(),
+        expires_at: record.expires_at,
+        gate_audience_uri: record.gate_audience,
+        pairing_code: body.pairing_code.clone(),
+        server_nonce: arkret_models_collaboration::http_bodies::DevicePairingNonce::new(
+            record.server_nonce,
+        )
+        .map_err(|error| AppError::internal(format!("stored server_nonce invalid: {error}")))?,
+    };
+    arkret_signatures::device_pairing::verify_server_device_pairing_challenge(
+        &body.new_device_pubkey,
+        &challenge,
+        &body.challenge_proof,
+        authorized_at,
+    )
+    .map_err(device_pairing_proof_failed)?;
     let authorize_payload = body
         .authorize_event
         .event
@@ -224,16 +196,14 @@ async fn authorize_account_device_pair(
         arkret_wire::DidCoreId::new(session.actor.clone()).map_err(|error| {
             AppError::internal(format!("authenticated actor id is invalid: {error}"))
         })?;
-    let pairing_commit = body.device_pairing_request_id.as_ref().map(|request_id| {
-        soland_services::events::CommitDevicePairingAuthorization {
-            device_pairing_request_id: request_id.to_string(),
-            pairing_code: pairing_code.to_owned(),
-            new_device_pubkey: body.new_device_pubkey.clone(),
-            device_id: device_id.clone(),
-            authorized_by_actor_id: authorized_by_actor_id.clone(),
-            authorized_event_ref: body.authorize_event.event.event_id.to_string(),
-            changed_at: authorized_at,
-        }
+    let pairing_commit = Some(soland_services::events::CommitDevicePairingAuthorization {
+        device_pairing_request_id: body.device_pairing_request_id.to_string(),
+        pairing_code: pairing_code.to_owned(),
+        new_device_pubkey: body.new_device_pubkey.clone(),
+        device_id: device_id.clone(),
+        authorized_by_actor_id,
+        authorized_event_ref: body.authorize_event.event.event_id.to_string(),
+        changed_at: authorized_at,
     });
     let submitted =
         crate::routing::events::event_log::submit_initial_event_submission_with_device_pairing(
@@ -387,18 +357,6 @@ fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError
         "did:key:{}",
         arkret_canonical::ed25519_pubkey_to_did_key_multibase(&public_key_bytes)
     ))
-}
-
-fn device_pairing_gate_audience(public_base_url: &str) -> Result<String, AppError> {
-    let url = reqwest::Url::parse(public_base_url)
-        .map_err(|error| AppError::internal(format!("public_base_url is invalid: {error}")))?;
-    let origin = url.origin().ascii_serialization();
-    if origin == "null" {
-        return Err(AppError::internal(
-            "public_base_url has no origin for device pairing",
-        ));
-    }
-    Ok(origin)
 }
 
 fn device_pairing_not_found() -> AppError {
