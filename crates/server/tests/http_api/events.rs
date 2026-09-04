@@ -1417,7 +1417,7 @@ async fn events_describe_and_single_event_submit_work_body() {
     );
     let unknown_schema_body: Value = unknown_schema_response.take_json().await.unwrap();
     assert_eq!(problem_code(&unknown_schema_body), "param_invalid");
-    assert_eq!(unknown_schema_body["reason_code"], "unknown_schema");
+    assert_eq!(unknown_schema_body["reason_detail"], "unknown_schema");
 
     let missing_event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let batch: Value = TestClient::query("http://server/_arkret/self/events/resolve")

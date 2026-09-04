@@ -370,7 +370,7 @@ fn device_message_request_conflict() -> AppError {
 fn device_message_intent_conflict() -> AppError {
     AppError::conflict("device_message_id was already used for a different canonical target")
         .with_wire_code("duplicate_conflict")
-        .with_reason_code("device_message_id_conflict")
+        .with_reason_code(arkret_wire::ReasonCode::DEVICE_MESSAGE_ID_CONFLICT)
 }
 
 /// Fan an actor-private update (account-data / blocklist / read-cursor

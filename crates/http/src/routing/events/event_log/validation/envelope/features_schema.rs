@@ -311,7 +311,7 @@ pub(crate) async fn validate_member_identity_proof(
         crate::metrics::record_digest_mismatch("member_identity_carrier_digest");
         return Err(event_validation_error(
             StatusCode::CONFLICT,
-            "proof_event_digest_mismatch",
+            arkret_wire::ReasonCode::MEMBER_IDENTITY_PROOF_INVALID,
             "MemberIdentityProof.payload_digest does not match the canonical payload",
         ));
     }
@@ -333,7 +333,7 @@ pub(crate) async fn validate_member_identity_proof(
     .map_err(|error| {
         event_validation_error(
             StatusCode::FORBIDDEN,
-            "proof_invalid",
+            arkret_wire::ReasonCode::MEMBER_IDENTITY_PROOF_INVALID,
             format!("MemberIdentity proof controller mismatch: {error}"),
         )
     })?;
@@ -369,7 +369,7 @@ pub(crate) async fn validate_member_identity_proof(
         .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
-                "proof_invalid",
+                arkret_wire::ReasonCode::MEMBER_IDENTITY_PROOF_INVALID,
                 format!("MemberIdentity proof signature verification failed: {error}"),
             )
         })

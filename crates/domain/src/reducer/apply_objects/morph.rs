@@ -23,6 +23,11 @@ impl ProjectionState {
                 reason: "morph_create_missing_event_id".to_owned(),
             };
         };
+        if let Err(reason) = morph_forbidden_wire_field_in_create_payload(object) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         // AKP-0007 — when the Morph carries a `scope_circle_id`, the
         // Circle MUST belong to this Realm and be active. Mirrors the
         // Strand.scope_circle_id validation.
@@ -143,9 +148,10 @@ impl ProjectionState {
                 morph.title = title;
             }
             // `morph.md` §4 (line 149): `morph_kind` is immutable after
-            // `ak.morph.create`. Admission rejects an update patch that names it
-            // (`morph_kind_immutable`); the reducer never mutates the field so the
-            // invariant also holds for any event that bypasses admission.
+            // `ak.morph.create`. Admission rejects an update patch that names
+            // it (`patch_path_reducer_managed`); the reducer never mutates
+            // the field so the invariant also holds for any event that
+            // bypasses admission.
             apply_morph_fields_patch(&mut morph.fields, patch);
         }
         morph.updated_by = Some(operation.context.sender.to_string());

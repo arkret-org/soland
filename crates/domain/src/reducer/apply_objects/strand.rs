@@ -84,6 +84,11 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        if let Err(reason) = strand_forbidden_wire_field_in_create_payload(object) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")

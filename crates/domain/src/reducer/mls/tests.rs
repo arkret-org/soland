@@ -1285,9 +1285,9 @@ fn commit_rejects_retired_binding_fields() {
     );
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, "mls_governance_binding_invalid");
+            assert_eq!(reason, arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
         }
-        other => panic!("expected mls_governance_binding_invalid, got {other:?}"),
+        other => panic!("expected governance_binding_mismatch, got {other:?}"),
     }
     assert_eq!(
         state

@@ -90,21 +90,21 @@ fn verify_allocation_handle(
             FailedPrecondition,
             "Agent provision allocation handle is malformed",
         )
-        .with_reason_code("agent_provision_allocation_mismatch"));
+        .with_internal_reason("agent_provision_allocation_mismatch"));
     };
     let public_key_bytes = URL_SAFE_NO_PAD.decode(encoded_public_key).map_err(|_| {
         crate::app_error!(
             FailedPrecondition,
             "Agent provision allocation handle public key is malformed",
         )
-        .with_reason_code("agent_provision_allocation_mismatch")
+        .with_internal_reason("agent_provision_allocation_mismatch")
     })?;
     let public_key_bytes: [u8; 32] = public_key_bytes.try_into().map_err(|_| {
         crate::app_error!(
             FailedPrecondition,
             "Agent provision allocation handle public key is malformed",
         )
-        .with_reason_code("agent_provision_allocation_mismatch")
+        .with_internal_reason("agent_provision_allocation_mismatch")
     })?;
     let verifying_key =
         ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes).map_err(|_| {
@@ -112,21 +112,21 @@ fn verify_allocation_handle(
                 FailedPrecondition,
                 "Agent provision allocation handle public key is malformed",
             )
-            .with_reason_code("agent_provision_allocation_mismatch")
+            .with_internal_reason("agent_provision_allocation_mismatch")
         })?;
     let signature_bytes = URL_SAFE_NO_PAD.decode(encoded_signature).map_err(|_| {
         crate::app_error!(
             FailedPrecondition,
             "Agent provision allocation handle signature is malformed",
         )
-        .with_reason_code("agent_provision_allocation_mismatch")
+        .with_internal_reason("agent_provision_allocation_mismatch")
     })?;
     let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
         crate::app_error!(
             FailedPrecondition,
             "Agent provision allocation handle signature is malformed",
         )
-        .with_reason_code("agent_provision_allocation_mismatch")
+        .with_internal_reason("agent_provision_allocation_mismatch")
     })?;
     let binding = allocation_binding(
         controller_principal_id,
@@ -139,7 +139,7 @@ fn verify_allocation_handle(
             FailedPrecondition,
             "Agent provision allocation handle signature is invalid",
         )
-        .with_reason_code("agent_provision_allocation_mismatch")
+        .with_internal_reason("agent_provision_allocation_mismatch")
     })
 }
 
@@ -171,7 +171,7 @@ fn allocation_missing() -> AppError {
         FailedPrecondition,
         "Agent provision commit has no active server allocation",
     )
-    .with_reason_code("agent_provision_allocation_missing")
+    .with_internal_reason("agent_provision_allocation_missing")
 }
 
 fn allocation_mismatch() -> AppError {
@@ -179,7 +179,7 @@ fn allocation_mismatch() -> AppError {
         FailedPrecondition,
         "Agent provision commit differs from its server allocation",
     )
-    .with_reason_code("agent_provision_allocation_mismatch")
+    .with_internal_reason("agent_provision_allocation_mismatch")
 }
 
 #[endpoint(
@@ -280,7 +280,7 @@ pub(super) async fn provision_agent(
                     FailedPrecondition,
                     "controller must accept a recovery policy before provisioning a Agent",
                 )
-                .with_reason_code("recovery_policy_required"));
+                .with_internal_reason("recovery_policy_required"));
             }
             let controller_realm =
                 require_controller_principal_control_realm(state, &session, &controller_authority)

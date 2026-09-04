@@ -540,18 +540,10 @@ fn strand_metadata_fields_status_has_no_private_transition_fsm() {
 /// top-level `stage` field). The FSM, that reason code and the synthetic
 /// `incident.status.transition` audit row are all deleted.
 ///
-/// What this test pins is the deletion: the same patch shape now behaves identically
-/// whichever value it carries, and no private verdict or audit row appears.
-///
-/// KNOWN GAP (not a regression from this ruling, tracked separately): soland does not
-/// enforce the `metadata.fields.status` hard-reject on any path. It validates payloads
-/// against SDK typed models, and the SDK has no generated projection of
-/// `forbidden-wire-fields.json` — `STRAND_METADATA_FORBIDDEN_KEYS` covers metadata's
-/// top-level keys only, not `fields.*`. Before this ruling a *first* write of
-/// `fields.status` was accepted too (the private FSM only rejected transitions away from
-/// an existing value), so the field was never actually rejected here. The assertion below
-/// therefore accepts either outcome and only forbids the deleted private verdict, so it
-/// keeps passing once the forbidden-wire surface lands.
+/// What this test pins is the deletion plus the landed forbidden-wire surface:
+/// `metadata.fields.status` is rejected as `schema_violation` on shape
+/// (registry-projected through `arkret_wire::forbidden_wire`), identically for
+/// every value, and no private verdict or audit row appears.
 async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
@@ -612,31 +604,30 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     // private FSM would have *accepted* `todo -> in_progress` here and only rejected a
     // "skipped" transition; now the field never reaches a reducer at all, so both a
     // legal-looking and an illegal-looking value fail identically.
-    let mut previous_event_id = domain_named_event_id.clone();
-    for (authoring_step, event_id, next_status) in [
+    //
+    // Rejected events are never persisted, so they do not advance the actor's
+    // accepted sequence: every forbidden attempt below re-presents the same next
+    // actor_seq chained onto `domain_named` (the sibling-fork guard counts only
+    // accepted events, so the repeated sequence never trips it).
+    for (event_id, next_status) in [
         (
-            3,
             "ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A",
             "in_progress",
         ),
         (
-            4,
             "ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo",
             "done",
         ),
     ] {
-        // Distinct authoring steps and a chained `prev_refs`: reusing one actor_seq
-        // would make the second submit a sibling at the same authoring position, so the
-        // test would be measuring fork admission rather than the status field.
         let forbidden = signed_strand_event(
             event_id,
-            authoring_step,
+            3,
             "ak.strand.update",
             serde_json::json!({
                 "target_ref": task_strand_id,
                 "patch": { "metadata": { "fields": { "status": next_status } } }
             }),
-            vec![previous_event_id.as_str()],
+            vec![domain_named_event_id.as_str()],
         );
         let forbidden_event_id = authored_event_id(&forbidden).to_string();
         let mut resp = TestClient::post("http://server/_arkret/self/events")
@@ -649,41 +640,70 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
             body["reason_code"], "strand_status_transition_invalid",
             "the private status FSM was deleted by ruling 2026-09-04-1752: {body}"
         );
-        let accepted = body["status"] == "accepted";
-        if accepted {
-            // Current behaviour: opaque profile data, forbidden-wire not yet enforced.
-            assert!(
-                state
-                    .test_persistence()
-                    .events()
-                    .get(&forbidden_event_id)
-                    .await
-                    .unwrap()
-                    .is_some(),
-                "an accepted event must be persisted: {body}"
-            );
-        } else {
-            // Target behaviour once the forbidden-wire surface lands.
-            assert_eq!(
-                problem_code(&body),
-                "schema_violation",
-                "metadata.fields.status is forbidden wire, not a failed transition: {body}"
-            );
-            assert!(
-                state
-                    .test_persistence()
-                    .events()
-                    .get(&forbidden_event_id)
-                    .await
-                    .unwrap()
-                    .is_none(),
-                "a rejected forbidden-wire event must not be persisted"
-            );
-        }
-        if accepted {
-            previous_event_id = forbidden_event_id;
-        }
+        assert_eq!(
+            problem_code(&body),
+            "schema_violation",
+            "metadata.fields.status is forbidden wire, not a failed transition: {body}"
+        );
+        assert_eq!(
+            body["reason_code"], "patch_path_reducer_managed",
+            "the rejection carries the registered patch-path reason: {body}"
+        );
+        assert!(
+            state
+                .test_persistence()
+                .events()
+                .get(&forbidden_event_id)
+                .await
+                .unwrap()
+                .is_none(),
+            "a rejected forbidden-wire event must not be persisted"
+        );
     }
+
+    // Create payloads are held to the same registry: `metadata.fields.status`
+    // in an `ak.strand.create` object fails admission with the registered
+    // `unknown_field` reason before anything projects.
+    let forbidden_create_id = soland_test_support::fixture_content_bound_id("ak:event:");
+    let forbidden_create = signed_strand_event(
+        &forbidden_create_id,
+        3,
+        "ak.strand.create",
+        serde_json::json!({
+            "object": {
+                "realm_id": demo_realm_id(),
+                "metadata": { "title": "Forbidden at birth", "fields": { "status": "todo" } },
+                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
+            }
+        }),
+        vec![domain_named_event_id.as_str()],
+    );
+    let forbidden_create_event_id = authored_event_id(&forbidden_create).to_string();
+    let mut resp = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&forbidden_create)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let body: Value = resp.take_json().await.unwrap();
+    assert_eq!(
+        problem_code(&body),
+        "schema_violation",
+        "metadata.fields.status is forbidden wire at create: {body}"
+    );
+    assert_eq!(
+        body["reason_code"], "unknown_field",
+        "the create-path rejection carries the registered unknown_field reason: {body}"
+    );
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .get(&forbidden_create_event_id)
+            .await
+            .unwrap()
+            .is_none(),
+        "a rejected forbidden-wire create must not be persisted"
+    );
 
     // No audit trail is synthesised for it either: the old code appended an
     // `incident.status.transition` audit row per accepted private transition.

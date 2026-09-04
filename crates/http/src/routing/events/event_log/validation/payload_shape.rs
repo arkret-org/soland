@@ -17,7 +17,12 @@ use super::super::*;
 /// no exemption: its outer payload carries only `strand_id` plus an
 /// `encrypted_payload` envelope whose ciphertext is an opaque string, so
 /// conforming producers never trip this structural scan.
-const SIDECAR_FORBIDDEN_WIRE_KEYS: &[&str] = &["sidecar_exchange_binding", "exchange_id"];
+///
+/// The machine-readable key (`sidecar_exchange_binding`) is queried from the
+/// SDK projection of the registry; `exchange_id` and the two schema-id string
+/// values exist only in the entry's prose notes, so they stay spelled out
+/// here until the registry projects them.
+const SIDECAR_FORBIDDEN_WIRE_CONTEXT: &str = "plaintext_metadata_or_shared_scope_payload";
 const SIDECAR_FORBIDDEN_WIRE_STRING_VALUES: &[&str] = &[
     arkret_wire::SchemaId::AGENT_SIDECAR_EVENT_EXCHANGE_BINDING_V1,
     arkret_wire::SchemaId::AGENT_SIDECAR_EXCHANGE_CONTROL_V1,
@@ -27,7 +32,11 @@ fn scan_sidecar_forbidden_wire_fields(value: &Value) -> Result<(), EventValidati
     match value {
         Value::Object(object) => {
             for (key, nested) in object {
-                if SIDECAR_FORBIDDEN_WIRE_KEYS.contains(&key.as_str()) {
+                if arkret_wire::forbidden_wire::forbidden_wire_path_hard_reject(
+                    SIDECAR_FORBIDDEN_WIRE_CONTEXT,
+                    key,
+                ) || key == "exchange_id"
+                {
                     return Err(sidecar_forbidden_wire_field_error(key));
                 }
                 scan_sidecar_forbidden_wire_fields(nested)?;

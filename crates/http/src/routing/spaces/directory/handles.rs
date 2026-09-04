@@ -371,7 +371,9 @@ async fn validate_remote_handle_resolution(
     if let Some(expected_account_id) = body.expected_account_id.as_ref()
         && outcome.account_id != *expected_account_id
     {
-        return Err("remote handle resolution expected_account_id mismatch".to_owned());
+        // identity-handles.md §3.7 — internal audit detail uses the registered
+        // discriminator; the wire code stays collapsed to `handle_unverified`.
+        return Err(arkret_wire::ReasonCode::HANDLE_SUBJECT_MISMATCH.to_owned());
     }
     let claim = outcome
         .claims
@@ -393,7 +395,7 @@ async fn validate_remote_handle_resolution(
         return Err("remote handle claim handle mismatch".to_owned());
     }
     if claim.claim.subject_account_id != outcome.account_id {
-        return Err("remote handle claim subject mismatch".to_owned());
+        return Err(arkret_wire::ReasonCode::HANDLE_SUBJECT_MISMATCH.to_owned());
     }
     if claim.claim.issuer_id.as_str() != peer_id || claim.verifier_id.as_str() != peer_id {
         return Err("remote handle claim issuer service mismatch".to_owned());

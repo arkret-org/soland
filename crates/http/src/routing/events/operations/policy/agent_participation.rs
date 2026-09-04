@@ -711,7 +711,10 @@ pub async fn validate_agent_reply_participation(
             operation.realm_id.as_str(),
             strand_id,
         ) else {
-            return Err(mode.rejection_reason());
+            // The message's Strand is not projected, so its participation
+            // policy layer cannot be resolved; fail closed as an unresolved
+            // ceiling rather than a plain not-permitted bit.
+            return Err(arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED);
         };
         let Some(resolved) =
             crate::routing::agent_participation::resolve_agent_participation_for_scope_keys(
@@ -723,6 +726,9 @@ pub async fn validate_agent_reply_participation(
         else {
             return Err(mode.rejection_reason());
         };
+        if resolved.ceiling_unresolved {
+            return Err(arkret_wire::ReasonCode::AGENT_PARTICIPATION_CEILING_UNRESOLVED);
+        }
         if !ap_effective_for_mode(mode, resolved.effective) {
             return Err(mode.rejection_reason());
         }

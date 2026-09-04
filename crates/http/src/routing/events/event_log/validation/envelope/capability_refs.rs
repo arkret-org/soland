@@ -139,7 +139,7 @@ pub(in crate::routing::events::event_log) async fn validate_data_event_capabilit
             object.get("executed_by").cloned().ok_or_else(|| {
                 event_validation_error(
                     StatusCode::BAD_REQUEST,
-                    arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
+                    "schema_violation",
                     "applet-originated DataEvent requires executed_by",
                 )
             })?,

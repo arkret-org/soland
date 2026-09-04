@@ -513,7 +513,7 @@ pub(super) async fn recovery_session_create(
     if account_id.station_id.as_str() != state.service_id() {
         return Err(
             crate::app_error!(FailedPrecondition, "account_id does not bind this Station",)
-                .with_reason_code("account_id_mismatch"),
+                .with_internal_reason("account_id_mismatch"),
         );
     }
     let authority_record = state
@@ -526,7 +526,7 @@ pub(super) async fn recovery_session_create(
                 FailedPrecondition,
                 "principal authority is not accepted by this Station",
             )
-            .with_reason_code("account_id_mismatch")
+            .with_internal_reason("account_id_mismatch")
         })?;
     let requesting_device_id = payload.requesting_device_id.as_str().to_owned();
     if !requesting_device_id.starts_with("ak:device:") {

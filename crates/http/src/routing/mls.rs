@@ -1774,12 +1774,14 @@ async fn validate_welcome_peer_claim_ledger(
     let claim_capabilities = arkret_canonical::canonical_json_bytes(&claim.capabilities)
         .map_err(|_| "peer_claim_welcome_invalid")?;
     let claim_capabilities_digest = arkret_canonical::sha256_digest(&claim_capabilities);
+    if claim_capabilities_digest != welcome.claim_ref.capabilities_digest.as_str() {
+        return Err(arkret_wire::ReasonCode::WELCOME_CAPABILITY_MISMATCH);
+    }
     if &claim.principal_id != recipient_actor_id
         || claim.device_id.as_ref() != welcome_recipient_device_id(&welcome)
         || claim.claim_id != welcome.claim_id.as_str()
         || claim.keypackage_ref != welcome.keypackage_ref
         || claim_keypackage_digest != welcome.claim_ref.keypackage_digest.as_str()
-        || claim_capabilities_digest != welcome.claim_ref.capabilities_digest.as_str()
         || claim.expires_at < receipt.expires_at
     {
         return Err("peer_claim_welcome_invalid");

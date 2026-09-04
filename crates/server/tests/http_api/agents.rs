@@ -1811,7 +1811,7 @@ async fn agent_provision_commit_requires_its_server_allocation_body() {
     assert_eq!(provision_status, Some(StatusCode::CONFLICT), "{body}");
     assert_eq!(problem_code(&body), "failed_precondition", "{body}");
     assert_eq!(
-        body["reason_code"], "agent_provision_allocation_missing",
+        body["reason_detail"], "agent_provision_allocation_missing",
         "{body}"
     );
     assert!(

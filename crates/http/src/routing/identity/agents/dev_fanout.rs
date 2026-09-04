@@ -51,7 +51,7 @@ pub(super) async fn require_controller_principal_control_realm(
             FailedPrecondition,
             "controller authority does not bind this session and Station",
         )
-        .with_reason_code("account_id_mismatch"));
+        .with_internal_reason("account_id_mismatch"));
     }
     let record = state
         .persistence()
@@ -65,7 +65,7 @@ pub(super) async fn require_controller_principal_control_realm(
                 FailedPrecondition,
                 "controller authority is not accepted by this Station",
             )
-            .with_reason_code("account_id_mismatch")
+            .with_internal_reason("account_id_mismatch")
         })?;
     let realm_id = record.pcr_realm_id.to_string();
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
@@ -73,7 +73,7 @@ pub(super) async fn require_controller_principal_control_realm(
             FailedPrecondition,
             "controller Principal Control Realm must be initialized before provisioning an Agent",
         )
-        .with_reason_code("principal_control_realm_missing"));
+        .with_internal_reason("principal_control_realm_missing"));
     }
 
     // The Realm directory index and reducer projection are separate caches.
@@ -92,7 +92,7 @@ pub(super) async fn require_controller_principal_control_realm(
                 FailedPrecondition,
                 "self Realm is indexed without durable metadata",
             )
-            .with_reason_code("self_realm_metadata_missing")
+            .with_internal_reason("self_realm_metadata_missing")
         })?;
     reconcile_self_realm_owner_projection(state, &realm_id, authority, &meta)?;
     Ok(realm_id)
@@ -111,7 +111,7 @@ fn reconcile_self_realm_owner_projection(
             FailedPrecondition,
             "self Realm owner does not match the authenticated controller",
         )
-        .with_reason_code("self_realm_owner_mismatch"));
+        .with_internal_reason("self_realm_owner_mismatch"));
     }
 
     if !state.projections().reconcile_realm_owner(
@@ -125,7 +125,7 @@ fn reconcile_self_realm_owner_projection(
             FailedPrecondition,
             "self Realm projection owner does not match durable metadata",
         )
-        .with_reason_code("self_realm_owner_mismatch"));
+        .with_internal_reason("self_realm_owner_mismatch"));
     }
     Ok(())
 }
@@ -444,7 +444,7 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::FailedPrecondition);
         assert_eq!(
-            error.reason_code.as_deref(),
+            error.reason_detail.as_deref(),
             Some("self_realm_owner_mismatch")
         );
     }
@@ -471,7 +471,7 @@ mod tests {
             )
             .expect_err("foreign or principal-only metadata cannot authorize this Account");
             assert_eq!(
-                error.reason_code.as_deref(),
+                error.reason_detail.as_deref(),
                 Some("self_realm_owner_mismatch")
             );
             assert!(
@@ -494,7 +494,7 @@ mod tests {
             reconcile_self_realm_owner_projection(&state, realm_id, &controller_account, &meta)
                 .expect_err("existing foreign Account ownership must not be overwritten");
         assert_eq!(
-            error.reason_code.as_deref(),
+            error.reason_detail.as_deref(),
             Some("self_realm_owner_mismatch")
         );
         assert_eq!(

@@ -5,7 +5,7 @@ pub(super) fn schema_error(message: impl Into<String>) -> AppError {
 }
 
 fn failed_precondition(message: impl Into<String>, reason: &str) -> AppError {
-    crate::app_error!(FailedPrecondition, message).with_reason_code(reason)
+    crate::app_error!(FailedPrecondition, message).with_internal_reason(reason)
 }
 
 pub(super) fn is_base64url_token(value: &str) -> bool {

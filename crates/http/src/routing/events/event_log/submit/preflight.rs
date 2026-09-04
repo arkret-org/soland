@@ -56,6 +56,8 @@ pub(super) async fn preflight_mls_welcome_claim_ledger_reject(
     .map(|reason| {
         if reason == "peer_claim_welcome_pending" {
             "dependency_missing".to_owned()
+        } else if reason == arkret_wire::ReasonCode::WELCOME_CAPABILITY_MISMATCH {
+            arkret_wire::ReasonCode::WELCOME_CAPABILITY_MISMATCH.to_owned()
         } else {
             arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned()
         }

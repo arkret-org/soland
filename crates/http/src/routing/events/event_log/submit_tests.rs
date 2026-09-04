@@ -67,8 +67,11 @@ mod circle_error_mapping_tests {
 
         assert_eq!(error.code, ErrorCode::CapabilityDenied);
         assert_eq!(error.http_status(), StatusCode::FORBIDDEN);
+        // Not a registered reason code: the internal discriminator rides the
+        // unstable `reason_detail` channel instead of `reason_code`.
+        assert_eq!(error.reason_code, None);
         assert_eq!(
-            error.reason_code.as_deref(),
+            error.reason_detail.as_deref(),
             Some("circle_member_manage_capability_required")
         );
     }

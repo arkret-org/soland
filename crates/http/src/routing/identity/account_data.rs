@@ -661,7 +661,7 @@ async fn delete_account_data(
             FailedPrecondition,
             "this account data type requires an in-value tombstone",
         )
-        .with_reason_code("physical_delete_forbidden"));
+        .with_internal_reason("physical_delete_forbidden"));
     }
 
     let revision = admit_caller_signed_account_data_set(
