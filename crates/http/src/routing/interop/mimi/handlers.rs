@@ -1722,7 +1722,16 @@ mod consent_proof_tests {
             Hlc::new(state.hlc().now()).unwrap(),
             json!({
                 "consent_id": consent_id,
-                "peer": "ak:did_core:web:mimi-peer-test.invalid",
+                "peer": {
+                    "kind": "actor",
+                    "actor_id": {
+                        "kind": "account",
+                        "account_id": {
+                            "principal_id": "ak:did_core:web:mimi-peer-test.invalid",
+                            "station_id": state.service_core_id(),
+                        },
+                    },
+                },
                 "consent_scope": "direct_message"
             }),
             now(),
