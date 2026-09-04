@@ -2093,7 +2093,13 @@ fn peer_claim_duplicate_conflict() -> AppError {
 }
 
 fn peer_claim_failed() -> AppError {
-    crate::app_error!(FailedPrecondition, "KeyPackage claim failed").with_wire_code("claim_failed")
+    // `claim_failed` is a registered endpoint code with its own status:
+    // `error-code-registry.json` binds it to HTTP 400, not to the 409 of the
+    // `failed_precondition` base code. Building it as `FailedPrecondition`
+    // plus a wire-code override rendered `type: .../claim_failed` under a 409,
+    // because `AppError::http_status()` resolves the status from the canonical
+    // `ErrorCode` and the override only rewrites the rendered string.
+    crate::app_error!(ClaimFailed, "KeyPackage claim failed")
 }
 
 #[salvo::oapi::endpoint(
