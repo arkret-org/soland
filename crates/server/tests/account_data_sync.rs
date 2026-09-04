@@ -464,7 +464,6 @@ fn read_cursor_payload(
         soland_test_support::fixture_station_id(),
     ));
     json!({
-        "id": arkret_identifiers::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ak.schema.read_cursor.v1",
         "actor_id": actor_id,
         "device_id": device_id,
@@ -478,7 +477,6 @@ fn read_cursor_payload(
             "event_id": event_id,
             "hlc": hlc
         },
-        "updated_at": "2026-05-21T00:00:00.000Z",
     })
 }
 
@@ -1151,6 +1149,19 @@ fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
             .filter(|event| event["kind"] == "ak.read_cursor.update")
             .collect::<Vec<_>>();
         assert_eq!(read_cursor_fanouts.len(), 2);
+        // read-receipts.md 6.6 step 2: the sibling-device content is the
+        // derived `ak.schema.read_cursor_update.v1` projection, not the
+        // `ak.schema.read_cursor.v1` payload object; it carries the winning
+        // envelope time as `updated_at` and never a cursor `id`.
+        for event in &read_cursor_fanouts {
+            assert_eq!(
+                event["content"]["schema"],
+                arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1,
+                "{event}"
+            );
+            assert!(event["content"].get("id").is_none(), "{event}");
+            assert!(event["content"]["updated_at"].is_string(), "{event}");
+        }
         assert!(read_cursor_fanouts.iter().any(|event| {
             event["content"]["realm_id"] == realm_a
                 && event["content"]["position"]["event_id"] == event_a

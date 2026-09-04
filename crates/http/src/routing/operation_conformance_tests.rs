@@ -183,14 +183,12 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "read marker missing event_id",
             kind: arkret_wire::EventKind::ReadCursorAdvance,
             payload: json!({
-                "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
                 "actor_id": account_actor("ak:did_core:web:alice.example"),
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
                 "realm_id": "ak:realm:Abeq9pC3fxOERl1X0ivHa5cJCBy41KfYu5LKvGfPFq5K",
                 "read_scope": {"kind": "realm"},
-                "position": {"hlc": "019041000000-0000-00000001"},
-                "updated_at": "2026-05-20T00:00:00.000Z"
+                "position": {"hlc": "019041000000-0000-00000001"}
             }),
             valid: false,
         },
@@ -198,7 +196,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "read marker valid",
             kind: arkret_wire::EventKind::ReadCursorAdvance,
             payload: json!({
-                "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
                 "actor_id": account_actor("ak:did_core:web:alice.example"),
                 "device_id": "ak:device:01964137-0000-7000-8000-000000000001",
@@ -207,8 +204,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "position": {
                     "event_id": "ak:event:ASVxAZxIUYM__aicHMtZdYI9scFpXAK99QLzn2_HB7oR",
                     "hlc": "019041000000-0000-00000001"
-                },
-                "updated_at": "2026-05-20T00:00:00.000Z"
+                }
             }),
             valid: true,
         },

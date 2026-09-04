@@ -1,6 +1,6 @@
 use arkret_identifiers::{
     BlobRef, CircleId, DidCoreId, EventId, InviteId, MessageId, MorphId, NotificationId, PolicyId,
-    ReadCursorId, RealmId, RelationId, SpaceId, StrandId, ViewId,
+    RealmId, RelationId, SpaceId, StrandId, ViewId,
 };
 pub use arkret_policy::authz::authority::{
     Grant, GrantConstraint, IssuerAuthorityRef, grant_effective_expiry, is_grant_expired,
@@ -118,7 +118,11 @@ fn resource_term_matches(pattern: &str, resource: &str) -> bool {
         "policy" => return PolicyId::new(resource).is_ok(),
         "invite" => return InviteId::new(resource).is_ok(),
         "notification" => return NotificationId::new(resource).is_ok(),
-        "read_cursor" => return ReadCursorId::new(resource).is_ok(),
+        // `read_cursor` has no typed id kind and no id-addressed resource
+        // (resource-selector-grammar.md §3.1: the only selector form is the
+        // realm-scoped wildcard `read_cursor:<realm>:*`), so a bare
+        // `read_cursor` term matches nothing here; only the wildcard prefix
+        // branch below can satisfy a read-cursor grant.
         "blob" => return is_typed_blob_ref(resource),
         _ => {}
     }

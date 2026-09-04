@@ -68,9 +68,11 @@ pub(super) async fn set_read_cursor(
             .cloned()
     }
     .ok_or_else(|| AppError::internal("accepted read cursor was not projected"))?;
-    let candidate_won = marker.device_id.as_str() == session.device_id
-        && marker.position == cursor.position
-        && marker.updated_at == cursor.updated_at;
+    // The projected marker's `updated_at` is the winning advance's envelope
+    // `created_at` (read-receipts.md §6.1), not a payload field, so identity of
+    // "this submission won" is the (device, position) pair we just submitted.
+    let candidate_won =
+        marker.device_id.as_str() == session.device_id && marker.position == cursor.position;
     if candidate_won {
         fanout_actor_private_update(
             state,
@@ -86,7 +88,7 @@ pub(super) async fn set_read_cursor(
                         })?,
                 },
                 content: ActorPrivateReadCursorUpdate {
-                    schema: arkret_wire::SchemaId::READ_CURSOR_V1.to_owned(),
+                    schema: arkret_wire::SchemaId::READ_CURSOR_UPDATE_V1.to_owned(),
                     actor_id: marker.actor_id.clone(),
                     device_id: marker.device_id.clone(),
                     realm_id: marker.realm_id.clone(),
@@ -137,11 +139,9 @@ fn validate_caller_signed_read_cursor(
             "advance_event payload.device_id must equal the authenticated session device",
         ));
     }
-    if cursor.updated_at != event.created_at {
-        return Err(AppError::param_invalid(
-            "advance_event payload.updated_at must equal event.created_at",
-        ));
-    }
+    // No payload/envelope timestamp comparison: the cursor object carries no
+    // `updated_at` at all (read-receipts.md §6.1). A payload that still ships
+    // one is rejected above by the closed `ReadCursor` shape.
     validate_read_scope(&cursor.read_scope)?;
     // `position` needs no local check: `ReadCursorPosition` carries the SDK
     // `EventId` and `Hlc` newtypes, so a non-canonical Event token or HLC is
@@ -289,7 +289,6 @@ mod tests {
             1,
             "019641370000-0000-00000001".parse().expect("hlc"),
             json!({
-                "id": "ak:read_cursor:01964137-0000-7000-8000-000000000001",
                 "schema": "ak.schema.read_cursor.v1",
                 "actor_id": actor(),
                 "device_id": DEVICE_ID,
@@ -298,8 +297,7 @@ mod tests {
                 "position": {
                     "event_id": "ak:event:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
                     "hlc": "019641370000-0000-00000001"
-                },
-                "updated_at": "2026-08-08T00:00:00.000Z"
+                }
             }),
             created_at,
         )
@@ -327,15 +325,34 @@ mod tests {
     }
 
     #[test]
-    fn rejects_payload_timestamp_outside_signed_event_time() {
+    fn rejects_payload_updated_at() {
+        // read-receipts.md §6.1: the cursor is never updated in place, so the
+        // object has no `updated_at` and the update time is the envelope
+        // `created_at`. A payload restating it is a closed-shape violation, not
+        // a value the service compares against the envelope.
         let mut event = signed_shape();
         event.payload.insert(
             "updated_at".to_owned(),
-            serde_json::Value::String("2026-08-08T00:00:01.000Z".to_owned()),
+            serde_json::Value::String("2026-08-08T00:00:00.000Z".to_owned()),
         );
         let error = validate_caller_signed_read_cursor(&actor(), DEVICE_ID, &event)
-            .expect_err("timestamp drift must fail closed");
-        assert!(error.message.contains("updated_at"));
+            .expect_err("payload updated_at must fail closed");
+        assert!(error.message.contains("updated_at"), "{}", error.message);
+    }
+
+    #[test]
+    fn rejects_payload_id() {
+        // private-objects.md §2.3: the cursor has no typed id. Identity is the
+        // (actor_id, realm_id, read_scope) tuple, so a payload `id` is a
+        // closed-shape violation exactly like `updated_at`.
+        let mut event = signed_shape();
+        event.payload.insert(
+            "id".to_owned(),
+            serde_json::Value::String("legacy-read-cursor-object-id".to_owned()),
+        );
+        let error = validate_caller_signed_read_cursor(&actor(), DEVICE_ID, &event)
+            .expect_err("payload id must fail closed");
+        assert!(error.message.contains("id"), "{}", error.message);
     }
 
     #[test]
