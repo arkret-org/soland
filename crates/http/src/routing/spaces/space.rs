@@ -991,6 +991,7 @@ mod tests {
         state
             .projections()
             .test_put_seal(&old_seal, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
 
         assert_eq!(
@@ -1003,6 +1004,7 @@ mod tests {
         state
             .projections()
             .test_put_seal(&create_seal, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
         let lifecycle_cell = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.invite.lifecycle.v1:{LIFECYCLE_INVITE}"
@@ -1034,6 +1036,7 @@ mod tests {
                     },
                 )],
             )
+            .await
             .unwrap();
 
         assert_eq!(

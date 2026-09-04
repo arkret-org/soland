@@ -2447,8 +2447,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn event_genesis_authorization_uses_the_create_events_notary_cell() {
+    #[tokio::test]
+    async fn event_genesis_authorization_uses_the_create_events_notary_cell() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -2485,6 +2485,7 @@ mod tests {
         assert!(
             local_worker
                 .is_authorized_for_event_state(&state, &realm_id, &event_ops)
+                .await
                 .unwrap()
         );
 
@@ -2515,6 +2516,7 @@ mod tests {
         assert!(
             !local_worker
                 .is_authorized_for_event_state(&state, &realm_id, &remote_event_ops)
+                .await
                 .unwrap()
         );
     }

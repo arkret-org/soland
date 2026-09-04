@@ -1157,18 +1157,17 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
             &ingress,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
     let now_ms = chrono::Utc::now().timestamp_millis().saturating_add(1_000);
-    let claim_store = stores.control_event_store.clone();
-    let first_claim = tokio::task::spawn_blocking(move || {
-        claim_store.claim_due_control_seal_realms("worker-a", now_ms, now_ms + 1_000, 1)
-    })
-    .await
-    .expect("coordinator-style blocking claim task")
-    .unwrap()
-    .pop()
-    .unwrap();
+    let first_claim = stores
+        .control_event_store
+        .claim_due_control_seal_realms("worker-a", now_ms, now_ms + 1_000, 1)
+        .await
+        .unwrap()
+        .pop()
+        .unwrap();
     assert_eq!(first_claim.generation, 1);
 
     stores
@@ -1178,6 +1177,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
             &ingress,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     assert_eq!(
         stores
@@ -1187,6 +1187,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
                 &ControlSealAttemptOutcome::SigningFailed,
                 now_ms,
             )
+            .await
             .unwrap(),
         ControlSealAttemptCompletion::Applied,
         "an idempotent Event replay must not bump generation"
@@ -1195,6 +1196,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
     let second_claim = stores
         .control_event_store
         .claim_due_control_seal_realms("worker-a", now_ms + 1_000, now_ms + 2_000, 1)
+        .await
         .unwrap()
         .pop()
         .unwrap();
@@ -1208,6 +1210,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
             &ingress,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     prioritize_control_seal_schedule_test_realm(&pool, realm_id.as_str()).await;
     assert_eq!(
@@ -1218,12 +1221,14 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
                 &ControlSealAttemptOutcome::SigningFailed,
                 now_ms + 1_001,
             )
+            .await
             .unwrap(),
         ControlSealAttemptCompletion::ReleasedNewGeneration
     );
     let third_claim = stores
         .control_event_store
         .claim_due_control_seal_realms("worker-a", now_ms + 1_001, now_ms + 1_101, 1)
+        .await
         .unwrap()
         .pop()
         .unwrap();
@@ -1231,18 +1236,21 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
     let active_stats = stores
         .control_event_store
         .control_seal_schedule_stats(now_ms + 1_100)
+        .await
         .unwrap();
     assert!(active_stats.pending >= 1);
     assert!(active_stats.claimed >= 1);
     let expired_stats = stores
         .control_event_store
         .control_seal_schedule_stats(now_ms + 1_101)
+        .await
         .unwrap();
     assert!(expired_stats.eligible >= 1);
     assert!(expired_stats.expired_claims >= 1);
     let reclaimed = stores
         .control_event_store
         .claim_due_control_seal_realms("worker-b", now_ms + 1_101, now_ms + 2_000, 1)
+        .await
         .unwrap()
         .pop()
         .unwrap();
@@ -1255,6 +1263,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
                 &ControlSealAttemptOutcome::ProgressPublished,
                 now_ms + 1_102,
             )
+            .await
             .unwrap(),
         ControlSealAttemptCompletion::StaleClaim
     );
@@ -1271,6 +1280,7 @@ async fn postgres_control_seal_schedule_fences_generation_expiry_and_repair() {
         repair_inserted += stores
             .control_event_store
             .repair_control_seal_schedule(now_ms + 1_200 + repair_round, 4_096)
+            .await
             .unwrap()
             .inserted;
         if control_seal_schedule_row_count(&pool, Some(realm_id.as_str())).await == 1 {
@@ -1534,6 +1544,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             &ingress,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     let genesis_dependency =
         seal_dependency_contract_availability(&genesis_event, "genesis-success");
@@ -1580,6 +1591,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
+            .await
             .unwrap()
     );
     let committed =
@@ -1595,6 +1607,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         stores
             .event_seal_committer
             .data_event_leaf_manifest(&genesis_seal.id)
+            .await
             .unwrap(),
         Some(genesis_manifest.clone())
     );
@@ -1606,6 +1619,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         restarted
             .event_seal_committer
             .data_event_leaf_manifest(&genesis_seal.id)
+            .await
             .unwrap(),
         Some(genesis_manifest.clone()),
         "a reconstructed PostgreSQL adapter must return the byte-identical frozen manifest"
@@ -1613,6 +1627,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     let checkpoint = restarted
         .event_seal_committer
         .effective_state_checkpoint(&genesis_seal.id)
+        .await
         .unwrap()
         .expect("accepted Seal checkpoint survives adapter reconstruction");
     assert_eq!(checkpoint.realm_id, realm_id);
@@ -1627,6 +1642,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         stores
             .control_event_store
             .covering_seals(&genesis_digest)
+            .await
             .unwrap(),
         vec![genesis_seal.id.clone()]
     );
@@ -1656,6 +1672,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 Some(&genesis_manifest),
                 std::slice::from_ref(&genesis_write),
             )
+            .await
             .unwrap(),
         "an exact retry must observe the same complete dependency set"
     );
@@ -1678,6 +1695,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 item: replay_mismatch,
             }],
         )
+        .await
         .unwrap_err();
     assert!(
         replay_error
@@ -1695,6 +1713,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         stores
             .control_event_store
             .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
         let mut dependency = seal_dependency_contract_availability(&event, &marker);
         if failure == "object" {
@@ -1750,6 +1769,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 Some(&std::collections::BTreeSet::new()),
                 &[write],
             )
+            .await
             .unwrap_err();
         let counts = seal_dependency_atomic_counts(&pool, &seal.id, &object_digest).await;
         assert_eq!(counts.seals, 0, "{failure} failure leaked a Seal");
@@ -1778,6 +1798,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             stores
                 .control_event_store
                 .covering_seals(&event_digest)
+                .await
                 .unwrap()
                 .is_empty()
         );
@@ -1787,6 +1808,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
     stores
         .control_event_store
         .put_pending_with_ingress(&cas_event, &ingress, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     let cas_dependency = seal_dependency_contract_availability(&cas_event, "cas-loss");
     let cas_object_digest = seal_dependency_contract_digest(&cas_dependency);
@@ -1821,6 +1843,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             Some(&root_mismatch_manifest),
             std::slice::from_ref(&cas_write),
         )
+        .await
         .unwrap_err();
     assert!(
         root_mismatch
@@ -1844,6 +1867,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
                 Some(&std::collections::BTreeSet::new()),
                 &[cas_write],
             )
+            .await
             .unwrap()
     );
     let cas_counts = seal_dependency_atomic_counts(&pool, &cas_seal.id, &cas_object_digest).await;
@@ -1858,6 +1882,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
         stores
             .control_event_store
             .covering_seals(&cas_digest)
+            .await
             .unwrap()
             .is_empty()
     );
@@ -1881,6 +1906,7 @@ async fn postgres_event_seal_commit_retains_dependencies_at_the_frontier_cas_bou
             Some(&genesis_manifest),
             std::slice::from_ref(&genesis_write),
         )
+        .await
         .unwrap_err();
     assert!(
         missing_manifest_retry
@@ -3270,10 +3296,12 @@ mod control_move_ingress_negatives {
                 &ControlProposalIngress::AckRequired(fixture.ack.clone()),
                 arkret_canonical::DigestSuite::Sha256,
             )
+            .await
             .unwrap();
         let snapshot = stores
             .control_event_store
             .control_proposal_snapshot(&fixture.proposal_digest)
+            .await
             .unwrap()
             .expect("the durable Control proposal snapshot must be readable");
         assert!(matches!(
@@ -3293,11 +3321,14 @@ mod control_move_ingress_negatives {
         });
         assert!(
             matches!(
-                stores.control_event_store.put_pending_with_ingress(
-                    &fixture.event,
-                    &ackless,
-                    arkret_canonical::DigestSuite::Sha256,
-                ),
+                stores
+                    .control_event_store
+                    .put_pending_with_ingress(
+                        &fixture.event,
+                        &ackless,
+                        arkret_canonical::DigestSuite::Sha256,
+                    )
+                    .await,
                 Err(StoreError::Conflict(_))
             ),
             "an Ack-required Move cannot be replayed as Ack-less"
@@ -3309,6 +3340,7 @@ mod control_move_ingress_negatives {
                 &ControlProposalIngress::AckRequired(fixture.ack.clone()),
                 arkret_canonical::DigestSuite::Sha256,
             )
+            .await
             .expect("the byte-identical class and Ack remain idempotent");
         cleanup_control_schedule_test_actor(&pool, &fixture.event.actor_id.to_string()).await;
     }

@@ -2618,6 +2618,7 @@ mod tests {
                 state
                     .projections()
                     .control_event_by_digest(&digest)
+                    .await
                     .unwrap(),
                 Some(event),
                 "an exact retry must restore the required pending control index",

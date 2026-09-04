@@ -3433,40 +3433,41 @@ mod effective_checkpoint_tests {
         }
     }
 
+    #[async_trait::async_trait]
     impl CellStore for CountingCellStore {
-        fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
+        async fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
             self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.list_cells(realm_id)
+            self.inner.list_cells(realm_id).await
         }
 
-        fn sealed_ops_for_cell(
+        async fn sealed_ops_for_cell(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
         ) -> StoreResult<Vec<IssuedOp>> {
             self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.sealed_ops_for_cell(realm_id, cell)
+            self.inner.sealed_ops_for_cell(realm_id, cell).await
         }
 
-        fn sealed_op_batches_for_cell(
+        async fn sealed_op_batches_for_cell(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
         ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
             self.history_reads.fetch_add(1, Ordering::Relaxed);
-            self.inner.sealed_op_batches_for_cell(realm_id, cell)
+            self.inner.sealed_op_batches_for_cell(realm_id, cell).await
         }
 
-        fn cached_state(
+        async fn cached_state(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
             view_hash: &Hash,
         ) -> StoreResult<Option<CellState>> {
-            self.inner.cached_state(realm_id, cell, view_hash)
+            self.inner.cached_state(realm_id, cell, view_hash).await
         }
 
-        fn put_cached_state(
+        async fn put_cached_state(
             &self,
             realm_id: &RealmId,
             cell: &CellRef,
@@ -3475,19 +3476,22 @@ mod effective_checkpoint_tests {
         ) -> StoreResult<()> {
             self.inner
                 .put_cached_state(realm_id, cell, view_hash, state)
+                .await
         }
 
-        fn append_sealed_effects(
+        async fn append_sealed_effects(
             &self,
             realm_id: &RealmId,
             seal: &SealId,
             new_ops: &[(CellRef, IssuedOp)],
         ) -> StoreResult<()> {
-            self.inner.append_sealed_effects(realm_id, seal, new_ops)
+            self.inner
+                .append_sealed_effects(realm_id, seal, new_ops)
+                .await
         }
 
-        fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
-            self.inner.rollback_seal(realm_id, seal)
+        async fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
+            self.inner.rollback_seal(realm_id, seal).await
         }
     }
 
@@ -3495,8 +3499,9 @@ mod effective_checkpoint_tests {
         checkpoints: BTreeMap<SealId, SealEffectiveStateCheckpoint>,
     }
 
+    #[async_trait::async_trait]
     impl EventSealCommitPort for CheckpointCommitter {
-        fn commit_if_frontier(
+        async fn commit_if_frontier(
             &self,
             _seal: &Seal,
             _digest_suite: arkret_canonical::DigestSuite,
@@ -3509,14 +3514,14 @@ mod effective_checkpoint_tests {
             panic!("checkpoint lookup test must not commit a Seal")
         }
 
-        fn data_event_leaf_manifest(
+        async fn data_event_leaf_manifest(
             &self,
             _seal_id: &SealId,
         ) -> StoreResult<Option<BTreeSet<Hash>>> {
             Ok(None)
         }
 
-        fn effective_state_checkpoint(
+        async fn effective_state_checkpoint(
             &self,
             seal_id: &SealId,
         ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
@@ -3566,8 +3571,8 @@ mod effective_checkpoint_tests {
         seal
     }
 
-    #[test]
-    fn long_successor_checkpoint_queries_do_not_reload_cell_history() {
+    #[tokio::test]
+    async fn long_successor_checkpoint_queries_do_not_reload_cell_history() {
         const SUCCESSORS: u64 = 128;
         let realm_id =
             RealmId::new("ak:realm:AcvBDtCDG7ajziiuQ2d0YqNmv_FKWuzI2TYPLj5Wsbjq".to_owned())
@@ -3598,6 +3603,7 @@ mod effective_checkpoint_tests {
             assert!(
                 seal_store
                     .put_if_frontier(&seal, &predecessors, arkret_canonical::DigestSuite::Sha256,)
+                    .await
                     .unwrap()
             );
             closure.insert(seal.id.clone());
@@ -3627,17 +3633,22 @@ mod effective_checkpoint_tests {
             assert_eq!(
                 service
                     .effective_state_at(std::slice::from_ref(&leaf), &realm_id)
+                    .await
                     .unwrap(),
                 state
             );
             assert_eq!(
                 service
                     .predecessor_covered_events(std::slice::from_ref(&leaf))
+                    .await
                     .unwrap(),
                 covered
             );
             assert_eq!(
-                service.seal_closure(std::slice::from_ref(&leaf)).unwrap(),
+                service
+                    .seal_closure(std::slice::from_ref(&leaf))
+                    .await
+                    .unwrap(),
                 closure
             );
         }
@@ -3656,8 +3667,9 @@ mod control_governance_health_tests {
 
     struct UnusedEventSealCommitter;
 
+    #[async_trait::async_trait]
     impl EventSealCommitPort for UnusedEventSealCommitter {
-        fn commit_if_frontier(
+        async fn commit_if_frontier(
             &self,
             _seal: &Seal,
             _digest_suite: arkret_canonical::DigestSuite,
@@ -3670,7 +3682,7 @@ mod control_governance_health_tests {
             panic!("governance health must not commit a Seal")
         }
 
-        fn data_event_leaf_manifest(
+        async fn data_event_leaf_manifest(
             &self,
             _seal_id: &SealId,
         ) -> StoreResult<Option<BTreeSet<Hash>>> {
@@ -3895,8 +3907,8 @@ mod control_governance_health_tests {
         assert!(service.project_accepted_cell_writes(&legacy).is_err());
     }
 
-    #[test]
-    fn ackless_governance_exemption_is_exact_digest_and_default_fail_closed() {
+    #[tokio::test]
+    async fn ackless_governance_exemption_is_exact_digest_and_default_fail_closed() {
         let service = service();
         let event = ackless_event("authorized");
         service
@@ -3905,6 +3917,7 @@ mod control_governance_health_tests {
                 &ControlProposalIngress::AcklessSelfPrincipal(ackless_class()),
                 arkret_canonical::DigestSuite::Sha256,
             )
+            .await
             .unwrap();
         let realm_id = event.realm_id.clone();
 
@@ -3914,6 +3927,7 @@ mod control_governance_health_tests {
                 Utc::now(),
                 ControlProposalDecisionPolicy::default(),
             )
+            .await
             .unwrap_err();
         assert!(
             default_error
@@ -3934,6 +3948,7 @@ mod control_governance_health_tests {
                 ControlProposalDecisionPolicy::default(),
                 &BTreeSet::from([unrelated_digest]),
             )
+            .await
             .unwrap_err();
         assert!(
             unrelated_error
@@ -3953,6 +3968,7 @@ mod control_governance_health_tests {
                 ControlProposalDecisionPolicy::default(),
                 &BTreeSet::from([digest]),
             )
+            .await
             .unwrap();
         assert!(health.pending_proposals.is_empty());
         assert!(health.retained_faults.is_empty());

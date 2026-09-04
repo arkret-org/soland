@@ -1968,8 +1968,8 @@ mod tests {
         assert_eq!(authoritative_notary(&joined).unwrap(), Some(notary));
     }
 
-    #[test]
-    fn governance_join_preserves_exposed_bottom_without_poisoning_the_realm() {
+    #[tokio::test]
+    async fn governance_join_preserves_exposed_bottom_without_poisoning_the_realm() {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:AdTN7L96rpQaXNqcIhMcXo5a1ucoPGnWeIyG7qhFPYFy").unwrap();
@@ -1988,6 +1988,7 @@ mod tests {
         let ops_by_cell = BTreeMap::from([(selector_cell.clone(), selector_ops)]);
 
         let joined = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
+            .await
             .expect("bottom=expose must not make unrelated governance unavailable");
 
         assert!(matches!(
@@ -2001,8 +2002,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn governance_join_still_fails_closed_for_rejected_bottom() {
+    #[tokio::test]
+    async fn governance_join_still_fails_closed_for_rejected_bottom() {
         let state = test_state();
         let realm_id =
             RealmId::new("ak:realm:Abojx_8QbHf40nUbyT3-uQrA2pKjNAbzZskY4Nc35U8S").unwrap();
@@ -2027,6 +2028,7 @@ mod tests {
         let ops_by_cell = BTreeMap::from([(accountability_cell.clone(), accountability_ops)]);
 
         let error = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
+            .await
             .expect_err("bottom=reject must remain fail closed");
 
         assert_eq!(error.code, ErrorCode::StateMismatch);

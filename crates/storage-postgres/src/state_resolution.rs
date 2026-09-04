@@ -2885,7 +2885,7 @@ mod event_seal_commit_tests {
         }
     }
 
-    use std::sync::{Arc, Barrier};
+    use std::sync::Arc;
 
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
@@ -2894,6 +2894,7 @@ mod event_seal_commit_tests {
     use arkret_wire::{LatticeOpType, NotarySig, SealSignature};
     use chrono::Utc;
     use serde_json::json;
+    use tokio::sync::Barrier;
 
     use super::{
         BTreeSet, CellRef, CellRegistry, CellStore, ControlEventStore, EventSealCommitStore, Hash,
@@ -2934,7 +2935,7 @@ mod event_seal_commit_tests {
         assert!(Arc::ptr_eq(&registry, &stores.cell_registry));
     }
 
-    fn competing_seal(
+    async fn competing_seal(
         cell_store: &dyn CellStore,
         registry: &dyn CellRegistry,
         realm: &RealmId,
@@ -2990,8 +2991,9 @@ mod event_seal_commit_tests {
             )),
         )];
         let covered = std::iter::once(move_id.clone()).collect::<BTreeSet<_>>();
-        let state =
-            effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops).unwrap();
+        let state = effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops)
+            .await
+            .unwrap();
         let state_root = compute_state_root(&state, arkret_canonical::DigestSuite::Sha256).unwrap();
         let control_root = arkret_state::state::control_event_set_root(
             &covered,
@@ -3029,8 +3031,8 @@ mod event_seal_commit_tests {
         (seal, ops, covered, event)
     }
 
-    #[test]
-    fn postgres_replay_uses_validated_sdk_fsm_contract() {
+    #[tokio::test]
+    async fn postgres_replay_uses_validated_sdk_fsm_contract() {
         let cell_store = arkret_state::state::MemoryCellStore::default();
         let registry =
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
@@ -3065,14 +3067,15 @@ mod event_seal_commit_tests {
         .collect::<Vec<_>>();
         let covered = [join_move, ban_move].into_iter().collect::<BTreeSet<_>>();
 
-        let state =
-            effective_state_with_new_ops(&cell_store, &registry, &realm, &covered, &ops).unwrap();
+        let state = effective_state_with_new_ops(&cell_store, &registry, &realm, &covered, &ops)
+            .await
+            .unwrap();
 
         assert_eq!(state.get(&cell), Some(&CellState::Value(json!("ban"))),);
     }
 
-    #[test]
-    fn memory_composite_commit_never_exposes_loser_effects() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn memory_composite_commit_never_exposes_loser_effects() {
         let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
         let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
         let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
@@ -3091,8 +3094,8 @@ mod event_seal_commit_tests {
         let realm =
             RealmId::new("ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC".to_owned())
                 .unwrap();
-        let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
-        let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
+        let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1).await;
+        let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2).await;
         let ackless = ControlProposalIngress::AcklessSelfPrincipal(AcklessSelfPrincipalIngress {
             device_id: "ak:device:fixture".to_owned(),
             device_authorize_event_id: "ak:event:fixture".to_owned(),
@@ -3101,9 +3104,11 @@ mod event_seal_commit_tests {
         });
         control_event_store
             .put_pending_with_ingress(&left.3, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
         control_event_store
             .put_pending_with_ingress(&right.3, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
         let barrier = Arc::new(Barrier::new(3));
         let spawn = |candidate: (
@@ -3114,8 +3119,8 @@ mod event_seal_commit_tests {
         )| {
             let committer = committer.clone();
             let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                barrier.wait();
+            tokio::spawn(async move {
+                barrier.wait().await;
                 let accepted = committer
                     .commit_if_frontier(
                         &candidate.0,
@@ -3126,20 +3131,21 @@ mod event_seal_commit_tests {
                         Some(&BTreeSet::new()),
                         &[],
                     )
+                    .await
                     .unwrap();
                 (candidate.0, candidate.1, accepted)
             })
         };
         let left = spawn(left);
         let right = spawn(right);
-        barrier.wait();
-        let left = left.join().unwrap();
-        let right = right.join().unwrap();
+        barrier.wait().await;
+        let left = left.await.unwrap();
+        let right = right.await.unwrap();
         assert_ne!(left.2, right.2);
         let winner = if left.2 { &left } else { &right };
         let loser = if left.2 { &right } else { &left };
         let cell = winner.1[0].0.clone();
-        let stored = cell_store.sealed_ops_for_cell(&realm, &cell).unwrap();
+        let stored = cell_store.sealed_ops_for_cell(&realm, &cell).await.unwrap();
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].op.move_id, winner.1[0].1.op.move_id);
         assert!(
@@ -3147,23 +3153,26 @@ mod event_seal_commit_tests {
                 .iter()
                 .all(|issued| issued.op.move_id != loser.1[0].1.op.move_id)
         );
-        assert!(seal_store.get(&winner.0.id).unwrap().is_some());
-        assert!(seal_store.get(&loser.0.id).unwrap().is_none());
+        assert!(seal_store.get(&winner.0.id).await.unwrap().is_some());
+        assert!(seal_store.get(&loser.0.id).await.unwrap().is_none());
         assert_eq!(
             control_event_store
                 .covering_seals(&winner.1[0].1.op.move_id)
+                .await
                 .unwrap(),
             vec![winner.0.id.clone()]
         );
         assert!(
             control_event_store
                 .covering_seals(&loser.1[0].1.op.move_id)
+                .await
                 .unwrap()
                 .is_empty()
         );
         assert!(
             control_event_store
                 .list_pending_records(&realm, 8)
+                .await
                 .unwrap()
                 .iter()
                 .all(|record| {
@@ -3173,36 +3182,27 @@ mod event_seal_commit_tests {
                 })
         );
         assert_eq!(
-            committer.data_event_leaf_manifest(&winner.0.id).unwrap(),
+            committer
+                .data_event_leaf_manifest(&winner.0.id)
+                .await
+                .unwrap(),
             Some(BTreeSet::new())
         );
-        let (read_started_tx, read_started_rx) = std::sync::mpsc::channel();
-        let (read_result_tx, read_result_rx) = std::sync::mpsc::channel();
         let read_committer = committer.clone();
         let read_seal_id = winner.0.id.clone();
-        let commit_guard = committer.lock.lock();
-        let reader = std::thread::spawn(move || {
-            read_started_tx.send(()).unwrap();
-            read_result_tx
-                .send(read_committer.data_event_leaf_manifest(&read_seal_id))
-                .unwrap();
-        });
-        read_started_rx.recv().unwrap();
+        let commit_guard = committer.lock.lock().await;
+        let mut reader =
+            tokio::spawn(
+                async move { read_committer.data_event_leaf_manifest(&read_seal_id).await },
+            );
         assert!(
-            read_result_rx
-                .recv_timeout(std::time::Duration::from_millis(50))
+            tokio::time::timeout(std::time::Duration::from_millis(50), &mut reader)
+                .await
                 .is_err(),
             "manifest reads must wait for the composite commit lock"
         );
         drop(commit_guard);
-        assert_eq!(
-            read_result_rx
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .unwrap()
-                .unwrap(),
-            Some(BTreeSet::new())
-        );
-        reader.join().unwrap();
+        assert_eq!(reader.await.unwrap().unwrap(), Some(BTreeSet::new()));
         committer
             .data_event_leaf_manifests
             .lock()
@@ -3217,6 +3217,7 @@ mod event_seal_commit_tests {
                 Some(&BTreeSet::new()),
                 &[],
             )
+            .await
             .unwrap_err();
         assert!(
             retry_error
@@ -3237,6 +3238,7 @@ mod event_seal_commit_tests {
                 Some(&mismatched_manifest),
                 &[],
             )
+            .await
             .unwrap_err();
         assert!(
             root_error
@@ -3245,8 +3247,8 @@ mod event_seal_commit_tests {
         );
     }
 
-    #[test]
-    fn memory_transport_commit_accepts_observational_root_without_manifest() {
+    #[tokio::test]
+    async fn memory_transport_commit_accepts_observational_root_without_manifest() {
         let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
         let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
         let control_event_store = Arc::new(arkret_state::state::MemoryControlEventStore::default());
@@ -3266,7 +3268,7 @@ mod event_seal_commit_tests {
             RealmId::new("ak:realm:AbyyZrF7pGSKY_6LDT13wAQKxoSWNXKFknfWSmLtjw3U".to_owned())
                 .unwrap();
         let (mut seal, ops, covered, event) =
-            competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'c', 3);
+            competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'c', 3).await;
         let observed = [Hash::new(format!("sha256:{}", "d".repeat(64))).unwrap()]
             .into_iter()
             .collect::<BTreeSet<_>>();
@@ -3285,6 +3287,7 @@ mod event_seal_commit_tests {
         });
         control_event_store
             .put_pending_with_ingress(&event, &ackless, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
 
         assert!(
@@ -3298,8 +3301,12 @@ mod event_seal_commit_tests {
                     None,
                     &[],
                 )
+                .await
                 .unwrap()
         );
-        assert_eq!(committer.data_event_leaf_manifest(&seal.id).unwrap(), None);
+        assert_eq!(
+            committer.data_event_leaf_manifest(&seal.id).await.unwrap(),
+            None
+        );
     }
 }

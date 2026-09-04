@@ -1359,11 +1359,11 @@ fn data_event_dummy_signature() -> arkret_wire::SealSignature {
     }
 }
 
-fn insert_data_event_seal(state: &AppState, delta: Vec<arkret_identifiers::Hash>) -> String {
-    insert_data_event_seal_with(state, Vec::new(), delta)
+async fn insert_data_event_seal(state: &AppState, delta: Vec<arkret_identifiers::Hash>) -> String {
+    insert_data_event_seal_with(state, Vec::new(), delta).await
 }
 
-fn insert_data_event_seal_with(
+async fn insert_data_event_seal_with(
     state: &AppState,
     predecessor_refs: Vec<arkret_identifiers::SealId>,
     delta: Vec<arkret_identifiers::Hash>,
@@ -1397,6 +1397,7 @@ fn insert_data_event_seal_with(
     state
         .projections()
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     seal_id.as_str().to_owned()
 }
@@ -1462,7 +1463,7 @@ fn historical_data_event_grant_value(
     value
 }
 
-fn insert_historical_data_event_grant(
+async fn insert_historical_data_event_grant(
     state: &AppState,
     grant_id: &str,
     action: &str,
@@ -1475,9 +1476,10 @@ fn insert_historical_data_event_grant(
         data_event_account(DATA_EVENT_ACTOR),
         revoked,
     )
+    .await
 }
 
-fn insert_historical_data_event_grant_for_subject(
+async fn insert_historical_data_event_grant_for_subject(
     state: &AppState,
     grant_id: &str,
     action: &str,
@@ -1486,7 +1488,7 @@ fn insert_historical_data_event_grant_for_subject(
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let move_id = data_event_move_id(0xab);
-    let seal_ref = insert_data_event_seal(state, vec![move_id.clone()]);
+    let seal_ref = insert_data_event_seal(state, vec![move_id.clone()]).await;
     let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
@@ -1520,11 +1522,12 @@ fn insert_historical_data_event_grant_for_subject(
                 strictness_issued(arkret_state::lattice::SealedOp::new(move_id.clone(), op)),
             )],
         )
+        .await
         .unwrap();
     seal_ref
 }
 
-fn insert_data_event_revocation_successor(
+async fn insert_data_event_revocation_successor(
     state: &AppState,
     predecessor_ref: &str,
     grant_id: &str,
@@ -1564,6 +1567,7 @@ fn insert_data_event_revocation_successor(
     state
         .projections()
         .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
@@ -1595,10 +1599,11 @@ fn insert_data_event_revocation_successor(
                 strictness_issued(arkret_state::lattice::SealedOp::new(move_id, op)),
             )],
         )
+        .await
         .unwrap();
 }
 
-fn insert_historical_data_event_child_grant_with_revoked_authority(
+async fn insert_historical_data_event_child_grant_with_revoked_authority(
     state: &AppState,
     authority_grant_id: &str,
     child_grant_id: &str,
@@ -1608,7 +1613,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
     let seal_ref =
-        insert_data_event_seal(state, vec![parent_move_id.clone(), child_move_id.clone()]);
+        insert_data_event_seal(state, vec![parent_move_id.clone(), child_move_id.clone()]).await;
     let seal_id = arkret_identifiers::SealId::new(seal_ref.clone()).unwrap();
     let parent_cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{authority_grant_id}"
@@ -1674,6 +1679,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
                 ),
             ],
         )
+        .await
         .unwrap();
     seal_ref
 }
@@ -1724,10 +1730,10 @@ fn data_event_object_with_refs(
     .clone()
 }
 
-#[test]
-fn data_event_capability_ref_must_resolve() {
+#[tokio::test]
+async fn data_event_capability_ref_must_resolve() {
     let state = make_state(true);
-    let seal_ref = insert_data_event_seal(&state, Vec::new());
+    let seal_ref = insert_data_event_seal(&state, Vec::new()).await;
     let object = data_event_object_with_refs(
         &seal_ref,
         vec!["ak:grant:ATPdRBJ7VjotWM8xezzjJYCICc6wTKShqh-oWNC3EGqO".to_owned()],
@@ -1743,6 +1749,7 @@ fn data_event_capability_ref_must_resolve() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("unknown capability_ref must reject");
 
     assert_eq!(err.code, "capability_denied");
@@ -1751,11 +1758,12 @@ fn data_event_capability_ref_must_resolve() {
 
 /// Coverage is judged against the cells the *receiver* derived, over the whole
 /// effective set the `seal_ref` basis yields for the actor.
-#[test]
-fn data_event_capability_must_cover_derived_cell() {
+#[tokio::test]
+async fn data_event_capability_must_cover_derived_cell() {
     let state = make_state(true);
     let grant_id = "ak:grant:AZjl4ii7409qEbi9w_hFgL2BOAn9txOvjwAf79MHg_i6";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -1768,12 +1776,14 @@ fn data_event_capability_must_cover_derived_cell() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("matching grant must cover the derived DataEvent cell");
 
     let wrong_state = make_state(true);
     let wrong_grant_id = "ak:grant:ARgPcY94c3tMPJStrGtcGWGqWQXLGc-0YDI6darot7h0";
     let wrong_seal_ref =
-        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false);
+        insert_historical_data_event_grant(&wrong_state, wrong_grant_id, "ak.reaction.add", false)
+            .await;
     let wrong_action_object =
         data_event_object_with_refs(&wrong_seal_ref, vec![wrong_grant_id.to_owned()]);
     let err = validate_data_event_capability_refs(
@@ -1786,6 +1796,7 @@ fn data_event_capability_must_cover_derived_cell() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("wrong action must not cover the derived DataEvent cell");
     assert_eq!(err.code, "capability_denied");
     assert!(err.message.contains("covers action"));
@@ -1796,11 +1807,12 @@ fn data_event_capability_must_cover_derived_cell() {
 /// answer `schema_violation` when it meets either. These were the two inputs
 /// the capability gate used to *require*, so they are asserted refused rather
 /// than merely unread.
-#[test]
-fn data_event_rejects_producer_selected_capability_fields() {
+#[tokio::test]
+async fn data_event_rejects_producer_selected_capability_fields() {
     let state = make_state(true);
     let grant_id = "ak:grant:AX37wLeLONzd_JNkw6LJ99yJoWyfGkOl1VRG-QZRvfHs";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
 
     let mut with_capability_refs = data_event_object_with_refs(&seal_ref, vec![]);
     with_capability_refs["auth_context"]["capability_refs"] = json!([grant_id]);
@@ -1814,6 +1826,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("auth_context.capability_refs must be refused");
     assert_eq!(err.code, "schema_violation");
     assert!(err.message.contains("auth_context is closed over"));
@@ -1836,6 +1849,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("effects must be refused");
     assert_eq!(err.code, "schema_violation");
     assert!(err.message.contains("not a v1 Event Envelope field"));
@@ -1844,11 +1858,12 @@ fn data_event_rejects_producer_selected_capability_fields() {
 /// A conformant DataEvent cites nothing: `refs[role=authorized_by]` is
 /// optional, and the effective capability set comes from the governance basis
 /// at `seal_ref` alone.
-#[test]
-fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
+#[tokio::test]
+async fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
     let state = make_state(true);
     let grant_id = "ak:grant:AawcynxQ2o8vL1cUX0ihdXGNoRO0G_nEj-ZtG2fA6Tq-";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
     let object = data_event_object_with_refs(&seal_ref, vec![]);
 
     validate_data_event_capability_refs(
@@ -1861,11 +1876,12 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("a DataEvent citing no grant is authorized by the basis at seal_ref");
 }
 
-#[test]
-fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
+#[tokio::test]
+async fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
     const APPLET_SERVICE: &str = "ak:did_core:web:bridge.example";
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
@@ -1877,7 +1893,8 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
             arkret_wire::DidCoreId::new(APPLET_SERVICE.to_owned()).unwrap(),
         ),
         false,
-    );
+    )
+    .await;
     let mut object = data_event_object_with_refs(&seal_ref, vec![]);
     object.insert(
         "applet_id".to_owned(),
@@ -1901,6 +1918,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("Applet DataEvent must use its executor's exact install grant");
 
     object.insert(
@@ -1917,16 +1935,18 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("another effective grant cannot substitute for authorization_ref");
     assert_eq!(err.code, "authorization_ref_inactive");
     assert!(err.message.contains("not projected at seal_ref"));
 }
 
-#[test]
-fn data_event_capability_ref_must_not_be_revoked() {
+#[tokio::test]
+async fn data_event_capability_ref_must_not_be_revoked() {
     let state = make_state(true);
     let grant_id = "ak:grant:AcQ0lLs0sdXJIIFx89z5MPiZcW4lJ931DNuCAR0tR-W3";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", true).await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -1939,14 +1959,15 @@ fn data_event_capability_ref_must_not_be_revoked() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("revoked capability_ref must reject");
 
     assert_eq!(err.code, "capability_denied");
     assert!(err.message.contains("revoked"));
 }
 
-#[test]
-fn data_event_capability_ref_reports_upstream_revoked_authority() {
+#[tokio::test]
+async fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let state = make_state(true);
     let authority_grant_id = "ak:grant:AXtQr1bQ29BYsE_HxdhYVb02wrOy3mDAcmK4juGSwpGE";
     let child_grant_id = "ak:grant:AUClLzOaZSu1iuMPWhnnXcjeH3Kdt15z74i8jhKEonWr";
@@ -1955,7 +1976,8 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
         authority_grant_id,
         child_grant_id,
         "ak.message.create",
-    );
+    )
+    .await;
     let object = data_event_object_with_refs(&seal_ref, vec![child_grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -1968,17 +1990,19 @@ fn data_event_capability_ref_reports_upstream_revoked_authority() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect_err("child capability_ref with revoked parent must reject");
 
     assert_eq!(err.code, arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM);
     assert!(err.message.contains("revoked upstream"));
 }
 
-#[test]
-fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
+#[tokio::test]
+async fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let state = make_state(true);
     let grant_id = "ak:grant:AbNxEyHm2i7kxIWT8d3aeJ0c7n5ujCnlTYJy9aAxH1Fn";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
     state
         .authorization()
         .upsert_projected_grant(data_event_grant(grant_id, "ak.message.create", true));
@@ -1994,15 +2018,18 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
 }
 
-#[test]
-fn data_event_revocation_successor_within_window_is_accepted() {
+#[tokio::test]
+async fn data_event_revocation_successor_within_window_is_accepted() {
     let state = make_state(true);
     let grant_id = "ak:grant:AYSBE0hegtYZwGZKvLpOxSBjVkkCzQx36JxTE3ExdEV5";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 1);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 1)
+        .await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -2015,15 +2042,18 @@ fn data_event_revocation_successor_within_window_is_accepted() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("a linear revocation inside the freshness window must remain accepted");
 }
 
-#[test]
-fn data_event_revocation_successor_at_window_boundary_is_accepted() {
+#[tokio::test]
+async fn data_event_revocation_successor_at_window_boundary_is_accepted() {
     let state = make_state(true);
     let grant_id = "ak:grant:Adtfh7VczxqGjGKRiDCJlBwIw-G-GAX-uATlzwwXLQcQ";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 24);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 24)
+        .await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -2036,15 +2066,18 @@ fn data_event_revocation_successor_at_window_boundary_is_accepted() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .expect("a revocation exactly at the freshness-window boundary must remain accepted");
 }
 
-#[test]
-fn data_event_revocation_successor_outside_window_is_excluded() {
+#[tokio::test]
+async fn data_event_revocation_successor_outside_window_is_excluded() {
     let state = make_state(true);
     let grant_id = "ak:grant:AXpDvFT5Ig3ReD8ssTjbXBgzMXgcnSVx4liP7nvihgRe";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 25);
+    let seal_ref =
+        insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false).await;
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, "ak.message.create", 25)
+        .await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -2057,17 +2090,18 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .unwrap_err();
     assert_eq!(err.code, "seal_ref_stale");
 }
 
-#[test]
-fn high_risk_data_event_revocation_has_no_grace_window() {
+#[tokio::test]
+async fn high_risk_data_event_revocation_has_no_grace_window() {
     let state = make_state(true);
     let grant_id = "ak:grant:AbcriCdScRg5DEU1Lki7mHfAdOK609vnq1PWuZBQR-mS";
     let action = "ak.message.mention.broadcast";
-    let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false);
-    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, action, 1);
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, action, false).await;
+    insert_data_event_revocation_successor(&state, &seal_ref, grant_id, action, 1).await;
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -2080,6 +2114,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
         &data_event_derived_cells(),
         false,
     )
+    .await
     .unwrap_err();
     assert_eq!(err.code, "seal_ref_stale");
 }

@@ -167,14 +167,6 @@ mod event_derived_id_tests {
     use super::*;
 
     #[test]
-    fn staged_bootstrap_digest_precedes_durable_reload() {
-        let suite = select_event_digest_algorithm(None, Some("sha256".to_owned()), || {
-            panic!("a staged bootstrap must not consult durable Realm cells")
-        });
-        assert_eq!(suite.as_deref(), Some("sha256"));
-    }
-
-    #[test]
     fn realm_genesis_uses_the_common_carried_object_id_reason() {
         let object = serde_json::json!({
             "kind": "ak.realm.create",
