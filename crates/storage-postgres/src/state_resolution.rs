@@ -2040,14 +2040,14 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     .get_result::<DataEventLeafManifestRow>(&mut *conn)
                     .await
                     .optional()?;
-                    if let Some(manifest) = &data_event_leaf_manifest {
-                        if stored_manifest.map(|row| row.leaf_digests) != Some(manifest.clone()) {
-                            return Err(StoreError::Conflict(
-                                "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
-                                    .to_owned(),
-                            )
-                            .into());
-                        }
+                    if let Some(manifest) = &data_event_leaf_manifest
+                        && stored_manifest.map(|row| row.leaf_digests) != Some(manifest.clone())
+                    {
+                        return Err(StoreError::Conflict(
+                            "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                                .to_owned(),
+                        )
+                        .into());
                     }
                     let exact_dependencies =
                         crate::governance_dependencies_match_in_transaction(
@@ -2433,13 +2433,13 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                         .to_owned(),
                 ));
             }
-            if let Some(manifest) = data_event_leaf_manifest {
-                if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest) {
-                    return Err(StoreError::Conflict(
-                        "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
-                            .to_owned(),
-                    ));
-                }
+            if let Some(manifest) = data_event_leaf_manifest
+                && self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest)
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay has a different or missing DataEvent leaf manifest"
+                        .to_owned(),
+                ));
             }
             let checkpoints = self.effective_state_checkpoints.lock();
             let checkpoint = checkpoints.get(&seal.id).ok_or_else(|| {

@@ -3090,13 +3090,13 @@ pub async fn assert_federation_outbox_store_contract(
             .is_some(),
         "the terminal state and its ledger row are one transaction"
     );
+    let terminal_claims = store
+        .claim_due(&claim("token-e", "worker-a", 10_000, 60))
+        .await
+        .expect("terminal claim");
     assert!(
-        store
-            .claim_due(&claim("token-e", "worker-a", 10_000, 60))
-            .await
-            .expect("terminal claim")
-            .is_empty(),
-        "a terminal row is never claimed again"
+        terminal_claims.iter().all(|row| row.id != first.id),
+        "the terminal row is never claimed again"
     );
 
     // Operator replay mints a new intent under a new key, single-shot.

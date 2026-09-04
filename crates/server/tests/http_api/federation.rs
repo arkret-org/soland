@@ -202,8 +202,8 @@ async fn signal_peer_roles_body() {
     resign_signal(&mut service_sender, &key);
     invalid.push(service_sender);
     let mut expired = envelope.clone();
-    expired.sent_at = expired.sent_at - ChronoDuration::seconds(60);
-    expired.expires_at = expired.expires_at - ChronoDuration::seconds(60);
+    expired.sent_at -= ChronoDuration::seconds(60);
+    expired.expires_at -= ChronoDuration::seconds(60);
     expired.proof.created_at = expired.sent_at;
     resign_signal(&mut expired, &key);
     invalid.push(expired);

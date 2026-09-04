@@ -1576,6 +1576,10 @@ impl ProjectionService {
         .await
     }
 
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
+    )]
     pub async fn apply_seal_in_context<F>(
         &self,
         seal: &Seal,
@@ -1604,6 +1608,10 @@ impl ProjectionService {
     /// Verify an incoming Seal completely while leaving every durable store
     /// unchanged. Federation receivers use the returned immutable transition
     /// as input to the atomic Seal/dependency/frontier commit.
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
+    )]
     pub async fn prepare_seal_in_context<F>(
         &self,
         seal: &Seal,
@@ -1633,6 +1641,10 @@ impl ProjectionService {
     /// the durable accepted-event lane. Incoming peer Seals use the prepared
     /// producer-submission path above and commit their receiver-owned evidence
     /// atomically.
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the process-wide authority CAS intentionally spans async store reads; contenders acquire through block_in_place so they do not park a Tokio worker"
+    )]
     pub async fn apply_accepted_seal_in_context<F>(
         &self,
         seal: &Seal,
@@ -1754,8 +1766,9 @@ impl ProjectionService {
     }
 
     #[allow(
+        clippy::await_holding_lock,
         clippy::too_many_arguments,
-        reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
+        reason = "the atomic frontier CAS intentionally spans the async commit and keeps every compared and committed component explicit; contenders acquire through block_in_place"
     )]
     pub async fn commit_event_seal_if_frontier(
         &self,
@@ -1791,6 +1804,10 @@ impl ProjectionService {
     }
 
     #[doc(hidden)]
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the conformance write participates in the same process-wide authority CAS; contenders acquire through block_in_place"
+    )]
     pub async fn conformance_put_seal(
         &self,
         seal: &Seal,
@@ -3200,6 +3217,10 @@ fn pending_device_revoke_exists(
 
 #[async_trait::async_trait(?Send)]
 impl HistoryAuthorityViewCas for ProjectionService {
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "release-authority validation and mutation are one process-wide CAS; contenders acquire through block_in_place so they do not park a Tokio worker"
+    )]
     async fn with_current_release_authority(
         &self,
         attestation: &HistoryReleaseAttestation,

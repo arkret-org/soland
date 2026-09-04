@@ -400,6 +400,10 @@ async fn resolve_external_service_identity(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the external identity acceptance boundary keeps provider, retained identity, key material, and outcome inputs explicit"
+)]
 async fn accept_external_outcome(
     persistence: &PersistenceHandle,
     config: &AppConfig,

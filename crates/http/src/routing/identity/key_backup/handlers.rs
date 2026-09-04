@@ -17,10 +17,8 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
         .ok_or_else(|| {
-            AppError::conflict(format!(
-                "no accepted recovery policy for exact backup account"
-            ))
-            .with_wire_code("recovery_policy_mismatch")
+            AppError::conflict("no accepted recovery policy for exact backup account")
+                .with_wire_code("recovery_policy_mismatch")
         })?;
 
     if ref_policy_id != active.policy_id.as_str() || ref_version != active.version as u64 {

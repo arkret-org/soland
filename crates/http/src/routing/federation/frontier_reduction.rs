@@ -204,13 +204,13 @@ mod tests {
         reversed.reverse();
         assert_eq!(sets, sibling_sets(&reversed, realm, &actors).unwrap());
         assert!(!snapshot_changed(
-            &[a.clone()],
+            std::slice::from_ref(&a),
             &records,
             &BTreeSet::from([b.event_id.clone()]),
             realm
         ));
         assert!(snapshot_changed(
-            &[a.clone()],
+            std::slice::from_ref(&a),
             &records,
             &BTreeSet::new(),
             realm

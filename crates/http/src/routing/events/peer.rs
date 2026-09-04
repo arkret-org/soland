@@ -224,7 +224,7 @@ fn fit_sibling_positions_outcome_to_budget(
 ) -> Result<PeerEventsSiblingPositionsOutcome, AppError> {
     loop {
         outcome
-            .validate_for_request(&request)
+            .validate_for_request(request)
             .map_err(|error| AppError::internal(error.to_string()))?;
         let response_bytes = arkret_canonical::canonical_json_bytes(&outcome).map_err(|error| {
             AppError::internal(format!("peer sibling-position response: {error}"))

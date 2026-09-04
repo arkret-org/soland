@@ -43,7 +43,20 @@ const BANNED: &[(&str, &[&str])] = &[
             "object_store",
         ],
     ),
-    ("soland-storage", &["salvo", "diesel", "diesel-async"]),
+    (
+        "soland-storage",
+        &[
+            "salvo",
+            "diesel",
+            "diesel-async",
+            "tokio-postgres",
+            "postgres",
+            "sqlx",
+            "deadpool",
+            "object_store",
+            "rusqlite",
+        ],
+    ),
     (
         "soland-services",
         &[

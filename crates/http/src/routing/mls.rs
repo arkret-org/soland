@@ -3420,7 +3420,7 @@ async fn validate_direct_keypackage_consume(
     }
     let claim_id = &body.claim_id;
     let key_package_id = body.recipient_durable_receipt.key_package_ref.as_str();
-    if !welcome_recipient_matches_consumer(&welcome, body)
+    if !welcome_recipient_matches_consumer(welcome, body)
         || welcome.mls_group_id.as_str() != group_id.as_str()
         || welcome.epoch != body.recipient_durable_receipt.mls_epoch
         || !welcome_claim_matches_consume(
@@ -3542,7 +3542,7 @@ async fn validate_sidecar_keypackage_consume(
     if welcome.mls_group_id.as_str() != group_id
         || welcome.epoch != body.recipient_durable_receipt.mls_epoch
         || body.recipient_durable_receipt.realm_id.as_str() != sidecar.realm_id.as_str()
-        || !welcome_recipient_matches_consumer(&welcome, body)
+        || !welcome_recipient_matches_consumer(welcome, body)
         || !welcome_claim_matches_consume(
             key_package_id,
             claim_id,

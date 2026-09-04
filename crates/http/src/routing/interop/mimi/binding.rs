@@ -453,6 +453,10 @@ fn local_mimi_sender_account(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::items_after_test_module,
+    reason = "the local-sender tests stay beside the private binding helpers they exercise"
+)]
 mod local_sender_tests {
     use super::*;
 

@@ -3244,8 +3244,8 @@ mod invite_locator_security_tests {
                 &decision,
             ),
         );
-        assert_eq!(first.expect("first quarantine outcome"), true);
-        assert_eq!(second.expect("second quarantine outcome"), true);
+        assert!(first.expect("first quarantine outcome"));
+        assert!(second.expect("second quarantine outcome"));
 
         let cell = state
             .account_data()

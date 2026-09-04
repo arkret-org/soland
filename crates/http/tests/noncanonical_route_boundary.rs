@@ -107,7 +107,12 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
         );
         assert!(!decision_ref.trim().is_empty(), "{path} lacks decision_ref");
         assert!(!owner.trim().is_empty(), "{path} lacks owner");
-        let _ = (caller_refs, canonical_operation);
+        assert!(
+            !caller_refs.is_empty()
+                || canonical_operation.is_some()
+                || decision_ref.starts_with("arkret-work/"),
+            "{path} has neither a live caller, a canonical replacement, nor an explicit arkret-work decision"
+        );
         assert!(
             inventoried.insert(path.clone(), methods).is_none(),
             "{path} is classified more than once"

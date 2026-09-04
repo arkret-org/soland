@@ -497,7 +497,11 @@ async fn postgres_key_backup_identity_and_series_round_trip() {
     use soland_storage_postgres::PgKeyBackupStore;
     let pool = test_pool().await;
     let _db_guard = DB_GUARD.lock().await;
-    let principal = DidCoreId::new("ak:did_core:web:backup-alice.example").unwrap();
+    let principal = DidCoreId::new(format!(
+        "ak:did_core:web:backup-{}.example",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
     let actor = |station| {
         ActorId::account(AccountId::new(
             principal.clone(),
@@ -815,7 +819,7 @@ async fn postgres_franking_nonce_ledger_is_bounded_atomic_and_restart_stable() {
     diesel::sql_query(
         "INSERT INTO moderation_franking_replay_nonces \
          (realm_id, received_by, replay_nonce, report_event_id, consumed_at, expires_at) \
-         SELECT $1, $2, 'capacity_nonce_' || n, 'capacity_report_' || n, $3, $4 \
+         SELECT $1, $2, 'capacity_nonce_' || n, 'capacity_report_' || $1 || '_' || n, $3, $4 \
          FROM generate_series(1, $5) AS n",
     )
     .bind::<Text, _>(realm_id.as_str())
@@ -2637,12 +2641,14 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
     .execute(&mut conn)
     .await
     .unwrap();
+    let seal_id = format!("ak:seal:test:{}", uuid::Uuid::now_v7().simple());
     sql_query(
         "INSERT INTO state_seals \
          (id, digest_suite, realm_id, seal_id_preimage_bytes, accepted_seal_bytes, seal_json, predecessor_refs, is_genesis) \
-         VALUES ('ak:seal:test', 'sha256', $1, decode('00', 'hex'), decode('00', 'hex'), \
+         VALUES ($1, 'sha256', $2, decode('00', 'hex'), decode('00', 'hex'), \
                  '{}'::jsonb, '[]'::jsonb, true)",
     )
+    .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)
     .execute(&mut conn)
     .await
@@ -2651,8 +2657,9 @@ async fn postgres_hash_collision_commits_quarantine_evidence_before_returning_co
         "INSERT INTO state_seal_control_events \
          (seal_id, realm_id, event_digest, delta_index, accepted_event_bytes_digest, \
           accepted_event_bytes, sealed_at, decision_overdue) \
-         VALUES ('ak:seal:test', $1, $2, 0, $2, decode('00', 'hex'), $3, false)",
+         VALUES ($1, $2, $3, 0, $3, decode('00', 'hex'), $4, false)",
     )
+    .bind::<Text, _>(&seal_id)
     .bind::<Text, _>(&realm_id)
     .bind::<Text, _>(&canonical_digest)
     .bind::<diesel::sql_types::Timestamptz, _>(now)

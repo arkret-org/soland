@@ -19,10 +19,6 @@ pub trait AccountLocalpartStore: Send + Sync {
         &self,
         account_pk: AccountPk,
     ) -> PersistenceResult<Vec<AccountLocalpartRecord>>;
-    async fn primary_for_account(
-        &self,
-        account_pk: AccountPk,
-    ) -> PersistenceResult<Option<AccountLocalpartRecord>>;
     async fn owner_of(&self, localpart: &str) -> PersistenceResult<Option<AccountLocalpartRecord>>;
     async fn add(
         &self,

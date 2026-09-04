@@ -1509,12 +1509,7 @@ pub(crate) async fn actor_has_call_capability(
     let actor_key = actor.to_string();
     let root_controller_holds_action = owner.as_deref() == Some(actor_key.as_str())
         && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
-            .is_some_and(|owner_action| {
-                owner_action
-                    .grant_authority_actions
-                    .iter()
-                    .any(|covered| *covered == action)
-            });
+            .is_some_and(|owner_action| owner_action.grant_authority_actions.contains(&action));
     if root_controller_holds_action {
         return true;
     }

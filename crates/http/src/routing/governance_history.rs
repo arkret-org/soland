@@ -2587,7 +2587,7 @@ async fn accept_history_response_manifest(
         })?;
         validate_manifest_current_gate(
             state,
-            &request_record,
+            request_record,
             &response,
             source_record_digest,
             source_relay,

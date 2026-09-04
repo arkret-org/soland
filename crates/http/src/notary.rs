@@ -169,6 +169,20 @@ struct AcceptedControlMove {
     effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 
+type RejectedControlMove = (
+    Hash,
+    String,
+    String,
+    Vec<arkret_wire::Precondition>,
+    ControlMoveRejection,
+);
+
+struct PreparedNotaryBatch {
+    pending: Vec<(Hash, Event)>,
+    leaves: Vec<SealId>,
+    event_digest_suite: arkret_canonical::DigestSuite,
+}
+
 #[derive(Clone, Debug)]
 pub struct MaterializedEventSealView {
     pub trust_anchor_seal_id: SealId,
@@ -406,22 +420,12 @@ impl NotaryWorker {
             .map_err(|error| NotaryError::Construction(error.to_string()))
     }
 
-    /// Run one signing pass for the given Realm. Returns:
-    ///
-    /// - `Ok(Some(outcome))` when a Seal was published
-    /// - `Ok(None)` when there were no pending Moves to seal (or none that passed verify)
-    /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_seal rejection that
-    ///   wasn't `StateRootMismatch`)
-    pub async fn sign_pending_for_realm(
+    async fn prepare_pending_notary_batch(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         max_control_moves: usize,
-        proposal_policy: ControlProposalDecisionPolicy,
-    ) -> Result<Option<NotaryOutcome>, NotaryError> {
-        // Step 1: list pending Control Moves (oldest first). Control-plane
-        // Events are keyed by their canonical `event_digest`, so pair each one
-        // with its digest before ordering (§6.3.2).
+    ) -> Result<Option<PreparedNotaryBatch>, NotaryError> {
         let mut pending_events = state
             .projections()
             .pending_control_events_for_notary(realm_id, None, max_control_moves)
@@ -455,7 +459,7 @@ impl NotaryWorker {
                 .await
                 .map_err(|error| NotaryError::ApplySeal(error.to_string()))?
         };
-        let mut pending: Vec<(Hash, Event)> = Vec::with_capacity(pending_events.len());
+        let mut pending = Vec::with_capacity(pending_events.len());
         for event in pending_events {
             let digest = event
                 .event_digest_with_digest_suite(
@@ -465,22 +469,29 @@ impl NotaryWorker {
                         event_digest_suite
                     },
                 )
-                .map_err(|e| NotaryError::Construction(format!("event digest: {e}")))?;
+                .map_err(|error| NotaryError::Construction(format!("event digest: {error}")))?;
             let digest = Hash::new(digest)
-                .map_err(|e| NotaryError::Construction(format!("event digest: {e}")))?;
+                .map_err(|error| NotaryError::Construction(format!("event digest: {error}")))?;
             pending.push((digest, event));
         }
+        Ok(Some(PreparedNotaryBatch {
+            pending,
+            leaves,
+            event_digest_suite,
+        }))
+    }
 
-        // Step 2: resolve the current Seal leaves. No synthetic empty root is
-        // permitted: when this set is empty the accepted bootstrap unit in
-        // `pending` becomes the delta of the first real Seal.
-        // Step 3: authorization. Existing Realms use the accepted notary
-        // cell. Genesis derives authority from the pending bootstrap Events'
-        // projected notary write; an unset local cell never grants this
-        // service implicit signing authority.
+    async fn ensure_pending_notary_authority(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        leaves: &[SealId],
+        event_digest_suite: arkret_canonical::DigestSuite,
+        pending: &[(Hash, Event)],
+    ) -> Result<(), NotaryError> {
         if leaves.is_empty() {
             let mut event_ops = Vec::new();
-            for (digest, event) in &pending {
+            for (digest, event) in pending {
                 let move_digest_suite = if event.kind == arkret_wire::EventKind::RealmCreate {
                     arkret_canonical::DigestSuite::Sha256
                 } else {
@@ -515,6 +526,121 @@ impl NotaryWorker {
         } else if !self.is_authorized_for(state, realm_id).await? {
             return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
+        Ok(())
+    }
+
+    async fn record_control_move_rejections(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        rejected: &[RejectedControlMove],
+        proposal_policy: ControlProposalDecisionPolicy,
+    ) -> Result<(), NotaryError> {
+        for (digest, event_id, event_kind, preconditions, rejection) in rejected {
+            tracing::warn!(
+                %realm_id,
+                proposal_digest = %digest,
+                %event_id,
+                %event_kind,
+                ?preconditions,
+                reason = ?rejection.reason,
+                detail = %rejection.detail,
+                "control-seal coordinator signed a proposal rejection"
+            );
+        }
+        let signed_rejections = rejected
+            .iter()
+            .map(|(digest, _, _, _, rejection)| (digest.clone(), rejection.clone()))
+            .collect::<Vec<_>>();
+        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)
+            .await
+    }
+
+    async fn refresh_cells_and_publish_frontier(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        seal: &Seal,
+        predicted_state_root: &Hash,
+    ) {
+        let mls_epoch_cell = CellRef::new(format!(
+            "ak:cell:ak.component.mls.epoch.v1:{}",
+            realm_id.as_str()
+        ))
+        .ok();
+        let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
+            .as_ref()
+            .and_then(|cell_id| state.projections().cell_value(cell_id));
+        if let Err(error) = state.projections().reload_cells_from_store(realm_id).await {
+            tracing::warn!(
+                error = %error,
+                "notary worker failed to refresh ProjectionState::cells after atomic Seal commit"
+            );
+        }
+        let _ = state.publish_event_notification(crate::state::EventNotification::frontier(
+            realm_id.as_str().to_owned(),
+            seal.id.as_str().to_owned(),
+            predicted_state_root.as_str().to_owned(),
+        ));
+        if let Some(cell_id) = mls_epoch_cell {
+            let new_epoch_value: Option<serde_json::Value> =
+                state.projections().cell_value(&cell_id);
+            if let Some(new_epoch) = new_epoch_value
+                && prev_epoch_value.as_ref() != Some(&new_epoch)
+            {
+                let _ = state.publish_event_notification(
+                    crate::state::EventNotification::epoch_rotation(
+                        realm_id.as_str().to_owned(),
+                        prev_epoch_value,
+                        new_epoch,
+                    ),
+                );
+            }
+        }
+    }
+
+    /// Run one signing pass for the given Realm. Returns:
+    ///
+    /// - `Ok(Some(outcome))` when a Seal was published
+    /// - `Ok(None)` when there were no pending Moves to seal (or none that passed verify)
+    /// - `Err(_)` when the worker hit a hard error (storage / signing / apply_seal rejection that
+    ///   wasn't `StateRootMismatch`)
+    pub async fn sign_pending_for_realm(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        max_control_moves: usize,
+        proposal_policy: ControlProposalDecisionPolicy,
+    ) -> Result<Option<NotaryOutcome>, NotaryError> {
+        // Step 1: list pending Control Moves (oldest first). Control-plane
+        // Events are keyed by their canonical `event_digest`, so pair each one
+        // with its digest before ordering (§6.3.2).
+        let Some(PreparedNotaryBatch {
+            pending,
+            leaves,
+            event_digest_suite,
+        }) = self
+            .prepare_pending_notary_batch(state, realm_id, max_control_moves)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        // Step 2: resolve the current Seal leaves. No synthetic empty root is
+        // permitted: when this set is empty the accepted bootstrap unit in
+        // `pending` becomes the delta of the first real Seal.
+        // Step 3: authorization. Existing Realms use the accepted notary
+        // cell. Genesis derives authority from the pending bootstrap Events'
+        // projected notary write; an unset local cell never grants this
+        // service implicit signing authority.
+        self.ensure_pending_notary_authority(
+            state,
+            realm_id,
+            &leaves,
+            event_digest_suite,
+            &pending,
+        )
+        .await?;
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
@@ -558,13 +684,7 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
         }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<(
-            Hash,
-            String,
-            String,
-            Vec<arkret_wire::Precondition>,
-            ControlMoveRejection,
-        )> = Vec::new();
+        let mut rejected: Vec<RejectedControlMove> = Vec::new();
         let mut staged_anchor_state = pre_state.clone();
         let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
         for (digest, event) in ordered {
@@ -733,23 +853,7 @@ impl NotaryWorker {
                 }
             }
         }
-        for (digest, event_id, event_kind, preconditions, rejection) in &rejected {
-            tracing::warn!(
-                %realm_id,
-                proposal_digest = %digest,
-                %event_id,
-                %event_kind,
-                ?preconditions,
-                reason = ?rejection.reason,
-                detail = %rejection.detail,
-                "control-seal coordinator signed a proposal rejection"
-            );
-        }
-        let signed_rejections = rejected
-            .iter()
-            .map(|(digest, _, _, _, rejection)| (digest.clone(), rejection.clone()))
-            .collect::<Vec<_>>();
-        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)
+        self.record_control_move_rejections(state, realm_id, &rejected, proposal_policy)
             .await?;
         if accepted.is_empty() {
             // Everyone rejected — nothing to seal, but record diagnostics.
@@ -985,46 +1089,8 @@ impl NotaryWorker {
             );
         }
 
-        // Refresh ProjectionState::cells
-        // from the now-updated CellStore so cell-keyed reads see the new
-        // effective state without waiting for an HTTP-side hook.
-        //
-        // Capture mls.epoch before reload so we can detect rotation.
-        let mls_epoch_cell = CellRef::new(format!(
-            "ak:cell:ak.component.mls.epoch.v1:{}",
-            realm_id.as_str()
-        ))
-        .ok();
-        let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
-            .as_ref()
-            .and_then(|cell_id| state.projections().cell_value(cell_id));
-        if let Err(error) = state.projections().reload_cells_from_store(realm_id).await {
-            tracing::warn!(
-                error = %error,
-                "notary worker failed to refresh ProjectionState::cells after atomic Seal commit"
-            );
-        }
-        // Broadcast Frontier (always) + EpochRotation (conditional).
-        let _ = state.publish_event_notification(crate::state::EventNotification::frontier(
-            realm_id.as_str().to_owned(),
-            seal.id.as_str().to_owned(),
-            predicted_state_root.as_str().to_owned(),
-        ));
-        if let Some(cell_id) = mls_epoch_cell {
-            let new_epoch_value: Option<serde_json::Value> =
-                state.projections().cell_value(&cell_id);
-            if let Some(new_epoch) = new_epoch_value
-                && prev_epoch_value.as_ref() != Some(&new_epoch)
-            {
-                let _ = state.publish_event_notification(
-                    crate::state::EventNotification::epoch_rotation(
-                        realm_id.as_str().to_owned(),
-                        prev_epoch_value,
-                        new_epoch,
-                    ),
-                );
-            }
-        }
+        self.refresh_cells_and_publish_frontier(state, realm_id, &seal, &predicted_state_root)
+            .await;
 
         let accepted_event_digests = seal.delta.clone();
         Ok(Some(NotaryOutcome {
@@ -2179,6 +2245,10 @@ pub struct FirstGenerationEventSealRequirement {
     pub replacement_device_public_key: String,
 }
 
+#[allow(
+    clippy::await_holding_lock,
+    reason = "materializing one event Seal is a process-wide single-flight operation; contenders use the same deliberate blocking boundary"
+)]
 pub async fn ensure_materialized_event_seal(
     state: &AppState,
     realm_id: &RealmId,

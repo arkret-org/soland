@@ -157,7 +157,7 @@ fn signed_outcome(
     let response = CurrentSignerEvidenceResponseCore {
         request_id: request.request_id.clone(),
         realm_id: request.realm_id.clone(),
-        operation_id: request.operation_id.clone(),
+        operation_id: request.operation_id,
         request_digest: request.request_digest.clone(),
         recipient_account_id: request.recipient_account_id.clone(),
         challenge: request.challenge.clone(),

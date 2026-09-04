@@ -165,27 +165,6 @@ impl AccountLocalpartStore for PgAccountLocalpartStore {
             .collect()
     }
 
-    async fn primary_for_account(
-        &self,
-        account_pk: AccountPk,
-    ) -> PersistenceResult<Option<AccountLocalpartRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(
-            "SELECT lp.id, lp.account_pk, lp.localpart, lp.is_primary, lp.created_at, lp.updated_at \
-             FROM account_localparts lp WHERE lp.account_pk = $1 \
-             ORDER BY lp.is_primary DESC, lp.created_at ASC, lp.localpart ASC \
-             LIMIT 1",
-        )
-        .bind::<BigInt, _>(account_pk.get())
-        .get_result::<AccountLocalpartRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        row.map(AccountLocalpartRecord::try_from).transpose()
-    }
-
     async fn owner_of(&self, localpart: &str) -> PersistenceResult<Option<AccountLocalpartRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

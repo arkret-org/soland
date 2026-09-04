@@ -1,7 +1,11 @@
-//! Persistence abstraction layer.
+//! Backend-neutral persistence records, ports, and adapter contracts.
 //!
-//! Provides a trait-based interface shared by the test-only in-memory adapter
-//! and the PostgreSQL runtime adapter.
+//! PostgreSQL is Soland's current durable production adapter, but it is not
+//! part of this crate's public boundary. A future SQLite or other durable
+//! adapter implements these same ports and contract suites without exposing
+//! backend client, query, transaction, or row types to services and HTTP.
+//! Backend-specific code belongs in an adapter crate such as
+//! `soland-storage-postgres`.
 
 // Crate-private imports shared by the explicitly imported storage modules.
 pub(crate) use std::collections::{BTreeMap, BTreeSet};

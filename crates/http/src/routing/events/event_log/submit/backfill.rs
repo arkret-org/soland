@@ -178,10 +178,10 @@ pub(in crate::routing) async fn admit_frontier_backfill_event(
             membership_compensation_evidence: submission.membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions {
+        SubmitMode::Commit(Box::new(SubmitCommitOptions {
             idempotency,
             ..SubmitCommitOptions::none()
-        }),
+        })),
     )
     .await
 }

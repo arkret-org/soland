@@ -379,12 +379,7 @@ fn signal_actor_has_realm_action_in_view(
         .map(|root| root.controller_actor_id);
     if root_controller.as_ref() == Some(actor)
         && arkret_schema::capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
-            .is_some_and(|descriptor| {
-                descriptor
-                    .grant_authority_actions
-                    .iter()
-                    .any(|covered| *covered == action)
-            })
+            .is_some_and(|descriptor| descriptor.grant_authority_actions.contains(&action))
     {
         return true;
     }

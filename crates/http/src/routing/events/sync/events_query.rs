@@ -1301,7 +1301,6 @@ fn canonical_query_page(
     Ok((indices, has_more))
 }
 #[cfg(test)]
-
 async fn projection_matches_actor_selectors(
     state: &AppState,
     event: &soland_services::events::ProjectedEvent,

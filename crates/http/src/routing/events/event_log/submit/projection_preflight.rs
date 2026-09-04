@@ -67,7 +67,7 @@ pub(super) async fn apply_projection_preflight(
                         format!("Control Move frozen Seal basis unavailable: {error}"),
                     )
                 })?;
-            validate_cas_write_guards(state, operation, &projected_cell_writes, &frozen)?;
+            validate_cas_write_guards(state, operation, projected_cell_writes, &frozen)?;
         }
         preflight_moderation_dismiss(state, operation).await?;
         preflight_account_data_cas(state, operation).await?;
@@ -78,7 +78,7 @@ pub(super) async fn apply_projection_preflight(
         consent_admission = crate::routing::identity::consent::preflight_consent_admission(
             state,
             operation,
-            &submitted_event,
+            submitted_event,
         )
         .await
         .map_err(|rejection| {
@@ -109,7 +109,7 @@ pub(super) async fn apply_projection_preflight(
                 reason,
             ));
         }
-        validate_active_series_authority_before_commit(state, &parsed, operation).await?;
+        validate_active_series_authority_before_commit(state, parsed, operation).await?;
         if let Err(reason) =
             validate_content_encryption_floor(state, std::slice::from_ref(operation)).await
         {
@@ -141,8 +141,7 @@ pub(super) async fn apply_projection_preflight(
         // agent_context/approval fields, so do not require that second,
         // incompatible authorization profile for the same producer.
         if !internal_admission.is_some_and(InternalEventAdmission::is_mimi_agent_reporter) {
-            let agent_policy_operation =
-                operation_with_unsigned_agent_context(operation, &envelope);
+            let agent_policy_operation = operation_with_unsigned_agent_context(operation, envelope);
             match validate_agent_reply_participation(
                 state,
                 std::slice::from_ref(&agent_policy_operation),
@@ -244,7 +243,7 @@ pub(super) async fn apply_projection_preflight(
             crate::routing::events::projection::validate_invite_cancel_pre_admission(
                 parsed.actor_id.as_str(),
                 operation,
-                &frozen_pre_state,
+                frozen_pre_state,
             )
         {
             return Err(SubmitOneError::new(
@@ -413,7 +412,7 @@ pub(super) async fn apply_projection_preflight(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_capability_rejection(operation, &projected_cell_writes)
+                .preflight_capability_rejection(operation, projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -423,7 +422,7 @@ pub(super) async fn apply_projection_preflight(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_realm_policy_rejection(operation, &projected_cell_writes)
+                .preflight_realm_policy_rejection(operation, projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -433,7 +432,7 @@ pub(super) async fn apply_projection_preflight(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_calendar_rejection(operation, &projected_cell_writes)
+                .preflight_calendar_rejection(operation, projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -454,7 +453,7 @@ pub(super) async fn apply_projection_preflight(
             // invalid selection can never enter the canonical Event log.
             if let Some(reason) = state
                 .projections()
-                .preflight_poll_rejection(operation, &projected_cell_writes)
+                .preflight_poll_rejection(operation, projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -464,7 +463,7 @@ pub(super) async fn apply_projection_preflight(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_moderation_rejection(operation, &projected_cell_writes)
+                .preflight_moderation_rejection(operation, projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -474,7 +473,7 @@ pub(super) async fn apply_projection_preflight(
             }
             let invite_preflight_reject = state
                 .projections()
-                .preflight_invite_rejection(operation, &projected_cell_writes);
+                .preflight_invite_rejection(operation, projected_cell_writes);
             let invite_proof_context = if invite_preflight_reject.is_none() {
                 invite_claim_proof_context_from_projection(state.projections(), operation).map_err(
                     |reason| SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason),

@@ -900,6 +900,10 @@ struct MemoryEventSealCommitter {
 
 #[async_trait::async_trait]
 impl EventSealCommitPort for MemoryEventSealCommitter {
+    #[allow(
+        clippy::await_holding_lock,
+        reason = "the test-only memory adapter serializes the complete multi-store frontier commit to model production transaction visibility"
+    )]
     async fn commit_if_frontier(
         &self,
         seal: &Seal,
@@ -934,13 +938,13 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
                         .to_owned(),
                 ));
             }
-            if let Some(manifest) = data_event_leaf_manifest {
-                if self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest) {
-                    return Err(StoreError::Conflict(
-                        "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
-                            .to_owned(),
-                    ));
-                }
+            if let Some(manifest) = data_event_leaf_manifest
+                && self.data_event_leaf_manifests.lock().get(&seal.id) != Some(manifest)
+            {
+                return Err(StoreError::Conflict(
+                    "duplicate_conflict: exact Seal replay changed its frozen DataEvent leaf manifest"
+                        .to_owned(),
+                ));
             }
             return Ok(true);
         }

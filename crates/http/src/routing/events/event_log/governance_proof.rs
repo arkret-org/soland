@@ -1828,7 +1828,7 @@ fn canonical_event_sealed_ops(
         // rule that has to agree byte-for-byte with `verify_control_move`.
         let effects = state
             .projections()
-            .resolve_projected_write(write, realm_id, &pre_state)
+            .resolve_projected_write(write, realm_id, pre_state)
             .map_err(|error| {
                 crate::app_error!(
                     StateMismatch,

@@ -103,7 +103,7 @@ impl SubmitCommitOptions<'_> {
 /// a staged preparation has no commit options and therefore cannot write
 /// commit-only state.
 pub(super) enum SubmitMode<'a> {
-    Commit(SubmitCommitOptions<'a>),
+    Commit(Box<SubmitCommitOptions<'a>>),
     PrepareAgentMembership(&'a mut Option<PreparedAgentMembershipEvent>),
     /// Admit an internally-authored Event through the ordinary canonical
     /// lane, but return its commit command to a larger atomic aggregate.
@@ -430,7 +430,7 @@ pub(in crate::routing) async fn submit_event_value(
             realm_bootstrap_contexts: &bootstrap_contexts,
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
     )
     .await
 }
@@ -664,7 +664,7 @@ async fn submit_initial_event_submission_with_commit_extensions(
             membership_compensation_evidence: membership_compensation_evidence.as_ref(),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(commit_options),
+        SubmitMode::Commit(Box::new(commit_options)),
     )
     .await
 }
@@ -711,7 +711,7 @@ pub(in crate::routing) async fn submit_mimi_reporter_initial_event_submission(
             internal_admission: Some(admission),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
     )
     .await
 }
@@ -850,7 +850,7 @@ pub(in crate::routing) async fn submit_mimi_event_value(
             internal_admission: Some(&admission),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
     )
     .await
 }
@@ -883,7 +883,7 @@ pub(in crate::routing) async fn submit_account_data_event_value(
             internal_admission: Some(&admission),
             ..SubmitEventContext::empty()
         },
-        SubmitMode::Commit(SubmitCommitOptions::none()),
+        SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
     )
     .await
 }
@@ -945,10 +945,10 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         session,
         envelope,
         SubmitEventContext::empty(),
-        SubmitMode::Commit(SubmitCommitOptions {
+        SubmitMode::Commit(Box::new(SubmitCommitOptions {
             idempotency: Some(SubmitCommitIdempotency::CommitKey(idempotency)),
             ..SubmitCommitOptions::none()
-        }),
+        })),
     )
     .await
 }
@@ -2166,7 +2166,7 @@ pub(super) async fn submit_event_value_with_context(
     mode: SubmitMode<'_>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let (commit_options, deferred_agent_membership, deferred_internal) = match mode {
-        SubmitMode::Commit(options) => (Some(options), None, None),
+        SubmitMode::Commit(options) => (Some(*options), None, None),
         SubmitMode::PrepareAgentMembership(slot) => (None, Some(slot), None),
         SubmitMode::PrepareInternal(slot) => (None, None, Some(slot)),
     };

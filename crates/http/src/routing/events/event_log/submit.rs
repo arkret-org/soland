@@ -309,7 +309,7 @@ pub(in crate::routing) struct EventValidationError {
 #[derive(Debug)]
 pub(in crate::routing) enum SubmitOneError {
     Rejected {
-        error: AppError,
+        error: Box<AppError>,
         details: Option<Value>,
     },
     Quarantined {
@@ -955,7 +955,7 @@ impl SubmitOneError {
             AppError::from_rejection(mapped, message).with_reason_code(code)
         };
         Self::Rejected {
-            error,
+            error: Box::new(error),
             details: None,
         }
     }
@@ -1780,7 +1780,7 @@ async fn submit_event_batch_outcome_with_leases(
                     .and_then(Option::as_ref),
                 ..SubmitEventContext::empty()
             },
-            SubmitMode::Commit(SubmitCommitOptions::none()),
+            SubmitMode::Commit(Box::new(SubmitCommitOptions::none())),
         )
         .await
         {
@@ -3231,10 +3231,10 @@ pub(crate) async fn submit_federation_events(
                     .and_then(|submission| submission.membership_compensation_evidence.as_ref()),
                 ..SubmitEventContext::empty()
             },
-            SubmitMode::Commit(SubmitCommitOptions {
+            SubmitMode::Commit(Box::new(SubmitCommitOptions {
                 idempotency: receipt_idempotency,
                 ..SubmitCommitOptions::none()
-            }),
+            })),
         )
         .await
         {

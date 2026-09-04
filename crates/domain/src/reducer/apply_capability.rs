@@ -311,10 +311,8 @@ fn validate_nonhuman_subject_grant_constraints(
             // Unregistered action: registry_rules default it to high.
             None => (CapabilityRiskTier::High, &[] as &[&str]),
         };
-        let expiry_required = risk_tier == CapabilityRiskTier::High
-            || required_constraints
-                .iter()
-                .any(|constraint| *constraint == "expires_at");
+        let expiry_required =
+            risk_tier == CapabilityRiskTier::High || required_constraints.contains(&"expires_at");
         if expiry_required && !has_finite_expiry {
             return Err("agent_grant_expiry_required");
         }
