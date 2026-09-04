@@ -87,7 +87,7 @@ pub(super) fn bottom_entry_from(realm_id: &str, cell_id: &str, bottom: &Value) -
 
 /// Walk the projection cell map for one Realm, collect every
 /// `CellState::Bottom(_)` cell, and shape it into the wire response.
-fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntry> {
+async fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<BottomEntry> {
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
@@ -95,6 +95,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
     let mut cells: BTreeSet<CellRef> = state
         .projections()
         .realm_cells(&realm)
+        .await
         .unwrap_or_default()
         .into_iter()
         .collect();
@@ -138,7 +139,7 @@ pub(crate) async fn admin_list_realm_bottom(
     let _ = RealmId::new(realm_id.clone()).map_err(|e| {
         app_error!(ParamInvalid, "invalid realm_id: {e}").with_status(StatusCode::BAD_REQUEST)
     })?;
-    json_ok(collect_bottom_entries_for_realm(state, &realm_id))
+    json_ok(collect_bottom_entries_for_realm(state, &realm_id).await)
 }
 
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
@@ -164,7 +165,7 @@ pub(crate) async fn admin_list_bottom_global(
             .collect()
     };
     for realm_id in realm_ids {
-        out.extend(collect_bottom_entries_for_realm(state, &realm_id));
+        out.extend(collect_bottom_entries_for_realm(state, &realm_id).await);
     }
     json_ok(out)
 }
@@ -244,6 +245,7 @@ pub(crate) async fn admin_repair_bottom(
             let witness_seal = state
                 .projections()
                 .seal_by_id(&state_witness_seal)
+                .await
                 .map_err(|e| app_error!(InternalError, "seal_store.get failed: {e}"))?
                 .ok_or_else(|| {
                     app_error!(
@@ -260,6 +262,7 @@ pub(crate) async fn admin_repair_bottom(
                 .with_status(StatusCode::PRECONDITION_FAILED));
             }
             let current_bottom_heads = collect_bottom_entries_for_realm(state, &realm_id)
+                .await
                 .into_iter()
                 .find(|entry| entry.cell_id == cell_id_str)
                 .map(|entry| entry.event_ids)

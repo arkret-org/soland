@@ -120,6 +120,7 @@ pub(crate) async fn prepare_franking_proof_event(
         &RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("franking Realm id invalid: {error}")))?,
     )
+    .await
     .map_err(|error| AppError::internal(format!("franking Realm Seal lookup failed: {error}")))?
     .ok_or_else(|| {
         AppError::new(
@@ -904,24 +905,30 @@ async fn materialize_franking_seal_observation(
     let leaves = state
         .projections()
         .realm_seal_leaves(&realm_id)
+        .await
         .map_err(|error| {
             AppError::internal(format!("franking Seal frontier lookup failed: {error}"))
         })?;
-    let closure = state.projections().seal_closure(&leaves).map_err(|error| {
-        AppError::internal(format!("franking Seal ancestry lookup failed: {error}"))
-    })?;
-    let mut seals = closure
-        .into_iter()
-        .map(|seal_id| {
+    let closure = state
+        .projections()
+        .seal_closure(&leaves)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("franking Seal ancestry lookup failed: {error}"))
+        })?;
+    let mut seals = Vec::with_capacity(closure.len());
+    for seal_id in closure {
+        seals.push(
             state
                 .projections()
                 .seal_by_id(&seal_id)
+                .await
                 .map_err(|error| {
                     AppError::internal(format!("franking Seal lookup failed: {error}"))
                 })?
-                .ok_or_else(|| AppError::internal(format!("accepted Seal {seal_id} is missing")))
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                .ok_or_else(|| AppError::internal(format!("accepted Seal {seal_id} is missing")))?,
+        );
+    }
     seals.sort_by(|left, right| {
         (left.sealed_at, left.notary_seq, left.id.as_str()).cmp(&(
             right.sealed_at,
@@ -937,6 +944,7 @@ async fn materialize_franking_seal_observation(
         let Some(digests) = state
             .projections()
             .data_event_leaf_manifest(&seal.id)
+            .await
             .map_err(|error| {
                 AppError::internal(format!("read frozen DataEvent leaf manifest: {error}"))
             })?

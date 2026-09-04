@@ -59,6 +59,7 @@ pub(super) async fn apply_projection_preflight(
             let frozen = state
                 .projections()
                 .effective_state_at(&basis.leaves, &operation.realm_id)
+                .await
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::PRECONDITION_FAILED,

@@ -115,7 +115,7 @@ fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError 
         .with_status(StatusCode::SERVICE_UNAVAILABLE)
 }
 
-pub(super) fn recovery_policy_acceptance_basis(
+pub(super) async fn recovery_policy_acceptance_basis(
     state: &AppState,
     realm_id: &RealmId,
     event_digest: &Hash,
@@ -123,6 +123,7 @@ pub(super) fn recovery_policy_acceptance_basis(
     let mut leaves = state
         .projections()
         .realm_seal_leaves(realm_id)
+        .await
         .map_err(|error| {
             recovery_policy_frontier_unavailable(format!(
                 "recovery policy Seal frontier is unavailable: {error}"
@@ -138,6 +139,7 @@ pub(super) fn recovery_policy_acceptance_basis(
     let covered = state
         .projections()
         .seal_leaf_union_proof(&leaves)
+        .await
         .map_err(|error| {
             recovery_policy_frontier_unavailable(format!(
                 "recovery policy Seal coverage is unavailable: {error}"
@@ -157,6 +159,7 @@ pub(super) fn recovery_policy_acceptance_basis(
     state
         .projections()
         .effective_seal_view(&leaves, realm_id)
+        .await
         .map_err(|error| {
             recovery_policy_frontier_unavailable(format!(
                 "recovery policy joined Seal basis is unavailable: {error}"
@@ -359,7 +362,8 @@ pub(super) async fn recovery_policy_put(
     let event_digest = Hash::new(accepted_event.canonical_digest.clone()).map_err(|error| {
         AppError::internal(format!("accepted Event digest is invalid: {error}"))
     })?;
-    let acceptance_basis = recovery_policy_acceptance_basis(state, &realm_id, &event_digest)?;
+    let acceptance_basis =
+        recovery_policy_acceptance_basis(state, &realm_id, &event_digest).await?;
 
     if let Some(current) = existing.as_ref()
         && current.policy_id == validated.policy_id

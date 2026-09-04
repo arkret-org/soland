@@ -215,21 +215,20 @@ impl NotaryWorker {
     /// leaves remain possible. Profiles this worker cannot truthfully sign
     /// return `None` instead of degrading a quorum signature to one service
     /// signature.
-    pub fn signing_lease_slot(
+    pub async fn signing_lease_slot(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<SigningLeaseSlotResolution, NotaryError> {
-        let pending = state.projections().pending_control_events_for_notary(
-            realm_id,
-            None,
-            max_control_moves,
-        )?;
+        let pending = state
+            .projections()
+            .pending_control_events_for_notary(realm_id, None, max_control_moves)
+            .await?;
         if pending.is_empty() {
             return Ok(SigningLeaseSlotResolution::NoPendingMoves);
         }
-        let leaves = state.projections().realm_seal_leaves(realm_id)?;
+        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
         let notary_cell = notary_cell_ref(realm_id)
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         let ops = if leaves.is_empty() {
@@ -270,7 +269,8 @@ impl NotaryWorker {
         } else {
             state
                 .projections()
-                .sealed_ops_for_cell(realm_id, &notary_cell)?
+                .sealed_ops_for_cell(realm_id, &notary_cell)
+                .await?
         };
         let Some((profile, envelope)) =
             self.resolve_notary_value(state, realm_id, &notary_cell, &ops)?
@@ -296,7 +296,8 @@ impl NotaryWorker {
                     .and_then(serde_json::Value::as_u64);
                 let eligible_at_ms = match recovery_window_ms {
                     Some(window) => {
-                        self.frontier_recovery_eligible_at_ms(state, realm_id, window)?
+                        self.frontier_recovery_eligible_at_ms(state, realm_id, window)
+                            .await?
                     }
                     None => None,
                 };
@@ -318,14 +319,15 @@ impl NotaryWorker {
         }
     }
 
-    pub fn authority_set_ref_for_events(
+    pub async fn authority_set_ref_for_events(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         events: &[Event],
     ) -> Result<Option<Hash>, NotaryError> {
-        let Some((profile, digest)) =
-            self.current_notary_value_for_events(state, realm_id, events)?
+        let Some((profile, digest)) = self
+            .current_notary_value_for_events(state, realm_id, events)
+            .await?
         else {
             return Ok(None);
         };
@@ -339,7 +341,7 @@ impl NotaryWorker {
         Ok(locally_signable.then_some(digest))
     }
 
-    pub(crate) fn current_notary_value_for_events(
+    pub(crate) async fn current_notary_value_for_events(
         &self,
         state: &AppState,
         realm_id: &RealmId,
@@ -349,7 +351,8 @@ impl NotaryWorker {
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         let sealed = state
             .projections()
-            .sealed_ops_for_cell(realm_id, &notary_cell)?;
+            .sealed_ops_for_cell(realm_id, &notary_cell)
+            .await?;
         let ops = if sealed.is_empty() {
             let digest_suite = (!events.is_empty())
                 .then(|| genesis_digest_suite(events))
@@ -419,15 +422,14 @@ impl NotaryWorker {
         // Step 1: list pending Control Moves (oldest first). Control-plane
         // Events are keyed by their canonical `event_digest`, so pair each one
         // with its digest before ordering (§6.3.2).
-        let mut pending_events = state.projections().pending_control_events_for_notary(
-            realm_id,
-            None,
-            max_control_moves,
-        )?;
+        let mut pending_events = state
+            .projections()
+            .pending_control_events_for_notary(realm_id, None, max_control_moves)
+            .await?;
         if pending_events.is_empty() {
             return Ok(None);
         }
-        let leaves = state.projections().realm_seal_leaves(realm_id)?;
+        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
         if !leaves.is_empty()
             && pending_events
                 .iter()
@@ -450,6 +452,7 @@ impl NotaryWorker {
             state
                 .projections()
                 .predecessor_digest_suite(realm_id, &leaves)
+                .await
                 .map_err(|error| NotaryError::ApplySeal(error.to_string()))?
         };
         let mut pending: Vec<(Hash, Event)> = Vec::with_capacity(pending_events.len());
@@ -503,10 +506,13 @@ impl NotaryWorker {
                     }
                 }
             }
-            if !self.is_authorized_for_event_state(state, realm_id, &event_ops)? {
+            if !self
+                .is_authorized_for_event_state(state, realm_id, &event_ops)
+                .await?
+            {
                 return Err(NotaryError::NotAuthorized(realm_id.to_string()));
             }
-        } else if !self.is_authorized_for(state, realm_id)? {
+        } else if !self.is_authorized_for(state, realm_id).await? {
             return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
 
@@ -515,11 +521,14 @@ impl NotaryWorker {
         let view = state
             .projections()
             .effective_seal_view_with_digest_suite(&leaves, realm_id, event_digest_suite)
+            .await
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Recompute pre_state map (effective_seal_view returns state_root
         // but we need the per-cell map for verify_control_move).
-        let pre_state = self.read_effective_state(state, realm_id, &view.predecessor_refs)?;
+        let pre_state = self
+            .read_effective_state(state, realm_id, &view.predecessor_refs)
+            .await?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
@@ -538,6 +547,7 @@ impl NotaryWorker {
         let predecessor_closure = state
             .projections()
             .seal_closure(&leaves)
+            .await
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
         if leaves.is_empty() {
             let anchor_events = ordered
@@ -566,7 +576,8 @@ impl NotaryWorker {
                 };
             let ack = state
                 .projections()
-                .control_proposal_ack(&digest)?
+                .control_proposal_ack(&digest)
+                .await?
                 .ok_or_else(|| {
                     NotaryError::Store(format!(
                         "locally signed Control Move {digest} has no immutable Control Proposal Ack"
@@ -670,6 +681,7 @@ impl NotaryWorker {
                             &predecessor_closure,
                             move_digest_suite,
                         )
+                        .await
                     {
                         rejected.push((
                             digest,
@@ -737,7 +749,8 @@ impl NotaryWorker {
             .iter()
             .map(|(digest, _, _, _, rejection)| (digest.clone(), rejection.clone()))
             .collect::<Vec<_>>();
-        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)?;
+        self.record_signed_rejections(state, realm_id, &signed_rejections, proposal_policy)
+            .await?;
         if accepted.is_empty() {
             // Everyone rejected — nothing to seal, but record diagnostics.
             return Ok(None);
@@ -759,23 +772,27 @@ impl NotaryWorker {
         let digest_suites = state
             .projections()
             .seal_digest_suites_for_delta(realm_id, &view.predecessor_refs, &delta)
+            .await
             .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
-        let predicted_state_root = self.predict_post_state_root(
-            state,
-            realm_id,
-            &view.covered_event_digests,
-            &accepted,
-            digest_suites.seal_digest_suite,
-        )?;
+        let predicted_state_root = self
+            .predict_post_state_root(
+                state,
+                realm_id,
+                &view.covered_event_digests,
+                &accepted,
+                digest_suites.seal_digest_suite,
+            )
+            .await?;
         let mut covered: BTreeSet<Hash> = view.covered_event_digests.iter().cloned().collect();
         covered.extend(delta.iter().cloned());
         let control_event_set_root =
             control_event_set_root(&covered, digest_suites.seal_digest_suite)
                 .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
-        let completeness_root =
-            self.completeness_root_for_covered(state, &covered, digest_suites.seal_digest_suite)?;
+        let completeness_root = self
+            .completeness_root_for_covered(state, &covered, digest_suites.seal_digest_suite)
+            .await?;
         let predecessor_refs = view.predecessor_refs.clone();
-        let notary_seq = self.next_notary_seq(state, &predecessor_refs)?;
+        let notary_seq = self.next_notary_seq(state, &predecessor_refs).await?;
         let hlc = Hlc::new(state.hlc().now())
             .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?;
         let sealed_at = chrono::Utc::now();
@@ -904,15 +921,19 @@ impl NotaryWorker {
                 })
             })
             .collect::<Vec<_>>();
-        match state.projections().commit_event_seal_if_frontier(
-            &seal,
-            digest_suites.seal_digest_suite,
-            &leaves,
-            &new_ops,
-            &covered,
-            Some(&data_event_digests),
-            &availability_dependency_writes,
-        ) {
+        match state
+            .projections()
+            .commit_event_seal_if_frontier(
+                &seal,
+                digest_suites.seal_digest_suite,
+                &leaves,
+                &new_ops,
+                &covered,
+                Some(&data_event_digests),
+                &availability_dependency_writes,
+            )
+            .await
+        {
             Ok(true) => {}
             Ok(false) => {
                 tracing::debug!(
@@ -955,7 +976,7 @@ impl NotaryWorker {
             })?;
         }
         if tracing::enabled!(tracing::Level::DEBUG) {
-            let projected_cells = state.projections().realm_cells(realm_id)?;
+            let projected_cells = state.projections().realm_cells(realm_id).await?;
             tracing::debug!(
                 %realm_id,
                 seal_id = %seal.id,
@@ -977,7 +998,7 @@ impl NotaryWorker {
         let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
             .as_ref()
             .and_then(|cell_id| state.projections().cell_value(cell_id));
-        if let Err(error) = state.projections().reload_cells_from_store(realm_id) {
+        if let Err(error) = state.projections().reload_cells_from_store(realm_id).await {
             tracing::warn!(
                 error = %error,
                 "notary worker failed to refresh ProjectionState::cells after atomic Seal commit"
@@ -1020,36 +1041,39 @@ impl NotaryWorker {
         }))
     }
 
-    fn completeness_root_for_covered(
+    async fn completeness_root_for_covered(
         &self,
         state: &AppState,
         covered: &BTreeSet<Hash>,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> Result<Hash, NotaryError> {
-        let events = covered
-            .iter()
-            .map(|digest| {
-                let event = state.projections().control_event(digest)?.ok_or_else(|| {
+        let mut events = Vec::with_capacity(covered.len());
+        for digest in covered {
+            let event = state
+                .projections()
+                .control_event(digest)
+                .await?
+                .ok_or_else(|| {
                     NotaryError::Construction(format!(
                         "cannot compute completeness_root without Control Move {digest}"
                     ))
                 })?;
-                let event_digest_suite = state
-                    .projections()
-                    .control_event_digest_suite(digest)?
-                    .ok_or_else(|| {
+            let event_digest_suite = state
+                .projections()
+                .control_event_digest_suite(digest)
+                .await?
+                .ok_or_else(|| {
                         NotaryError::Construction(format!(
                             "cannot compute completeness_root without the frozen digest suite for Control Move {digest}"
                         ))
                     })?;
-                Ok::<_, NotaryError>((event, event_digest_suite))
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+            events.push((event, event_digest_suite));
+        }
         arkret_state::control_event_completeness_root(&events, covered, digest_suite)
             .map_err(|error| NotaryError::Construction(format!("completeness_root: {error}")))
     }
 
-    pub fn notary_value_for_seal(
+    pub async fn notary_value_for_seal(
         &self,
         state: &AppState,
         seal: &Seal,
@@ -1060,14 +1084,19 @@ impl NotaryWorker {
             let digest_suites = state
                 .projections()
                 .seal_digest_suites(seal)
+                .await
                 .map_err(|error| NotaryError::ApplySeal(error.to_string()))?;
             let mut event_ops = Vec::new();
             for digest in &seal.delta {
-                let event = state.projections().control_event(digest)?.ok_or_else(|| {
-                    NotaryError::Construction(format!(
-                        "genesis Seal is missing Control Move {digest}"
-                    ))
-                })?;
+                let event = state
+                    .projections()
+                    .control_event(digest)
+                    .await?
+                    .ok_or_else(|| {
+                        NotaryError::Construction(format!(
+                            "genesis Seal is missing Control Move {digest}"
+                        ))
+                    })?;
                 let event_digest_suite = if event.kind == arkret_wire::EventKind::RealmCreate {
                     arkret_canonical::DigestSuite::Sha256
                 } else {
@@ -1108,8 +1137,9 @@ impl NotaryWorker {
                 });
         }
 
-        let state_at_predecessors =
-            self.read_effective_state(state, &seal.realm_id, &seal.predecessor_refs)?;
+        let state_at_predecessors = self
+            .read_effective_state(state, &seal.realm_id, &seal.predecessor_refs)
+            .await?;
         let CellState::Value(value) = state_at_predecessors.get(&notary_cell).ok_or_else(|| {
             NotaryError::NotAuthorized(
                 "Seal predecessor state has no authoritative notary cell".to_owned(),
@@ -1153,14 +1183,19 @@ impl NotaryWorker {
     ///   the joined control view. otherwise no-op.
     /// - **mixed(primary, recovery_members, ...)** — primary signs directly; recovery fails closed
     ///   until a real multi-signer candidate is available.
-    fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
+    async fn is_authorized_for(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+    ) -> Result<bool, NotaryError> {
         let notary_cell = match notary_cell_ref(realm_id) {
             Ok(c) => c,
             Err(_) => return Ok(true),
         };
         let ops = state
             .projections()
-            .sealed_ops_for_cell(realm_id, &notary_cell)?;
+            .sealed_ops_for_cell(realm_id, &notary_cell)
+            .await?;
         if ops.is_empty() {
             return Ok(false);
         }
@@ -1176,7 +1211,7 @@ impl NotaryWorker {
     /// The create Event's derived notary-cell write is already part of
     /// `event_ops`, so it is the fail-closed authority until a sealed value is
     /// available.
-    fn is_authorized_for_event_state(
+    async fn is_authorized_for_event_state(
         &self,
         state: &AppState,
         realm_id: &RealmId,
@@ -1188,7 +1223,8 @@ impl NotaryWorker {
         };
         let sealed = state
             .projections()
-            .sealed_ops_for_cell(realm_id, &notary_cell)?;
+            .sealed_ops_for_cell(realm_id, &notary_cell)
+            .await?;
         if !sealed.is_empty() {
             return self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &sealed);
         }
@@ -1272,7 +1308,7 @@ impl NotaryWorker {
         Ok(Some((notary_value, value)))
     }
 
-    fn record_signed_rejections(
+    async fn record_signed_rejections(
         &self,
         state: &AppState,
         realm_id: &RealmId,
@@ -1284,7 +1320,8 @@ impl NotaryWorker {
         }
         let records = state
             .projections()
-            .pending_control_records(realm_id, 4096)?;
+            .pending_control_records(realm_id, 4096)
+            .await?;
         let by_digest = records
             .into_iter()
             .filter_map(|record| {
@@ -1333,7 +1370,8 @@ impl NotaryWorker {
                     state,
                     realm_id,
                     std::slice::from_ref(&record.event),
-                )?
+                )
+                .await?
                 .ok_or_else(|| {
                     NotaryError::Construction(
                         "current proposal notary profile is unavailable".to_owned(),
@@ -1348,11 +1386,10 @@ impl NotaryWorker {
                 chrono::Utc::now(),
             )
             .map_err(NotaryError::Construction)?;
-            state.projections().record_control_proposal_decision(
-                digest,
-                &decision,
-                proposal_policy,
-            )?;
+            state
+                .projections()
+                .record_control_proposal_decision(digest, &decision, proposal_policy)
+                .await?;
         }
         Ok(())
     }
@@ -1360,17 +1397,17 @@ impl NotaryWorker {
     /// Earliest physical millisecond when a mixed recovery member could be
     /// eligible. A missing frontier remains ineligible so the primary must
     /// author the genesis Seal.
-    fn frontier_recovery_eligible_at_ms(
+    async fn frontier_recovery_eligible_at_ms(
         &self,
         state: &AppState,
         realm_id: &RealmId,
         staleness_ms: u64,
     ) -> Result<Option<i64>, NotaryError> {
-        let leaves = state.projections().realm_seal_leaves(realm_id)?;
+        let leaves = state.projections().realm_seal_leaves(realm_id).await?;
         let Some(leaf_id) = leaves.first() else {
             return Ok(None);
         };
-        let Some(seal) = state.projections().seal_by_id(leaf_id)? else {
+        let Some(seal) = state.projections().seal_by_id(leaf_id).await? else {
             return Ok(None);
         };
         // The Seal.hlc carries a 12-hex physical-millis prefix per the
@@ -1389,7 +1426,7 @@ impl NotaryWorker {
     /// Read current effective state per cell from the cell_store, joining
     /// ops through each cell's lattice. Mirrors SDK `effective_state_at`
     /// but exposed here so we can reuse the resulting map for verify_move.
-    fn read_effective_state(
+    async fn read_effective_state(
         &self,
         state: &AppState,
         realm_id: &RealmId,
@@ -1398,13 +1435,14 @@ impl NotaryWorker {
         state
             .projections()
             .effective_state_at(leaves, realm_id)
+            .await
             .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
     }
 
     /// Predict the state_root after the accepted Moves' effects are
     /// appended on top of the current per-cell op log. Replicates the
     /// SDK's apply_seal steps 6-7 in memory without persisting.
-    fn predict_post_state_root(
+    async fn predict_post_state_root(
         &self,
         state: &AppState,
         realm_id: &RealmId,
@@ -1416,10 +1454,11 @@ impl NotaryWorker {
         let mut batches_by_cell: BTreeMap<CellRef, Vec<Vec<IssuedOp>>> = BTreeMap::new();
         let covered: BTreeSet<Hash> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
-        for cell in state.projections().realm_cells(realm_id)? {
+        for cell in state.projections().realm_cells(realm_id).await? {
             let batches = state
                 .projections()
-                .sealed_op_batches_for_cell(realm_id, &cell)?
+                .sealed_op_batches_for_cell(realm_id, &cell)
+                .await?
                 .into_iter()
                 .filter_map(|(_, ops)| {
                     let ops = ops
@@ -1698,14 +1737,14 @@ impl NotaryWorker {
             .collect())
     }
 
-    fn next_notary_seq(
+    async fn next_notary_seq(
         &self,
         state: &AppState,
         predecessor_refs: &[SealId],
     ) -> Result<u64, NotaryError> {
         let mut max_seq = 0u64;
         for id in predecessor_refs {
-            if let Some(seal) = state.projections().seal_by_id(id)? {
+            if let Some(seal) = state.projections().seal_by_id(id).await? {
                 max_seq = max_seq.max(seal.notary_seq);
             }
         }
@@ -1776,7 +1815,8 @@ async fn data_event_digests_for_window(
     for predecessor_ref in predecessor_refs {
         let predecessor = state
             .projections()
-            .seal_by_id(predecessor_ref)?
+            .seal_by_id(predecessor_ref)
+            .await?
             .ok_or_else(|| {
                 NotaryError::Store(format!(
                     "data observation predecessor {predecessor_ref} is missing"
@@ -1901,7 +1941,8 @@ async fn local_service_is_eligible_availability_holder(
         }
         let ops = state
             .projections()
-            .sealed_ops_for_cell(realm_id, cell)?
+            .sealed_ops_for_cell(realm_id, cell)
+            .await?
             .into_iter()
             .filter(|issued| covered.contains(&issued.op.move_id))
             .collect::<Vec<_>>();
@@ -2087,17 +2128,17 @@ static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 /// With multiple DAG leaves (not expected under a v1 single-signer notary), the
 /// leaf with the highest `notary_seq` (id as tie-break) is served — a light
 /// client cannot sign a multi-leaf union basis anyway.
-pub fn ensure_realm_seal_head(
+pub async fn ensure_realm_seal_head(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<Option<Seal>, NotaryError> {
-    let leaves = state.projections().realm_seal_leaves(realm_id)?;
+    let leaves = state.projections().realm_seal_leaves(realm_id).await?;
     if leaves.is_empty() {
         return Ok(None);
     }
     let mut head: Option<Seal> = None;
     for leaf in &leaves {
-        let Some(seal) = state.projections().seal_by_id(leaf)? else {
+        let Some(seal) = state.projections().seal_by_id(leaf).await? else {
             continue;
         };
         let replace = head.as_ref().is_none_or(|current| {
@@ -2135,7 +2176,7 @@ pub struct FirstGenerationEventSealRequirement {
     pub replacement_device_public_key: String,
 }
 
-pub fn ensure_materialized_event_seal(
+pub async fn ensure_materialized_event_seal(
     state: &AppState,
     realm_id: &RealmId,
     covered_event_digests: &[Hash],
@@ -2147,7 +2188,7 @@ pub fn ensure_materialized_event_seal(
 ) -> Result<MaterializedEventSealView, NotaryError> {
     let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
     let worker = NotaryWorker::for_service(state.service_id().clone());
-    let mut leaves = state.projections().realm_seal_leaves(realm_id)?;
+    let mut leaves = state.projections().realm_seal_leaves(realm_id).await?;
     if let Some(requirement) = generation_fence {
         leaves = requirement.accepted_frontier_refs.clone();
     }
@@ -2158,7 +2199,8 @@ pub fn ensure_materialized_event_seal(
         predecessor_seals.push(
             state
                 .projections()
-                .seal_by_id(leaf)?
+                .seal_by_id(leaf)
+                .await?
                 .ok_or_else(|| NotaryError::Store(format!("Seal leaf {leaf} is missing")))?,
         );
     }
@@ -2168,6 +2210,7 @@ pub fn ensure_materialized_event_seal(
         state
             .projections()
             .seal_leaf_union_proof(&leaves)
+            .await
             .map_err(|error| NotaryError::Store(format!("read Seal coverage: {error}")))?
             .into_iter()
             .flat_map(|proof| proof.covered_event_digests)
@@ -2210,7 +2253,7 @@ pub fn ensure_materialized_event_seal(
                 "existing Seal completeness_root differs for the same Event coverage".to_owned(),
             ));
         }
-        return materialized_event_seal_view(state, head.clone());
+        return materialized_event_seal_view(state, head.clone()).await;
     }
 
     if device_generation_seal_required {
@@ -2219,7 +2262,10 @@ pub fn ensure_materialized_event_seal(
                 .to_owned(),
         ));
     }
-    if !worker.is_authorized_for_event_state(state, realm_id, event_ops)? {
+    if !worker
+        .is_authorized_for_event_state(state, realm_id, event_ops)
+        .await?
+    {
         return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
     Err(NotaryError::Construction(
@@ -2271,7 +2317,7 @@ pub(crate) fn validate_first_generation_event_seal(
     Ok(true)
 }
 
-pub(crate) fn materialized_event_seal_view(
+pub(crate) async fn materialized_event_seal_view(
     state: &AppState,
     accepted_seal: Seal,
 ) -> Result<MaterializedEventSealView, NotaryError> {
@@ -2285,7 +2331,8 @@ pub(crate) fn materialized_event_seal_view(
             pending.push(
                 state
                     .projections()
-                    .seal_by_id(predecessor)?
+                    .seal_by_id(predecessor)
+                    .await?
                     .ok_or_else(|| {
                         NotaryError::Store(format!("Seal predecessor {predecessor} is missing"))
                     })?,
@@ -2321,10 +2368,10 @@ pub async fn run_one_signing_pass(
     realm_id: &RealmId,
     max_control_moves: usize,
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
-    let pending =
-        state
-            .projections()
-            .pending_control_events_for_notary(realm_id, None, max_control_moves)?;
+    let pending = state
+        .projections()
+        .pending_control_events_for_notary(realm_id, None, max_control_moves)
+        .await?;
     if pending.is_empty() {
         return Ok(None);
     }

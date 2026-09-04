@@ -180,12 +180,14 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
         .expect("accepted Agent PCR genesis Event");
     let genesis_seal_id = state
         .test_seal_leaves(&agent_pcr_realm)
+        .await
         .unwrap()
         .into_iter()
         .next()
         .expect("accepted Agent PCR genesis Seal");
     let genesis_seal = state
         .test_seal(&genesis_seal_id)
+        .await
         .unwrap()
         .expect("stored Agent PCR genesis Seal");
 

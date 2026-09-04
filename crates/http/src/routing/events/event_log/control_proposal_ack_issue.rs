@@ -66,6 +66,7 @@ pub(super) async fn issue_control_proposal_ack(
     })?;
     let authority_set_ref = crate::notary::NotaryWorker::for_service(state.service_id().clone())
         .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(&request.event))
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::PolicyViolation,

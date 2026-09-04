@@ -122,6 +122,7 @@ pub(crate) async fn verified_availability_dependency_writes(
     let (replay_context, events) = state
         .projections()
         .seal_dependency_replay_context(seal)
+        .await
         .map_err(app_error_from_seal_reject)?;
     arkret::verify_seal_availability_dependencies_default(
         seal,
@@ -166,12 +167,16 @@ pub(crate) async fn validate_accepted_fork_resolution_records(
     digest_suite: arkret_canonical::DigestSuite,
 ) -> Result<(), AppError> {
     for digest in &seal.delta {
-        let Some(event) = state.projections().control_event(digest).map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("load accepted fork-resolution Move: {error}"),
-            )
-        })?
+        let Some(event) = state
+            .projections()
+            .control_event(digest)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::InternalError,
+                    format!("load accepted fork-resolution Move: {error}"),
+                )
+            })?
         else {
             continue;
         };
@@ -565,6 +570,7 @@ async fn device_generation_event_seal_context(
     let cas_frontier_refs = state
         .projections()
         .realm_seal_leaves(realm_id)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -740,6 +746,7 @@ async fn try_apply_device_generation_event_seal(
     let digest_suites = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?;
     seal.validate_id(digest_suites.seal_digest_suite)
         .map_err(|error| seal_admission_error(format!("Seal id: {error}")))?;
@@ -754,12 +761,17 @@ async fn try_apply_device_generation_event_seal(
             initial_context.principal_id.as_str(),
         );
     let _guard = generation_lock.lock().await;
-    if let Some(existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("Seal lookup failed: {error}"),
-        )
-    })? {
+    if let Some(existing) = state
+        .projections()
+        .seal_by_id(&seal.id)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("Seal lookup failed: {error}"),
+            )
+        })?
+    {
         if existing != *seal {
             return Err(seal_admission_error(
                 "Seal id already exists with different signature material",
@@ -776,6 +788,7 @@ async fn try_apply_device_generation_event_seal(
     if !state
         .projections()
         .seal_predecessors_known(&seal.predecessor_refs)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -797,6 +810,7 @@ async fn try_apply_device_generation_event_seal(
     let predecessor_coverage = state
         .projections()
         .predecessor_covered_events(&seal.predecessor_refs)
+        .await
         .map_err(app_error_from_seal_reject)?;
     if seal
         .delta
@@ -897,6 +911,7 @@ async fn try_apply_device_generation_event_seal(
             let value = state
                 .projections()
                 .seal_by_id(predecessor)
+                .await
                 .map_err(|error| {
                     AppError::new(
                         ErrorCode::InternalError,
@@ -1103,6 +1118,7 @@ async fn try_apply_device_generation_event_seal(
     let predecessor_state = state
         .projections()
         .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+        .await
         .map_err(|error| {
             seal_admission_error(format!(
                 "resolve B-model Event Seal predecessor state: {error}"
@@ -1263,17 +1279,22 @@ async fn try_apply_device_generation_event_seal(
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
-    match state.projections().commit_event_seal_if_frontier(
-        seal,
-        digest_suite,
-        &context.cas_frontier_refs,
-        &new_ops,
-        &target,
-        None,
-        &availability_dependency_writes,
-    ) {
+    match state
+        .projections()
+        .commit_event_seal_if_frontier(
+            seal,
+            digest_suite,
+            &context.cas_frontier_refs,
+            &new_ops,
+            &target,
+            None,
+            &availability_dependency_writes,
+        )
+        .await
+    {
         Ok(true) => {}
         Ok(false) => {
             return Err(device_generation_fenced(
@@ -1326,6 +1347,7 @@ pub(crate) async fn apply_agent_event_seal(
     let digest_suites = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?;
     seal.validate_id(digest_suites.seal_digest_suite)
         .map_err(|error| seal_admission_error(format!("Agent PCR Seal id: {error}")))?;
@@ -1357,12 +1379,17 @@ pub(crate) async fn apply_agent_event_seal(
             seal.realm_id.as_str(),
         );
     let _guard = admission_lock.lock().await;
-    if let Some(existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("Agent PCR Seal lookup failed: {error}"),
-        )
-    })? {
+    if let Some(existing) = state
+        .projections()
+        .seal_by_id(&seal.id)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("Agent PCR Seal lookup failed: {error}"),
+            )
+        })?
+    {
         if existing != *seal {
             return Err(seal_admission_error(
                 "Agent PCR Seal id already exists with different signature material",
@@ -1374,6 +1401,7 @@ pub(crate) async fn apply_agent_event_seal(
     let mut leaves = state
         .projections()
         .realm_seal_leaves(&seal.realm_id)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -1389,6 +1417,7 @@ pub(crate) async fn apply_agent_event_seal(
     let current = state
         .projections()
         .predecessor_covered_events(&leaves)
+        .await
         .map_err(app_error_from_seal_reject)?;
 
     let records = state
@@ -1527,29 +1556,30 @@ pub(crate) async fn apply_agent_event_seal(
             seal.state_root, material.state_root
         )));
     }
-    let expected_notary_seq = leaves
-        .iter()
-        .map(|leaf| {
-            state
-                .projections()
-                .seal_by_id(leaf)
-                .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::InternalError,
-                        format!("Agent PCR predecessor lookup failed: {error}"),
-                    )
-                })?
-                .ok_or_else(|| seal_admission_error("Agent PCR predecessor is missing"))
-                .map(|predecessor| predecessor.notary_seq)
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .max()
-        .map_or(Ok(0), |sequence| {
-            sequence
-                .checked_add(1)
-                .ok_or_else(|| seal_admission_error("Agent PCR Seal notary_seq overflow"))
-        })?;
+    let mut predecessor_sequences = Vec::with_capacity(leaves.len());
+    for leaf in &leaves {
+        let predecessor = state
+            .projections()
+            .seal_by_id(leaf)
+            .await
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::InternalError,
+                    format!("Agent PCR predecessor lookup failed: {error}"),
+                )
+            })?
+            .ok_or_else(|| seal_admission_error("Agent PCR predecessor is missing"))?;
+        predecessor_sequences.push(predecessor.notary_seq);
+    }
+    let expected_notary_seq =
+        predecessor_sequences
+            .into_iter()
+            .max()
+            .map_or(Ok(0), |sequence| {
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| seal_admission_error("Agent PCR Seal notary_seq overflow"))
+            })?;
     if seal.notary_seq != expected_notary_seq {
         return Err(seal_admission_error(
             "Agent PCR Seal notary_seq does not follow its predecessors",
@@ -1630,17 +1660,22 @@ pub(crate) async fn apply_agent_event_seal(
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
-    match state.projections().commit_event_seal_if_frontier(
-        seal,
-        digest_suite,
-        &leaves,
-        &new_ops,
-        &target,
-        None,
-        &availability_dependency_writes,
-    ) {
+    match state
+        .projections()
+        .commit_event_seal_if_frontier(
+            seal,
+            digest_suite,
+            &leaves,
+            &new_ops,
+            &target,
+            None,
+            &availability_dependency_writes,
+        )
+        .await
+    {
         Ok(true) => {}
         Ok(false) => {
             return Err(seal_admission_error(
@@ -1687,25 +1722,23 @@ pub(crate) async fn apply_inbound_seal(
     verify_realm_notary_seal(state, seal).await?;
     let verifier = select_jws_verifier(state);
     let context = if seal.predecessor_refs.is_empty() {
-        let events_with_digests = seal
-            .delta
-            .iter()
-            .map(|digest| {
-                state
-                    .projections()
-                    .control_event(digest)
-                    .map_err(|error| {
-                        AppError::new(
-                            ErrorCode::InternalError,
-                            format!("load first-Seal Control Move: {error}"),
-                        )
-                    })?
-                    .map(|event| (digest.clone(), event))
-                    .ok_or_else(|| {
-                        seal_admission_error(format!("first Seal is missing Control Move {digest}"))
-                    })
-            })
-            .collect::<Result<Vec<_>, AppError>>()?;
+        let mut events_with_digests = Vec::with_capacity(seal.delta.len());
+        for digest in &seal.delta {
+            let event = state
+                .projections()
+                .control_event(digest)
+                .await
+                .map_err(|error| {
+                    AppError::new(
+                        ErrorCode::InternalError,
+                        format!("load first-Seal Control Move: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    seal_admission_error(format!("first Seal is missing Control Move {digest}"))
+                })?;
+            events_with_digests.push((digest.clone(), event));
+        }
         let events = arkret_state::deterministic_order(events_with_digests)
             .into_iter()
             .map(|(_, event)| event)
@@ -1719,6 +1752,7 @@ pub(crate) async fn apply_inbound_seal(
     let expected_store_frontier = state
         .projections()
         .realm_seal_leaves(&seal.realm_id)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::FrontierUnavailable,
@@ -1728,22 +1762,28 @@ pub(crate) async fn apply_inbound_seal(
     let prepared = state
         .projections()
         .prepare_seal_in_context(seal, verifier, context)
+        .await
         .map_err(app_error_from_seal_reject)?;
     let governance_dependencies = verified_availability_dependency_writes(state, seal).await?;
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
-    match state.projections().commit_event_seal_if_frontier(
-        seal,
-        digest_suite,
-        &expected_store_frontier,
-        &prepared.new_ops,
-        &prepared.covered_event_digests,
-        None,
-        &governance_dependencies,
-    ) {
+    match state
+        .projections()
+        .commit_event_seal_if_frontier(
+            seal,
+            digest_suite,
+            &expected_store_frontier,
+            &prepared.new_ops,
+            &prepared.covered_event_digests,
+            None,
+            &governance_dependencies,
+        )
+        .await
+    {
         Ok(true) => {
             if state.storage_mode() == "memory" {
                 validate_accepted_fork_resolution_records(state, seal, digest_suite).await?;
@@ -1767,10 +1807,12 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(app_error_from_seal_reject)?
         .seal_digest_suite;
     let notary = crate::notary::NotaryWorker::for_service(state.service_id().clone())
         .notary_value_for_seal(state, seal)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::DirectoryGovernanceProofSignatureInvalid,
@@ -1825,6 +1867,7 @@ async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), A
             let event = state
                 .projections()
                 .control_event(digest)
+                .await
                 .map_err(|error| {
                     AppError::new(
                         ErrorCode::InternalError,

@@ -536,7 +536,7 @@ async fn resolve_self_seals(
             seals.push(seal);
             continue;
         }
-        match state.projections().seal_by_id(seal_ref) {
+        match state.projections().seal_by_id(seal_ref).await {
             Ok(Some(seal)) if seal.realm_id == request.realm_id && ordinary_visible => {
                 seals.push(seal)
             }
@@ -592,7 +592,7 @@ async fn resolve_peer_seals(
             seals.push(seal);
             continue;
         }
-        match state.projections().seal_by_id(seal_ref) {
+        match state.projections().seal_by_id(seal_ref).await {
             Ok(Some(seal)) if seal.realm_id == request.realm_id && ordinary_visible => {
                 seals.push(seal)
             }
@@ -739,7 +739,7 @@ async fn create_history_key_request(
     )
     .await?;
     validate_history_requester_endpoint_authorization(state, &request).await?;
-    validate_history_request_bases(state, realm_id, &request)?;
+    validate_history_request_bases(state, realm_id, &request).await?;
     let request_digest = request
         .request_digest()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
@@ -1110,7 +1110,7 @@ async fn send_history_key_response(
     let checkpoint = validate_retained_history_cut(state, &request_record).await?;
     let source_signer_dependencies =
         resolve_history_source_signer_dependencies(state, &response, None).await?;
-    verify_history_source_proof(state, &response, &checkpoint, &source_signer_dependencies)?;
+    verify_history_source_proof(state, &response, &checkpoint, &source_signer_dependencies).await?;
     let has_reservation = matches!(
         state
             .persistence()
@@ -1261,7 +1261,8 @@ async fn relay_history_key_response(
         &relay.response,
         &checkpoint,
         &source_signer_dependencies,
-    )?;
+    )
+    .await?;
     validate_history_source_relay_binding(state, &relay.response, &relay.source_relay_attestation)
         .await?;
     if matches!(
@@ -1541,31 +1542,50 @@ fn history_source_signer_content_digest(
         .map_err(|error| AppError::param_invalid(error.to_string()))
 }
 
-fn verify_history_source_proof(
+async fn verify_history_source_proof(
     state: &AppState,
     response: &HistoryKeyResponseSendRequest,
     checkpoint: &MlsGovernanceVerificationCheckpoint,
     dependencies: &[GovernanceDependency],
 ) -> Result<(), AppError> {
-    arkret::verify_history_source_proof(response, checkpoint, dependencies, |request| match request
-    {
-        arkret::HistorySourceProofExternalVerificationRequest::Agent {
-            source_record,
-            signer_evidence,
-            dependencies,
-        } => arkret::verify_agent_history_source_key(
-            source_record,
-            signer_evidence,
-            dependencies,
-            |trust_request| verify_agent_history_trust(state, trust_request),
-        ),
-        arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata { .. } => {
-            Err(arkret_wire::WireError::Protocol(
-                "minimal-metadata history source verification requires receiver-local MLS state"
-                    .to_owned(),
-            ))
-        }
-    })
+    let trust_state = state.clone();
+    arkret::verify_history_source_proof(
+        response,
+        checkpoint,
+        dependencies,
+        move |request| {
+            let trust_state = trust_state.clone();
+            Box::pin(async move {
+                match request {
+                    arkret::HistorySourceProofExternalVerificationRequest::Agent {
+                        source_record,
+                        signer_evidence,
+                        dependencies,
+                    } => {
+                        arkret::verify_agent_history_source_key(
+                            source_record,
+                            signer_evidence,
+                            dependencies,
+                            move |trust_request| {
+                                let trust_state = trust_state.clone();
+                                Box::pin(async move {
+                                    verify_agent_history_trust(&trust_state, trust_request).await
+                                })
+                            },
+                        )
+                        .await
+                    }
+                    arkret::HistorySourceProofExternalVerificationRequest::MinimalMetadata {
+                        ..
+                    } => Err(arkret_wire::WireError::Protocol(
+                        "minimal-metadata history source verification requires receiver-local MLS state"
+                            .to_owned(),
+                    )),
+                }
+            })
+        },
+    )
+    .await
     .map_err(|error| AppError::capability_denied(error.to_string()))
 }
 
@@ -2090,7 +2110,7 @@ async fn validate_history_source_relay_binding(
     Ok(())
 }
 
-fn validate_history_request_bases(
+async fn validate_history_request_bases(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     request: &HistoryKeyRequest,
@@ -2098,6 +2118,7 @@ fn validate_history_request_bases(
     let mut current = state
         .projections()
         .realm_seal_leaves(realm_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     current.sort();
     if current != request.trusted_current_basis.leaves {
@@ -2108,6 +2129,7 @@ fn validate_history_request_bases(
     let target_closure = state
         .projections()
         .seal_closure(&request.trusted_current_basis.leaves)
+        .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     if request
         .trusted_history_base_basis
@@ -2119,21 +2141,23 @@ fn validate_history_request_bases(
             "history request bootstrap basis is not dominated by current basis",
         ));
     }
-    let mut bootstrap_leaves = target_closure
-        .iter()
-        .map(|seal_id| {
+    let mut closure_seals = Vec::with_capacity(target_closure.len());
+    for seal_id in &target_closure {
+        closure_seals.push(
             state
                 .projections()
                 .seal_by_id(seal_id)
+                .await
                 .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
                         ErrorCode::FrontierUnavailable,
                         "history bootstrap Seal is unavailable",
                     )
-                })
-        })
-        .collect::<Result<Vec<_>, AppError>>()?
+                })?,
+        );
+    }
+    let mut bootstrap_leaves = closure_seals
         .into_iter()
         .filter(|seal| seal.predecessor_refs.is_empty())
         .map(|seal| seal.id)
@@ -2167,12 +2191,14 @@ async fn build_member_history_retention(
     let target_closure = state
         .projections()
         .seal_closure(&target_basis.leaves)
+        .await
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let mut before_base = std::collections::BTreeSet::new();
     for base_leaf in &request.trusted_history_base_basis.leaves {
         let seal = state
             .projections()
             .seal_by_id(base_leaf)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::param_invalid("history bootstrap Seal is unavailable"))?;
         if seal.realm_id != *realm_id {
@@ -2184,6 +2210,7 @@ async fn build_member_history_retention(
             state
                 .projections()
                 .seal_closure(&seal.predecessor_refs)
+                .await
                 .map_err(|error| AppError::param_invalid(error.to_string()))?,
         );
     }
@@ -2203,6 +2230,7 @@ async fn build_member_history_retention(
         let seal = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| AppError::new(ErrorCode::DependencyMissing, "retained Seal missing"))?;
         if seal.realm_id != *realm_id {
@@ -2236,6 +2264,7 @@ async fn build_member_history_retention(
             let event = state
                 .projections()
                 .control_event_by_digest(event_digest)
+                .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
@@ -2307,6 +2336,7 @@ async fn materialize_history_retained_objects(
                 let seal = state
                     .projections()
                     .seal_by_id(seal_id)
+                    .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         AppError::new(
@@ -2320,6 +2350,7 @@ async fn materialize_history_retained_objects(
                 let event = state
                     .projections()
                     .control_event_by_digest(event_digest)
+                    .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         AppError::new(
@@ -2696,21 +2727,15 @@ async fn validate_retained_history_cut(
         &prepared.replay_seals,
         &prepared.replay_events,
         &prepared.checkpoint_dependencies,
-        |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_agent_historical_event_key(
-                event,
-                evidence,
-                dependencies,
-                |trust_request| verify_agent_history_trust(state, trust_request),
-            )
-        },
+        agent_history_key_verifier(state.clone()),
     )
+    .await
     .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
     .checkpoint;
     Ok(checkpoint)
 }
 
-pub(crate) fn verify_agent_history_trust(
+pub(crate) async fn verify_agent_history_trust(
     state: &AppState,
     request: arkret::AgentHistoricalTrustRequest<'_>,
 ) -> Result<(), arkret_wire::WireError> {
@@ -2719,6 +2744,7 @@ pub(crate) fn verify_agent_history_trust(
             let retained = state
                 .projections()
                 .seal_by_id(&seal.id)
+                .await
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
@@ -2736,6 +2762,7 @@ pub(crate) fn verify_agent_history_trust(
             let retained_seal = state
                 .projections()
                 .seal_by_id(&witness.seal_id)
+                .await
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
@@ -2750,6 +2777,7 @@ pub(crate) fn verify_agent_history_trust(
             let digest_suites = state
                 .projections()
                 .seal_digest_suites(&retained_seal)
+                .await
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?;
             let event_digest = arkret_wire::Hash::new(
                 witness
@@ -2764,6 +2792,7 @@ pub(crate) fn verify_agent_history_trust(
             let retained_event = state
                 .projections()
                 .control_event_by_digest(&event_digest)
+                .await
                 .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
                 .ok_or_else(|| {
                     arkret_wire::WireError::Protocol(
@@ -2782,6 +2811,34 @@ pub(crate) fn verify_agent_history_trust(
                 "Agent transparency trust anchor is unavailable".to_owned(),
             ))
         }
+    }
+}
+
+pub(crate) fn agent_history_key_verifier(
+    state: AppState,
+) -> impl for<'a> Fn(
+    &'a arkret_wire::Event,
+    arkret_canonical::DigestSuite,
+    &'a arkret::AuthenticatedSignerResolutionEvidence,
+    &'a [GovernanceDependency],
+) -> arkret::VerifyAgentHistoryKeyFuture<'a>
++ Clone
++ Send
++ 'static {
+    move |event, _digest_suite, evidence, dependencies| {
+        let state = state.clone();
+        Box::pin(async move {
+            arkret::verify_agent_historical_event_key(
+                event,
+                evidence,
+                dependencies,
+                move |request| {
+                    let state = state.clone();
+                    Box::pin(async move { verify_agent_history_trust(&state, request).await })
+                },
+            )
+            .await
+        })
     }
 }
 
@@ -2992,6 +3049,7 @@ async fn build_history_release_attestation(
     let mut current_leaves = state
         .projections()
         .realm_seal_leaves(realm_id)
+        .await
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     current_leaves.sort();
     let seal_basis = arkret_wire::SealBasis {
@@ -3005,6 +3063,7 @@ async fn build_history_release_attestation(
         let seal = state
             .projections()
             .seal_by_id(leaf)
+            .await
             .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
             .ok_or_else(|| {
                 AppError::new(
@@ -3465,15 +3524,18 @@ async fn build_history_recipient_authority_views(
     let mut pcr_leaves = state
         .projections()
         .realm_seal_leaves(&pcr_realm_id)
+        .await
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     pcr_leaves.sort();
     let pcr_closure = state
         .projections()
         .seal_closure(&pcr_leaves)
+        .await
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     let authorize_is_currently_accepted = state
         .projections()
         .seals_covering_event(&authorize_digest)
+        .await
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?
         .iter()
         .any(|seal| pcr_closure.contains(&seal.id));
@@ -3687,6 +3749,7 @@ async fn validate_manifest_current_gate(
     let target_closure = state
         .projections()
         .seal_closure(&target_basis.leaves)
+        .await
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     if request
         .trusted_history_base_basis
@@ -3716,7 +3779,7 @@ async fn validate_manifest_current_gate(
     if history_access == "since_join"
         && let HistoryKeyResponseContent::Manifest(manifest) = &response.content
     {
-        let join_epoch = replay_derived_history_join_epoch(state, request_record)?;
+        let join_epoch = replay_derived_history_join_epoch(state, request_record).await?;
         if manifest
             .chunks
             .iter()

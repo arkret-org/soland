@@ -275,8 +275,9 @@ pub struct HistoryResponseReservationInput {
     pub sent_at: DateTime<Utc>,
 }
 
+#[async_trait(?Send)]
 pub trait HistoryAuthorityViewCas: Send + Sync {
-    fn with_current_release_authority(
+    async fn with_current_release_authority(
         &self,
         attestation: &HistoryReleaseAttestation,
         mutation: &mut dyn FnMut() -> PersistenceResult<()>,

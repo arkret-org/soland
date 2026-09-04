@@ -454,6 +454,7 @@ pub async fn accepted_device_generation_seal_leaves(
     let raw_leaves = state
         .projections()
         .realm_seal_leaves(realm_id)
+        .await
         .map_err(|error| ServiceError::internal(format!("Seal frontier unavailable: {error}")))?;
     if quarantined.is_empty() {
         return Ok(raw_leaves);
@@ -475,6 +476,7 @@ pub async fn accepted_device_generation_seal_leaves(
         let coverage = state
             .projections()
             .seal_leaf_union_proof(std::slice::from_ref(&seal_id))
+            .await
             .map_err(|error| ServiceError::internal(format!("Seal coverage unavailable: {error}")))?
             .into_iter()
             .flat_map(|proof| proof.covered_event_digests)
@@ -486,6 +488,7 @@ pub async fn accepted_device_generation_seal_leaves(
         let seal = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
             .ok_or_else(|| ServiceError::internal(format!("Seal {seal_id} is missing")))?;
         pending.extend(seal.predecessor_refs);
@@ -495,6 +498,7 @@ pub async fn accepted_device_generation_seal_leaves(
         let mut ancestors = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| ServiceError::internal(format!("Seal lookup unavailable: {error}")))?
             .map(|seal| seal.predecessor_refs)
             .unwrap_or_default();
@@ -504,9 +508,15 @@ pub async fn accepted_device_generation_seal_leaves(
                 continue;
             }
             accepted.remove(&ancestor);
-            if let Some(seal) = state.projections().seal_by_id(&ancestor).map_err(|error| {
-                ServiceError::internal(format!("Seal lookup unavailable: {error}"))
-            })? {
+            if let Some(seal) =
+                state
+                    .projections()
+                    .seal_by_id(&ancestor)
+                    .await
+                    .map_err(|error| {
+                        ServiceError::internal(format!("Seal lookup unavailable: {error}"))
+                    })?
+            {
                 ancestors.extend(seal.predecessor_refs);
             }
         }

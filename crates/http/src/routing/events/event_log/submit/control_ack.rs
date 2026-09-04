@@ -78,6 +78,7 @@ pub(super) async fn resolve_control_proposal_ack(
                             &realm_id,
                             std::slice::from_ref(event),
                         )
+                        .await
                         .map_err(|error| {
                             SubmitOneError::new(
                                 StatusCode::SERVICE_UNAVAILABLE,
@@ -153,6 +154,7 @@ pub(super) async fn resolve_control_proposal_ack(
                 let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
                 let (_, authority_set_ref) = worker
                     .current_notary_value_for_events(state, &realm_id, std::slice::from_ref(event))
+                    .await
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::SERVICE_UNAVAILABLE,
@@ -169,7 +171,7 @@ pub(super) async fn resolve_control_proposal_ack(
                     })?;
                 worker
                 .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
-                .map_err(|error| {
+                .await.map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::SERVICE_UNAVAILABLE,
                         "quorum_unreachable",

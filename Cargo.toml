@@ -91,7 +91,7 @@ object_store = "0.14.1"
 opentelemetry = { version = "0.32.0", default-features = false }
 opentelemetry-otlp = { version = "0.32.0", default-features = false }
 opentelemetry_sdk = { version = "0.32.1", default-features = false }
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = ["send_guard"] }
 proptest = "1.11.0"
 rand = "0.10.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["form"] }

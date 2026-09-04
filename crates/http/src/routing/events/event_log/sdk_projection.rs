@@ -618,7 +618,11 @@ async fn is_validated_realm_bootstrap_member(state: &AppState, record: &Accepted
     let Ok(event_digest) = Hash::new(record.canonical_digest.clone()) else {
         return false;
     };
-    let Ok(covering_seals) = state.projections().seals_covering_event(&event_digest) else {
+    let Ok(covering_seals) = state
+        .projections()
+        .seals_covering_event(&event_digest)
+        .await
+    else {
         return false;
     };
     let genesis_seals = covering_seals

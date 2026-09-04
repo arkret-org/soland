@@ -1063,6 +1063,7 @@ pub(super) async fn stored_control_proposal_ack(
     if let Some(ack) = state
         .projections()
         .control_proposal_ack(digest)
+        .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1119,6 +1120,7 @@ pub(super) async fn restore_exact_duplicate_control_event(
     if state
         .projections()
         .control_event_by_digest(&digest)
+        .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1140,6 +1142,7 @@ pub(super) async fn restore_exact_duplicate_control_event(
     state
         .projections()
         .put_pending_control_event(&event, &ingress, digest_suite)
+        .await
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1307,7 +1310,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         // The exemption is based on accepted authority, never on a notary
         // mutation proposed by this Event itself.
         .current_notary_value_for_events(state, &realm_id, &[])
-        .map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
+        .await.map_err(|error| format!("self-principal PCR authority is unavailable: {error}"))?
     else {
         return Ok(SelfPrincipalPcrAuthority::Rejected(
             "Realm has no current accepted notary",
@@ -1389,6 +1392,7 @@ pub(in crate::routing::events::event_log) async fn self_principal_pcr_control_au
         if state
             .projections()
             .seal_by_id(leaf)
+            .await
             .map_err(|error| format!("self-principal PCR Seal basis is unavailable: {error}"))?
             .is_none()
         {
@@ -1463,6 +1467,7 @@ async fn replay_ackless_self_principal_ingress_for_station(
         if state
             .projections()
             .seal_by_id(leaf)
+            .await
             .map_err(|error| format!("Ack-less ingress Seal basis is unavailable: {error}"))?
             .is_none()
         {

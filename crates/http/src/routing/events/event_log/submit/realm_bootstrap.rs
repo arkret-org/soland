@@ -583,6 +583,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         state
             .projections()
             .put_pending_control_event_with_ack(event, ack, parsed.digest_suite)
+            .await
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,

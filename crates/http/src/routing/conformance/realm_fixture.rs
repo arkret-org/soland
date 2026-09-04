@@ -104,6 +104,7 @@ pub async fn install(
             state
                 .projections()
                 .put_pending_control_event_with_ack(event, ack, digest_suite)
+                .await
                 .map_err(|error| AppError::param_invalid(error.to_string()))?;
         }
         let envelope = serde_json::to_value(event)

@@ -72,6 +72,7 @@ async fn retained_federation_submission(
         let snapshot = state
             .projections()
             .control_proposal_snapshot(event_digest)
+            .await
             .map_err(|error| {
                 AppError::internal(format!("Control admission evidence lookup: {error}"))
             })?
@@ -285,6 +286,7 @@ async fn adjudicated_position_siblings(
     let Some(resolution) = state
         .projections()
         .control_event_by_digest(&resolution_digest)
+        .await
         .map_err(|error| AppError::internal(format!("fork resolution Move lookup: {error}")))?
     else {
         return Ok(None);

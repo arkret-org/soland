@@ -422,6 +422,7 @@ async fn issue_intent_leases(
                 let seal = state
                     .projections()
                     .seal_by_id(seal_id)
+                    .await
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         AppError::conflict("authorization lease intent basis is not accepted")

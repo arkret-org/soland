@@ -544,6 +544,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let raw_leaves = state
             .projections()
             .realm_seal_leaves(&realm_id)
+            .await
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -687,6 +688,7 @@ pub(super) async fn submit_identity_anchor_batch(
             state
                 .projections()
                 .put_pending_control_event_with_ack(event, ack, digest_suite)
+                .await
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -1039,17 +1041,17 @@ async fn identical_historical_retry_with_wake(
                     format!("stored anchor Event digest is invalid: {error}"),
                 )
             })?;
-            let indexed_ack =
-                state
-                    .projections()
-                    .control_proposal_ack(&digest)
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!("stored Control Proposal Ack unavailable: {error}"),
-                        )
-                    })?;
+            let indexed_ack = state
+                .projections()
+                .control_proposal_ack(&digest)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("stored Control Proposal Ack unavailable: {error}"),
+                    )
+                })?;
             let durable_ack = if indexed_ack.is_none() {
                 state
                     .event_queries()
@@ -1100,6 +1102,7 @@ async fn identical_historical_retry_with_wake(
                 state
                     .projections()
                     .put_pending_control_event_with_ack(&event, &ack, record.digest_suite)
+                    .await
                     .map_err(|error| {
                         SubmitOneError::new(
                             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1372,6 +1375,7 @@ async fn validate_reanchor_actor_frontier(
         state
             .projections()
             .seal_leaf_union_proof(&basis.leaves)
+            .await
             .map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -1623,6 +1627,7 @@ async fn validate_pre_fence_seal_frontier(
     let view = state
         .projections()
         .effective_seal_view(&leaves, &realm_id)
+        .await
         .map_err(|_| frontier_error())?;
     if view.control_event_set_root != basis.control_event_set_root
         || view.state_root != basis.state_root

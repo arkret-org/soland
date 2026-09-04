@@ -839,6 +839,7 @@ pub(crate) async fn backup_series_erase_command(
     let basis_seal = state
         .projections()
         .seal_by_id(basis_seal_id)
+        .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
             AppError::conflict("backup-series erase lease basis is not accepted")

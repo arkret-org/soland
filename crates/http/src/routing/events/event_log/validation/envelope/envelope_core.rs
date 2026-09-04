@@ -279,7 +279,8 @@ async fn validate_event_envelope_with_ingress(
         realm_id.as_str(),
         object,
         realm_bootstrap_contexts,
-    )?;
+    )
+    .await?;
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
     validate_prelookup_event_identity(event_id.as_str(), &canonical_digest, &canonical_bytes)?;
     let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)
@@ -708,7 +709,8 @@ async fn validate_event_envelope_with_ingress(
         &actor,
         bootstrap_unit_member,
         realm_bootstrap_contexts,
-    )?;
+    )
+    .await?;
     let data_event_cells = derived_data_event_cells(envelope, object, typed_digest_suite)?;
     validate_data_event_capability_refs(
         state,
@@ -719,7 +721,8 @@ async fn validate_event_envelope_with_ingress(
         object,
         &data_event_cells,
         realm_authority_root_authorized,
-    )?;
+    )
+    .await?;
     validate_control_move_seal_basis(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
@@ -848,7 +851,8 @@ async fn validate_event_envelope_with_ingress(
         realm_id.as_str(),
         object,
         realm_bootstrap_contexts,
-    )?;
+    )
+    .await?;
     // The submitting device is request context, not an Event field:
     // `event-envelope.schema.json` declares no `device_id` and closes the object.
     // A service session (applet bridge, federation source signature) authenticates
@@ -1298,7 +1302,7 @@ fn enforce_registered_cell_contract(
 /// every kind whose registry row declares an ordered-log single-target
 /// contract with a value projection, not only one historical carrier family
 /// that first exposed the gap.
-fn enforce_ordered_log_cell_contract(
+async fn enforce_ordered_log_cell_contract(
     state: &AppState,
     envelope: &Value,
     kind: &str,
@@ -1329,7 +1333,8 @@ fn enforce_ordered_log_cell_contract(
         })?;
     // device-lifecycle.md 13.0.1 pins the material digest to the Realm's active
     // digest_algorithm, so the contract cannot be checked without it.
-    let suite_name = event_digest_suite(state, kind, realm_id, object, realm_bootstrap_contexts)?;
+    let suite_name =
+        event_digest_suite(state, kind, realm_id, object, realm_bootstrap_contexts).await?;
     let suite = arkret_canonical::digest_suite(&suite_name)
         .map_err(|_| unsupported_digest_algorithm_error(&suite_name))?;
     // v1 has no producer `effects[]` to compare an append against: the single

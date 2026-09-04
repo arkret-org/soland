@@ -348,7 +348,11 @@ async fn recovery_policy_grant_for_bearer(
     presentation
 }
 
-fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkret_wire::Seal) {
+async fn seed_local_notary_authority(
+    state: &AppState,
+    realm_id: &RealmId,
+    seal: &arkret_wire::Seal,
+) {
     let move_id = seal
         .delta
         .first()
@@ -382,6 +386,7 @@ fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkr
             &seal.id,
             &[(arkret_wire::REALM_NOTARY_CELL.parse().unwrap(), op)],
         )
+        .await
         .unwrap();
 }
 
@@ -841,7 +846,7 @@ pub(crate) async fn post_recovery_policy(
         &principal_core,
         fixture_basis,
     );
-    seed_local_notary_authority(&state, &realm, &basis);
+    seed_local_notary_authority(&state, &realm, &basis).await;
     let prior = state
         .test_persistence()
         .events()
@@ -1003,6 +1008,7 @@ pub(crate) async fn post_recovery_policy(
 
         let leaves = state
             .test_seal_leaves(&realm)
+            .await
             .expect("recovery policy Seal frontier");
         assert_eq!(leaves.len(), 1, "fixture recovery frontier must be linear");
         let mut pending = leaves.clone();
@@ -1010,6 +1016,7 @@ pub(crate) async fn post_recovery_policy(
         while let Some(seal_id) = pending.pop() {
             let seal = state
                 .test_seal(&seal_id)
+                .await
                 .expect("recovery policy predecessor lookup")
                 .expect("recovery policy predecessor");
             if predecessor_state_root.is_none() {
@@ -1029,6 +1036,7 @@ pub(crate) async fn post_recovery_policy(
             &[(event.clone(), arkret_canonical::DigestSuite::Sha256)],
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .expect("recovery policy Seal roots");
         let seal_signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
             state.notary_signing_key().to_bytes(),
@@ -1053,6 +1061,7 @@ pub(crate) async fn post_recovery_policy(
         .unwrap();
         state
             .test_put_seal(&successor, arkret_canonical::DigestSuite::Sha256)
+            .await
             .unwrap();
 
         let (authorization, dpop) =

@@ -802,7 +802,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let seal_basis = if let Some(seal_basis) = disclosed_seal_basis {
         seal_basis.clone()
     } else {
-        let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed) else {
+        let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id_typed).await else {
             return Vec::new();
         };
         leaves.sort();
@@ -814,6 +814,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let Ok(digest_algorithm) = state
         .projections()
         .predecessor_digest_suite(&realm_id_typed, &seal_basis.leaves)
+        .await
     else {
         return Vec::new();
     };
@@ -844,6 +845,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let authority_ids: BTreeSet<String> =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
             .current_notary_value_for_events(state, &realm_id_typed, &[])
+            .await
             .ok()
             .flatten()
             .map(|(profile, _)| match profile {

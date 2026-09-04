@@ -357,9 +357,11 @@ pub async fn seed_realm_basis(
     let basis = realm_basis(state, realm_id, &subject_core, fixture_basis);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .expect("fixture basis Seal");
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .await
         .expect("fixture basis sealed effects");
     seed_realm_genesis_event(state, realm_id, subject).await;
     // Accepting a capability Event is what fills the projected grant index the

@@ -1993,7 +1993,7 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_effective_state_at(
+    pub async fn test_effective_state_at(
         &self,
         leaves: &[arkret_identifiers::SealId],
         realm_id: &arkret_identifiers::RealmId,
@@ -2001,7 +2001,7 @@ impl AppState {
         std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
         arkret_state::state::SealReject,
     > {
-        self.projections.effective_state_at(leaves, realm_id)
+        self.projections.effective_state_at(leaves, realm_id).await
     }
 
     pub(crate) fn hlc(&self) -> &ServiceClock {
@@ -2129,13 +2129,14 @@ impl AppState {
     /// into the runtime authorization index.
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_refresh_grant_from_sealed_cells(
+    pub async fn test_refresh_grant_from_sealed_cells(
         &self,
         realm_id: &arkret_identifiers::RealmId,
         grant_id: &str,
     ) {
         self.projections
             .reload_cells_from_store(realm_id)
+            .await
             .expect("test fixture sealed cells reload");
         let grant = self
             .projections

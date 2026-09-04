@@ -467,6 +467,7 @@ pub(crate) async fn agent_event_seal_head(
     // The service must never mint a substitute Seal with its own key merely
     // because accepted Events exist.
     let Some(seal) = crate::notary::ensure_realm_seal_head(state, &realm_id)
+        .await
         .map_err(|error| AppError::internal(format!("Agent PCR Seal lookup failed: {error}")))?
     else {
         return Ok(None);

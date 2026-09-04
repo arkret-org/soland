@@ -5276,6 +5276,7 @@ pub async fn assert_device_revocation_seal_settlement_contract(
     stores
         .control_events
         .put_pending_with_ingress(&event, &ingress, arkret_canonical::DigestSuite::Sha256)
+        .await
         .expect("admit pending Control Move");
     let outcome = stores
         .unit_of_work
@@ -5298,6 +5299,7 @@ pub async fn assert_device_revocation_seal_settlement_contract(
     stores
         .control_events
         .mark_sealed(&digest, &seal)
+        .await
         .expect("seal the accepted revoke");
 
     match stores

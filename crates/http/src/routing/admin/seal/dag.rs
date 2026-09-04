@@ -40,6 +40,7 @@ pub(crate) async fn admin_get_seal_dag(
     let leaf_ids = state
         .projections()
         .realm_seal_leaves(&realm)
+        .await
         .map_err(|error| {
             AppError::new(
                 ErrorCode::InternalError,
@@ -52,7 +53,7 @@ pub(crate) async fn admin_get_seal_dag(
     let mut covered_event_digests = std::collections::BTreeSet::new();
     let mut latest_state_root = None;
     for leaf_id in &leaf_ids {
-        let Ok(Some(seal)) = state.projections().seal_by_id(leaf_id) else {
+        let Ok(Some(seal)) = state.projections().seal_by_id(leaf_id).await else {
             continue;
         };
         let signers = match &seal.notary_signature {

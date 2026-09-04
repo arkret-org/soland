@@ -131,6 +131,7 @@ async fn apply_authoritative_event_seal_path(
         let digest_suites = state
             .projections()
             .seal_digest_suites(seal)
+            .await
             .map_err(proof_state_error)?;
         seal.validate_id(digest_suites.seal_digest_suite)
             .map_err(|error| {
@@ -149,6 +150,7 @@ async fn apply_authoritative_event_seal_path(
         if let Some(existing) = state
             .projections()
             .seal_by_id(&seal.id)
+            .await
             .map_err(|error| proof_state_error(format!("read Event Seal: {error}")))?
         {
             if existing != *seal {
@@ -162,6 +164,7 @@ async fn apply_authoritative_event_seal_path(
         let mut leaves = state
             .projections()
             .realm_seal_leaves(realm_id)
+            .await
             .map_err(|error| proof_state_error(format!("read Event Seal frontier: {error}")))?;
         leaves.sort();
         if seal.predecessor_refs != leaves {
@@ -175,6 +178,7 @@ async fn apply_authoritative_event_seal_path(
             state
                 .projections()
                 .predecessor_covered_events(&leaves)
+                .await
                 .map_err(|error| {
                     proof_state_error(format!("read Event Seal predecessor coverage: {error}"))
                 })?
@@ -236,6 +240,7 @@ async fn apply_authoritative_event_seal_path(
                 .push(op.clone());
         }
         let target_state = join_control_state_batches(state, realm_id, &ops_by_cell, &target)
+            .await
             .map_err(|error| {
                 proof_state_error(format!("resolve authoritative Event Seal state: {error}"))
             })?;
@@ -248,24 +253,25 @@ async fn apply_authoritative_event_seal_path(
                 seal.state_root, expected_state_root
             )));
         }
-        let expected_notary_seq = leaves
-            .iter()
-            .map(|leaf| {
-                state
-                    .projections()
-                    .seal_by_id(leaf)
-                    .map_err(|error| proof_state_error(format!("read Seal predecessor: {error}")))?
-                    .ok_or_else(|| proof_state_error("Event Seal predecessor is missing"))
-                    .map(|predecessor| predecessor.notary_seq)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .map_or(Ok(0), |sequence| {
-                sequence
-                    .checked_add(1)
-                    .ok_or_else(|| proof_state_error("Event Seal notary_seq overflow"))
-            })?;
+        let mut predecessor_sequences = Vec::with_capacity(leaves.len());
+        for leaf in &leaves {
+            let predecessor = state
+                .projections()
+                .seal_by_id(leaf)
+                .await
+                .map_err(|error| proof_state_error(format!("read Seal predecessor: {error}")))?
+                .ok_or_else(|| proof_state_error("Event Seal predecessor is missing"))?;
+            predecessor_sequences.push(predecessor.notary_seq);
+        }
+        let expected_notary_seq =
+            predecessor_sequences
+                .into_iter()
+                .max()
+                .map_or(Ok(0), |sequence| {
+                    sequence
+                        .checked_add(1)
+                        .ok_or_else(|| proof_state_error("Event Seal notary_seq overflow"))
+                })?;
         if seal.notary_seq != expected_notary_seq {
             return Err(proof_state_error(
                 "authoritative Event Seal notary_seq does not follow its predecessors",
@@ -314,19 +320,24 @@ async fn apply_authoritative_event_seal_path(
             .filter(|(_, issued)| delta.contains(&issued.op.move_id))
             .cloned()
             .collect::<Vec<_>>();
-        match state.projections().commit_event_seal_if_frontier(
-            seal,
-            state
-                .projections()
-                .seal_digest_suites(seal)
-                .map_err(proof_state_error)?
-                .seal_digest_suite,
-            &leaves,
-            &new_ops,
-            &target,
-            None,
-            &[],
-        ) {
+        match state
+            .projections()
+            .commit_event_seal_if_frontier(
+                seal,
+                state
+                    .projections()
+                    .seal_digest_suites(seal)
+                    .await
+                    .map_err(proof_state_error)?
+                    .seal_digest_suite,
+                &leaves,
+                &new_ops,
+                &target,
+                None,
+                &[],
+            )
+            .await
+        {
             Ok(true) => {}
             Ok(false) => {
                 return Err(proof_state_error(
@@ -387,7 +398,7 @@ async fn materialize_realm_control_with_transported_seals(
                     serde_json::from_value::<arkret_wire::ActorId>(executed_by.clone()).is_ok()
                 })
     }) {
-        return materialize_agent_realm_control(state, realm_id, &realm_records);
+        return materialize_agent_realm_control(state, realm_id, &realm_records).await;
     }
     let generation_fence = first_generation_event_seal_requirement(state, &realm_records).await?;
     let principal_control_actor = realm_records
@@ -440,6 +451,7 @@ async fn materialize_realm_control_with_transported_seals(
         state
             .projections()
             .seal_leaf_union_proof(&requirement.accepted_frontier_refs)
+            .await
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,
@@ -481,15 +493,21 @@ async fn materialize_realm_control_with_transported_seals(
     let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
     let mut event_ops = Vec::new();
     let mut sealed_move_ids = BTreeSet::new();
-    for cell in state.projections().realm_cells(realm_id).map_err(|error| {
-        AppError::new(
-            ErrorCode::FrontierUnavailable,
-            format!("read sealed Realm cells for governance replay: {error}"),
-        )
-    })? {
+    for cell in state
+        .projections()
+        .realm_cells(realm_id)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("read sealed Realm cells for governance replay: {error}"),
+            )
+        })?
+    {
         let ops = state
             .projections()
             .sealed_ops_for_cell(realm_id, &cell)
+            .await
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,
@@ -712,16 +730,18 @@ async fn materialize_realm_control_with_transported_seals(
         }
     }
     if covered.is_empty() {
-        if let Some(head) =
-            crate::notary::ensure_realm_seal_head(state, realm_id).map_err(|error| {
+        if let Some(head) = crate::notary::ensure_realm_seal_head(state, realm_id)
+            .await
+            .map_err(|error| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,
                     format!("accepted Realm Seal frontier is unavailable: {error}"),
                 )
             })?
         {
-            let seal_view =
-                crate::notary::materialized_event_seal_view(state, head).map_err(|error| {
+            let seal_view = crate::notary::materialized_event_seal_view(state, head)
+                .await
+                .map_err(|error| {
                     AppError::new(
                         ErrorCode::FrontierUnavailable,
                         format!("accepted Realm Seal path is unavailable: {error}"),
@@ -756,7 +776,7 @@ async fn materialize_realm_control_with_transported_seals(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered)?;
+    let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
     let state_root = compute_state_root(&joined, digest_suite).map_err(|error| {
         AppError::new(
@@ -793,7 +813,7 @@ async fn materialize_realm_control_with_transported_seals(
         device_generation_seal_required,
         generation_fence.as_ref(),
     );
-    let seal_view = seal_view.map_err(|error| {
+    let seal_view = seal_view.await.map_err(|error| {
         AppError::new(
             ErrorCode::FrontierUnavailable,
             format!("accepted Event Seal materialization failed: {error}"),
@@ -803,7 +823,7 @@ async fn materialize_realm_control_with_transported_seals(
     Ok(MaterializedRealmControl { seal_view })
 }
 
-fn materialize_agent_realm_control(
+async fn materialize_agent_realm_control(
     state: &AppState,
     realm_id: &RealmId,
     records: &[soland_services::events::AcceptedEvent],
@@ -914,6 +934,7 @@ fn materialize_agent_realm_control(
         true,
         None,
     )
+    .await
     .map_err(|error| {
         AppError::new(
             ErrorCode::FrontierUnavailable,
@@ -957,15 +978,9 @@ pub(in crate::routing) async fn materialize_governance_frontier(
         &checkpoint,
         &group_genesis_binding,
         &leaves,
-        |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_agent_historical_event_key(
-                event,
-                evidence,
-                dependencies,
-                |trust_request| verify_agent_history_trust(state, trust_request),
-            )
-        },
+        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
     )
+    .await
     .map_err(map_governance_frontier_error)
 }
 
@@ -985,6 +1000,7 @@ async fn load_governance_checkpoint(
         let seal = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| {
                 AppError::new(
@@ -1009,6 +1025,7 @@ async fn load_governance_checkpoint(
             let event = state
                 .projections()
                 .control_event_by_digest(digest)
+                .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
@@ -1032,15 +1049,9 @@ async fn load_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_agent_historical_event_key(
-                event,
-                evidence,
-                dependencies,
-                |trust_request| verify_agent_history_trust(state, trust_request),
-            )
-        },
+        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
     )
+    .await
     .map(|verified| verified.checkpoint)
     .map_err(map_governance_frontier_error)
 }
@@ -1062,6 +1073,7 @@ pub(crate) async fn load_verified_governance_checkpoint(
         let seal = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| AppError::internal(error.to_string()))?
             .ok_or_else(|| {
                 AppError::new(
@@ -1084,6 +1096,7 @@ pub(crate) async fn load_verified_governance_checkpoint(
             let event = state
                 .projections()
                 .control_event_by_digest(digest)
+                .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(
@@ -1107,15 +1120,9 @@ pub(crate) async fn load_verified_governance_checkpoint(
         &seals.into_values().collect::<Vec<_>>(),
         &events.into_values().collect::<Vec<_>>(),
         &dependencies,
-        |event, _digest_suite, evidence, dependencies| {
-            arkret::verify_agent_historical_event_key(
-                event,
-                evidence,
-                dependencies,
-                |trust_request| verify_agent_history_trust(state, trust_request),
-            )
-        },
+        crate::routing::governance_history::agent_history_key_verifier(state.clone()),
     )
+    .await
     .map(|verified| verified.checkpoint)
     .map_err(map_governance_frontier_error)
 }
@@ -1359,81 +1366,6 @@ fn group_genesis_binding(
         .validate()
         .map_err(|error| AppError::new(ErrorCode::FrontierUnavailable, error.to_string()))?;
     Ok(binding)
-}
-
-fn verify_agent_history_trust(
-    state: &AppState,
-    request: arkret::AgentHistoricalTrustRequest<'_>,
-) -> Result<(), arkret_wire::WireError> {
-    match request {
-        arkret::AgentHistoricalTrustRequest::PcrSeal(seal) => {
-            let retained = state
-                .projections()
-                .seal_by_id(&seal.id)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
-                .ok_or_else(|| {
-                    arkret_wire::WireError::Protocol(
-                        "Agent PCR Seal is not locally accepted".to_owned(),
-                    )
-                })?;
-            if retained != *seal {
-                return Err(arkret_wire::WireError::Protocol(
-                    "Agent PCR Seal differs from locally accepted bytes".to_owned(),
-                ));
-            }
-            Ok(())
-        }
-        arkret::AgentHistoricalTrustRequest::LifecycleWitness(witness) => {
-            let retained_seal = state
-                .projections()
-                .seal_by_id(&witness.seal_id)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
-                .ok_or_else(|| {
-                    arkret_wire::WireError::Protocol(
-                        "Agent lifecycle Seal is not locally accepted".to_owned(),
-                    )
-                })?;
-            if retained_seal != witness.seal || retained_seal.id != witness.seal_id {
-                return Err(arkret_wire::WireError::Protocol(
-                    "Agent lifecycle witness differs from locally accepted history".to_owned(),
-                ));
-            }
-            let digest_suites = state
-                .projections()
-                .seal_digest_suites(&retained_seal)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?;
-            let event_digest = Hash::new(
-                witness
-                    .accepted_status_event
-                    .event_digest_with_digest_suite(digest_suites.event_digest_suite)?,
-            )?;
-            if !retained_seal.delta.contains(&event_digest) {
-                return Err(arkret_wire::WireError::Protocol(
-                    "Agent lifecycle Event is not covered by its accepted Seal".to_owned(),
-                ));
-            }
-            let retained_event = state
-                .projections()
-                .control_event_by_digest(&event_digest)
-                .map_err(|error| arkret_wire::WireError::Protocol(error.to_string()))?
-                .ok_or_else(|| {
-                    arkret_wire::WireError::Protocol(
-                        "Agent lifecycle Event is not locally accepted".to_owned(),
-                    )
-                })?;
-            if retained_event != witness.accepted_status_event {
-                return Err(arkret_wire::WireError::Protocol(
-                    "Agent lifecycle Event differs from locally accepted history".to_owned(),
-                ));
-            }
-            Ok(())
-        }
-        arkret::AgentHistoricalTrustRequest::Transparency(_) => {
-            Err(arkret_wire::WireError::Protocol(
-                "Agent transparency trust anchor is unavailable".to_owned(),
-            ))
-        }
-    }
 }
 
 fn map_governance_frontier_error(error: arkret_wire::WireError) -> AppError {
@@ -1680,7 +1612,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
     Ok(requirement)
 }
 
-fn join_control_state_batches(
+async fn join_control_state_batches(
     state: &AppState,
     realm_id: &RealmId,
     ops_by_cell: &BTreeMap<CellRef, Vec<IssuedOp>>,
@@ -1691,6 +1623,7 @@ fn join_control_state_batches(
         let persisted = state
             .projections()
             .sealed_op_batches_for_cell(realm_id, cell)
+            .await
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,

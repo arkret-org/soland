@@ -518,24 +518,15 @@ async fn sample_federation_outbox_gauges(state: &AppState) {
 
 async fn sample_control_seal_schedule_gauges(state: &AppState) {
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let sample_state = state.clone();
     let stats = tokio::time::timeout(
         Duration::from_secs(5),
-        tokio::task::spawn_blocking(move || {
-            sample_state
-                .projections()
-                .control_seal_schedule_stats(now_ms)
-        }),
+        state.projections().control_seal_schedule_stats(now_ms),
     )
     .await;
     let stats = match stats {
-        Ok(Ok(Ok(stats))) => stats,
-        Ok(Ok(Err(error))) => {
-            tracing::warn!(%error, "control-seal schedule gauges unavailable");
-            return;
-        }
+        Ok(Ok(stats)) => stats,
         Ok(Err(error)) => {
-            tracing::warn!(%error, "control-seal schedule gauge worker panicked");
+            tracing::warn!(%error, "control-seal schedule gauges unavailable");
             return;
         }
         Err(_) => {

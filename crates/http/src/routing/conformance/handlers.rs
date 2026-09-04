@@ -433,12 +433,14 @@ pub async fn realm_basis(
     let has_existing_notary = !state
         .projections()
         .sealed_ops_for_cell(&realm_id, &notary_cell)
+        .await
         .map_err(|error| AppError::internal(format!("read current notary state: {error}")))?
         .is_empty();
     if has_existing_notary {
         let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
         let (notary, _) = worker
             .current_notary_value_for_events(state, &realm_id, &[])
+            .await
             .map_err(|error| AppError::internal(format!("resolve current notary value: {error}")))?
             .ok_or_else(|| AppError::conflict("existing notary state is not materializable"))?;
         let local_method =
@@ -464,10 +466,12 @@ pub async fn realm_basis(
     state
         .projections()
         .conformance_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
     state
         .projections()
         .conformance_append_sealed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
+        .await
         .map_err(|error| {
             AppError::internal(format!("store conformance sealed basis state: {error}"))
         })?;

@@ -679,6 +679,7 @@ async fn prepare<K: arkret_event_draft::EventSpec>(
     .await?;
     let accepted_seal = if state.projections().is_conformance_fixture_realm(&realm_id) {
         crate::notary::ensure_realm_seal_head(state, &realm_id)
+            .await
             .map_err(|error| {
                 AppError::new(
                     ErrorCode::FrontierUnavailable,

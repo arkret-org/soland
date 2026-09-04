@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::future::Future;
 use std::sync::Arc;
 
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
@@ -16,6 +15,7 @@ use arkret_wire::{
     ControlProposalAck, ControlProposalDecision, ControlProposalDecisionPolicy, Event, LatticeOp,
     Seal,
 };
+use async_trait::async_trait;
 use diesel::sql_types::{Array, BigInt, Binary, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
@@ -41,12 +41,13 @@ pub struct SealEffectiveStateCheckpoint {
     pub state: BTreeMap<CellRef, CellState>,
 }
 
+#[async_trait]
 pub trait EventSealCommitStore: Send + Sync {
     #[allow(
         clippy::too_many_arguments,
         reason = "the transaction boundary keeps every frontier precondition and durable write explicit"
     )]
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -57,12 +58,15 @@ pub trait EventSealCommitStore: Send + Sync {
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 
-    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>>;
 
     /// Return the immutable, receiver-verified effective state frozen at one
     /// accepted Seal. A missing row permits legacy replay; a malformed row is
     /// an error and must never silently fall back to a closure scan.
-    fn effective_state_checkpoint(
+    async fn effective_state_checkpoint(
         &self,
         seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>>;
@@ -93,7 +97,7 @@ pub fn build_state_resolution_stores(
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
-            lock: parking_lot::Mutex::new(()),
+            lock: tokio::sync::Mutex::new(()),
             data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store,
@@ -123,7 +127,7 @@ struct PgEventSealCommitStore {
 }
 
 struct MemoryEventSealCommitStore {
-    lock: parking_lot::Mutex<()>,
+    lock: tokio::sync::Mutex<()>,
     data_event_leaf_manifests:
         parking_lot::Mutex<std::collections::BTreeMap<SealId, BTreeSet<Hash>>>,
     effective_state_checkpoints: parking_lot::Mutex<BTreeMap<SealId, SealEffectiveStateCheckpoint>>,
@@ -512,34 +516,10 @@ async fn mark_control_event_sealed_in_transaction(
     Ok(())
 }
 
-fn run_blocking<F, T>(future: F) -> StoreResult<T>
-where
-    F: Future<Output = StoreResult<T>> + Send + 'static,
-    T: Send + 'static,
-{
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
-            return tokio::task::block_in_place(|| handle.block_on(future));
-        }
-        Ok(_) => {
-            return std::thread::spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map_err(|error| StoreError::Backend(format!("build runtime: {error}")))?
-                    .block_on(future)
-            })
-            .join()
-            .map_err(|_| StoreError::Backend("state store worker panicked".to_owned()))?;
-        }
-        Err(_) => {}
-    }
-
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| StoreError::Backend(format!("build runtime: {error}")))?
-        .block_on(future)
+macro_rules! await_store {
+    ($future:expr) => {
+        $future.await
+    };
 }
 
 fn serde_to_store(error: serde_json::Error) -> StoreError {
@@ -817,7 +797,7 @@ fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     }))
 }
 
-fn effective_state_with_new_ops(
+async fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellRegistry,
     realm_id: &RealmId,
@@ -825,14 +805,16 @@ fn effective_state_with_new_ops(
     new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<std::collections::BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
-        .list_cells(realm_id)?
+        .list_cells(realm_id)
+        .await?
         .into_iter()
         .collect::<BTreeSet<_>>();
     cell_refs.extend(new_ops.iter().map(|(cell, _)| cell.clone()));
     let mut joined = std::collections::BTreeMap::new();
     for cell in cell_refs {
         let mut batches = cells
-            .sealed_op_batches_for_cell(realm_id, &cell)?
+            .sealed_op_batches_for_cell(realm_id, &cell)
+            .await?
             .into_iter()
             .filter_map(|(_, ops)| {
                 let ops = ops
@@ -883,8 +865,9 @@ fn covering_seal_ids(ids: Vec<String>) -> StoreResult<Vec<SealId>> {
         .collect()
 }
 
+#[async_trait]
 impl ControlEventStore for PgControlEventStore {
-    fn put_pending_with_ingress(
+    async fn put_pending_with_ingress(
         &self,
         event: &Event,
         ingress: &ControlProposalIngress,
@@ -916,7 +899,7 @@ impl ControlEventStore for PgControlEventStore {
             .transpose()
             .map_err(serde_to_store)?;
         let ingress_class = serde_json::to_value(ingress.class()).map_err(serde_to_store)?;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_realm(conn, &realm_id).await?;
@@ -965,7 +948,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn mark_sealed(&self, event_digest: &Hash, seal: &Seal) -> StoreResult<()> {
+    async fn mark_sealed(&self, event_digest: &Hash, seal: &Seal) -> StoreResult<()> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;
@@ -992,7 +975,7 @@ impl ControlEventStore for PgControlEventStore {
                 ))
             })? as i64;
         let sealed_at = seal.sealed_at;
-        let outcome = run_blocking(async move {
+        let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &seal_id).await?;
@@ -1059,10 +1042,10 @@ impl ControlEventStore for PgControlEventStore {
         Ok(())
     }
 
-    fn get(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
+    async fn get(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "SELECT event_json AS value FROM state_control_events WHERE event_digest = $1",
@@ -1077,13 +1060,13 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn digest_suite(
+    async fn digest_suite(
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "SELECT digest_suite AS value FROM state_control_events WHERE event_digest = $1",
@@ -1101,10 +1084,10 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn covering_seals(&self, event_digest: &Hash) -> StoreResult<Vec<SealId>> {
+    async fn covering_seals(&self, event_digest: &Hash) -> StoreResult<Vec<SealId>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT b.seal_id AS value FROM state_seal_control_events b \
@@ -1120,10 +1103,13 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn control_proposal_ack(&self, event_digest: &Hash) -> StoreResult<Option<ControlProposalAck>> {
+    async fn control_proposal_ack(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<ControlProposalAck>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
                 "SELECT control_proposal_ack AS value \
@@ -1140,13 +1126,13 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn control_proposal_snapshot(
+    async fn control_proposal_snapshot(
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<ControlProposalSnapshot>> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
                 "SELECT c.digest_suite, c.event_json, c.control_proposal_ack, c.ingress_class, c.proposal_decisions, \
@@ -1190,7 +1176,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn record_proposal_decision(
+    async fn record_proposal_decision(
         &self,
         event_digest: &Hash,
         decision: &ControlProposalDecision,
@@ -1199,7 +1185,7 @@ impl ControlEventStore for PgControlEventStore {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
         let decision = decision.clone();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 let row = sql_query(
@@ -1262,7 +1248,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn list_pending_records(
+    async fn list_pending_records(
         &self,
         realm_id: &RealmId,
         limit: usize,
@@ -1270,7 +1256,7 @@ impl ControlEventStore for PgControlEventStore {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let limit = limit as i64;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT digest_suite, event_json, control_proposal_ack, proposal_decisions, ingress_class \
@@ -1306,7 +1292,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn claim_due_control_seal_realms(
+    async fn claim_due_control_seal_realms(
         &self,
         holder: &str,
         now_ms: i64,
@@ -1320,7 +1306,7 @@ impl ControlEventStore for PgControlEventStore {
         }
         let pool = self.pool.clone();
         let holder = holder.to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             control_seal_schedule::claim_due(&mut conn, &holder, now_ms, claim_until_ms, limit)
                 .await
@@ -1328,7 +1314,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn complete_control_seal_attempt(
+    async fn complete_control_seal_attempt(
         &self,
         claim: &ControlSealScheduleClaim,
         outcome: &ControlSealAttemptOutcome,
@@ -1337,7 +1323,7 @@ impl ControlEventStore for PgControlEventStore {
         let pool = self.pool.clone();
         let claim = claim.clone();
         let outcome = outcome.clone();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             control_seal_schedule::complete_attempt(&mut conn, &claim, &outcome, observed_at_ms)
                 .await
@@ -1345,13 +1331,13 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn repair_control_seal_schedule(
+    async fn repair_control_seal_schedule(
         &self,
         now_ms: i64,
         limit: usize,
     ) -> StoreResult<ControlSealScheduleRepairStats> {
         let pool = self.pool.clone();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             control_seal_schedule::repair(&mut conn, now_ms, limit)
                 .await
@@ -1359,12 +1345,12 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn control_seal_schedule_stats(
+    async fn control_seal_schedule_stats(
         &self,
         now_ms: i64,
     ) -> StoreResult<arkret_state::state::ControlSealScheduleStats> {
         let pool = self.pool.clone();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             control_seal_schedule::stats(&mut conn, now_ms)
                 .await
@@ -1372,7 +1358,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn list_pending_for_notary(
+    async fn list_pending_for_notary(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
@@ -1382,7 +1368,7 @@ impl ControlEventStore for PgControlEventStore {
         let realm_id = realm_id.as_str().to_owned();
         let cursor = cursor.map(|digest| digest.as_str().to_owned());
         let limit = limit as i64;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT event_json AS value \
@@ -1413,7 +1399,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn list_sealed(
+    async fn list_sealed(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
@@ -1423,7 +1409,7 @@ impl ControlEventStore for PgControlEventStore {
         let realm_id = realm_id.as_str().to_owned();
         let cursor = cursor.map(|digest| digest.as_str().to_owned());
         let limit = limit as i64;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
@@ -1475,7 +1461,7 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
-    fn list_retained_faults(
+    async fn list_retained_faults(
         &self,
         realm_id: &RealmId,
         limit: usize,
@@ -1483,7 +1469,7 @@ impl ControlEventStore for PgControlEventStore {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let limit = limit as i64;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT c.digest_suite, c.event_json, array_agg(b.seal_id ORDER BY b.seal_id) AS covering_seal_ids, \
@@ -1533,8 +1519,9 @@ impl ControlEventStore for PgControlEventStore {
     }
 }
 
+#[async_trait]
 impl SealStore for PgSealStore {
-    fn try_claim_signing_lease(
+    async fn try_claim_signing_lease(
         &self,
         realm_id: &RealmId,
         signer_slot: &str,
@@ -1551,7 +1538,7 @@ impl SealStore for PgSealStore {
         let realm_id = realm_id.as_str().to_owned();
         let signer_slot = signer_slot.to_owned();
         let holder = holder.to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
                 "INSERT INTO state_seal_signing_leases \
@@ -1583,7 +1570,7 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn release_signing_lease(
+    async fn release_signing_lease(
         &self,
         realm_id: &RealmId,
         signer_slot: &str,
@@ -1597,7 +1584,7 @@ impl SealStore for PgSealStore {
         let realm_id = realm_id.as_str().to_owned();
         let signer_slot = signer_slot.to_owned();
         let holder = holder.to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "UPDATE state_seal_signing_leases SET lease_until_ms = $5 \
@@ -1616,7 +1603,11 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn put(&self, seal: &Seal, digest_suite: arkret_canonical::DigestSuite) -> StoreResult<()> {
+    async fn put(
+        &self,
+        seal: &Seal,
+        digest_suite: arkret_canonical::DigestSuite,
+    ) -> StoreResult<()> {
         seal.validate_id(digest_suite)
             .map_err(|error| StoreError::Conflict(error.to_string()))?;
         let pool = self.pool.clone();
@@ -1633,7 +1624,7 @@ impl SealStore for PgSealStore {
         let error_id = id.clone();
         let realm_id = seal.realm_id.as_str().to_owned();
         let is_genesis = seal.predecessor_refs.is_empty();
-        let outcome = run_blocking(async move {
+        let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &id).await?;
@@ -1671,7 +1662,7 @@ impl SealStore for PgSealStore {
         Ok(())
     }
 
-    fn put_if_frontier(
+    async fn put_if_frontier(
         &self,
         seal: &Seal,
         expected_leaves: &[SealId],
@@ -1697,7 +1688,7 @@ impl SealStore for PgSealStore {
             .iter()
             .map(|leaf| leaf.as_str().to_owned())
             .collect::<BTreeSet<_>>();
-        let outcome = run_blocking(async move {
+        let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &id).await?;
@@ -1762,10 +1753,10 @@ impl SealStore for PgSealStore {
         }
     }
 
-    fn get(&self, id: &SealId) -> StoreResult<Option<Seal>> {
+    async fn get(&self, id: &SealId) -> StoreResult<Option<Seal>> {
         let pool = self.pool.clone();
         let id = id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "SELECT s.seal_json AS value FROM state_seals s \
@@ -1783,10 +1774,13 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn digest_suite(&self, id: &SealId) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
+    async fn digest_suite(
+        &self,
+        id: &SealId,
+    ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
         let pool = self.pool.clone();
         let id = id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
                 "SELECT s.digest_suite AS value FROM state_seals s \
@@ -1807,10 +1801,10 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn list_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+    async fn list_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             if realm_has_seal_collision(&mut conn, &realm_id)
                 .await
@@ -1847,13 +1841,13 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn predecessors_known(&self, refs: &[SealId]) -> StoreResult<bool> {
+    async fn predecessors_known(&self, refs: &[SealId]) -> StoreResult<bool> {
         if refs.is_empty() {
             return Ok(true);
         }
         let pool = self.pool.clone();
         let refs: Vec<String> = refs.iter().map(|id| id.as_str().to_owned()).collect();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             for id in refs {
                 let count = sql_query(
@@ -1874,10 +1868,10 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn genesis(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
+    async fn genesis(&self, realm_id: &RealmId) -> StoreResult<Option<SealId>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "SELECT id AS value \
@@ -1900,11 +1894,11 @@ impl SealStore for PgSealStore {
         })
     }
 
-    fn successors(&self, realm_id: &RealmId, seal_id: &SealId) -> StoreResult<Vec<SealId>> {
+    async fn successors(&self, realm_id: &RealmId, seal_id: &SealId) -> StoreResult<Vec<SealId>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let seal_id = seal_id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT id AS value \
@@ -1928,8 +1922,9 @@ impl SealStore for PgSealStore {
     }
 }
 
+#[async_trait]
 impl EventSealCommitStore for PgEventSealCommitStore {
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -2022,7 +2017,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 ))
             })
             .collect::<StoreResult<Vec<_>>>()?;
-        let outcome = run_blocking(async move {
+        let outcome = await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
                 lock_seal_identity(conn, &seal_id).await?;
@@ -2336,10 +2331,13 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         }
     }
 
-    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>> {
         let pool = self.pool.clone();
         let seal_id = seal_id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query("SELECT leaf_digests FROM state_seal_data_event_manifests WHERE seal_id = $1")
                 .bind::<Text, _>(&seal_id)
@@ -2360,13 +2358,13 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         })
     }
 
-    fn effective_state_checkpoint(
+    async fn effective_state_checkpoint(
         &self,
         seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
         let pool = self.pool.clone();
         let seal_id = seal_id.clone();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let row = sql_query(
                 "SELECT realm_id, covered_event_digests, covered_seal_ids, state_json \
@@ -2408,8 +2406,9 @@ impl EventSealCommitStore for PgEventSealCommitStore {
     }
 }
 
+#[async_trait]
 impl EventSealCommitStore for MemoryEventSealCommitStore {
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -2419,11 +2418,11 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         data_event_leaf_manifest: Option<&BTreeSet<Hash>>,
         _governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
-        let _guard = self.lock.lock();
+        let _guard = self.lock.lock().await;
         if let Some(manifest) = data_event_leaf_manifest {
             validate_data_event_leaf_manifest(seal, digest_suite, manifest)?;
         }
-        if let Some(existing) = self.seal_store.get(&seal.id)? {
+        if let Some(existing) = self.seal_store.get(&seal.id).await? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
             let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
@@ -2464,7 +2463,8 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         }
         let actual = self
             .seal_store
-            .list_leaves(&seal.realm_id)?
+            .list_leaves(&seal.realm_id)
+            .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
         let expected = expected_store_frontier
@@ -2497,7 +2497,8 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             &seal.realm_id,
             covered,
             new_ops,
-        )?;
+        )
+        .await?;
         let state_root = compute_state_root(&post_state, digest_suite)
             .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
@@ -2507,10 +2508,12 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             )));
         }
         self.cell_store
-            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)?;
+            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)
+            .await?;
         match self
             .seal_store
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
+            .await
         {
             Ok(true) => {
                 if let Some(manifest) = data_event_leaf_manifest {
@@ -2534,31 +2537,39 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                 // Human PCR create+authorize pair becomes final when its
                 // rooted bootstrap Seal is accepted.
                 for digest in &seal.delta {
-                    self.control_event_store.mark_sealed(digest, seal)?;
+                    self.control_event_store.mark_sealed(digest, seal).await?;
                 }
                 Ok(true)
             }
             Ok(false) => {
-                self.cell_store.rollback_seal(&seal.realm_id, &seal.id)?;
+                self.cell_store
+                    .rollback_seal(&seal.realm_id, &seal.id)
+                    .await?;
                 Ok(false)
             }
             Err(error) => {
-                let _ = self.cell_store.rollback_seal(&seal.realm_id, &seal.id);
+                let _ = self
+                    .cell_store
+                    .rollback_seal(&seal.realm_id, &seal.id)
+                    .await;
                 Err(error)
             }
         }
     }
 
-    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
-        let _guard = self.lock.lock();
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>> {
+        let _guard = self.lock.lock().await;
         Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
     }
 
-    fn effective_state_checkpoint(
+    async fn effective_state_checkpoint(
         &self,
         seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
-        let _guard = self.lock.lock();
+        let _guard = self.lock.lock().await;
         Ok(self
             .effective_state_checkpoints
             .lock()
@@ -2567,11 +2578,12 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
     }
 }
 
+#[async_trait]
 impl CellStore for PgCellStore {
-    fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
+    async fn list_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT DISTINCT op.cell_id AS value \
@@ -2594,7 +2606,7 @@ impl CellStore for PgCellStore {
         })
     }
 
-    fn sealed_ops_for_cell(
+    async fn sealed_ops_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
@@ -2602,7 +2614,7 @@ impl CellStore for PgCellStore {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let cell = cell.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT op.op_json \
@@ -2624,7 +2636,7 @@ impl CellStore for PgCellStore {
         })
     }
 
-    fn sealed_op_batches_for_cell(
+    async fn sealed_op_batches_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
@@ -2632,7 +2644,7 @@ impl CellStore for PgCellStore {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let cell = cell.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
                 "SELECT op.seal_id, op.op_json \
@@ -2670,7 +2682,7 @@ impl CellStore for PgCellStore {
     // reports a miss and drops writes instead of maintaining a table no read
     // path can reach. `None` makes the runtime recompute from the sealed op
     // log, which is always correct.
-    fn cached_state(
+    async fn cached_state(
         &self,
         _realm_id: &RealmId,
         _cell: &CellRef,
@@ -2679,7 +2691,7 @@ impl CellStore for PgCellStore {
         Ok(None)
     }
 
-    fn put_cached_state(
+    async fn put_cached_state(
         &self,
         _realm_id: &RealmId,
         _cell: &CellRef,
@@ -2689,7 +2701,7 @@ impl CellStore for PgCellStore {
         Ok(())
     }
 
-    fn append_sealed_effects(
+    async fn append_sealed_effects(
         &self,
         realm_id: &RealmId,
         seal: &SealId,
@@ -2711,7 +2723,7 @@ impl CellStore for PgCellStore {
                 ))
             })
             .collect::<StoreResult<_>>()?;
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             for (index, cell, move_id, op_json) in rows {
                 sql_query(
@@ -2734,11 +2746,11 @@ impl CellStore for PgCellStore {
         })
     }
 
-    fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
+    async fn rollback_seal(&self, realm_id: &RealmId, seal: &SealId) -> StoreResult<()> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let seal = seal.as_str().to_owned();
-        run_blocking(async move {
+        await_store!(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
                 "DELETE FROM state_cell_ops op WHERE realm_id = $1 AND seal_id = $2 \
@@ -3068,7 +3080,7 @@ mod event_seal_commit_tests {
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
         );
         let committer = Arc::new(MemoryEventSealCommitStore {
-            lock: parking_lot::Mutex::new(()),
+            lock: tokio::sync::Mutex::new(()),
             data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store: control_event_store.clone(),
@@ -3242,7 +3254,7 @@ mod event_seal_commit_tests {
             soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
         );
         let committer = MemoryEventSealCommitStore {
-            lock: parking_lot::Mutex::new(()),
+            lock: tokio::sync::Mutex::new(()),
             data_event_leaf_manifests: parking_lot::Mutex::new(Default::default()),
             effective_state_checkpoints: parking_lot::Mutex::new(Default::default()),
             control_event_store: control_event_store.clone(),

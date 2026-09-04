@@ -2150,6 +2150,7 @@ async fn accept_federated_seal_prerequisite(
         if state
             .projections()
             .seal_by_id(root)
+            .await
             .map_err(|error| {
                 AppError::internal(format!("read transported Seal prerequisite: {error}"))
             })?
@@ -2202,6 +2203,7 @@ async fn accept_federated_seal_prerequisite(
             if state
                 .projections()
                 .seal_by_id(predecessor)
+                .await
                 .map_err(|error| {
                     AppError::internal(format!(
                         "read transported Seal predecessor prerequisite: {error}"
@@ -2268,6 +2270,7 @@ async fn accept_federated_seal_prerequisite(
         if state
             .projections()
             .seal_by_id(&root)
+            .await
             .map_err(|error| {
                 AppError::internal(format!(
                     "read projected transported Seal prerequisite: {error}"

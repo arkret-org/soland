@@ -37,6 +37,7 @@ async fn seal_accepted_invite_create(
         .expect("accepted invite registered projection");
     let mut post_state = state
         .test_effective_state_at(&predecessor_basis.leaves, &event.realm_id)
+        .await
         .expect("invite predecessor state");
     let mut ops_by_cell: std::collections::BTreeMap<
         arkret_identifiers::CellRef,
@@ -96,6 +97,7 @@ async fn seal_accepted_invite_create(
         &[(event.clone(), record.digest_suite)],
         arkret_canonical::DigestSuite::Sha256,
     )
+    .await
     .expect("accepted invite successor Seal roots");
     let seal = arkret_wire::Seal::sign_single_with_roots(
         event.realm_id.clone(),
@@ -111,9 +113,11 @@ async fn seal_accepted_invite_create(
     .expect("accepted invite successor Seal");
     state
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .expect("persist accepted invite successor Seal");
     state
         .test_append_sealed_effects(&event.realm_id, &seal.id, &sealed_ops)
+        .await
         .expect("persist accepted invite sealed effects");
 }
 

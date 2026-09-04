@@ -1197,6 +1197,7 @@ async fn update_profile(
     let covering_seal_found = state
         .projections()
         .seal_covering_event(&event_digest)
+        .await
         .map_err(|error| {
             profile_frontier_unavailable(format!(
                 "account profile Event covering Seal lookup failed: {error}"
@@ -1365,6 +1366,7 @@ async fn accepted_account_profile_in_realm(
     let leaves = state
         .projections()
         .realm_seal_leaves(pcr_realm_id)
+        .await
         .map_err(|error| {
             profile_frontier_unavailable(format!(
                 "accepted profile Seal frontier is unavailable: {error}"
@@ -1378,6 +1380,7 @@ async fn accepted_account_profile_in_realm(
     let effective_state = state
         .projections()
         .effective_state_at(&leaves, pcr_realm_id)
+        .await
         .map_err(|error| {
             profile_frontier_unavailable(format!(
                 "accepted profile effective state is unavailable: {error}"
@@ -1491,6 +1494,7 @@ async fn resolved_actor_profile_evidence(
         let Some(accepted_seal) = state
             .projections()
             .seal_covering_event(&event_digest)
+            .await
             .map_err(|error| {
                 AppError::internal(format!("Actor Profile Seal lookup failed: {error}"))
             })?
@@ -1673,6 +1677,7 @@ async fn read_principal_resolution_audit(
     let accepted_seal = state
         .projections()
         .seal_covering_event(&current_digest)
+        .await
         .map_err(|error| AppError::internal(format!("resolution Seal lookup failed: {error}")))?
         .ok_or_else(|| AppError::not_found("principal resolution audit unavailable"))?;
 
@@ -1887,6 +1892,7 @@ async fn direct_conversation_resolve(
             .map_err(|error| AppError::internal(format!("direct Realm id invalid: {error}")))?;
         let notary_available = crate::notary::NotaryWorker::for_service(state.service_id().clone())
             .current_notary_value_for_events(state, &realm_id, &[])
+            .await
             .ok()
             .flatten()
             .is_some();

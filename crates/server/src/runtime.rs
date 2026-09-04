@@ -86,8 +86,9 @@ struct RuntimeSettingsPersistence {
 struct RuntimeDatabaseHealth(Db);
 struct RuntimeEventSealCommitter(Arc<dyn soland_storage_postgres::EventSealCommitStore>);
 
+#[async_trait::async_trait]
 impl EventSealCommitPort for RuntimeEventSealCommitter {
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &arkret_wire::Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -100,25 +101,27 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
         data_event_leaf_manifest: Option<&BTreeSet<arkret_wire::Hash>>,
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> arkret_state::state::StoreResult<bool> {
-        self.0.commit_if_frontier(
-            seal,
-            digest_suite,
-            expected_store_frontier,
-            new_ops,
-            covered,
-            data_event_leaf_manifest,
-            governance_dependencies,
-        )
+        self.0
+            .commit_if_frontier(
+                seal,
+                digest_suite,
+                expected_store_frontier,
+                new_ops,
+                covered,
+                data_event_leaf_manifest,
+                governance_dependencies,
+            )
+            .await
     }
 
-    fn data_event_leaf_manifest(
+    async fn data_event_leaf_manifest(
         &self,
         seal_id: &arkret_wire::SealId,
     ) -> arkret_state::state::StoreResult<Option<BTreeSet<arkret_wire::Hash>>> {
-        self.0.data_event_leaf_manifest(seal_id)
+        self.0.data_event_leaf_manifest(seal_id).await
     }
 
-    fn effective_state_checkpoint(
+    async fn effective_state_checkpoint(
         &self,
         seal_id: &arkret_wire::SealId,
     ) -> arkret_state::state::StoreResult<
@@ -126,6 +129,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
     > {
         self.0
             .effective_state_checkpoint(seal_id)
+            .await
             .map(|checkpoint| {
                 checkpoint.map(|checkpoint| {
                     soland_services::projection::SealEffectiveStateCheckpoint {

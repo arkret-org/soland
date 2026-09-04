@@ -324,7 +324,7 @@ async fn issue_authorization_leases(
 
 /// Persist one accepted bootstrap Seal together with the exact direct cell
 /// effects committed by its closed Event unit.
-pub(crate) fn seed_seal_with_direct_event_effects(
+pub(crate) async fn seed_seal_with_direct_event_effects(
     state: &AppState,
     seal: &arkret_wire::Seal,
     events: &[&arkret_wire::Event],
@@ -377,9 +377,11 @@ pub(crate) fn seed_seal_with_direct_event_effects(
     );
     state
         .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .expect("bootstrap Seal");
     state
         .test_append_sealed_effects(&seal.realm_id, &seal.id, &ops)
+        .await
         .expect("bootstrap sealed effects");
 }
 
@@ -900,6 +902,7 @@ pub(crate) async fn seed_test_realm(
         &[],
         arkret_canonical::DigestSuite::Sha256,
     )
+    .await
     .unwrap();
     let bootstrap_seal = arkret_wire::Seal::sign_single_with_roots(
         RealmId::new(realm_id.clone()).unwrap(),
@@ -919,6 +922,7 @@ pub(crate) async fn seed_test_realm(
     .unwrap();
     state
         .test_put_seal(&bootstrap_seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     let seal_basis = bootstrap_seal.seal_basis();
     let owner_core = arkret_wire::project_did_to_core_id(
@@ -2050,9 +2054,11 @@ pub(crate) async fn seed_test_realm_basis_seal_for_station(
     let basis = test_realm_basis_for_station(state, realm_id, subject, station_id);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .await
         .unwrap();
     for grant in &basis.grants {
         if let Some(grant) =
@@ -2139,9 +2145,11 @@ pub(crate) async fn seed_test_realm_basis_seal(
     let basis = test_realm_basis(state, realm_id, subject);
     state
         .test_put_seal(&basis.seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .await
         .unwrap();
     // Keep the synthetic setup honest: the head Seal must reconstruct the
     // grant cells it claims to cover through the same historical-state path
@@ -2150,6 +2158,7 @@ pub(crate) async fn seed_test_realm_basis_seal(
     // valid governance basis.
     let historical_state = state
         .test_effective_state_at(std::slice::from_ref(&basis.seal.id), &realm)
+        .await
         .expect("fixture basis historical state");
     let subject_core = arkret_wire::project_did_to_core_id(
         &Did::new(subject.to_owned()).expect("fixture basis subject DID"),
@@ -2255,7 +2264,7 @@ pub(crate) async fn seed_signal_basis_seal(
 ) -> arkret_wire::SealId {
     seed_realm_genesis_event(state, realm_id, subject).await;
     let (seal, ops) = signal_basis_with_joined_members(state, realm_id, subject);
-    install_signal_basis(state, &seal, &ops);
+    install_signal_basis(state, &seal, &ops).await;
     seed_signal_mls_basis(
         state,
         &arkret_wire::ScopeRef::Realm {
@@ -2274,9 +2283,9 @@ pub(crate) async fn seed_shared_signal_basis_seal(
 ) -> arkret_wire::SealId {
     seed_realm_genesis_event(authority, realm_id, subject).await;
     let (seal, ops) = signal_basis_with_joined_members(authority, realm_id, subject);
-    install_signal_basis(authority, &seal, &ops);
+    install_signal_basis(authority, &seal, &ops).await;
     for replica in replicas {
-        install_signal_basis(replica, &seal, &ops);
+        install_signal_basis(replica, &seal, &ops).await;
     }
     let scope = arkret_wire::ScopeRef::Realm {
         realm_id: RealmId::new(realm_id).unwrap(),
@@ -2441,19 +2450,23 @@ fn append_signal_membership_op(
     ));
 }
 
-fn install_signal_basis(state: &AppState, seal: &arkret_wire::Seal, ops: &[SignalBasisOp]) {
+async fn install_signal_basis(state: &AppState, seal: &arkret_wire::Seal, ops: &[SignalBasisOp]) {
     state
         .test_put_seal(seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     state
         .test_append_sealed_effects(&seal.realm_id, &seal.id, ops)
+        .await
         .unwrap();
     for (cell, _) in ops {
         let Ok(cell_id) = arkret_wire::cell::CellId::from_ref(cell) else {
             continue;
         };
         if cell_id.component() == arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1 {
-            state.test_refresh_grant_from_sealed_cells(&seal.realm_id, cell_id.subject());
+            state
+                .test_refresh_grant_from_sealed_cells(&seal.realm_id, cell_id.subject())
+                .await;
         }
     }
 }

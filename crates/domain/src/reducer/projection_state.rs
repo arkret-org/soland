@@ -930,15 +930,15 @@ impl ProjectionState {
     /// sealed view after `apply_seal`. The durable-Event path may stage the
     /// same cell families before sealing, but correctness after finalization
     /// comes from this reload.
-    pub fn reload_cells_from_store(
+    pub async fn reload_cells_from_store(
         &mut self,
         realm_id: &RealmId,
         cell_store: &dyn CellStore,
         cell_registry: &dyn CellRegistry,
     ) -> Result<(), StoreError> {
         let mut resolved_cells = Vec::new();
-        for cell in cell_store.list_cells(realm_id)? {
-            let ops = cell_store.sealed_ops_for_cell(realm_id, &cell)?;
+        for cell in cell_store.list_cells(realm_id).await? {
+            let ops = cell_store.sealed_ops_for_cell(realm_id, &cell).await?;
             let binding = cell_registry
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;

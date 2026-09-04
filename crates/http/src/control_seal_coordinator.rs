@@ -55,14 +55,11 @@ pub fn spawn(state: AppState) -> tokio::task::JoinHandle<()> {
 async fn run_reconciliation_pass(state: &AppState, holder: &str, repair_due: bool) {
     if repair_due {
         let repair_now_ms = chrono::Utc::now().timestamp_millis();
-        let repair_state = state.clone();
         let repair = tokio::time::timeout(
             SCHEDULE_STORE_TIMEOUT,
-            run_blocking_store_stage(move || {
-                repair_state
-                    .projections()
-                    .repair_control_seal_schedule(repair_now_ms, MAX_SCHEDULE_REPAIRS_PER_PASS)
-            }),
+            state
+                .projections()
+                .repair_control_seal_schedule(repair_now_ms, MAX_SCHEDULE_REPAIRS_PER_PASS),
         )
         .await;
         match repair {
@@ -108,18 +105,15 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str, repair_due: boo
         let free_slots = (MAX_CONCURRENT_REALM_PASSES - passes.len())
             .min(MAX_REALM_ATTEMPTS_PER_PASS - attempts);
         let now_ms = chrono::Utc::now().timestamp_millis();
-        let claim_state = state.clone();
         let claim_holder = holder.to_owned();
         let claims = tokio::time::timeout(
             SCHEDULE_STORE_TIMEOUT,
-            run_blocking_store_stage(move || {
-                claim_state.projections().claim_due_control_seal_realms(
-                    &claim_holder,
-                    now_ms,
-                    now_ms.saturating_add(SCHEDULE_CLAIM_DURATION_MS),
-                    free_slots,
-                )
-            }),
+            state.projections().claim_due_control_seal_realms(
+                &claim_holder,
+                now_ms,
+                now_ms.saturating_add(SCHEDULE_CLAIM_DURATION_MS),
+                free_slots,
+            ),
         )
         .await;
         let claims = match claims {
@@ -184,24 +178,15 @@ async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClai
         }
     };
     let observed_at_ms = chrono::Utc::now().timestamp_millis();
-    let completion_state = state.clone();
-    let completion_claim = claim.clone();
-    let completion_outcome = outcome.clone();
     let completion = tokio::time::timeout(
         SCHEDULE_COMPLETION_TIMEOUT,
-        tokio::task::spawn_blocking(move || {
-            completion_state
-                .projections()
-                .complete_control_seal_attempt(
-                    &completion_claim,
-                    &completion_outcome,
-                    observed_at_ms,
-                )
-        }),
+        state
+            .projections()
+            .complete_control_seal_attempt(&claim, &outcome, observed_at_ms),
     )
     .await;
     match completion {
-        Ok(Ok(Ok(completion))) => {
+        Ok(Ok(completion)) => {
             crate::metrics::record_control_seal_attempt(outcome.as_str(), completion.as_str());
             tracing::debug!(
                 realm_id = %claim.realm_id,
@@ -212,7 +197,7 @@ async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClai
                 "control-seal schedule attempt completed"
             );
         }
-        Ok(Ok(Err(error))) => {
+        Ok(Err(error)) => {
             crate::metrics::record_control_seal_attempt(outcome.as_str(), "store_error");
             tracing::error!(
                 %error,
@@ -221,17 +206,6 @@ async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClai
                 fence = claim.fence,
                 outcome = outcome.as_str(),
                 "control-seal schedule completion failed"
-            );
-        }
-        Ok(Err(error)) => {
-            crate::metrics::record_control_seal_attempt(outcome.as_str(), "worker_panicked");
-            tracing::error!(
-                %error,
-                realm_id = %claim.realm_id,
-                generation = claim.generation,
-                fence = claim.fence,
-                outcome = outcome.as_str(),
-                "control-seal schedule completion worker panicked"
             );
         }
         Err(_) => {
@@ -246,18 +220,6 @@ async fn run_claimed_realm_pass(state: &AppState, claim: ControlSealScheduleClai
             );
         }
     }
-}
-
-async fn run_blocking_store_stage<T, E, F>(operation: F) -> Result<T, String>
-where
-    T: Send + 'static,
-    E: std::fmt::Display + Send + 'static,
-    F: FnOnce() -> Result<T, E> + Send + 'static,
-{
-    tokio::task::spawn_blocking(operation)
-        .await
-        .map_err(|error| format!("storage worker panicked: {error}"))?
-        .map_err(|error| error.to_string())
 }
 
 async fn join_next_realm_pass(passes: &mut JoinSet<()>) {
@@ -402,17 +364,10 @@ async fn run_realm_pass(
     realm_id: &RealmId,
     holder: &str,
 ) -> ControlSealAttemptOutcome {
-    let slot_state = state.clone();
-    let slot_realm_id = realm_id.clone();
     let service_id = state.service_id().clone();
-    let slot = match run_blocking_store_stage(move || {
-        NotaryWorker::for_service(service_id).signing_lease_slot(
-            &slot_state,
-            &slot_realm_id,
-            MAX_CONTROL_MOVES_PER_REALM,
-        )
-    })
-    .await
+    let slot = match NotaryWorker::for_service(service_id)
+        .signing_lease_slot(state, realm_id, MAX_CONTROL_MOVES_PER_REALM)
+        .await
     {
         Ok(SigningLeaseSlotResolution::Ready(slot)) => slot,
         Ok(SigningLeaseSlotResolution::NoPendingMoves) => {
@@ -438,14 +393,10 @@ async fn run_realm_pass(
             return ControlSealAttemptOutcome::SignerSlotUnavailable;
         }
     };
-    let pending_state = state.clone();
-    let pending_realm_id = realm_id.clone();
-    let pending = match run_blocking_store_stage(move || {
-        pending_state
-            .projections()
-            .pending_control_events_for_notary(&pending_realm_id, None, MAX_CONTROL_MOVES_PER_REALM)
-    })
-    .await
+    let pending = match state
+        .projections()
+        .pending_control_events_for_notary(realm_id, None, MAX_CONTROL_MOVES_PER_REALM)
+        .await
     {
         Ok(pending) => pending,
         Err(error) => {
@@ -465,20 +416,17 @@ async fn run_realm_pass(
         }
     };
     let now_ms = chrono::Utc::now().timestamp_millis();
-    let lease_state = state.clone();
-    let lease_realm_id = realm_id.clone();
-    let lease_slot = slot.clone();
     let lease_holder = holder.to_owned();
-    let fence = match run_blocking_store_stage(move || {
-        lease_state.projections().try_claim_control_signing_lease(
-            &lease_realm_id,
-            &lease_slot,
+    let fence = match state
+        .projections()
+        .try_claim_control_signing_lease(
+            realm_id,
+            &slot,
             &lease_holder,
             now_ms,
             now_ms.saturating_add(SIGNING_LEASE_DURATION_MS),
         )
-    })
-    .await
+        .await
     {
         Ok(Some(fence)) => fence,
         Ok(None) => return ControlSealAttemptOutcome::SigningLeaseBusy,
@@ -525,16 +473,8 @@ async fn run_realm_pass(
                 fence,
                 "control-seal signing pass failed"
             );
-            let defer_state = state.clone();
-            let defer_realm_id = realm_id.clone();
-            if let Err(defer_error) = run_blocking_store_stage(move || {
-                defer_due_proposals_after_failed_signing(
-                    &defer_state,
-                    &defer_realm_id,
-                    proposal_policy,
-                )
-            })
-            .await
+            if let Err(defer_error) =
+                defer_due_proposals_after_failed_signing(state, realm_id, proposal_policy).await
             {
                 tracing::error!(
                     %defer_error,
@@ -545,19 +485,11 @@ async fn run_realm_pass(
             ControlSealAttemptOutcome::SigningFailed
         }
     };
-    let release_state = state.clone();
-    let release_realm_id = realm_id.clone();
-    let release_slot = slot.clone();
     let release_holder = holder.to_owned();
-    match run_blocking_store_stage(move || {
-        release_state.projections().release_control_signing_lease(
-            &release_realm_id,
-            &release_slot,
-            &release_holder,
-            fence,
-        )
-    })
-    .await
+    match state
+        .projections()
+        .release_control_signing_lease(realm_id, &slot, &release_holder, fence)
+        .await
     {
         Ok(true) => {}
         Ok(false) => tracing::warn!(
@@ -577,7 +509,7 @@ async fn run_realm_pass(
     attempt_outcome
 }
 
-fn defer_due_proposals_after_failed_signing(
+async fn defer_due_proposals_after_failed_signing(
     state: &AppState,
     realm_id: &RealmId,
     policy: arkret_wire::ControlProposalDecisionPolicy,
@@ -591,6 +523,7 @@ fn defer_due_proposals_after_failed_signing(
     let records = state
         .projections()
         .pending_control_records(realm_id, MAX_CONTROL_MOVES_PER_REALM)
+        .await
         .map_err(|error| error.to_string())?;
     for record in records {
         let Some(ack) = record.control_proposal_ack.as_ref() else {
@@ -632,6 +565,7 @@ fn defer_due_proposals_after_failed_signing(
         }
         let (notary, _) = crate::notary::NotaryWorker::for_service(state.service_id().clone())
             .current_notary_value_for_events(state, realm_id, std::slice::from_ref(&record.event))
+            .await
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "current proposal notary profile is unavailable".to_owned())?;
         let decision = crate::control_proposal::sign_control_proposal_defer(
@@ -654,27 +588,8 @@ fn defer_due_proposals_after_failed_signing(
         state
             .projections()
             .record_control_proposal_decision(&digest, &decision, policy)
+            .await
             .map_err(|error| error.to_string())?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::run_blocking_store_stage;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn blocking_store_stage_remains_subject_to_an_outer_deadline() {
-        let started = std::time::Instant::now();
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(25),
-            run_blocking_store_stage(|| {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                Ok::<_, String>(())
-            }),
-        )
-        .await;
-        assert!(result.is_err());
-        assert!(started.elapsed() < std::time::Duration::from_millis(200));
-    }
 }

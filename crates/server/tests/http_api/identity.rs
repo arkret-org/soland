@@ -30,6 +30,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     .await;
     let basis_seal = state
         .test_seal(&basis_seal_id)
+        .await
         .unwrap()
         .expect("fixture PCR basis Seal");
     let genesis_record = state
@@ -161,6 +162,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
         ],
         arkret_canonical::DigestSuite::Sha256,
     )
+    .await
     .unwrap();
     let audit_seal = arkret_wire::Seal::sign_single_with_roots(
         pcr_realm_id.clone(),
@@ -177,6 +179,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
     state
         .test_projections()
         .test_put_seal(&audit_seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     state
         .test_projections()
@@ -193,6 +196,7 @@ async fn seed_closed_pcr_audit_evidence(state: &AppState, principal_did: &str) {
             ),
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
 
     let fixture_hash =

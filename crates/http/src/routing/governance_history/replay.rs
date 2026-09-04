@@ -4,7 +4,7 @@ use arkret_state::direct_traversal::{HistoryJoinEpochSubject, derive_history_joi
 
 use super::*;
 
-pub(super) fn replay_derived_history_join_epoch(
+pub(super) async fn replay_derived_history_join_epoch(
     state: &AppState,
     request_record: &soland_storage::HistoryRequestRecord,
 ) -> Result<u64, AppError> {
@@ -36,6 +36,7 @@ pub(super) fn replay_derived_history_join_epoch(
             state
                 .projections()
                 .control_event_by_digest(event_digest)
+                .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     AppError::new(

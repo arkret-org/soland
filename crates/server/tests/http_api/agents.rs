@@ -456,7 +456,8 @@ pub(crate) async fn seed_active_controller_device_generation(
         &bootstrap_seal,
         &[&bootstrap, &authorize],
         &genesis_projector,
-    );
+    )
+    .await;
     let bootstrap_notary: arkret_wire::NotaryValue =
         serde_json::from_value(bootstrap.payload["object"]["notary"].clone())
             .expect("bootstrap notary");
@@ -491,6 +492,7 @@ pub(crate) async fn seed_active_controller_device_generation(
                 &arkret_state::state::store::ControlProposalIngress::AckRequired(ack),
                 arkret_canonical::DigestSuite::Sha256,
             )
+            .await
             .expect("bootstrap sealed Control Event");
     }
     let authorize_event_id = authorize.event_id.clone();
@@ -1082,6 +1084,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
 
     let predecessor = state
         .test_seal(frontier.sole_leaf().expect("single-signer Realm frontier"))
+        .await
         .unwrap()
         .expect("controller PCR predecessor Seal");
     let mut controller_events = state
@@ -1212,6 +1215,7 @@ async fn provision_agent_sdk_commit_attempt_inner(
             &receiptless_controller_seal,
             durable_controller_events,
         )
+        .await
         .unwrap();
     let receiptless_error = arkret::verify_seal_availability_dependencies_default(
         &receiptless_controller_seal,

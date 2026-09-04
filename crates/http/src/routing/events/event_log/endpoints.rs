@@ -53,6 +53,7 @@ pub(crate) async fn load_realm_seal_frontier(
     realm_id: &RealmId,
 ) -> Result<arkret_models_collaboration::event_sync::RealmSealFrontierView, AppError> {
     let head = crate::notary::ensure_realm_seal_head(state, realm_id)
+        .await
         .map_err(|error| AppError::internal(format!("seal head unavailable: {error}")))?;
     let stats = state
         .event_queries()
@@ -111,6 +112,7 @@ pub(crate) async fn frontier_control_governance_health(
     let pending = state
         .projections()
         .pending_control_records(realm_id, limit)
+        .await
         .map_err(|error| {
             AppError::internal(format!(
                 "control governance pending rows unavailable: {error}"
@@ -119,6 +121,7 @@ pub(crate) async fn frontier_control_governance_health(
     let sealed = state
         .projections()
         .retained_control_proposal_faults(realm_id, limit)
+        .await
         .map_err(|error| {
             AppError::internal(format!(
                 "control governance sealed rows unavailable: {error}"
@@ -173,6 +176,7 @@ pub(crate) async fn frontier_control_governance_health(
             policy,
             &ackless_authorized,
         )
+        .await
         .map_err(|error| {
             let diagnostic = if ackless_rejections.is_empty() {
                 String::new()
@@ -418,6 +422,7 @@ async fn issue_seal_availability_receipts(
     let mut current = state
         .projections()
         .realm_seal_leaves(&request.realm_id)
+        .await
         .map_err(|error| AppError::internal(format!("Seal frontier unavailable: {error}")))?;
     current.sort();
     if current != request.predecessor_refs {
@@ -430,6 +435,7 @@ async fn issue_seal_availability_receipts(
     let predecessor_covered = state
         .projections()
         .predecessor_covered_events(&request.predecessor_refs)
+        .await
         .map_err(|error| {
             AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
                 .with_status(StatusCode::CONFLICT)
@@ -461,6 +467,7 @@ async fn issue_seal_availability_receipts(
     let predecessor_state = state
         .projections()
         .effective_state_at(&request.predecessor_refs, &request.realm_id)
+        .await
         .map_err(|error| {
             AppError::new(ErrorCode::FrontierUnavailable, error.to_string())
                 .with_status(StatusCode::CONFLICT)
@@ -472,6 +479,7 @@ async fn issue_seal_availability_receipts(
             &request.predecessor_refs,
             &request.event_digests,
         )
+        .await
         .map_err(|error| {
             AppError::new(ErrorCode::StateMismatch, error.to_string())
                 .with_status(StatusCode::CONFLICT)
@@ -731,6 +739,7 @@ async fn submit_event_seal(
     state
         .projections()
         .reload_cells_from_store(&seal.realm_id)
+        .await
         .map_err(|error| {
             AppError::internal(format!(
                 "refresh projected cells after principal Seal acceptance: {error}"
@@ -1666,6 +1675,7 @@ async fn seals_frontier(
             state
                 .projections()
                 .control_governance_health(&seal.realm_id, chrono::Utc::now(), governance_policy)
+                .await
                 .map_err(|error| {
                     AppError::internal(format!("control governance health unavailable: {error}"))
                 })?,

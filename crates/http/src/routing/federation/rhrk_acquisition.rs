@@ -427,20 +427,9 @@ impl RhrkAcquisitionWorker {
             &cut_seals,
             &event_values,
             &dependency_values,
-            |event, _digest_suite, evidence, dependencies| {
-                arkret::verify_agent_historical_event_key(
-                    event,
-                    evidence,
-                    dependencies,
-                    |request| {
-                        super::super::governance_history::verify_agent_history_trust(
-                            &self.state,
-                            request,
-                        )
-                    },
-                )
-            },
+            super::super::governance_history::agent_history_key_verifier(self.state.clone()),
         )
+        .await
         .map_err(|error| format!("checkpoint_replay:{error}"))?;
         Ok(VerifiedClosure {
             seals: seal_values,

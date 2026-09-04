@@ -432,6 +432,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             &create_ack,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     state
         .test_persistence()
@@ -463,6 +464,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             &admin_grant_ack,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
     let mut delta = vec![move_id, admin_grant_move_id];
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -498,6 +500,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     .unwrap();
     state
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .unwrap();
     state
         .test_append_sealed_effects(
@@ -505,8 +508,11 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             &seal.id,
             &[(notary_cell, notary_op), (admin_grant_cell, admin_grant_op)],
         )
+        .await
         .unwrap();
-    state.test_refresh_grant_from_sealed_cells(&realm, admin_grant_id.as_str());
+    state
+        .test_refresh_grant_from_sealed_cells(&realm, admin_grant_id.as_str())
+        .await;
     soland_test_support::cba_basis::seed_realm_genesis_event(
         state,
         demo_realm_id(),
@@ -2192,6 +2198,7 @@ async fn seed_applet_message_grant_basis(
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
     let predecessors = state
         .test_seal_leaves(&realm)
+        .await
         .expect("fixture reads the current accepted Realm Seal frontier");
     assert!(
         !predecessors.is_empty(),
@@ -2322,6 +2329,7 @@ async fn applet_bridge_register_ghost_route_revoke_scenario() {
     );
     let pre_revoke_message_seals = state
         .test_seal_leaves(&arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap())
+        .await
         .unwrap();
     let [pre_revoke_message_seal] = pre_revoke_message_seals.as_slice() else {
         panic!(
@@ -2783,12 +2791,14 @@ async fn signed_install_events(
     );
     let seal_id = state
         .test_seal_leaves(&realm_id)
+        .await
         .unwrap()
         .into_iter()
         .next()
         .expect("extension test Realm has an accepted Seal");
     let seal_basis = state
         .test_seal(&seal_id)
+        .await
         .unwrap()
         .expect("extension test Seal is readable")
         .seal_basis();
@@ -3105,12 +3115,14 @@ async fn admit_applet_managed_member(
     };
     let seal_id = state
         .test_seal_leaves(&realm_id)
+        .await
         .unwrap()
         .into_iter()
         .next()
         .expect("extension test Realm has an accepted Seal");
     let seal_basis = state
         .test_seal(&seal_id)
+        .await
         .unwrap()
         .expect("extension test Seal is readable")
         .seal_basis();
@@ -3235,12 +3247,14 @@ async fn signed_revoke_events(
     );
     let seal_id = state
         .test_seal_leaves(&realm_id)
+        .await
         .unwrap()
         .into_iter()
         .next()
         .expect("extension test Realm has an accepted Seal");
     let seal_basis = state
         .test_seal(&seal_id)
+        .await
         .unwrap()
         .expect("extension test Seal is readable")
         .seal_basis();

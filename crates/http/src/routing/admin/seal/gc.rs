@@ -38,7 +38,7 @@ pub(crate) async fn admin_list_gc_candidates(
         AppError::new(ErrorCode::ParamInvalid, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let candidates = crate::gc::scan_gc_candidates(state, &realm);
+    let candidates = crate::gc::scan_gc_candidates(state, &realm).await;
     let total = candidates.len();
     json_ok(GcCandidatesOutcome {
         realm_id: realm_id_str,

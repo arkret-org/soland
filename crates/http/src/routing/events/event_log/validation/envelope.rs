@@ -14,19 +14,11 @@ const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
     arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
 ];
 
-fn select_event_digest_algorithm(
-    projected: Option<String>,
-    staged_bootstrap: Option<String>,
-    reload_projected: impl FnOnce() -> Option<String>,
-) -> Option<String> {
-    projected.or(staged_bootstrap).or_else(reload_projected)
-}
-
 pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {
     canonical::canonical_sha256(value).ok()
 }
 
-pub(super) fn event_digest_suite(
+pub(super) async fn event_digest_suite(
     state: &AppState,
     kind: &str,
     realm_id: &str,
@@ -50,18 +42,25 @@ pub(super) fn event_digest_suite(
         // reload. Besides doing needless synchronous storage work, reloading
         // here can wait on the global history-view CAS lock held by another
         // concurrent bootstrap.
-        select_event_digest_algorithm(projected, staged_bootstrap, || {
-            // apply_accepted_seal persists the cell ops before the HTTP
-            // projection cache is refreshed. A concurrent next Event may
-            // therefore observe the accepted frontier during this narrow
-            // cache window. Reload the durable cells once instead of
-            // reporting a false dependency_missing for an already
-            // materialized Realm.
-            let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
-            projections.reload_cells_from_store(&typed_realm_id).ok()?;
-            projections.snapshot().realm_digest_algorithm(realm_id)
-        })
-        .ok_or_else(|| {
+        let projected = match projected.or(staged_bootstrap) {
+            Some(projected) => Some(projected),
+            None => {
+                // apply_accepted_seal persists the cell ops before the HTTP
+                // projection cache is refreshed. A concurrent next Event may
+                // therefore observe the accepted frontier during this narrow
+                // cache window. Reload the durable cells once instead of
+                // reporting a false dependency_missing for an already
+                // materialized Realm.
+                let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok();
+                if let Some(typed_realm_id) = typed_realm_id {
+                    let _ = projections.reload_cells_from_store(&typed_realm_id).await;
+                    projections.snapshot().realm_digest_algorithm(realm_id)
+                } else {
+                    None
+                }
+            }
+        };
+        projected.ok_or_else(|| {
             event_validation_error(
                 StatusCode::CONFLICT,
                 arkret_wire::ErrorCode::DEPENDENCY_MISSING,

@@ -38,6 +38,7 @@ use soland_domain::reducer::{
 use soland_storage::{
     HistoryAuthorityViewCas, PersistenceError, PersistenceResult, PersistenceStore,
 };
+use tokio::sync::Mutex as AsyncMutex;
 
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
@@ -96,12 +97,13 @@ pub struct SealEffectiveStateCheckpoint {
     pub state: BTreeMap<CellRef, CellState>,
 }
 
+#[async_trait::async_trait]
 pub trait EventSealCommitPort: Send + Sync {
     #[allow(
         clippy::too_many_arguments,
         reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
     )]
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -112,9 +114,12 @@ pub trait EventSealCommitPort: Send + Sync {
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool>;
 
-    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>>;
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>>;
 
-    fn effective_state_checkpoint(
+    async fn effective_state_checkpoint(
         &self,
         _seal_id: &SealId,
     ) -> StoreResult<Option<SealEffectiveStateCheckpoint>> {
@@ -163,7 +168,7 @@ pub struct ProjectionService {
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
-    control_decision_commit_lock: Arc<Mutex<()>>,
+    control_decision_commit_lock: Arc<AsyncMutex<()>>,
     history_authority_view_cas_lock: Arc<Mutex<()>>,
     clock: Arc<ServiceClock>,
 }
@@ -390,13 +395,11 @@ impl ProjectionService {
     /// Acquire the process-wide history-authority CAS guard without parking a
     /// Tokio worker thread.
     ///
-    /// Several guarded operations bridge the synchronous Arkret state-store
-    /// traits to async PostgreSQL I/O. Under concurrent Realm sealing, a plain
-    /// `parking_lot::Mutex::lock` can park the last replacement worker while
-    /// the current guard holder is in `block_in_place(...block_on(...))`, so
-    /// the runtime can no longer drive the holder's I/O future. Marking lock
-    /// contention as blocking lets Tokio provision another worker and breaks
-    /// that starvation cycle without weakening the global CAS boundary.
+    /// The guarded operation can await PostgreSQL I/O. Under concurrent Realm
+    /// sealing, a plain `parking_lot::Mutex::lock` can park the last worker
+    /// while the current guard holder is suspended. Marking only lock
+    /// acquisition as blocking lets Tokio provision a replacement worker
+    /// without weakening the global CAS boundary.
     fn history_authority_view_cas_guard(&self) -> MutexGuard<'_, ()> {
         match tokio::runtime::Handle::try_current() {
             Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
@@ -423,7 +426,7 @@ impl ProjectionService {
             cell_store,
             cell_registry,
             event_seal_committer,
-            control_decision_commit_lock: Arc::new(Mutex::new(())),
+            control_decision_commit_lock: Arc::new(AsyncMutex::new(())),
             history_authority_view_cas_lock: Arc::new(Mutex::new(())),
             clock: Arc::new(ServiceClock::new(clock_node)),
         }
@@ -439,8 +442,9 @@ impl ProjectionService {
         hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
         state.replay_resolved_pending(self.clock());
         for realm_id in realm_ids {
-            if let Err(error) =
-                state.reload_cells_from_store(&realm_id, self.cell_store(), self.cell_registry())
+            if let Err(error) = state
+                .reload_cells_from_store(&realm_id, self.cell_store(), self.cell_registry())
+                .await
             {
                 tracing::warn!(%error, %realm_id, "failed to hydrate cells from state store");
             }
@@ -514,7 +518,7 @@ impl ProjectionService {
         self.event_seal_committer.as_ref()
     }
 
-    pub fn put_pending_control_event_with_ack(
+    pub async fn put_pending_control_event_with_ack(
         &self,
         event: &Event,
         ack: &ControlProposalAck,
@@ -525,6 +529,7 @@ impl ProjectionService {
             &ControlProposalIngress::AckRequired(ack.clone()),
             digest_suite,
         )
+        .await
     }
 
     /// Record an accepted Control Move before a Seal may cover it.
@@ -535,7 +540,7 @@ impl ProjectionService {
     /// ingress-authority Ack included), while `AcklessSelfPrincipal` stores
     /// the stable references its first admission was proven against. An
     /// Ack-required Move without its Ack is unrepresentable here.
-    pub fn put_pending_control_event(
+    pub async fn put_pending_control_event(
         &self,
         event: &Event,
         ingress: &ControlProposalIngress,
@@ -543,45 +548,48 @@ impl ProjectionService {
     ) -> StoreResult<()> {
         self.control_event_store()
             .put_pending_with_ingress(event, ingress, digest_suite)
+            .await
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
     /// `event_id`: an equivocated id must stay distinguishable (§6.3.2).
-    pub fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
-        self.control_event_store().get(event_digest)
+    pub async fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
+        self.control_event_store().get(event_digest).await
     }
 
-    pub fn control_event_digest_suite(
+    pub async fn control_event_digest_suite(
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<arkret_canonical::DigestSuite>> {
-        self.control_event_store().digest_suite(event_digest)
+        self.control_event_store().digest_suite(event_digest).await
     }
 
-    pub fn control_proposal_ack(
+    pub async fn control_proposal_ack(
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<ControlProposalAck>> {
         self.control_event_store()
             .control_proposal_ack(event_digest)
+            .await
     }
 
     /// Load one exact proposal/Ack/decision/Seal view from the backend's
     /// single durable snapshot. HTTP observation and decision admission use
     /// this instead of composing independently-timed point reads.
-    pub fn control_proposal_snapshot(
+    pub async fn control_proposal_snapshot(
         &self,
         event_digest: &Hash,
     ) -> StoreResult<Option<ControlProposalSnapshot>> {
         self.control_event_store()
             .control_proposal_snapshot(event_digest)
+            .await
     }
 
-    pub fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
-        self.control_event_store().get(event_digest)
+    pub async fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
+        self.control_event_store().get(event_digest).await
     }
 
-    pub fn record_control_proposal_decision(
+    pub async fn record_control_proposal_decision(
         &self,
         event_digest: &Hash,
         decision: &ControlProposalDecision,
@@ -589,6 +597,7 @@ impl ProjectionService {
     ) -> StoreResult<()> {
         self.control_event_store()
             .record_proposal_decision(event_digest, decision, policy)
+            .await
     }
 
     pub async fn commit_control_proposal_decision(
@@ -597,29 +606,32 @@ impl ProjectionService {
         decision: &ControlProposalDecision,
         policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<soland_storage::ControlProposalDecisionCommitOutcome> {
-        let _guard = self.control_decision_commit_lock.lock();
+        let _guard = self.control_decision_commit_lock.lock().await;
         if self
             .control_event_store()
-            .control_proposal_snapshot(event_digest)?
+            .control_proposal_snapshot(event_digest)
+            .await?
             .is_some_and(|snapshot| snapshot.decisions.contains(decision))
         {
             return Ok(soland_storage::ControlProposalDecisionCommitOutcome::Duplicate);
         }
         self.control_event_store()
-            .record_proposal_decision(event_digest, decision, policy)?;
+            .record_proposal_decision(event_digest, decision, policy)
+            .await?;
         Ok(soland_storage::ControlProposalDecisionCommitOutcome::Accepted)
     }
 
-    pub fn pending_control_records(
+    pub async fn pending_control_records(
         &self,
         realm_id: &RealmId,
         limit: usize,
     ) -> StoreResult<Vec<PendingControlEventRecord>> {
         self.control_event_store()
             .list_pending_records(realm_id, limit)
+            .await
     }
 
-    pub fn control_governance_health(
+    pub async fn control_governance_health(
         &self,
         realm_id: &RealmId,
         observed_at: DateTime<Utc>,
@@ -631,6 +643,7 @@ impl ProjectionService {
             policy,
             &BTreeSet::new(),
         )
+        .await
     }
 
     /// Build governance health while excluding Ack-less Moves whose proposal
@@ -640,17 +653,16 @@ impl ProjectionService {
     /// must therefore supply exact digests, never a Realm-wide boolean. An
     /// empty set preserves the fail-closed behavior used by ordinary Realms,
     /// Agent PCRs and reanchor control.
-    pub fn control_governance_health_with_ackless_authorities(
+    pub async fn control_governance_health_with_ackless_authorities(
         &self,
         realm_id: &RealmId,
         observed_at: DateTime<Utc>,
         policy: ControlProposalDecisionPolicy,
         ackless_authorized: &BTreeSet<Hash>,
     ) -> StoreResult<ControlGovernanceHealth> {
-        let records = self.pending_control_records(
-            realm_id,
-            ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
-        )?;
+        let records = self
+            .pending_control_records(realm_id, ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1)
+            .await?;
         if records.len() > ControlGovernanceHealth::MAX_PENDING_PROPOSALS {
             return Err(arkret_state::state::StoreError::Conflict(
                 "control governance pending proposal view exceeds 128 entries".to_owned(),
@@ -732,10 +744,12 @@ impl ProjectionService {
             (left.absolute_due_at, left.proposal_digest.as_str())
                 .cmp(&(right.absolute_due_at, right.proposal_digest.as_str()))
         });
-        let sealed = self.retained_control_proposal_faults(
-            realm_id,
-            ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
-        )?;
+        let sealed = self
+            .retained_control_proposal_faults(
+                realm_id,
+                ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
+            )
+            .await?;
         let mut retained_faults = Vec::new();
         for record in sealed {
             let digest =
@@ -780,7 +794,7 @@ impl ProjectionService {
             }
             let mut faulting_seals = Vec::new();
             for seal_id in &record.covering_seals {
-                let seal = self.seal_by_id(seal_id)?.ok_or_else(|| {
+                let seal = self.seal_by_id(seal_id).await?.ok_or_else(|| {
                     arkret_state::state::StoreError::Conflict(format!(
                         "sealed Control Move references missing Seal {seal_id}"
                     ))
@@ -833,22 +847,19 @@ impl ProjectionService {
         Ok(health)
     }
 
-    pub fn claim_due_control_seal_realms(
+    pub async fn claim_due_control_seal_realms(
         &self,
         holder: &str,
         now_ms: i64,
         claim_until_ms: i64,
         limit: usize,
     ) -> StoreResult<Vec<ControlSealScheduleClaim>> {
-        self.control_event_store().claim_due_control_seal_realms(
-            holder,
-            now_ms,
-            claim_until_ms,
-            limit,
-        )
+        self.control_event_store()
+            .claim_due_control_seal_realms(holder, now_ms, claim_until_ms, limit)
+            .await
     }
 
-    pub fn complete_control_seal_attempt(
+    pub async fn complete_control_seal_attempt(
         &self,
         claim: &ControlSealScheduleClaim,
         outcome: &ControlSealAttemptOutcome,
@@ -856,26 +867,29 @@ impl ProjectionService {
     ) -> StoreResult<ControlSealAttemptCompletion> {
         self.control_event_store()
             .complete_control_seal_attempt(claim, outcome, observed_at_ms)
+            .await
     }
 
-    pub fn repair_control_seal_schedule(
+    pub async fn repair_control_seal_schedule(
         &self,
         now_ms: i64,
         limit: usize,
     ) -> StoreResult<ControlSealScheduleRepairStats> {
         self.control_event_store()
             .repair_control_seal_schedule(now_ms, limit)
+            .await
     }
 
-    pub fn control_seal_schedule_stats(
+    pub async fn control_seal_schedule_stats(
         &self,
         now_ms: i64,
     ) -> StoreResult<arkret_state::state::ControlSealScheduleStats> {
         self.control_event_store()
             .control_seal_schedule_stats(now_ms)
+            .await
     }
 
-    pub fn try_claim_control_signing_lease(
+    pub async fn try_claim_control_signing_lease(
         &self,
         realm_id: &RealmId,
         signer_slot: &str,
@@ -885,9 +899,10 @@ impl ProjectionService {
     ) -> StoreResult<Option<u64>> {
         self.seal_store()
             .try_claim_signing_lease(realm_id, signer_slot, holder, now_ms, until_ms)
+            .await
     }
 
-    pub fn release_control_signing_lease(
+    pub async fn release_control_signing_lease(
         &self,
         realm_id: &RealmId,
         signer_slot: &str,
@@ -896,9 +911,10 @@ impl ProjectionService {
     ) -> StoreResult<bool> {
         self.seal_store()
             .release_signing_lease(realm_id, signer_slot, holder, fence)
+            .await
     }
 
-    pub fn pending_control_events_for_notary(
+    pub async fn pending_control_events_for_notary(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
@@ -906,9 +922,10 @@ impl ProjectionService {
     ) -> StoreResult<Vec<Event>> {
         self.control_event_store()
             .list_pending_for_notary(realm_id, cursor, limit)
+            .await
     }
 
-    pub fn sealed_control_events(
+    pub async fn sealed_control_events(
         &self,
         realm_id: &RealmId,
         cursor: Option<&Hash>,
@@ -916,39 +933,44 @@ impl ProjectionService {
     ) -> StoreResult<Vec<SealedControlEventRecord>> {
         self.control_event_store()
             .list_sealed(realm_id, cursor, limit)
+            .await
     }
 
-    pub fn retained_control_proposal_faults(
+    pub async fn retained_control_proposal_faults(
         &self,
         realm_id: &RealmId,
         limit: usize,
     ) -> StoreResult<Vec<SealedControlEventRecord>> {
         self.control_event_store()
             .list_retained_faults(realm_id, limit)
+            .await
     }
 
-    pub fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
-        self.seal_store().get(seal_id)
+    pub async fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
+        self.seal_store().get(seal_id).await
     }
 
-    pub fn seals_covering_event(&self, event_digest: &Hash) -> StoreResult<Vec<Seal>> {
-        self.control_event_store()
-            .covering_seals(event_digest)?
-            .into_iter()
-            .map(|seal_id| {
-                self.seal_by_id(&seal_id)?.ok_or_else(|| {
-                    StoreError::Conflict(format!(
-                        "Control Move references missing covering Seal {seal_id}"
-                    ))
-                })
-            })
-            .collect()
+    pub async fn seals_covering_event(&self, event_digest: &Hash) -> StoreResult<Vec<Seal>> {
+        let seal_ids = self
+            .control_event_store()
+            .covering_seals(event_digest)
+            .await?;
+        let mut seals = Vec::with_capacity(seal_ids.len());
+        for seal_id in seal_ids {
+            let seal = self.seal_by_id(&seal_id).await?.ok_or_else(|| {
+                StoreError::Conflict(format!(
+                    "Control Move references missing covering Seal {seal_id}"
+                ))
+            })?;
+            seals.push(seal);
+        }
+        Ok(seals)
     }
 
     /// Point lookup for callers that require exactly one direct covering Seal.
     /// Multi-Seal coverage is never collapsed implicitly.
-    pub fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
-        let mut seals = self.seals_covering_event(event_digest)?;
+    pub async fn seal_covering_event(&self, event_digest: &Hash) -> StoreResult<Option<Seal>> {
+        let mut seals = self.seals_covering_event(event_digest).await?;
         match seals.len() {
             0 => Ok(None),
             1 => Ok(seals.pop()),
@@ -958,40 +980,42 @@ impl ProjectionService {
         }
     }
 
-    pub fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
-        self.seal_store().list_leaves(realm_id)
+    pub async fn realm_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+        self.seal_store().list_leaves(realm_id).await
     }
 
-    pub fn seal_predecessors_known(&self, predecessor_refs: &[SealId]) -> StoreResult<bool> {
-        self.seal_store().predecessors_known(predecessor_refs)
+    pub async fn seal_predecessors_known(&self, predecessor_refs: &[SealId]) -> StoreResult<bool> {
+        self.seal_store().predecessors_known(predecessor_refs).await
     }
 
-    pub fn seal_successors(
+    pub async fn seal_successors(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
     ) -> StoreResult<Vec<SealId>> {
-        self.seal_store().successors(realm_id, seal_id)
+        self.seal_store().successors(realm_id, seal_id).await
     }
 
-    pub fn realm_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
-        self.cell_store().list_cells(realm_id)
+    pub async fn realm_cells(&self, realm_id: &RealmId) -> StoreResult<Vec<CellRef>> {
+        self.cell_store().list_cells(realm_id).await
     }
 
-    pub fn sealed_ops_for_cell(
+    pub async fn sealed_ops_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
     ) -> StoreResult<Vec<IssuedOp>> {
-        self.cell_store().sealed_ops_for_cell(realm_id, cell)
+        self.cell_store().sealed_ops_for_cell(realm_id, cell).await
     }
 
-    pub fn sealed_op_batches_for_cell(
+    pub async fn sealed_op_batches_for_cell(
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
     ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
-        self.cell_store().sealed_op_batches_for_cell(realm_id, cell)
+        self.cell_store()
+            .sealed_op_batches_for_cell(realm_id, cell)
+            .await
     }
 
     pub fn resolve_cell(
@@ -1019,14 +1043,15 @@ impl ProjectionService {
         arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
 
-    fn validated_effective_state_checkpoint(
+    async fn validated_effective_state_checkpoint(
         &self,
         seal_id: &SealId,
         realm_id: &RealmId,
     ) -> Result<Option<SealEffectiveStateCheckpoint>, SealReject> {
         let Some(checkpoint) = self
             .event_seal_committer()
-            .effective_state_checkpoint(seal_id)?
+            .effective_state_checkpoint(seal_id)
+            .await?
         else {
             return Ok(None);
         };
@@ -1035,10 +1060,10 @@ impl ProjectionService {
                 "effective-state checkpoint is bound to a different Seal or Realm".to_owned(),
             ));
         }
-        let seal = self
-            .seal_store()
-            .get(seal_id)?
-            .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} not in store")))?;
+        let seal =
+            self.seal_store().get(seal_id).await?.ok_or_else(|| {
+                SealReject::Store(format!("checkpoint Seal {seal_id} not in store"))
+            })?;
         if seal.realm_id != *realm_id {
             return Err(SealReject::Store(
                 "effective-state checkpoint Seal belongs to a different Realm".to_owned(),
@@ -1056,7 +1081,8 @@ impl ProjectionService {
         }
         let digest_suite = self
             .seal_store()
-            .digest_suite(seal_id)?
+            .digest_suite(seal_id)
+            .await?
             .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} has no suite")))?;
         let state_root = arkret_state::compute_state_root(&checkpoint.state, digest_suite)
             .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
@@ -1077,25 +1103,26 @@ impl ProjectionService {
         Ok(Some(checkpoint))
     }
 
-    pub fn predecessor_covered_events(
+    pub async fn predecessor_covered_events(
         &self,
         predecessor_refs: &[SealId],
     ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
         if let [seal_id] = predecessor_refs {
-            let seal = self
-                .seal_store()
-                .get(seal_id)?
-                .ok_or_else(|| SealReject::Store(format!("predecessor {seal_id} not in store")))?;
-            if let Some(checkpoint) =
-                self.validated_effective_state_checkpoint(seal_id, &seal.realm_id)?
+            let seal =
+                self.seal_store().get(seal_id).await?.ok_or_else(|| {
+                    SealReject::Store(format!("predecessor {seal_id} not in store"))
+                })?;
+            if let Some(checkpoint) = self
+                .validated_effective_state_checkpoint(seal_id, &seal.realm_id)
+                .await?
             {
                 return Ok(checkpoint.covered_event_digests);
             }
         }
-        arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store())
+        arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store()).await
     }
 
-    pub fn seal_dependency_replay_context(
+    pub async fn seal_dependency_replay_context(
         &self,
         seal: &Seal,
     ) -> Result<
@@ -1110,15 +1137,17 @@ impl ProjectionService {
             let event = self
                 .control_event_store()
                 .get(digest)
+                .await
                 .map_err(|error| SealReject::Store(error.to_string()))?
                 .ok_or_else(|| SealReject::MissingControlEvent {
                     event_digest: digest.as_str().to_owned(),
                 })?;
             events.insert(digest.clone(), event);
         }
-        let digest_suites = self.seal_digest_suites(seal)?;
+        let digest_suites = self.seal_digest_suites(seal).await?;
         let predecessor_state = self
             .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .await
             .map_err(|error| SealReject::Store(error.to_string()))?;
         let event_lookup = arkret_state::mls_governance_proof::ControlEventReplayLookup::new(
             self.control_event_store(),
@@ -1131,11 +1160,12 @@ impl ProjectionService {
             self.cell_store(),
             digest_suites,
         )
+        .await
         .map_err(|error| SealReject::Structural(error.to_string()))?;
         Ok((context, events))
     }
 
-    pub fn seal_dependency_replay_context_with_events(
+    pub async fn seal_dependency_replay_context_with_events(
         &self,
         seal: &Seal,
         events: BTreeMap<Hash, Event>,
@@ -1146,9 +1176,10 @@ impl ProjectionService {
         ),
         SealReject,
     > {
-        let digest_suites = self.seal_digest_suites(seal)?;
+        let digest_suites = self.seal_digest_suites(seal).await?;
         let predecessor_state = self
             .effective_state_at(&seal.predecessor_refs, &seal.realm_id)
+            .await
             .map_err(|error| SealReject::Store(error.to_string()))?;
         let context = arkret_state::mls_governance_proof::derive_seal_dependency_replay_context(
             seal,
@@ -1158,27 +1189,29 @@ impl ProjectionService {
             self.cell_store(),
             digest_suites,
         )
+        .await
         .map_err(|error| SealReject::Structural(error.to_string()))?;
         Ok((context, events))
     }
 
-    pub fn seal_leaf_union_proof(
+    pub async fn seal_leaf_union_proof(
         &self,
         leaves: &[SealId],
     ) -> Result<Vec<SealLeafUnionProof>, SealReject> {
-        arkret_state::leaf_union_proof(leaves, self.seal_store())
+        arkret_state::leaf_union_proof(leaves, self.seal_store()).await
     }
 
-    pub fn effective_seal_view(
+    pub async fn effective_seal_view(
         &self,
         leaves: &[SealId],
         realm_id: &RealmId,
     ) -> Result<EffectiveSealView, SealReject> {
-        let digest_suite = self.predecessor_digest_suite(realm_id, leaves)?;
+        let digest_suite = self.predecessor_digest_suite(realm_id, leaves).await?;
         self.effective_seal_view_with_digest_suite(leaves, realm_id, digest_suite)
+            .await
     }
 
-    pub fn effective_seal_view_with_digest_suite(
+    pub async fn effective_seal_view_with_digest_suite(
         &self,
         leaves: &[SealId],
         realm_id: &RealmId,
@@ -1192,16 +1225,18 @@ impl ProjectionService {
             self.cell_registry(),
             digest_suite,
         )
+        .await
     }
 
-    pub fn effective_state_at(
+    pub async fn effective_state_at(
         &self,
         leaves: &[SealId],
         realm_id: &RealmId,
     ) -> Result<BTreeMap<CellRef, CellState>, SealReject> {
         if let [seal_id] = leaves
-            && let Some(checkpoint) =
-                self.validated_effective_state_checkpoint(seal_id, realm_id)?
+            && let Some(checkpoint) = self
+                .validated_effective_state_checkpoint(seal_id, realm_id)
+                .await?
         {
             return Ok(checkpoint.state);
         }
@@ -1212,25 +1247,27 @@ impl ProjectionService {
             self.cell_store(),
             self.cell_registry(),
         )
+        .await
     }
 
     /// The Seals visible from `leaves`: the leaves themselves plus their whole
     /// predecessor closure.
     ///
     /// Used by consumers that need the accepted Seal predecessor closure.
-    pub fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
+    pub async fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
         if let [seal_id] = leaves {
-            let seal = self
-                .seal_store()
-                .get(seal_id)?
-                .ok_or_else(|| SealReject::Store(format!("predecessor {seal_id} not in store")))?;
-            if let Some(checkpoint) =
-                self.validated_effective_state_checkpoint(seal_id, &seal.realm_id)?
+            let seal =
+                self.seal_store().get(seal_id).await?.ok_or_else(|| {
+                    SealReject::Store(format!("predecessor {seal_id} not in store"))
+                })?;
+            if let Some(checkpoint) = self
+                .validated_effective_state_checkpoint(seal_id, &seal.realm_id)
+                .await?
             {
                 return Ok(checkpoint.covered_seal_ids);
             }
         }
-        arkret_state::predecessor_seal_closure(leaves, self.seal_store())
+        arkret_state::predecessor_seal_closure(leaves, self.seal_store()).await
     }
 
     /// The Realm's effective digest suite
@@ -1481,7 +1518,7 @@ impl ProjectionService {
         )
     }
 
-    pub fn verify_recovery_witness(
+    pub async fn verify_recovery_witness(
         &self,
         event: &Event,
         effects: &[arkret_wire::cba::ProjectionEffect],
@@ -1497,9 +1534,10 @@ impl ProjectionService {
             predecessor_closure,
             self.realm_digest_suite(realm_id.as_str()),
         )
+        .await
     }
 
-    pub fn verify_recovery_witness_with_digest_suite(
+    pub async fn verify_recovery_witness_with_digest_suite(
         &self,
         event: &Event,
         effects: &[arkret_wire::cba::ProjectionEffect],
@@ -1519,9 +1557,14 @@ impl ProjectionService {
             self.cell_registry(),
             digest_suite,
         )
+        .await
     }
 
-    pub fn apply_seal<F>(&self, seal: &Seal, verify_proofs: F) -> Result<SealEffect, SealReject>
+    pub async fn apply_seal<F>(
+        &self,
+        seal: &Seal,
+        verify_proofs: F,
+    ) -> Result<SealEffect, SealReject>
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
@@ -1530,9 +1573,10 @@ impl ProjectionService {
             verify_proofs,
             arkret_wire::event_envelope::EventSubmitContext::Standard,
         )
+        .await
     }
 
-    pub fn apply_seal_in_context<F>(
+    pub async fn apply_seal_in_context<F>(
         &self,
         seal: &Seal,
         verify_proofs: F,
@@ -1542,7 +1586,7 @@ impl ProjectionService {
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal)?;
+        let digest_suites = self.seal_digest_suites(seal).await?;
         arkret_state::apply_seal_in_context(
             seal,
             self.control_event_store(),
@@ -1554,12 +1598,13 @@ impl ProjectionService {
             |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
+        .await
     }
 
     /// Verify an incoming Seal completely while leaving every durable store
     /// unchanged. Federation receivers use the returned immutable transition
     /// as input to the atomic Seal/dependency/frontier commit.
-    pub fn prepare_seal_in_context<F>(
+    pub async fn prepare_seal_in_context<F>(
         &self,
         seal: &Seal,
         verify_proofs: F,
@@ -1569,7 +1614,7 @@ impl ProjectionService {
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal)?;
+        let digest_suites = self.seal_digest_suites(seal).await?;
         arkret_state::prepare_seal_in_context(
             seal,
             self.control_event_store(),
@@ -1581,13 +1626,14 @@ impl ProjectionService {
             |event, digest_suite| self.project_cell_writes_with_digest_suite(event, digest_suite),
             context,
         )
+        .await
     }
 
     /// Apply a locally constructed Seal whose delta contains only Events from
     /// the durable accepted-event lane. Incoming peer Seals use the prepared
     /// producer-submission path above and commit their receiver-owned evidence
     /// atomically.
-    pub fn apply_accepted_seal_in_context<F>(
+    pub async fn apply_accepted_seal_in_context<F>(
         &self,
         seal: &Seal,
         verify_proofs: F,
@@ -1597,7 +1643,7 @@ impl ProjectionService {
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
         let _authority_guard = self.history_authority_view_cas_guard();
-        let digest_suites = self.seal_digest_suites(seal)?;
+        let digest_suites = self.seal_digest_suites(seal).await?;
         arkret_state::apply_accepted_seal_in_context(
             seal,
             self.control_event_store(),
@@ -1611,28 +1657,31 @@ impl ProjectionService {
             },
             context,
         )
+        .await
     }
 
-    pub fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
+    pub async fn seal_digest_suites(&self, seal: &Seal) -> Result<SealDigestSuites, SealReject> {
         self.seal_digest_suites_for_delta(&seal.realm_id, &seal.predecessor_refs, &seal.delta)
+            .await
     }
 
-    pub fn seal_digest_suites_for_delta(
+    pub async fn seal_digest_suites_for_delta(
         &self,
         realm_id: &RealmId,
         predecessor_refs: &[SealId],
         delta: &[Hash],
     ) -> Result<SealDigestSuites, SealReject> {
-        let delta_events = delta
-            .iter()
-            .map(|digest| {
-                self.control_event_store().get(digest)?.ok_or_else(|| {
-                    SealReject::MissingControlEvent {
-                        event_digest: digest.to_string(),
-                    }
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut delta_events = Vec::with_capacity(delta.len());
+        for digest in delta {
+            let event = self
+                .control_event_store()
+                .get(digest)
+                .await?
+                .ok_or_else(|| SealReject::MissingControlEvent {
+                    event_digest: digest.to_string(),
+                })?;
+            delta_events.push(event);
+        }
         if predecessor_refs.is_empty() {
             let create_events = delta_events
                 .iter()
@@ -1660,7 +1709,9 @@ impl ProjectionService {
             return Ok(SealDigestSuites::standard(declared));
         }
 
-        let live_suite = self.predecessor_digest_suite(realm_id, predecessor_refs)?;
+        let live_suite = self
+            .predecessor_digest_suite(realm_id, predecessor_refs)
+            .await?;
         let transitions = delta_events
             .iter()
             .filter(|event| event.kind == arkret_wire::EventKind::RealmDigestSuiteTransition)
@@ -1688,7 +1739,7 @@ impl ProjectionService {
         }
     }
 
-    pub fn predecessor_digest_suite(
+    pub async fn predecessor_digest_suite(
         &self,
         realm_id: &RealmId,
         predecessor_refs: &[SealId],
@@ -1698,7 +1749,7 @@ impl ProjectionService {
                 "Genesis has no predecessor digest-suite state".to_owned(),
             ));
         }
-        let predecessor_state = self.effective_state_at(predecessor_refs, realm_id)?;
+        let predecessor_state = self.effective_state_at(predecessor_refs, realm_id).await?;
         arkret_state::live_digest_suite_from_state(&predecessor_state)
     }
 
@@ -1706,7 +1757,7 @@ impl ProjectionService {
         clippy::too_many_arguments,
         reason = "the atomic frontier CAS boundary keeps every compared and committed component explicit"
     )]
-    pub fn commit_event_seal_if_frontier(
+    pub async fn commit_event_seal_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -1717,37 +1768,40 @@ impl ProjectionService {
         governance_dependencies: &[soland_storage::GovernanceDependencyWrite],
     ) -> StoreResult<bool> {
         let _authority_guard = self.history_authority_view_cas_guard();
-        self.event_seal_committer().commit_if_frontier(
-            seal,
-            digest_suite,
-            expected_store_frontier,
-            new_ops,
-            covered,
-            data_event_leaf_manifest,
-            governance_dependencies,
-        )
+        self.event_seal_committer()
+            .commit_if_frontier(
+                seal,
+                digest_suite,
+                expected_store_frontier,
+                new_ops,
+                covered,
+                data_event_leaf_manifest,
+                governance_dependencies,
+            )
+            .await
     }
 
-    pub fn data_event_leaf_manifest(
+    pub async fn data_event_leaf_manifest(
         &self,
         seal_id: &SealId,
     ) -> StoreResult<Option<BTreeSet<Hash>>> {
         self.event_seal_committer()
             .data_event_leaf_manifest(seal_id)
+            .await
     }
 
     #[doc(hidden)]
-    pub fn conformance_put_seal(
+    pub async fn conformance_put_seal(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
         let _authority_guard = self.history_authority_view_cas_guard();
-        self.seal_store().put(seal, digest_suite)
+        self.seal_store().put(seal, digest_suite).await
     }
 
     #[doc(hidden)]
-    pub fn conformance_append_sealed_effects(
+    pub async fn conformance_append_sealed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
@@ -1755,6 +1809,7 @@ impl ProjectionService {
     ) -> StoreResult<()> {
         self.cell_store()
             .append_sealed_effects(realm_id, seal_id, new_ops)
+            .await
     }
 
     /// Mirror the synthetic Realm genesis cell into the application read
@@ -1794,28 +1849,29 @@ impl ProjectionService {
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub fn test_put_seal(
+    pub async fn test_put_seal(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
-        self.conformance_put_seal(seal, digest_suite)
+        self.conformance_put_seal(seal, digest_suite).await
     }
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub fn test_append_sealed_effects(
+    pub async fn test_append_sealed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
         new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
         self.conformance_append_sealed_effects(realm_id, seal_id, new_ops)
+            .await
     }
 
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
-    pub fn test_mark_control_event_sealed(
+    pub async fn test_mark_control_event_sealed(
         &self,
         event: &Event,
         seal: &Seal,
@@ -1829,8 +1885,9 @@ impl ProjectionService {
         )
         .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         self.control_event_store()
-            .put_pending_with_ingress(event, ingress, digest_suite)?;
-        self.control_event_store().mark_sealed(&digest, seal)
+            .put_pending_with_ingress(event, ingress, digest_suite)
+            .await?;
+        self.control_event_store().mark_sealed(&digest, seal).await
     }
 
     #[must_use]
@@ -2708,14 +2765,16 @@ impl ProjectionService {
             .map(ToOwned::to_owned)
     }
 
-    pub fn reload_cells_from_store(
+    pub async fn reload_cells_from_store(
         &self,
         realm_id: &RealmId,
     ) -> Result<(), arkret_state::StoreError> {
-        let _authority_guard = self.history_authority_view_cas_guard();
         let mut resolved_cells = Vec::new();
-        for cell in self.cell_store().list_cells(realm_id)? {
-            let ops = self.cell_store().sealed_ops_for_cell(realm_id, &cell)?;
+        for cell in self.cell_store().list_cells(realm_id).await? {
+            let ops = self
+                .cell_store()
+                .sealed_ops_for_cell(realm_id, &cell)
+                .await?;
             let binding = self
                 .cell_registry()
                 .resolve(realm_id, &cell)
@@ -2725,6 +2784,7 @@ impl ProjectionService {
             let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
             resolved_cells.push((cell, resolved));
         }
+        let _authority_guard = self.history_authority_view_cas_guard();
         self.state
             .lock()
             .install_reloaded_cells(realm_id, resolved_cells);
@@ -3138,8 +3198,9 @@ fn pending_device_revoke_exists(
     })
 }
 
+#[async_trait::async_trait(?Send)]
 impl HistoryAuthorityViewCas for ProjectionService {
-    fn with_current_release_authority(
+    async fn with_current_release_authority(
         &self,
         attestation: &HistoryReleaseAttestation,
         mutation: &mut dyn FnMut() -> PersistenceResult<()>,
@@ -3181,6 +3242,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
                 let seal = self
                     .seal_store()
                     .get(leaf)
+                    .await
                     .map_err(|error| PersistenceError::Internal(error.to_string()))?
                     .ok_or_else(|| {
                         PersistenceError::Conflict(
@@ -3212,6 +3274,7 @@ impl HistoryAuthorityViewCas for ProjectionService {
             let mut current = self
                 .seal_store()
                 .list_leaves(&realm_id)
+                .await
                 .map_err(|error| PersistenceError::Internal(error.to_string()))?;
             current.sort();
             current.dedup();

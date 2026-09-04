@@ -246,7 +246,7 @@ async fn admin_list_cells(
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let all_cells = state.projections().realm_cells(&realm).map_err(|e| {
+    let all_cells = state.projections().realm_cells(&realm).await.map_err(|e| {
         AppError::new(
             ErrorCode::InternalError,
             format!("cell_store list_cells failed: {e}"),

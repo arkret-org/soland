@@ -66,7 +66,7 @@ async fn require_visible_proposal(
     Ok(())
 }
 
-fn load_snapshot(
+async fn load_snapshot(
     state: &AppState,
     realm_id: &RealmId,
     proposal_digest: &Hash,
@@ -74,6 +74,7 @@ fn load_snapshot(
     let snapshot = state
         .projections()
         .control_proposal_snapshot(proposal_digest)
+        .await
         .map_err(|error| {
             AppError::internal(format!("control proposal snapshot unavailable: {error}"))
         })?
@@ -266,7 +267,7 @@ pub(super) async fn submit_control_proposal_decision(
         decision.proposal_digest(),
     )
     .await?;
-    let snapshot = load_snapshot(state, decision.realm_id(), decision.proposal_digest())?;
+    let snapshot = load_snapshot(state, decision.realm_id(), decision.proposal_digest()).await?;
     let Some(ack) = snapshot.control_proposal_ack.as_ref() else {
         return Err(failed_precondition(
             "Ack-less Control Proposals do not accept signed decisions",
@@ -351,6 +352,6 @@ pub(super) async fn read_control_proposal_decision(
     super::super::super::require_agent_session_scope(&session, READ_OPERATION)?;
     let request = body.into_inner();
     require_visible_proposal(state, &session, &request.realm_id, &request.proposal_digest).await?;
-    let snapshot = load_snapshot(state, &request.realm_id, &request.proposal_digest)?;
+    let snapshot = load_snapshot(state, &request.realm_id, &request.proposal_digest).await?;
     json_ok(read_outcome(&request, snapshot, now())?)
 }

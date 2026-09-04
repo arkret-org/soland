@@ -39,12 +39,13 @@ pub struct GcCandidate {
 ///   - That referencing Seal is NOT a current leaf — i.e. its coverage has been superseded.
 ///   - The Control Move is NOT in any current leaf coverage set.
 ///   - The Control Move is NOT in the pending pool (`list_pending_for_notary`).
-pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
+pub async fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
     let projections = state.projections();
 
     // 1) Pending Control Move digests — never GC.
     let pending = projections
         .pending_control_records(realm_id, 4096)
+        .await
         .unwrap_or_default();
     let pending_digests: std::collections::HashSet<String> = pending
         .iter()
@@ -58,9 +59,12 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
 
     // 2) Union of current leaf-Seal coverage. Control Moves still covered by live leaves are also
     //    out of scope for GC.
-    let leaves = projections.realm_seal_leaves(realm_id).unwrap_or_default();
+    let leaves = projections
+        .realm_seal_leaves(realm_id)
+        .await
+        .unwrap_or_default();
     let mut live_coverage: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if let Ok(covered) = projections.predecessor_covered_events(&leaves) {
+    if let Ok(covered) = projections.predecessor_covered_events(&leaves).await {
         live_coverage.extend(covered.into_iter().map(|digest| digest.to_string()));
     }
 
@@ -68,7 +72,10 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
     let mut candidates: Vec<GcCandidate> = Vec::new();
     let mut cursor: Option<Hash> = None;
     loop {
-        let page = match projections.sealed_control_events(realm_id, cursor.as_ref(), 256) {
+        let page = match projections
+            .sealed_control_events(realm_id, cursor.as_ref(), 256)
+            .await
+        {
             Ok(page) if !page.is_empty() => page,
             _ => break,
         };
@@ -114,7 +121,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
 
 /// Scan every Realm we know about. Used by the admin endpoint when no
 /// `realm_id` is provided.
-pub fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
+pub async fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
     let realm_ids: Vec<RealmId> = {
         let realms = state.realm_directory().snapshot();
         realms
@@ -123,8 +130,9 @@ pub fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
             .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
             .collect()
     };
-    realm_ids
-        .iter()
-        .flat_map(|id| scan_gc_candidates(state, id))
-        .collect()
+    let mut candidates = Vec::new();
+    for realm_id in &realm_ids {
+        candidates.extend(scan_gc_candidates(state, realm_id).await);
+    }
+    candidates
 }

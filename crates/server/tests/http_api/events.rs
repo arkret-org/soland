@@ -481,12 +481,14 @@ pub(super) async fn seed_agent_grant_session(
         .expect("typed Agent PCR genesis Event");
     let genesis_seal_id = state
         .test_seal_leaves(&agent_pcr_realm)
+        .await
         .unwrap()
         .into_iter()
         .next()
         .expect("accepted Agent PCR genesis Seal");
     let genesis_seal = state
         .test_seal(&genesis_seal_id)
+        .await
         .unwrap()
         .expect("stored Agent PCR genesis Seal");
     let controller_verification_method = arkret_wire::DidUrl::new(format!(
@@ -639,6 +641,7 @@ pub(super) async fn seed_agent_grant_session(
             &proposal_ack,
             arkret_canonical::DigestSuite::Sha256,
         )
+        .await
         .unwrap();
 
     // Freeze the accepted authorization into the successor Agent-PCR Seal.
@@ -720,6 +723,7 @@ pub(super) async fn seed_agent_grant_session(
 
     let effective = state
         .test_effective_state_at(std::slice::from_ref(&successor_seal.id), &agent_pcr_realm)
+        .await
         .unwrap();
     let key_cell = arkret_wire::CellRef::new(
         arkret_signatures::agent_evidence::agent_authorization_cell_ref(
@@ -1112,17 +1116,8 @@ async fn agent_session_without_submit_scope_cannot_submit_events_body() {
     assert_agent_scope_denied(&body, "ak.self.events.command.submit.v1");
 }
 
-// The only case here that gives `AppState` a durable state-resolution plane.
-// Those three SDK stores (`SealStore`, `CellStore`, `ControlEventStore`) are
-// synchronous traits, so the Postgres implementations bridge through
-// `soland_storage_postgres::state_resolution`'s `run_blocking`. On a
-// current-thread test runtime that bridge spawns a second runtime and joins it,
-// while the pooled connection it needs is driven by the runtime now blocked in
-// that join -- the two wait on each other forever. Production runs multi-thread
-// and takes `block_in_place` instead, so this is a test-runtime deadlock, not a
-// server defect. Un-ignore once those three traits are async.
+// Exercise the durable state-resolution plane across an AppState rebuild.
 #[test]
-#[ignore = "deadlocks on a current-thread runtime: sync state-resolution stores bridge through run_blocking; see soland_storage_postgres::state_resolution"]
 fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild() {
     run_on_deep_stack(
         "pg_account_subscribe_cursor_handle_survives_app_state_rebuild",

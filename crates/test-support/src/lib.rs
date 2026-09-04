@@ -389,18 +389,19 @@ fn register_state_resources(key: usize, resources: StateTestResources) {
     registry.insert(key, resources);
 }
 
+#[async_trait::async_trait]
 pub trait AppStateTestExt {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore>;
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionState>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
-    fn test_put_seal(
+    async fn test_put_seal(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()>;
-    fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
-    fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
-    fn test_put_pending_control_event_with_ack(
+    async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
+    async fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
+    async fn test_put_pending_control_event_with_ack(
         &self,
         event: &arkret_wire::Event,
         ack: &arkret_wire::ControlProposalAck,
@@ -415,7 +416,7 @@ pub trait AppStateTestExt {
     /// fixture that needs the Seal to actually *carry* state — for example a
     /// capability grant — has to write the ops the sealed Control Moves
     /// projected, which is what this does.
-    fn test_append_sealed_effects(
+    async fn test_append_sealed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
@@ -442,7 +443,7 @@ pub fn register_persistence(state: &AppState, persistence: &Arc<dyn PersistenceS
 /// Real Control Events are resolved from the test Control Event store. The
 /// development-only synthetic basis retains its exact listed descriptors in
 /// the fixture cache. Any digest unresolved by either source fails closed.
-pub fn test_seal_roots(
+pub async fn test_seal_roots(
     state: &AppState,
     predecessor_refs: &[SealId],
     delta_events: &[(arkret_wire::Event, arkret_canonical::DigestSuite)],
@@ -466,10 +467,12 @@ pub fn test_seal_roots(
         .expect("AppState was not constructed by soland-test-support");
     let mut covered =
         arkret_state::union_predecessor_covered_events(predecessor_refs, seal_store.as_ref())
+            .await
             .map_err(|error| StoreError::Backend(error.to_string()))?;
     let mut resolved = BTreeMap::new();
     let predecessor_closure =
         arkret_state::predecessor_seal_closure(predecessor_refs, seal_store.as_ref())
+            .await
             .map_err(|error| StoreError::Backend(error.to_string()))?;
     for seal_id in predecessor_closure {
         if let Some(listed) = crate::cba_basis::basis_listed_control_events_with_id(&seal_id) {
@@ -492,7 +495,7 @@ pub fn test_seal_roots(
         if resolved.contains_key(digest) {
             continue;
         }
-        if let Some(event) = control_event_store.get(digest)? {
+        if let Some(event) = control_event_store.get(digest).await? {
             resolved.insert(digest.clone(), (event.actor_id, event.actor_seq));
         }
     }
@@ -519,6 +522,7 @@ pub fn test_seal_roots(
     Ok((control_root, completeness_root))
 }
 
+#[async_trait::async_trait]
 impl AppStateTestExt for AppState {
     fn test_persistence(&self) -> Arc<dyn PersistenceStore> {
         state_test_registry()
@@ -544,67 +548,69 @@ impl AppStateTestExt for AppState {
             .expect("test Realm directory is unavailable for this AppState")
     }
 
-    fn test_put_seal(
+    async fn test_put_seal(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
-        state_test_registry()
+        let store = state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState")
-            .put(seal, digest_suite)
+            .expect("test Seal store is unavailable for this AppState");
+        store.put(seal, digest_suite).await
     }
 
-    fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
-        state_test_registry()
+    async fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
+        let store = state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState")
-            .get(seal_id)
+            .expect("test Seal store is unavailable for this AppState");
+        store.get(seal_id).await
     }
 
-    fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
-        state_test_registry()
+    async fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+        let store = state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.seal_store.clone())
-            .expect("test Seal store is unavailable for this AppState")
-            .list_leaves(realm_id)
+            .expect("test Seal store is unavailable for this AppState");
+        store.list_leaves(realm_id).await
     }
 
-    fn test_put_pending_control_event_with_ack(
+    async fn test_put_pending_control_event_with_ack(
         &self,
         event: &arkret_wire::Event,
         ack: &arkret_wire::ControlProposalAck,
         digest_suite: arkret_canonical::DigestSuite,
     ) -> StoreResult<()> {
-        state_test_registry()
+        let store = state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.control_event_store.clone())
-            .expect("test Control Event store is unavailable for this AppState")
+            .expect("test Control Event store is unavailable for this AppState");
+        store
             .put_pending_with_ingress(
                 event,
                 &ControlProposalIngress::AckRequired(ack.clone()),
                 digest_suite,
             )
+            .await
     }
 
-    fn test_append_sealed_effects(
+    async fn test_append_sealed_effects(
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
         ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
-        state_test_registry()
+        let store = state_test_registry()
             .lock()
             .get(&app_state_key(self))
             .and_then(|resources| resources.cell_store.clone())
-            .expect("test cell store is unavailable for this AppState")
-            .append_sealed_effects(realm_id, seal_id, ops)
+            .expect("test cell store is unavailable for this AppState");
+        store.append_sealed_effects(realm_id, seal_id, ops).await
     }
 }
 
@@ -892,8 +898,9 @@ struct MemoryEventSealCommitter {
     control_event_store: Arc<dyn ControlEventStore>,
 }
 
+#[async_trait::async_trait]
 impl EventSealCommitPort for MemoryEventSealCommitter {
-    fn commit_if_frontier(
+    async fn commit_if_frontier(
         &self,
         seal: &Seal,
         digest_suite: arkret_canonical::DigestSuite,
@@ -916,7 +923,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
                 ));
             }
         }
-        if let Some(existing) = self.seal_store.get(&seal.id)? {
+        if let Some(existing) = self.seal_store.get(&seal.id).await? {
             let existing_bytes = arkret_canonical::canonical_json_bytes(&existing)
                 .map_err(|error| StoreError::Backend(error.to_string()))?;
             let retry_bytes = arkret_canonical::canonical_json_bytes(seal)
@@ -939,7 +946,8 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         }
         let actual = self
             .seal_store
-            .list_leaves(&seal.realm_id)?
+            .list_leaves(&seal.realm_id)
+            .await?
             .into_iter()
             .collect::<BTreeSet<_>>();
         let expected = expected_store_frontier
@@ -955,7 +963,8 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             &seal.realm_id,
             covered,
             new_ops,
-        )?;
+        )
+        .await?;
         let state_root = compute_state_root(&post_state, digest_suite)
             .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
@@ -965,10 +974,12 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             )));
         }
         self.cell_store
-            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)?;
+            .append_sealed_effects(&seal.realm_id, &seal.id, new_ops)
+            .await?;
         match self
             .seal_store
             .put_if_frontier(seal, expected_store_frontier, digest_suite)
+            .await
         {
             Ok(true) => {
                 if let Some(manifest) = data_event_leaf_manifest {
@@ -979,28 +990,36 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
                 // Match the production memory commit boundary: a sealed Move
                 // must leave the pending queue before another signing pass.
                 for digest in &seal.delta {
-                    self.control_event_store.mark_sealed(digest, seal)?;
+                    self.control_event_store.mark_sealed(digest, seal).await?;
                 }
                 Ok(true)
             }
             Ok(false) => {
-                self.cell_store.rollback_seal(&seal.realm_id, &seal.id)?;
+                self.cell_store
+                    .rollback_seal(&seal.realm_id, &seal.id)
+                    .await?;
                 Ok(false)
             }
             Err(error) => {
-                let _ = self.cell_store.rollback_seal(&seal.realm_id, &seal.id);
+                let _ = self
+                    .cell_store
+                    .rollback_seal(&seal.realm_id, &seal.id)
+                    .await;
                 Err(error)
             }
         }
     }
 
-    fn data_event_leaf_manifest(&self, seal_id: &SealId) -> StoreResult<Option<BTreeSet<Hash>>> {
+    async fn data_event_leaf_manifest(
+        &self,
+        seal_id: &SealId,
+    ) -> StoreResult<Option<BTreeSet<Hash>>> {
         let _guard = self.lock.lock();
         Ok(self.data_event_leaf_manifests.lock().get(seal_id).cloned())
     }
 }
 
-fn effective_state_with_new_ops(
+async fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellRegistry,
     realm_id: &arkret_identifiers::RealmId,
@@ -1008,14 +1027,16 @@ fn effective_state_with_new_ops(
     new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
-        .list_cells(realm_id)?
+        .list_cells(realm_id)
+        .await?
         .into_iter()
         .collect::<BTreeSet<_>>();
     cell_refs.extend(new_ops.iter().map(|(cell, _)| cell.clone()));
     let mut joined = BTreeMap::new();
     for cell in cell_refs {
         let mut batches = cells
-            .sealed_op_batches_for_cell(realm_id, &cell)?
+            .sealed_op_batches_for_cell(realm_id, &cell)
+            .await?
             .into_iter()
             .filter_map(|(_, ops)| {
                 let ops = ops

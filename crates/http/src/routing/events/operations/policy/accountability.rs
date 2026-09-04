@@ -61,6 +61,7 @@ async fn accountability_grants_at_frozen_basis(
         let frozen = state
             .projections()
             .effective_state_at(&basis, &realm)
+            .await
             .map_err(|_| "accountability grant frozen basis unavailable")?;
         let mut grants = std::collections::BTreeMap::new();
         for (cell_ref, cell_state) in frozen {

@@ -228,6 +228,7 @@ async fn admit_signal(
     let seal = state
         .projections()
         .seal_by_id(&envelope.seal_ref)
+        .await
         .map_err(|error| {
             tracing::error!(%error, "failed to resolve the signal seal_ref");
             signal_rail_unavailable("resolve the signal seal basis")
@@ -243,7 +244,7 @@ async fn admit_signal(
     // signed Seal state at both the declared historical basis and the complete
     // current accepted antichain. A current projection row or pending-removal
     // flag is not a substitute for either signed view.
-    verify_signal_scope_authority(state, envelope, &actor)?;
+    verify_signal_scope_authority(state, envelope, &actor).await?;
 
     match (&envelope.sender_device_id, &session.agent_session) {
         (Some(device_id), None) if device_id.as_str() == session.device_id => {
@@ -263,7 +264,7 @@ async fn admit_signal(
 }
 
 /// `signal.md` §3(2) — live send eligibility for the envelope's scope.
-fn verify_signal_scope_authority(
+async fn verify_signal_scope_authority(
     state: &AppState,
     envelope: &SignalEnvelope,
     actor: &arkret_wire::ActorId,
@@ -272,6 +273,7 @@ fn verify_signal_scope_authority(
     let current_leaves = state
         .projections()
         .realm_seal_leaves(realm)
+        .await
         .map_err(|error| {
             signal_rail_unavailable(&format!("resolve current Signal Seal basis: {error}"))
         })?;
@@ -290,6 +292,7 @@ fn verify_signal_scope_authority(
         let view = state
             .projections()
             .effective_state_at(&basis.leaves, realm)
+            .await
             .map_err(|error| {
                 signal_rail_unavailable(&format!(
                     "resolve {label} Signal governance basis: {error}"
@@ -877,6 +880,7 @@ async fn admit_signal_outer(
     let seal = state
         .projections()
         .seal_by_id(&envelope.seal_ref)
+        .await
         .map_err(|_| signal_rail_unavailable("resolve the signal seal basis"))?
         .ok_or_else(|| signal_invalid("signal seal_ref does not resolve"))?;
     if seal.realm_id != envelope.realm_id {
@@ -884,7 +888,7 @@ async fn admit_signal_outer(
             "signal seal_ref belongs to a different Realm",
         ));
     }
-    verify_signal_scope_authority(state, envelope, &sender_actor)?;
+    verify_signal_scope_authority(state, envelope, &sender_actor).await?;
     Ok(())
 }
 

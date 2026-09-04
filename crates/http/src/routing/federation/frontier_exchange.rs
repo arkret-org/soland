@@ -520,6 +520,7 @@ impl FrontierExchangeWorker {
                 .state
                 .projections()
                 .seal_by_id(&seal_ref)
+                .await
                 .map_err(|error| error.to_string())?
                 .is_none()
             {
@@ -566,6 +567,7 @@ impl FrontierExchangeWorker {
                         .state
                         .projections()
                         .seal_by_id(predecessor)
+                        .await
                         .map_err(|error| error.to_string())?
                         .is_some();
                     if !is_local && !resolved_seals.contains_key(predecessor) {
@@ -832,6 +834,7 @@ impl FrontierExchangeWorker {
             .state
             .projections()
             .control_event_by_digest(&digest)
+            .await
             .map_err(|error| format!("temporarily_unavailable:control_event_store:{error}"))?
             .ok_or_else(|| "dependency_missing:fork_resolution_event".to_owned())?;
         let request = PeerEventsSiblingPositionsRequestBody {
@@ -938,6 +941,7 @@ impl FrontierExchangeWorker {
             .state
             .projections()
             .control_event_by_digest(&digest)
+            .await
             .map_err(|error| format!("temporarily_unavailable:control_event_store:{error}"))?
             .ok_or_else(|| "dependency_missing:fork_resolution_event".to_owned())?;
         let payload: ForkResolutionPayload = serde_json::from_value(serde_json::Value::Object(

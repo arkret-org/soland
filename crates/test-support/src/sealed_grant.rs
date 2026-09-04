@@ -105,7 +105,7 @@ pub async fn seal_accepted_capability_grant(
         issuer_id: event.actor_id.clone(),
         op: arkret_state::lattice::SealedOp::new(move_id.clone(), projected_op),
     };
-    let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op);
+    let state_root = state_root_for(state, &realm, &predecessors, &expected_cell, &op).await;
 
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
@@ -118,6 +118,7 @@ pub async fn seal_accepted_capability_grant(
         &[(event.clone(), record.digest_suite)],
         arkret_canonical::DigestSuite::Sha256,
     )
+    .await
     .expect("fixture accepted grant Seal roots");
     let seal = Seal::sign_single_with_roots(
         realm.clone(),
@@ -134,11 +135,15 @@ pub async fn seal_accepted_capability_grant(
 
     state
         .test_put_seal(&seal, arkret_canonical::DigestSuite::Sha256)
+        .await
         .expect("fixture accepted grant Seal put");
     state
         .test_append_sealed_effects(&realm, &seal.id, &[(expected_cell, op)])
+        .await
         .expect("fixture accepted grant sealed effects");
-    state.test_refresh_grant_from_sealed_cells(&realm, grant_id);
+    state
+        .test_refresh_grant_from_sealed_cells(&realm, grant_id)
+        .await;
 
     SealedCapabilityGrant {
         grant_id: grant_id.to_owned(),
@@ -149,7 +154,7 @@ pub async fn seal_accepted_capability_grant(
     }
 }
 
-fn state_root_for(
+async fn state_root_for(
     state: &AppState,
     realm: &RealmId,
     predecessors: &[SealId],
@@ -165,6 +170,7 @@ fn state_root_for(
     } else {
         state
             .test_effective_state_at(predecessors, realm)
+            .await
             .expect("fixture predecessor Seal state is valid")
     };
     insert_new_grant_cell(

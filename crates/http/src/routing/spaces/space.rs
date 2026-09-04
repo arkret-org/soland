@@ -641,7 +641,7 @@ pub(crate) async fn invite_token_realm_resolution(
     let Ok(realm_id) = RealmId::new(invite.realm_id.clone()) else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
-    let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id) else {
+    let Ok(mut leaves) = state.projections().realm_seal_leaves(&realm_id).await else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
     leaves.sort();
@@ -652,6 +652,7 @@ pub(crate) async fn invite_token_realm_resolution(
     let Ok(covered_events) = state
         .projections()
         .predecessor_covered_events(&seal_basis.leaves)
+        .await
     else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };
@@ -664,6 +665,7 @@ pub(crate) async fn invite_token_realm_resolution(
     let Ok(batches) = state
         .projections()
         .sealed_op_batches_for_cell(&realm_id, &lifecycle_cell)
+        .await
     else {
         return InviteTokenRealmResolution::FrontierUnavailable;
     };

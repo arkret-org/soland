@@ -63,6 +63,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("MIMI Realm id invalid: {error}")))?;
     let seal = crate::notary::ensure_realm_seal_head(state, &realm)
+        .await
         .map_err(|error| AppError::internal(format!("MIMI Realm Seal lookup failed: {error}")))?
         .ok_or_else(|| {
             AppError::new(

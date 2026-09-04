@@ -18,7 +18,7 @@ use super::*;
 /// Validate an Event whose `authorization_ref` is the Realm authority-root cell.
 ///
 /// Events that cite anything else are unaffected.
-pub(super) fn validate_realm_authority_root_authorization(
+pub(super) async fn validate_realm_authority_root_authorization(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     kind: &str,
@@ -60,7 +60,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     let root = if bootstrap_unit_member {
         staged_genesis_root(realm_id, &actor_id.to_string(), realm_bootstrap_contexts)?
     } else {
-        accepted_seal_root(state, object, realm_id)?
+        accepted_seal_root(state, object, realm_id).await?
     };
 
     if root.controller_actor_id != subject {
@@ -120,7 +120,7 @@ fn staged_genesis_root(
 
 /// Accepted-Seal proof: the registered cell must be included in the state the
 /// Event's own governance basis resolves to.
-fn accepted_seal_root(
+async fn accepted_seal_root(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     realm_id: &str,
@@ -136,6 +136,7 @@ fn accepted_seal_root(
     let effective = state
         .projections()
         .effective_state_at(&leaves, &realm)
+        .await
         .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,

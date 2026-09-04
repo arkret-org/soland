@@ -994,21 +994,21 @@ async fn produce_current_agent_signer_evidence(
     {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
-    let key_seal = covering_seal(state, &authorize_event)?;
+    let key_seal = covering_seal(state, &authorize_event).await?;
     let key_cell_ref = arkret_signatures::agent_evidence::agent_authorization_cell_ref(
         agent_id,
         &runtime.signing_key_binding.agent_key_id,
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let (key_value, key_proof) = witnessed_cell(state, &realm_id, &key_seal, &key_cell_ref)?;
+    let (key_value, key_proof) = witnessed_cell(state, &realm_id, &key_seal, &key_cell_ref).await?;
     let key_value: Vec<AgentKeyCellEntry> = serde_json::from_value(key_value)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
 
     let lifecycle = accepted_current_lifecycle(state, &agent, agent_id, &realm_id).await?;
-    let lifecycle_seal = covering_seal(state, &lifecycle.event)?;
+    let lifecycle_seal = covering_seal(state, &lifecycle.event).await?;
     let lifecycle_cell_ref = lifecycle_cell_ref(&agent_actor)?;
     let (lifecycle_value, lifecycle_proof) =
-        witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref)?;
+        witnessed_cell(state, &realm_id, &lifecycle_seal, &lifecycle_cell_ref).await?;
     let lifecycle_value: AgentLifecycleStatus = serde_json::from_value(lifecycle_value)
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     if lifecycle_value != AgentLifecycleStatus::Active {
@@ -1023,20 +1023,22 @@ async fn produce_current_agent_signer_evidence(
     let closure = state
         .projections()
         .seal_closure(std::slice::from_ref(&frontier.id))
+        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     if !closure.contains(&key_seal.id) || !closure.contains(&lifecycle_seal.id) {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
-    let mut seal_lineage = closure
-        .into_iter()
-        .map(|seal_id| {
+    let mut seal_lineage = Vec::with_capacity(closure.len());
+    for seal_id in closure {
+        seal_lineage.push(
             state
                 .projections()
                 .seal_by_id(&seal_id)
+                .await
                 .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
-                .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+                .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?,
+        );
+    }
     seal_lineage.sort_by_key(|seal| seal.notary_seq);
 
     let service_id =
@@ -1201,7 +1203,7 @@ async fn accepted_event(
     Ok(event)
 }
 
-fn covering_seal(
+async fn covering_seal(
     state: &AppState,
     event: &Event,
 ) -> Result<Seal, AgentSignerEvidenceQueryFailureReason> {
@@ -1217,11 +1219,12 @@ fn covering_seal(
     state
         .projections()
         .seal_covering_event(&digest)
+        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)
 }
 
-fn witnessed_cell(
+async fn witnessed_cell(
     state: &AppState,
     realm_id: &RealmId,
     seal: &Seal,
@@ -1235,6 +1238,7 @@ fn witnessed_cell(
     let effective = state
         .projections()
         .effective_state_at(std::slice::from_ref(&seal.id), realm_id)
+        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let value = effective
         .get(&cell)
@@ -1246,6 +1250,7 @@ fn witnessed_cell(
     let digest_suite = state
         .projections()
         .seal_digest_suites(seal)
+        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .seal_digest_suite;
     let proof = arkret_state::state_inclusion_proof(&effective, &cell, digest_suite)

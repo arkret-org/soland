@@ -255,6 +255,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
     let covered = state
         .projections()
         .seal_leaf_union_proof(&leaves)
+        .await
         .map_err(|error| {
             AppError::conflict(format!(
                 "recovery policy acceptance basis cannot be resolved: {error}"
@@ -630,6 +631,7 @@ pub(super) async fn recovery_session_create(
         let view = state
             .projections()
             .effective_seal_view(&leaves, &realm_id)
+            .await
             .map_err(|error| {
                 AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                     .with_wire_code("device_reanchor_frontier_mismatch")

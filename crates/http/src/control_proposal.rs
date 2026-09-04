@@ -128,6 +128,7 @@ pub(crate) async fn mint_control_proposal_acks(
     let notary_authority_set_ref =
         crate::notary::NotaryWorker::for_service(state.service_id().clone())
             .authority_set_ref_for_events(state, realm_id, events)
+            .await
             .map_err(|error| error.to_string())?;
     let is_closed_genesis = events
         .first()
@@ -364,6 +365,7 @@ pub(crate) async fn verify_control_proposal_ack(
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
     let Some((profile, authority_set_ref)) = worker
         .current_notary_value_for_events(state, &ack.realm_id, std::slice::from_ref(event))
+        .await
         .map_err(|error| error.to_string())?
     else {
         return Err("current proposal authority profile is unavailable".to_owned());
@@ -432,6 +434,7 @@ pub(crate) async fn verify_control_proposal_decision(
     let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
     let Some((notary, authority_set_ref)) = worker
         .current_notary_value_for_events(state, &event.realm_id, std::slice::from_ref(event))
+        .await
         .map_err(|error| error.to_string())?
     else {
         return Err("current proposal authority profile is unavailable".to_owned());

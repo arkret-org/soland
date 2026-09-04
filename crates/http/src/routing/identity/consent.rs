@@ -512,6 +512,7 @@ async fn seal_basis_event_view(
         let seal = state
             .projections()
             .seal_by_id(&seal_id)
+            .await
             .map_err(|error| {
                 ConsentRejection::internal(format!("seal_basis is unavailable: {error}"))
             })?

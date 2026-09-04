@@ -20,7 +20,7 @@ use super::*;
 /// - `refs[]` entries with `role=authorized_by` — semantic, non-authoritative citations that MUST
 ///   still resolve and be valid at `seal_ref`, exactly as `arkret_state`'s `verify_capability_refs`
 ///   requires of a Control Move.
-pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
+pub(in crate::routing::events::event_log) async fn validate_data_event_capability_refs(
     state: &AppState,
     _actor_id: &str,
     _station_id: &str,
@@ -104,11 +104,12 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         )
     })?;
 
-    let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
+    let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id).await?;
     let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
     let auth_time = state
         .projections()
         .seal_by_id(&seal_id)
+        .await
         .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -368,6 +369,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         &state_at_ref,
         &used_grant_ids,
     )
+    .await
 }
 
 /// `refs[]` entries carrying `role=authorized_by`.
@@ -414,7 +416,7 @@ fn data_event_authorized_by_refs(
     Ok(authorized_by)
 }
 
-fn validate_data_event_revocation_freshness(
+async fn validate_data_event_revocation_freshness(
     state: &AppState,
     realm: &RealmId,
     seal_ref: &arkret_identifiers::SealId,
@@ -431,6 +433,7 @@ fn validate_data_event_revocation_freshness(
     let base_seal = state
         .projections()
         .seal_by_id(seal_ref)
+        .await
         .map_err(|error| stale_seal_ref_error(format!("seal_ref lookup failed: {error}")))?
         .ok_or_else(|| stale_seal_ref_error("seal_ref is not projected"))?;
     let configured_window = realm_revocation_freshness_window_ms(state_at_ref);
@@ -451,6 +454,7 @@ fn validate_data_event_revocation_freshness(
         for successor in state
             .projections()
             .seal_successors(realm, &current)
+            .await
             .map_err(|error| {
                 stale_seal_ref_error(format!("Seal successor lookup failed: {error}"))
             })?
@@ -461,6 +465,7 @@ fn validate_data_event_revocation_freshness(
             let successor_seal = state
                 .projections()
                 .seal_by_id(&successor)
+                .await
                 .map_err(|error| {
                     stale_seal_ref_error(format!("successor Seal lookup failed: {error}"))
                 })?
@@ -468,6 +473,7 @@ fn validate_data_event_revocation_freshness(
             let successor_state = state
                 .projections()
                 .effective_state_at(std::slice::from_ref(&successor), realm)
+                .await
                 .map_err(|error| {
                     stale_seal_ref_error(format!(
                         "successor control view could not be resolved: {error}"
@@ -509,11 +515,13 @@ fn validate_data_event_revocation_freshness(
     let leaves = state
         .projections()
         .realm_seal_leaves(realm)
+        .await
         .map_err(|error| stale_seal_ref_error(format!("joined leaves unavailable: {error}")))?;
     if !leaves.is_empty() {
         let joined = state
             .projections()
             .effective_state_at(&leaves, realm)
+            .await
             .map_err(|error| {
                 stale_seal_ref_error(format!("joined control view unavailable: {error}"))
             })?;
@@ -590,7 +598,7 @@ fn stale_seal_ref_error(message: impl Into<String>) -> EventValidationError {
     event_validation_error(StatusCode::PRECONDITION_FAILED, "seal_ref_stale", message)
 }
 
-pub(super) fn data_event_state_at_seal_ref(
+pub(super) async fn data_event_state_at_seal_ref(
     state: &AppState,
     realm: &RealmId,
     seal_id: &arkret_identifiers::SealId,
@@ -598,13 +606,17 @@ pub(super) fn data_event_state_at_seal_ref(
     std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
     EventValidationError,
 > {
-    let seal = state.projections().seal_by_id(seal_id).map_err(|error| {
-        event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            format!("DataEvent seal_ref lookup failed: {error}"),
-        )
-    })?;
+    let seal = state
+        .projections()
+        .seal_by_id(seal_id)
+        .await
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent seal_ref lookup failed: {error}"),
+            )
+        })?;
     let Some(seal) = seal else {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -623,6 +635,7 @@ pub(super) fn data_event_state_at_seal_ref(
     let state_at_ref = state
         .projections()
         .effective_state_at(std::slice::from_ref(seal_id), realm)
+        .await
         .map_err(|error| {
             event_validation_error(
                 StatusCode::FORBIDDEN,

@@ -155,7 +155,7 @@ async fn accepted_seal_id(state: &AppState, token: &str, realm_id: &str) -> Seal
                 .sole_leaf()
                 .expect("single-signer Realm frontier")
                 .clone();
-            if seal_covers_link_history(state, &leaf, &required_link_digests) {
+            if seal_covers_link_history(state, &leaf, &required_link_digests).await {
                 return leaf;
             }
             assert!(
@@ -205,27 +205,30 @@ async fn realm_link_diagnostics(state: &AppState, realm_id: &str) -> Value {
             })
         })
         .collect::<Vec<_>>();
-    let batches = state
+    let cells = state
         .test_projections()
         .realm_cells(&realm_id)
+        .await
         .unwrap()
         .into_iter()
         .filter(|cell| {
             cell.as_str()
                 .starts_with("ak:cell:ak.component.realm.link.v1:")
         })
-        .map(|cell| {
-            let batches = state
-                .test_projections()
-                .sealed_op_batches_for_cell(&realm_id, &cell)
-                .unwrap();
-            json!({"cell": cell, "batches": format!("{batches:?}")})
-        })
         .collect::<Vec<_>>();
+    let mut batches = Vec::with_capacity(cells.len());
+    for cell in cells {
+        let cell_batches = state
+            .test_projections()
+            .sealed_op_batches_for_cell(&realm_id, &cell)
+            .await
+            .unwrap();
+        batches.push(json!({"cell": cell, "batches": format!("{cell_batches:?}")}));
+    }
     json!({"events_newest_first": history, "persisted_batches": batches})
 }
 
-fn seal_covers_link_history(
+async fn seal_covers_link_history(
     state: &AppState,
     leaf: &SealId,
     required: &std::collections::BTreeSet<arkret_wire::Hash>,
@@ -239,6 +242,7 @@ fn seal_covers_link_history(
         }
         let seal = state
             .test_seal(&seal_id)
+            .await
             .expect("read accepted Seal")
             .expect("frontier and predecessor Seals are durably available");
         covered.extend(seal.delta);
@@ -547,6 +551,7 @@ async fn assert_link_moves_are_sealed_once(state: &AppState, realm_id: &str, lea
     let pending = state
         .test_projections()
         .pending_control_events_for_notary(&realm_id, None, 100)
+        .await
         .unwrap();
     for event in pending {
         let digest = arkret_wire::Hash::new(
@@ -568,7 +573,7 @@ async fn assert_link_moves_are_sealed_once(state: &AppState, realm_id: &str, lea
         if !visited.insert(seal_id.clone()) {
             continue;
         }
-        let seal = state.test_seal(&seal_id).unwrap().unwrap();
+        let seal = state.test_seal(&seal_id).await.unwrap().unwrap();
         for digest in seal.delta {
             if accepted_links.contains(&digest) {
                 *counts.entry(digest).or_default() += 1;

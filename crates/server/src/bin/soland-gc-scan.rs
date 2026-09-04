@@ -47,9 +47,9 @@ async fn main() -> anyhow::Result<()> {
         Some(id) => {
             let realm = arkret_identifiers::RealmId::new(id.to_owned())
                 .map_err(|e| anyhow::anyhow!("invalid --realm-id: {e}"))?;
-            gc::scan_gc_candidates(&state, &realm)
+            gc::scan_gc_candidates(&state, &realm).await
         }
-        None => gc::scan_all_realms(&state),
+        None => gc::scan_all_realms(&state).await,
     };
 
     let report = serde_json::json!({

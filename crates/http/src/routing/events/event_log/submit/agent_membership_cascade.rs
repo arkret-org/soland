@@ -533,6 +533,7 @@ async fn finalize_prepared_batch(
                 &control_proposal_ack,
                 event.digest_suite,
             )
+            .await
             .map_err(|error| {
                 cascade_error(
                     StatusCode::INTERNAL_SERVER_ERROR,
