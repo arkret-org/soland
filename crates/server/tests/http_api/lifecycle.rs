@@ -612,19 +612,31 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     // private FSM would have *accepted* `todo -> in_progress` here and only rejected a
     // "skipped" transition; now the field never reaches a reducer at all, so both a
     // legal-looking and an illegal-looking value fail identically.
-    for (event_id, next_status) in [
-        ("ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A", "in_progress"),
-        ("ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo", "done"),
+    let mut previous_event_id = domain_named_event_id.clone();
+    for (authoring_step, event_id, next_status) in [
+        (
+            3,
+            "ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A",
+            "in_progress",
+        ),
+        (
+            4,
+            "ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo",
+            "done",
+        ),
     ] {
+        // Distinct authoring steps and a chained `prev_refs`: reusing one actor_seq
+        // would make the second submit a sibling at the same authoring position, so the
+        // test would be measuring fork admission rather than the status field.
         let forbidden = signed_strand_event(
             event_id,
-            3,
+            authoring_step,
             "ak.strand.update",
             serde_json::json!({
                 "target_ref": task_strand_id,
                 "patch": { "metadata": { "fields": { "status": next_status } } }
             }),
-            vec![domain_named_event_id.as_str()],
+            vec![previous_event_id.as_str()],
         );
         let forbidden_event_id = authored_event_id(&forbidden).to_string();
         let mut resp = TestClient::post("http://server/_arkret/self/events")
@@ -667,6 +679,9 @@ async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
                     .is_none(),
                 "a rejected forbidden-wire event must not be persisted"
             );
+        }
+        if accepted {
+            previous_event_id = forbidden_event_id;
         }
     }
 
