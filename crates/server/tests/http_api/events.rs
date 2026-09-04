@@ -1150,7 +1150,13 @@ async fn pg_account_subscribe_cursor_handle_survives_app_state_rebuild_body() {
     .await;
 
     assert_eq!(status, StatusCode::OK, "resume response: {resumed}");
-    assert_eq!(resumed["kind"], "delta");
+    assert_eq!(resumed["kind"], "frontier");
+    assert!(
+        resumed["cursor"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("ak:cursor:")),
+        "pg restart resume must return a durable cursor: {resumed}"
+    );
     assert!(
         resumed.get("error").is_none(),
         "pg restart resume must not fail cursor integrity: {resumed}"
