@@ -585,7 +585,7 @@ async fn verify_cross_session_revoke_proof(
 
 fn session_revoke_proof_invalid(message: impl Into<String>) -> AppError {
     crate::app_error!(SignatureInvalid, message)
-        .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID)
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
 }
 
 fn session_revoke_has_applet_selector(body: &SessionRevokeRequestBody) -> bool {

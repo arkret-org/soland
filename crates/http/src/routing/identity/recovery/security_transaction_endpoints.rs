@@ -146,7 +146,7 @@ pub(super) async fn security_transaction_create(
             CapabilityDenied,
             "security transaction account_id does not match the authenticated account",
         )
-        .with_wire_code("security_transaction_principal_isolation"));
+        .with_internal_reason("security_transaction_principal_isolation"));
     }
     enforce_recovery_grant_transaction_binding(
         state,
@@ -171,7 +171,7 @@ pub(super) async fn security_transaction_create(
         return Err(AppError::capability_denied(
             "security transaction does not match the authenticated account",
         )
-        .with_wire_code("security_transaction_principal_isolation"));
+        .with_internal_reason("security_transaction_principal_isolation"));
     }
     let stored = state
         .security_transactions()
@@ -232,10 +232,7 @@ pub(super) async fn security_transaction_continue(
     let requested_step = transaction
         .resource
         .accepted_step_kind(usize::from(request.expected_accepted_step_count))
-        .map_err(|error| {
-            AppError::conflict(error.to_string())
-                .with_wire_code("security_transaction_failed_precondition")
-        })?;
+        .map_err(|error| crate::app_error!(FailedPrecondition, error.to_string()))?;
 
     if let Some(stored) = state
         .security_transactions()
@@ -260,13 +257,12 @@ pub(super) async fn security_transaction_continue(
 
     request
         .validate_for_transaction(&transaction.resource)
-        .map_err(|error| {
-            AppError::conflict(error.to_string())
-                .with_wire_code("security_transaction_failed_precondition")
-        })?;
+        .map_err(|error| crate::app_error!(FailedPrecondition, error.to_string()))?;
     if transaction.resource.expires_at <= chrono::Utc::now() {
-        return Err(AppError::conflict("security transaction has expired")
-            .with_wire_code("security_transaction_expired"));
+        return Err(
+            crate::app_error!(FailedPrecondition, "security transaction has expired")
+                .with_internal_reason("security_transaction_expired"),
+        );
     }
 
     match requested_step {
@@ -301,10 +297,10 @@ pub(super) async fn security_transaction_continue(
         SecurityTransactionStep::SwitchAuthoritativePointer => {
             continue_rotation_switch(state, &session, transaction, canonical_request, res).await
         }
-        SecurityTransactionStep::EraseOldMaterial => Err(AppError::conflict(
+        SecurityTransactionStep::EraseOldMaterial => Err(crate::app_error!(
+            FailedPrecondition,
             "erase_old_material advances only through ak.self.keys.backup_series.command.erase.v1",
-        )
-        .with_wire_code("security_transaction_failed_precondition")),
+        )),
         SecurityTransactionStep::LocalCommit => {
             continue_rotation_local_commit(
                 state,
@@ -324,10 +320,10 @@ fn rotation_plan(
 ) -> Result<arkret_wire::SecurityRotationPlan, AppError> {
     match &transaction.resource.prepared_plan {
         SecurityTransactionPreparedPlan::SecurityRotation(plan) => Ok(plan.clone()),
-        _ => Err(
-            AppError::conflict("rotation step requires a SecurityRotationTransaction")
-                .with_wire_code("security_transaction_failed_precondition"),
-        ),
+        _ => Err(crate::app_error!(
+            FailedPrecondition,
+            "rotation step requires a SecurityRotationTransaction"
+        )),
     }
 }
 
@@ -432,7 +428,7 @@ async fn submit_rotation_event_unit(
             "prepared rotation Event unit was rejected: {}",
             error.message()
         ))
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     if !outcome.rejections.is_empty()
         || !outcome.quarantine.is_empty()
@@ -443,11 +439,13 @@ async fn submit_rotation_event_unit(
             .map(|event_id| event_id.as_str())
             .ne(expected_event_ids.iter().map(|event_id| event_id.as_str()))
     {
-        return Err(AppError::conflict(format!(
-            "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
-            outcome.accepted, outcome.rejections, outcome.quarantine
-        ))
-        .with_wire_code("security_transaction_failed_precondition"));
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            format!(
+                "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
+                outcome.accepted, outcome.rejections, outcome.quarantine
+            )
+        ));
     }
     serde_json::to_value(outcome).map_err(|error| AppError::internal(error.to_string()))
 }
@@ -501,8 +499,10 @@ fn public_backup_values(
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .ok_or_else(|| {
-            AppError::conflict("prepared backup material does not contain a backups array")
-                .with_wire_code("security_transaction_failed_precondition")
+            crate::app_error!(
+                FailedPrecondition,
+                "prepared backup material does not contain a backups array"
+            )
         })
 }
 
@@ -530,10 +530,10 @@ async fn continue_rotation_upload(
         let rotation = &prepared.binding;
         let values = public_backup_values(&prepared.encrypted_backup_material)?;
         if values.len() != rotation.new_backups.len() {
-            return Err(
-                AppError::conflict("prepared backup material has unreserved entries")
-                    .with_wire_code("security_transaction_failed_precondition"),
-            );
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "prepared backup material has unreserved entries"
+            ));
         }
         for expected in &rotation.new_backups {
             let value = values
@@ -544,8 +544,10 @@ async fn continue_rotation_upload(
                 })
                 .cloned()
                 .ok_or_else(|| {
-                    AppError::conflict("prepared backup material omits a reserved backup")
-                        .with_wire_code("security_transaction_failed_precondition")
+                    crate::app_error!(
+                        FailedPrecondition,
+                        "prepared backup material omits a reserved backup"
+                    )
                 })?;
             if !backup_value_matches_rotation(
                 &value,
@@ -554,10 +556,10 @@ async fn continue_rotation_upload(
                 rotation.backup_kind,
                 expected,
             ) {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "prepared backup identity, series, kind, or digest changed",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
             if let Some(existing) = state
                 .key_backups()
@@ -808,10 +810,10 @@ pub(crate) async fn backup_series_erase_command(
         || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
         || !request.authorization_lease.covers_instant(now)
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "backup-series erase request is not authorized for this transaction",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let expected_control_realm = request.authorization_lease.scope_ref.realm_id();
     if !state
@@ -822,16 +824,16 @@ pub(crate) async fn backup_series_erase_command(
             &session_actor.to_string(),
         )
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "backup-series erase lease is scoped outside principal control",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let arkret_wire::LeaseBasisRef::Seal(basis_seal_id) = &request.authorization_lease.basis_ref
     else {
         return Err(
             AppError::conflict("backup-series erase requires an accepted Seal basis")
-                .with_wire_code("authorization_lease_basis_mismatch"),
+                .with_internal_reason("authorization_lease_basis_mismatch"),
         );
     };
     let basis_seal = state
@@ -841,12 +843,12 @@ pub(crate) async fn backup_series_erase_command(
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| {
             AppError::conflict("backup-series erase lease basis is not accepted")
-                .with_wire_code("authorization_lease_basis_mismatch")
+                .with_internal_reason("authorization_lease_basis_mismatch")
         })?;
     if basis_seal.realm_id != *request.authorization_lease.scope_ref.realm_id() {
         return Err(
             AppError::conflict("backup-series erase lease basis belongs to another Realm")
-                .with_wire_code("authorization_lease_basis_mismatch"),
+                .with_internal_reason("authorization_lease_basis_mismatch"),
         );
     }
     let (expected_authority_ref, expected_authority_policy) =
@@ -864,7 +866,7 @@ pub(crate) async fn backup_series_erase_command(
             CapabilityDenied,
             "backup-series erase lease authority policy is not current for its basis",
         )
-        .with_wire_code("authorization_lease_basis_mismatch"));
+        .with_internal_reason("authorization_lease_basis_mismatch"));
     }
     for proof in &request.authorization_lease.proofs {
         let issuer = arkret_identity::verification_method_did(&proof.verification_method)
@@ -881,7 +883,7 @@ pub(crate) async fn backup_series_erase_command(
                 CapabilityDenied,
                 "backup-series erase lease proof audience does not cover its issuer",
             )
-            .with_wire_code("invalid_proof"));
+            .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
         }
         let binding_bytes = request
             .authorization_lease
@@ -896,7 +898,8 @@ pub(crate) async fn backup_series_erase_command(
         )
         .await
         .map_err(|error| {
-            crate::app_error!(CapabilityDenied, error).with_wire_code("invalid_proof")
+            crate::app_error!(CapabilityDenied, error)
+                .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
         })?;
     }
     for prepared in &plan.backup_rotations {
@@ -908,10 +911,10 @@ pub(crate) async fn backup_series_erase_command(
                 .await
                 .map_err(recovery_service_error)?
             else {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "replacement backup is missing before old-series erasure",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             };
             if !backup_value_matches_rotation(
                 &stored,
@@ -920,10 +923,10 @@ pub(crate) async fn backup_series_erase_command(
                 rotation.backup_kind,
                 expected,
             ) {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "replacement backup identity, series, kind, or digest changed before erasure",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
         }
         let active = state
@@ -934,10 +937,10 @@ pub(crate) async fn backup_series_erase_command(
         if active.is_none_or(|event| {
             event.kind != arkret_wire::EventKind::KeyBackupActiveSeries.as_str()
         }) {
-            return Err(
-                AppError::conflict("replacement active-series Event is not accepted")
-                    .with_wire_code("security_transaction_failed_precondition"),
-            );
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "replacement active-series Event is not accepted"
+            ));
         }
         let active_pointer = state
             .projections()
@@ -946,18 +949,20 @@ pub(crate) async fn backup_series_erase_command(
                 backup_rotation_kind_name(rotation.backup_kind),
             )
             .ok_or_else(|| {
-                AppError::conflict("replacement backup series is not authoritative")
-                    .with_wire_code("security_transaction_failed_precondition")
+                crate::app_error!(
+                    FailedPrecondition,
+                    "replacement backup series is not authoritative"
+                )
             })?;
         if active_pointer.active_series_id != rotation.new_series_id
             || !active_pointer
                 .previous_series_ids
                 .contains(&rotation.previous_series_id)
         {
-            return Err(AppError::conflict(
+            return Err(crate::app_error!(
+                FailedPrecondition,
                 "replacement backup series pointer changed before old-series erasure",
-            )
-            .with_wire_code("security_transaction_failed_precondition"));
+            ));
         }
     }
 
@@ -983,8 +988,10 @@ pub(crate) async fn backup_series_erase_command(
                     .await
                     .map_err(recovery_service_error)?
                     .ok_or_else(|| {
-                        AppError::conflict("planned old backup is missing before erasure begins")
-                            .with_wire_code("security_transaction_failed_precondition")
+                        crate::app_error!(
+                            FailedPrecondition,
+                            "planned old backup is missing before erasure begins"
+                        )
                     })?;
                 if !backup_value_matches_rotation(
                     &existing,
@@ -993,10 +1000,10 @@ pub(crate) async fn backup_series_erase_command(
                     rotation.backup_kind,
                     old,
                 ) {
-                    return Err(AppError::conflict(
+                    return Err(crate::app_error!(
+                        FailedPrecondition,
                         "planned old backup identity, series, kind, or digest changed before erasure",
-                    )
-                    .with_wire_code("security_transaction_failed_precondition"));
+                    ));
                 }
             }
         }
@@ -1057,10 +1064,10 @@ pub(crate) async fn backup_series_erase_command(
                     &old,
                 )
             {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "planned old backup changed while erasure was in progress",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
             if state
                 .key_backups()
@@ -1191,20 +1198,20 @@ async fn continue_rotation_local_commit(
         || commit.device_id.as_str() != session.device_id
         || attestation.attestation_digest != canonical_digest(commit)?
     {
-        return Err(
-            AppError::conflict("local commit artifact changed the durable rotation plan")
-                .with_wire_code("security_transaction_failed_precondition"),
-        );
+        return Err(crate::app_error!(
+            FailedPrecondition,
+            "local commit artifact changed the durable rotation plan"
+        ));
     }
     let expected_verification_method = format!(
         "{}#{}",
         transaction.resource.account_id.principal_id, session.device_id
     );
     if attestation.auth_data.verification_method != expected_verification_method {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "local commit signature is not bound to the session device",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let device_key = resolve_session_device_key_for_genesis_policy(
         state,
@@ -1289,10 +1296,10 @@ async fn continue_issue_terminal_receipt(
             Some(plan.binding.reanchor_event_id.clone()),
         ),
         _ => {
-            return Err(
-                AppError::conflict("terminal receipt requires a recovery transaction")
-                    .with_wire_code("security_transaction_failed_precondition"),
-            );
+            return Err(crate::app_error!(
+                FailedPrecondition,
+                "terminal receipt requires a recovery transaction"
+            ));
         }
     };
     let expected_recovery_session_id = &binding.recovery_session_id;
@@ -1303,18 +1310,19 @@ async fn continue_issue_terminal_receipt(
         .await
         .map_err(recovery_service_error)?
         .ok_or_else(|| {
-            AppError::conflict("bound recovery session is unavailable")
-                .with_wire_code("security_transaction_failed_precondition")
+            crate::app_error!(FailedPrecondition, "bound recovery session is unavailable")
         })?;
     let recovery_proof_summary = recovery_proof_summary(&recovery_session).ok_or_else(|| {
-        AppError::conflict("bound recovery session has no verified proof summary")
-            .with_wire_code("security_transaction_failed_precondition")
+        crate::app_error!(
+            FailedPrecondition,
+            "bound recovery session has no verified proof summary"
+        )
     })?;
     if recovery_session.created_at != receipt.started_at {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "terminal recovery receipt started_at does not match the verified recovery session",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     if recovery_session.state != SessionState::Verified
         || recovery_session.transaction_id.as_deref()
@@ -1329,10 +1337,10 @@ async fn continue_issue_terminal_receipt(
         || recovery_proof_summary.kind != receipt.proof_summary.kind
         || recovery_proof_summary.proof_digest != receipt.proof_summary.proof_digest
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "terminal recovery receipt does not match the verified recovery session snapshot",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let receipt_previous_generation = serde_json::to_value(receipt.previous_model_generation_ref)
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1362,17 +1370,17 @@ async fn continue_issue_terminal_receipt(
         || attestation.transaction_request_digest != transaction.resource.request_digest
         || attestation.prepared_plan_digest != transaction.resource.prepared_plan_digest
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "terminal recovery receipt or outer attestation changed the durable transaction binding",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let receipt_digest = canonical_digest(receipt)?;
     if attestation.attestation_digest != receipt_digest {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "outer attestation digest does not bind the terminal recovery receipt",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let authorization_event = state
         .event_queries()
@@ -1381,8 +1389,10 @@ async fn continue_issue_terminal_receipt(
         .map_err(recovery_service_error)?
         .filter(|event| event.kind == arkret_wire::EventKind::DeviceAuthorize.as_str())
         .ok_or_else(|| {
-            AppError::conflict("durable device authorization Event is unavailable")
-                .with_wire_code("security_transaction_failed_precondition")
+            crate::app_error!(
+                FailedPrecondition,
+                "durable device authorization Event is unavailable"
+            )
         })?;
     let authorization_envelope: arkret_wire::Event =
         serde_json::from_value(authorization_event.envelope.clone()).map_err(|error| {
@@ -1400,10 +1410,10 @@ async fn continue_issue_terminal_receipt(
         &authorization_envelope.actor_id,
         &transaction_actor,
     ) {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "device authorization Event or its stored identity belongs to a different account",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let authorization_payload = authorization_envelope
         .typed_payload::<arkret_wire::event_spec::DeviceAuthorize>()
@@ -1415,10 +1425,10 @@ async fn continue_issue_terminal_receipt(
     if authorization_payload.device_id != *expected_device_id
         || authorization_payload.recovery_session_id.as_ref() != Some(expected_recovery_session_id)
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "accepted device authorization Event changed the recovery binding",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let expected_verification_method = format!(
         "{}#{}",
@@ -1428,10 +1438,10 @@ async fn continue_issue_terminal_receipt(
     if attestation.auth_data.verification_method != expected_verification_method
         || receipt.auth_data.verification_method != expected_verification_method
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "terminal recovery signatures are not identified by the accepted replacement device",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let recovery_device_key = crate::routing::identity::device_signing::decode_ed25519_key(
         authorization_payload.device_public_key_did.as_str(),
@@ -1469,8 +1479,10 @@ async fn continue_issue_terminal_receipt(
                 .map_err(recovery_service_error)?
                 .filter(|event| event.kind == arkret_wire::EventKind::DeviceReanchor.as_str())
                 .ok_or_else(|| {
-                    AppError::conflict("durable device re-anchor Event is unavailable")
-                        .with_wire_code("security_transaction_failed_precondition")
+                    crate::app_error!(
+                        FailedPrecondition,
+                        "durable device re-anchor Event is unavailable"
+                    )
                 })?;
             let recovery_account_id = arkret_wire::AccountId::new(
                 transaction.resource.account_id.principal_id.clone(),
@@ -1479,10 +1491,10 @@ async fn continue_issue_terminal_receipt(
             if reanchor_event.actor_id
                 != arkret_wire::ActorId::account(recovery_account_id.clone()).to_string()
             {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "device re-anchor Event belongs to a different principal",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
             let reanchor_payload: arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload =
                 serde_json::from_value(
@@ -1518,14 +1530,16 @@ async fn continue_issue_terminal_receipt(
                 || reanchor_payload.replacement_authorize_payload_digest
                     != replacement_payload_digest
             {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "device re-anchor Event changed the accepted recovery unit binding",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
             let accepted_unit = transaction.resource.accepted_steps.first().ok_or_else(|| {
-                AppError::conflict("re-anchor publication step is not durably accepted")
-                    .with_wire_code("security_transaction_failed_precondition")
+                crate::app_error!(
+                    FailedPrecondition,
+                    "re-anchor publication step is not durably accepted"
+                )
             })?;
             if receipt
                 .reanchor_batch_receipt_id
@@ -1533,10 +1547,10 @@ async fn continue_issue_terminal_receipt(
                 .map(|id| id.as_str())
                 != Some(accepted_unit.output_ref.as_str())
             {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "terminal receipt does not reference the accepted re-anchor batch receipt",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
             let batch_receipts = state
                 .event_queries()
@@ -1550,8 +1564,10 @@ async fn continue_issue_terminal_receipt(
                         == Some(accepted_unit.output_ref.as_str())
                 })
                 .ok_or_else(|| {
-                    AppError::conflict("accepted re-anchor batch receipt is unavailable")
-                        .with_wire_code("security_transaction_failed_precondition")
+                    crate::app_error!(
+                        FailedPrecondition,
+                        "accepted re-anchor batch receipt is unavailable"
+                    )
                 })?;
             let durable_receipt: arkret_wire::EventBatchReceipt =
                 serde_json::from_value(durable_receipt.value).map_err(|error| {
@@ -1572,10 +1588,10 @@ async fn continue_issue_terminal_receipt(
                     &item.event_id == *event_id && item.event_id.event_digest() == **digest
                 })
             }) {
-                return Err(AppError::conflict(
+                return Err(crate::app_error!(
+                    FailedPrecondition,
                     "accepted re-anchor batch receipt does not bind both fixed Events",
-                )
-                .with_wire_code("security_transaction_failed_precondition"));
+                ));
             }
         }
     }
@@ -1703,8 +1719,10 @@ fn verify_recovery_device_signature(
     let signature = Signature::from_slice(&raw)
         .map_err(|_| AppError::param_invalid("recovery device signature must be 64 bytes"))?;
     key.verify(signing_bytes, &signature).map_err(|_| {
-        AppError::conflict("recovery device signature verification failed")
-            .with_wire_code("security_transaction_failed_precondition")
+        crate::app_error!(
+            FailedPrecondition,
+            "recovery device signature verification failed"
+        )
     })
 }
 
@@ -1769,7 +1787,7 @@ async fn continue_submit_reanchor_unit(
             "re-anchor publication unit was rejected: {}",
             error.message()
         ))
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     let expected_ids = [
         binding.reanchor_event_id.as_str(),
@@ -1785,10 +1803,10 @@ async fn continue_submit_reanchor_unit(
             .map(|event_id| event_id.as_str())
             .ne(expected_ids)
     {
-        return Err(AppError::conflict(
+        return Err(crate::app_error!(
+            FailedPrecondition,
             "re-anchor publication did not atomically accept the fixed Event unit",
-        )
-        .with_wire_code("security_transaction_failed_precondition"));
+        ));
     }
     let batch_receipts = state
         .event_queries()
@@ -1876,10 +1894,10 @@ fn pcr_policy_parts(
         SecurityTransactionPreparedPlan::Recovery(RecoveryPreparedPlan::PcrPolicy(plan)) => {
             Ok((&plan.binding, plan))
         }
-        _ => Err(
-            AppError::conflict("operation requires a PCR-policy recovery transaction")
-                .with_wire_code("security_transaction_failed_precondition"),
-        ),
+        _ => Err(crate::app_error!(
+            FailedPrecondition,
+            "operation requires a PCR-policy recovery transaction"
+        )),
     }
 }
 

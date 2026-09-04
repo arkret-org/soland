@@ -77,7 +77,7 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
             CapabilityDenied,
             "session actor does not match recovery policy principal",
         )
-        .with_wire_code("recovery_principal_isolation"));
+        .with_reason_code("recovery_principal_isolation"));
     }
     let auth_data = payload
         .get("auth_data")

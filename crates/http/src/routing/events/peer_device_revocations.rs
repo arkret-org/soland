@@ -316,7 +316,7 @@ pub(super) async fn check_device_revocation_gate(
         return Err(AppError::conflict(
             "device authorization changed while the gate decision was linearized",
         )
-        .with_wire_code("device_generation_changed"));
+        .with_internal_reason("device_generation_changed"));
     }
 
     let GateDecisionProjection {

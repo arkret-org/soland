@@ -132,7 +132,7 @@ pub(super) async fn applet_record_for_realm(
         return Err(AppError::conflict(
             "multiple Applet installs share this realm; an exact effective scope is required",
         )
-        .with_wire_code("applet_effective_scope_ambiguous"));
+        .with_internal_reason("applet_effective_scope_ambiguous"));
     }
     Ok(result)
 }

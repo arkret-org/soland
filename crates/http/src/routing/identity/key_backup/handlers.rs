@@ -310,7 +310,7 @@ pub(super) async fn put_key_backup(
                     SchemaViolation,
                     format!("series_seq_not_monotonic: {}", error.detail()),
                 )
-                .with_wire_code("series_seq_not_monotonic")
+                .with_reason_code("series_seq_not_monotonic")
             } else {
                 AppError::internal(error.to_string())
             }

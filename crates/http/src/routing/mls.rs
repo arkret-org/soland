@@ -166,7 +166,7 @@ fn trust_binding_from_parts(
         pairwise_verification_method,
     )
     .map_err(|reason_code| {
-        crate::app_error!(FailedPrecondition, message).with_wire_code(reason_code)
+        crate::app_error!(FailedPrecondition, message).with_rejection_code(reason_code)
     })
 }
 
@@ -2230,7 +2230,7 @@ async fn claim_keypackage(
                         FailedPrecondition,
                         format!("remote KeyPackage authority route unavailable: {error}"),
                     )
-                    .with_wire_code("dependency_unavailable")
+                    .with_internal_reason("dependency_unavailable")
                 })?;
         let payload = String::from_utf8(arkret_canonical::canonical_json_bytes(&body).map_err(
             |error| AppError::internal(format!("remote claim canonical body: {error}")),
@@ -2250,7 +2250,7 @@ async fn claim_keypackage(
             FailedPrecondition,
             "remote KeyPackage claim has been durably accepted for relay",
         )
-        .with_wire_code("dependency_unavailable"));
+        .with_internal_reason("dependency_unavailable"));
     }
     claim_keypackage_at_destination(state, &peer_body, authorization)
         .await
@@ -4143,7 +4143,7 @@ async fn ensure_pairwise_realm_affinity(
             FailedPrecondition,
             "pairwise endpoint requires the current minimal-metadata Realm profile",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     let snapshot = state.projections().snapshot();
     let membership_actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
@@ -4159,7 +4159,7 @@ async fn ensure_pairwise_realm_affinity(
             FailedPrecondition,
             "pairwise endpoint has no current Realm membership affinity",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     Ok(())
 }
@@ -4227,14 +4227,14 @@ async fn verify_device_keypackage_signature(
                 FailedPrecondition,
                 "accepted device authorization is required for KeyPackage signature",
             )
-            .with_wire_code("claim_generation_mismatch")
+            .with_reason_code("claim_generation_mismatch")
         })?;
     if device.verification_state != "verified" || device.revoked_at.is_some() {
         return Err(crate::app_error!(
             FailedPrecondition,
             "KeyPackage signature requires a verified, non-revoked device",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     let device_public_key = device
         .payload
@@ -4326,7 +4326,7 @@ async fn verify_session_keypackage_write_signature(
                     FailedPrecondition,
                     "Agent KeyPackage write binding differs from current authorization",
                 )
-                .with_wire_code("claim_generation_mismatch"));
+                .with_reason_code("claim_generation_mismatch"));
             }
             validate_agent_keypackage_upload(
                 state,
@@ -4387,21 +4387,21 @@ async fn current_agent_keypackage_trust_binding(
             FailedPrecondition,
             "Agent must be active before publishing or claiming a KeyPackage",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     let event_ref = agent.authorized_event_ref.as_deref().ok_or_else(|| {
         crate::app_error!(
             FailedPrecondition,
             "Agent has no accepted key authorization",
         )
-        .with_wire_code("claim_generation_mismatch")
+        .with_reason_code("claim_generation_mismatch")
     })?;
     let verification_method = agent
         .authorized_verification_method
         .as_deref()
         .ok_or_else(|| {
             crate::app_error!(FailedPrecondition, "Agent key authorization is incomplete",)
-                .with_wire_code("claim_generation_mismatch")
+                .with_reason_code("claim_generation_mismatch")
         })?;
     let active_event = state
         .projections()
@@ -4414,7 +4414,7 @@ async fn current_agent_keypackage_trust_binding(
             FailedPrecondition,
             "Agent key authorization is no longer active",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     let accepted = state
         .event_queries()
@@ -4428,7 +4428,7 @@ async fn current_agent_keypackage_trust_binding(
                 FailedPrecondition,
                 "Agent key authorization Event is unavailable",
             )
-            .with_wire_code("claim_generation_mismatch")
+            .with_reason_code("claim_generation_mismatch")
         })?;
     let event =
         serde_json::from_value::<arkret_wire::Event>(accepted.envelope).map_err(|error| {
@@ -4453,7 +4453,7 @@ async fn current_agent_keypackage_trust_binding(
             FailedPrecondition,
             "Agent key authorization does not match current accepted state",
         )
-        .with_wire_code("claim_generation_mismatch"));
+        .with_reason_code("claim_generation_mismatch"));
     }
     Ok(Some(KeyPackageTrustBinding::agent_key_authorize(
         event_ref.to_owned(),
@@ -4515,14 +4515,14 @@ async fn current_keypackage_trust_binding(
                 FailedPrecondition,
                 "accepted device authorization is required for KeyPackage publish",
             )
-            .with_wire_code("claim_generation_mismatch")
+            .with_reason_code("claim_generation_mismatch")
         })?;
     device_authorize_trust_binding(&device).ok_or_else(|| {
         crate::app_error!(
             FailedPrecondition,
             "accepted device authorization is required for KeyPackage publish",
         )
-        .with_wire_code("claim_generation_mismatch")
+        .with_reason_code("claim_generation_mismatch")
     })
 }
 
@@ -4536,7 +4536,7 @@ async fn current_keypackage_claim_trust_selector(
     if let Some(verification_method) = pairwise_verification_method {
         let realm_id = intended_realm_id.ok_or_else(|| {
             crate::app_error!(FailedPrecondition, "pairwise claim requires Realm affinity",)
-                .with_wire_code("claim_generation_mismatch")
+                .with_reason_code("claim_generation_mismatch")
         })?;
         let method = arkret_wire::DidUrl::new(verification_method.to_owned())
             .map_err(|_| AppError::param_invalid("pairwise verification method is invalid"))?;
@@ -4558,7 +4558,7 @@ async fn current_keypackage_claim_trust_selector(
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| {
                     crate::app_error!(FailedPrecondition, "Agent membership is unavailable",)
-                        .with_wire_code("claim_generation_mismatch")
+                        .with_reason_code("claim_generation_mismatch")
                 })?;
             crate::routing::identity::agent_pcr::validate_effective_agent_realm_membership(
                 state,
@@ -4569,7 +4569,7 @@ async fn current_keypackage_claim_trust_selector(
             .await
             .map_err(|_| {
                 crate::app_error!(FailedPrecondition, "Agent is not an effective Realm member",)
-                    .with_wire_code("claim_generation_mismatch")
+                    .with_reason_code("claim_generation_mismatch")
             })?;
         }
         return Ok(KeyPackageTrustSelector::Principal(binding));

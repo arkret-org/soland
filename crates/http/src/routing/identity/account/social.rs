@@ -805,7 +805,7 @@ pub(crate) fn direct_resolve_precondition(reason: &'static str, message: &'stati
 }
 
 fn contact_failed_precondition(reason: &'static str, message: &'static str) -> AppError {
-    crate::app_error!(FailedPrecondition, message).with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, message).with_rejection_code(reason)
 }
 
 fn direct_summary(

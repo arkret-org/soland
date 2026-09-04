@@ -53,14 +53,14 @@ async fn lock_sidecar_ensure(
 
 pub(super) fn sidecar_create_denied(message: impl Into<String>) -> AppError {
     AppError::capability_denied(message)
-        .with_wire_code(arkret_wire::ReasonCode::SIDECAR_CREATE_DENIED)
+        .with_reason_code(arkret_wire::ReasonCode::SIDECAR_CREATE_DENIED)
 }
 
 pub(super) fn sidecar_failed_precondition(
     reason: &'static str,
     message: impl Into<String>,
 ) -> AppError {
-    crate::app_error!(FailedPrecondition, message.into()).with_wire_code(reason)
+    crate::app_error!(FailedPrecondition, message.into()).with_rejection_code(reason)
 }
 
 async fn authorize_sidecar_ensure(
@@ -1221,7 +1221,8 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                crate::app_error!(FailedPrecondition, error.message()).with_wire_code(error.code())
+                crate::app_error!(FailedPrecondition, error.message())
+                    .with_rejection_code(error.code())
             })?;
             finalize_sidecar_projection_records(
                 state,
@@ -1302,7 +1303,8 @@ async fn ensure_sidecar_impl(
             )
             .await
             .map_err(|error| {
-                crate::app_error!(FailedPrecondition, error.message()).with_wire_code(error.code())
+                crate::app_error!(FailedPrecondition, error.message())
+                    .with_rejection_code(error.code())
             })?;
             finalize_sidecar_projection_records(
                 state,

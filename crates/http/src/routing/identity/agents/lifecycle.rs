@@ -1159,7 +1159,7 @@ pub(super) async fn lifecycle_transition(
         return Err(AppError::unsupported_feature(
             "production agent lifecycle transitions require protocol-valid delegated fan-out",
         )
-        .with_wire_code("agent_lifecycle_fanout_unavailable"));
+        .with_internal_reason("agent_lifecycle_fanout_unavailable"));
     };
     // Resume is a pure lifecycle-intent write and MUST NOT interlock with an
     // open pairing handle (key-management.md §3.6.1): an in-flight replacement

@@ -1614,7 +1614,7 @@ async fn read_principal_resolution_audit(
             .filter(|position| *position > 0)
             .ok_or_else(|| {
                 AppError::param_invalid("resolution history ancestor is unknown")
-                    .with_wire_code("resolution_history_ancestor_unknown")
+                    .with_reason_code("resolution_history_ancestor_unknown")
             })?;
         Some(position)
     } else {

@@ -423,7 +423,7 @@ async fn admit_caller_signed_account_data_set(
             ParamInvalid,
             format!("account_data Event admission failed: {}", error.message()),
         )
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     Ok(revision)
 }

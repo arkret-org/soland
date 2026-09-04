@@ -178,7 +178,7 @@ async fn install_preview_endpoint(
                     .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
                 error.message,
             )
-            .with_wire_code(error.code)
+            .with_rejection_code(error.code)
         })?;
     }
     let validated_admin =
@@ -567,7 +567,7 @@ fn require_current_station_authoring_binding(
     Err(AppError::param_invalid(
         "install authoring request targets or is signed by a non-current Station key",
     )
-    .with_wire_code("authoring_request_proof_invalid"))
+    .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID))
 }
 
 #[salvo::oapi::endpoint(
@@ -1491,7 +1491,7 @@ async fn provision_ghost_actor_endpoint(
         return Err(AppError::param_invalid(
             "Ghost authoring request does not pin the current hosting notary",
         )
-        .with_wire_code("authoring_request_proof_invalid"));
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
     }
     arkret_signatures::Ed25519DetachedJwsVerifier::new()
         .verify_detached_jws(
@@ -1611,7 +1611,7 @@ async fn provision_ghost_actor_endpoint(
             return Err(AppError::conflict(
                 "Ghost actor identity is already used by an Applet service, controller, Bot, or Ghost",
             )
-            .with_wire_code("applet_managed_actor_provision_invalid"));
+            .with_reason_code("applet_managed_actor_provision_invalid"));
         }
     }
     let (authorization_ref, _) =
@@ -1764,7 +1764,7 @@ async fn provision_ghost_actor_endpoint(
                 .unwrap_or(soland_http::error::ErrorCode::ParamInvalid),
             error.message(),
         )
-        .with_wire_code(error.code()));
+        .with_rejection_code(error.code()));
     }
 
     crate::routing::append_audit_log(
@@ -2360,8 +2360,8 @@ mod revoke_saga_tests {
         )
         .unwrap_err();
         assert_eq!(
-            wrong_target.wire_code_override.as_deref(),
-            Some("authoring_request_proof_invalid")
+            wrong_target.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
         );
 
         // The detached signature may still be cryptographically valid under
@@ -2377,8 +2377,8 @@ mod revoke_saga_tests {
         )
         .unwrap_err();
         assert_eq!(
-            stale_key.wire_code_override.as_deref(),
-            Some("authoring_request_proof_invalid")
+            stale_key.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::PROOF_INVALID)
         );
     }
 

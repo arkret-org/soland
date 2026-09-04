@@ -720,7 +720,7 @@ async fn blob_presign(
             "rejected",
         )
         .await;
-        return Err(AppError::not_found("blob not found").with_wire_code(reason));
+        return Err(AppError::not_found("blob not found").with_rejection_code(reason));
     }
     let ttl_seconds = u64::from(body.max_age_seconds.unwrap_or(300)).clamp(1, 300);
     let issued_at = now();
@@ -1546,12 +1546,12 @@ impl PresignBlobBlock {
                 FailedPrecondition,
                 "blob is currently subject to a legal hold; presign refused",
             )
-            .with_wire_code(arkret_wire::ReasonCode::LEGAL_HOLD_ACTIVE),
+            .with_reason_code(arkret_wire::ReasonCode::LEGAL_HOLD_ACTIVE),
             Self::Redacted => crate::app_error!(
                 FailedPrecondition,
                 "blob has been redacted; presign refused",
             )
-            .with_wire_code(arkret_wire::ReasonCode::BLOB_REDACTED),
+            .with_reason_code(arkret_wire::ReasonCode::BLOB_REDACTED),
             Self::ActorPrivate => crate::app_error!(
                 CapabilityDenied,
                 "blob is actor_private; only the owner may request a presign URL",

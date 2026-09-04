@@ -1130,7 +1130,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     {
         return Err(
             crate::app_error!(CapabilityDenied, "snapshot issuer is revoked")
-                .with_wire_code("snapshot_issuer_revoked"),
+                .with_reason_code("snapshot_issuer_revoked"),
         );
     }
 

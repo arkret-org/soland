@@ -418,13 +418,13 @@ async fn issue_intent_leases(
                     .map_err(|error| AppError::internal(error.to_string()))?
                     .ok_or_else(|| {
                         AppError::conflict("authorization lease intent basis is not accepted")
-                            .with_wire_code("authorization_lease_basis_mismatch")
+                            .with_internal_reason("authorization_lease_basis_mismatch")
                     })?;
                 if seal.realm_id != *intent.scope_ref.realm_id() {
                     return Err(AppError::conflict(
                         "authorization lease intent basis is in another Realm",
                     )
-                    .with_wire_code("authorization_lease_basis_mismatch"));
+                    .with_internal_reason("authorization_lease_basis_mismatch"));
                 }
             }
             _ => {

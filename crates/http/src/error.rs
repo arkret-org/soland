@@ -176,6 +176,28 @@ mod tests {
     }
 
     #[test]
+    fn with_wire_code_accepts_registered_top_level_codes() {
+        let error =
+            AppError::new(ErrorCode::Conflict, "bad").with_wire_code(ErrorCode::CAS_CONFLICT);
+        assert_eq!(error.wire_code(), "cas_conflict");
+    }
+
+    #[test]
+    #[should_panic(expected = "unregistered top-level error code")]
+    fn with_wire_code_rejects_reason_codes_in_debug_builds() {
+        // `proof_invalid` is a registered reason code, never a top-level one:
+        // `error.code` is the RFC 9457 `type` tail and is bound to `codes[]`.
+        let _ = AppError::new(ErrorCode::ParamInvalid, "bad")
+            .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID);
+    }
+
+    #[test]
+    #[should_panic(expected = "unregistered top-level error code")]
+    fn with_wire_code_rejects_internal_discriminators_in_debug_builds() {
+        let _ = AppError::new(ErrorCode::Conflict, "bad").with_wire_code("some_internal_state");
+    }
+
+    #[test]
     fn with_reason_code_accepts_registered_reason_codes() {
         let error = AppError::new(ErrorCode::SchemaViolation, "bad")
             .with_reason_code(arkret_wire::ReasonCode::UNKNOWN_FIELD);
@@ -300,15 +322,28 @@ impl AppError {
 
     /// Override the on-wire `error.code` string. See `wire_code_override` for
     /// the rationale + caveats.
+    ///
+    /// The value MUST be a registered member of
+    /// `registry/error-code-registry.json` `codes[]`: `error.code` is the tail
+    /// of the RFC 9457 `type` URI, and api-conventions.md 5.1 binds that tail
+    /// to the registry. A registered `reason_codes[]` member is NOT a
+    /// top-level code - route it through [`Self::with_reason_code`]; an
+    /// internal discriminator belongs on [`Self::with_internal_reason`].
     pub fn with_wire_code(mut self, wire_code: impl Into<String>) -> Self {
-        self.wire_code_override = Some(wire_code.into().into_boxed_str());
+        let wire_code = wire_code.into();
+        debug_assert!(
+            ErrorCode::is_registered(&wire_code),
+            "unregistered top-level error code `{wire_code}`; a registered reason code belongs \
+             on `with_reason_code` and an internal discriminator on `with_internal_reason`"
+        );
+        self.wire_code_override = Some(wire_code.into_boxed_str());
         self
     }
 
     /// Attach a stable protocol reason code without replacing `error.code`.
     ///
-    /// The value MUST be a registered member of
-    /// `registry/reason-code-registry.json`; the SDK projection enforces this
+    /// The value MUST be a registered member of the `reason_codes[]` section of
+    /// `registry/error-code-registry.json`; the SDK projection enforces this
     /// in debug builds so an unregistered string cannot silently reach the
     /// wire. Route strings of unknown provenance through
     /// [`Self::with_internal_reason`] instead.
@@ -327,6 +362,25 @@ impl AppError {
              `with_internal_reason`"
         );
         self.reason_code = Some(reason_code.into_boxed_str());
+    }
+
+    /// Route a downstream rejection's discriminator across all three channels.
+    ///
+    /// A rejection that crosses a module boundary arrives as a bare string
+    /// whose registry membership is only known at runtime: reducer and
+    /// admission lanes mix registered top-level codes, registered reason codes
+    /// and internal discriminators in one `&str`. Dispatching on membership
+    /// here keeps a registered top-level code on `error.code` (its previous
+    /// behaviour) while an unregistered discriminator can no longer reach that
+    /// field.
+    pub fn with_rejection_code(mut self, value: impl AsRef<str>) -> Self {
+        let value = value.as_ref();
+        if ErrorCode::is_registered(value) {
+            self.wire_code_override = Some(value.into());
+        } else {
+            self.attach_internal_reason(value);
+        }
+        self
     }
 
     /// Route a reason string of unknown provenance onto the right channel: a

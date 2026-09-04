@@ -285,7 +285,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         return Err(AppError::capability_denied(
             "Ghost provisioning Event proofs must use the installed registration-epoch key",
         )
-        .with_wire_code("invalid_proof"));
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
     }
 
     let grant: AccountabilityGrantPayload = serde_json::from_value(
@@ -324,7 +324,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         return Err(AppError::capability_denied(
             "accountability payload proof must use the installed registration-epoch key",
         )
-        .with_wire_code("invalid_proof"));
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID));
     }
     let proof_binding = grant.canonical_proof_binding_bytes().map_err(|error| {
         AppError::param_invalid(format!(
@@ -342,7 +342,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         AppError::param_invalid(format!(
             "accountability payload proof JWS verification failed: {error}"
         ))
-        .with_wire_code("invalid_proof")
+        .with_reason_code(arkret_wire::ReasonCode::PROOF_INVALID)
     })?;
 
     let profile_payload: arkret_models_collaboration::events_payloads::ActorProfileCreatePayload =
@@ -403,7 +403,7 @@ async fn validate_ghost_managed_actor_unit(
         return Err(AppError::param_invalid(
             "managed_actor_provision_event does not match the installed Applet service",
         )
-        .with_wire_code("applet_managed_actor_provision_invalid"));
+        .with_reason_code("applet_managed_actor_provision_invalid"));
     }
     let payload: AppletManagedActorProvisionPayload =
         serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
@@ -413,11 +413,11 @@ async fn validate_ghost_managed_actor_unit(
         })?)
         .map_err(|error| {
             AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-                .with_wire_code("applet_managed_actor_provision_invalid")
+                .with_reason_code("applet_managed_actor_provision_invalid")
         })?;
     payload.validate().map_err(|error| {
         AppError::param_invalid(format!("managed actor provision payload invalid: {error}"))
-            .with_wire_code("applet_managed_actor_provision_invalid")
+            .with_reason_code("applet_managed_actor_provision_invalid")
     })?;
     if payload.actor_role != AppletManagedActorRole::Ghost
         || payload.applet_id != basis.applet_id
@@ -432,7 +432,7 @@ async fn validate_ghost_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Ghost provision authority does not bind the exact authority pair, registration, grant, or external principal",
         )
-        .with_wire_code("applet_managed_actor_provision_invalid"));
+        .with_reason_code("applet_managed_actor_provision_invalid"));
     }
     super::install::validate_managed_actor_method_evidence(&payload)?;
     super::install::validate_managed_actor_current_method_evidence(state, &payload).await?;
@@ -448,7 +448,7 @@ async fn validate_ghost_managed_actor_unit(
         return Err(AppError::capability_denied(
             "Ghost did is outside the installed Applet actor namespace",
         )
-        .with_wire_code("applet_namespace_mismatch"));
+        .with_reason_code("applet_namespace_mismatch"));
     }
 
     let genesis = &request.managed_actor_bundle.pcr_genesis_event;
@@ -463,7 +463,7 @@ async fn validate_ghost_managed_actor_unit(
         )
         .map_err(|error| {
             AppError::param_invalid(format!("Ghost PCR genesis object is invalid: {error}"))
-                .with_wire_code("applet_managed_pcr_genesis_invalid")
+                .with_reason_code("applet_managed_pcr_genesis_invalid")
         })?;
     let expected_host_notary = arkret_wire::NotaryValue::single_signer(
         state
@@ -503,7 +503,7 @@ async fn validate_ghost_managed_actor_unit(
         return Err(AppError::param_invalid(
             "Ghost PCR genesis does not exactly cross-bind its immutable provision authority",
         )
-        .with_wire_code("applet_managed_pcr_genesis_invalid"));
+        .with_reason_code("applet_managed_pcr_genesis_invalid"));
     }
     Ok(payload)
 }

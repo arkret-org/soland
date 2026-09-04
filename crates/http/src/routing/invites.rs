@@ -268,10 +268,7 @@ async fn peer_invites_submit(
     // trust-domain-bound identity. It is never a principal session and MUST NOT
     // be reused by the authenticated self dispatch surface.
     let trust_headers = crate::routing::federation::FederationTrustHeaders::from_salvo_request(req)
-        .map_err(|violation| {
-            super::events::peer::schema_violation(violation.message())
-                .with_wire_code(violation.error_code())
-        })?;
+        .map_err(|violation| super::events::peer::schema_violation(violation.message()))?;
     let request_hash = crate::util::canonical_digest(&body)?;
     let session = SessionRecord {
         token_hash: format!(
@@ -429,7 +426,7 @@ async fn receive_private_invite_delivery(
             )
             .await
             .map_err(|error| {
-                crate::app_error!(SchemaViolation, error.message).with_wire_code(error.code)
+                crate::app_error!(SchemaViolation, error.message).with_rejection_code(error.code)
             })?;
             let duplicate = persist_private_invite_projection(
                 state,

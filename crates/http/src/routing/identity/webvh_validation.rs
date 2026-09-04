@@ -169,7 +169,7 @@ impl From<WebvhValidationError> for AppError {
         } else {
             ErrorCode::SchemaViolation
         };
-        AppError::from_rejection(code, error.message()).with_wire_code(error.code())
+        AppError::from_rejection(code, error.message()).with_rejection_code(error.code())
     }
 }
 

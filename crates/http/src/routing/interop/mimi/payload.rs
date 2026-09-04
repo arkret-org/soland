@@ -150,7 +150,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
             ParamInvalid,
             format!("MIMI Event admission failed: {}", error.message()),
         )
-        .with_wire_code(error.code())
+        .with_rejection_code(error.code())
     })?;
     Ok(event_id)
 }

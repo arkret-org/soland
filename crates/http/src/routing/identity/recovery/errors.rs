@@ -40,13 +40,17 @@ pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
         return recovery_store_error(error);
     }
     let message = error.detail();
+    // `conflict` is the abstract 409 base code; api-conventions.md 5.1 asks for
+    // the precise registry entry. All three arms are the same top-level
+    // rejection, discriminated by their registered reason code.
+    let rejection = AppError::conflict(message).with_wire_code("recovery_policy_conflict");
     match error.conflict_code() {
         Some(soland_storage::ConflictCode::RecoveryPolicyVersionNotMonotonic) => {
-            AppError::conflict(message).with_wire_code("recovery_policy_version_not_monotonic")
+            rejection.with_reason_code("recovery_policy_version_not_monotonic")
         }
         Some(soland_storage::ConflictCode::RecoveryPolicySupersedesInvalid) => {
-            AppError::conflict(message).with_wire_code("recovery_policy_supersedes_invalid")
+            rejection.with_reason_code("recovery_policy_supersedes_invalid")
         }
-        _ => AppError::conflict(message).with_wire_code("recovery_policy_conflict"),
+        _ => rejection,
     }
 }
