@@ -662,6 +662,22 @@ pub(crate) async fn event_visible_to_session(
     }
     match canonical_realm_id_for_record(record) {
         Some(realm_id) => {
+            // Agent PCR Events are authored as the Agent Actor, while the
+            // delegated human controller owns the device key that signs the
+            // accepted Seal. The controller must be able to resolve the exact
+            // Event closure named by that Seal in order to verify and pin the
+            // Agent PCR checkpoint; Agent PCRs intentionally have no ordinary
+            // membership row.
+            if crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
+                state,
+                &session.actor,
+                &realm_id,
+            )
+            .await
+            .unwrap_or(false)
+            {
+                return circle_event_visible_to_session(state, record, session);
+            }
             // Governance verification is not content-history backfill. A
             // current member must be able to resolve every accepted Control
             // Move named by the Realm Seal closure so a new member can perform

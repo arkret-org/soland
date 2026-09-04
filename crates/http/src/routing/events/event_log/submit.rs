@@ -1092,6 +1092,17 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         )));
         return;
     }
+    if error.code == arkret_wire::ReasonCode::CROSS_REALM_STRUCTURAL_RELATION {
+        crate::error::render_error_with_reason_code(
+            res,
+            StatusCode::CONFLICT,
+            ErrorCode::FailedPrecondition.as_str(),
+            &error.message,
+            &error.code,
+            None,
+        );
+        return;
+    }
     if let Some(details) = error.details {
         let mut envelope =
             arkret_wire::problem_details::ErrorEnvelope::new(error.code, error.message)

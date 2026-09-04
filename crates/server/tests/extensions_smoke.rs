@@ -1131,7 +1131,10 @@ async fn applet_protocol_describe_smoke() {
     describe
         .validate()
         .expect("Applet describe must be the canonical ServiceDescribe");
-    assert_eq!(describe.protocol_version, arkret_wire::PROTOCOL_VERSION);
+    assert_eq!(
+        describe.protocol_version.as_str(),
+        arkret_wire::PROTOCOL_VERSION
+    );
     for operation_id in [
         arkret_wire::ServiceOperationId::EDGE_APPLET_READ_PING_V1,
         arkret_wire::ServiceOperationId::EDGE_APPLET_READ_DESCRIBE_V1,

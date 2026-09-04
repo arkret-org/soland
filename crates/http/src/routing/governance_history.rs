@@ -146,20 +146,34 @@ async fn current_membership_evidence(
     Ok((membership_ref, membership_digest))
 }
 
-fn has_ordinary_governance_read_access(
+async fn has_ordinary_governance_read_access(
     state: &AppState,
     realm_id: &arkret_wire::RealmId,
     actor_id: &arkret_wire::ActorId,
-) -> bool {
+) -> Result<bool, AppError> {
     let snapshot = state.projections().snapshot();
     let actor_key = actor_id.to_string();
     // PCR genesis does not create membership. Its exact Account Actor can
     // still resolve its own accepted control closure; this grants no
     // cross-principal or cross-Station visibility.
-    snapshot.realm_is_principal_control_for_actor(realm_id.as_str(), &actor_key)
+    if snapshot.realm_is_principal_control_for_actor(realm_id.as_str(), &actor_key)
         || snapshot
             .member(realm_id.as_str(), &actor_key)
             .is_some_and(|member| member.state == "join")
+    {
+        return Ok(true);
+    }
+    // An Agent PCR is controlled by another principal and therefore cannot
+    // satisfy either ordinary membership check above. The delegated
+    // controller nevertheless needs the exact accepted Seal/Event/dependency
+    // closure to verify and pin the Agent PCR governance checkpoint after
+    // authoring its device-signed Seal.
+    crate::routing::identity::agent_pcr::controller_manages_agent_pcr(
+        state,
+        actor_id.signing_principal_id().as_str(),
+        realm_id.as_str(),
+    )
+    .await
 }
 
 /// Reconcile durable request-replica obligations after startup and membership
@@ -495,7 +509,7 @@ async fn resolve_self_seals(
         .validate()
         .map_err(|error| AppError::param_invalid(error.to_string()))?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        has_ordinary_governance_read_access(state, &request.realm_id, &caller)
+        has_ordinary_governance_read_access(state, &request.realm_id, &caller).await?
     } else {
         false
     };
@@ -627,7 +641,7 @@ async fn resolve_self_dependencies(
     let request = body.into_inner();
     let caller = exact_session_actor_id(state, &session).await?;
     let ordinary_visible = if request.history_traversal_access.is_none() {
-        has_ordinary_governance_read_access(state, &request.realm_id, &caller)
+        has_ordinary_governance_read_access(state, &request.realm_id, &caller).await?
     } else {
         false
     };
