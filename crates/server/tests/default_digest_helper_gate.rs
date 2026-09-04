@@ -17,6 +17,15 @@ fn production_http_authoring_never_uses_default_event_digest_helpers() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../http/src");
     let mut sources = Vec::new();
     rust_sources(&root, &mut sources);
+    // A relative scan path that stops resolving turns this gate into a
+    // tautology: zero files scanned means zero violations found. Fail on an
+    // empty scan surface instead, the same self-check
+    // `event_preimage_authoring_guard.rs` carries.
+    assert!(
+        !sources.is_empty(),
+        "found no Rust sources under {}; the scan surface moved and this gate stopped covering anything",
+        root.display()
+    );
 
     // An `AuthoredEvent` carries the suite its identity was derived under, and
     // signing reuses it, so the suite can only be chosen wrongly at the

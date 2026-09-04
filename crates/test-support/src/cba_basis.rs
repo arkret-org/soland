@@ -33,12 +33,14 @@ use std::sync::{LazyLock, Mutex};
 use arkret_identifiers::{Did, Hlc, RealmId, SealId};
 use arkret_wire::{Seal, SealBasis};
 use soland_http::state::AppState;
-use soland_services::conformance_basis::ConformanceRealmBasis;
+use soland_services::conformance_basis::{ConformanceRealmBasis, FIXTURE_BASIS_HLC};
 
 use crate::AppStateTestExt as _;
 
 /// The notary key every fixture basis Seal is signed with.
-const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
+/// This family's own id domain. It MUST stay different from
+/// `soland_services::conformance_basis`'s domain: the two build Seals over the
+/// same pinned HLC, and equal domains would make them the same Seal id.
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
 /// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";

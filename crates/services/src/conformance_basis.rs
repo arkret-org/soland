@@ -15,7 +15,18 @@ use sha2::{Digest, Sha256};
 
 use crate::projection::ProjectionService;
 
-const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
+/// The pinned HLC every synthetic Realm basis Seal in this workspace is
+/// authored at.
+///
+/// One definition, because the Seal id is derived from the HLC together with
+/// the fixture id domain: the two fixture families below and in
+/// `soland-test-support` deliberately use **different** id domains
+/// (`soland:conformance:realm-basis:` vs `soland:test-support:realm-basis:`)
+/// so their Seals cannot collide, and it used to be this constant that was
+/// duplicated instead. Changing one copy of the HLC while leaving the other
+/// moves one family's Seal ids and nothing fails, so the HLC is shared from
+/// here and the id domains stay apart on purpose.
+pub const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const CONFORMANCE_FIXTURE_ID_DOMAIN: &str = "soland:conformance:realm-basis:";
 
 /// The patch paths the fixture field-scoped grant authorizes.

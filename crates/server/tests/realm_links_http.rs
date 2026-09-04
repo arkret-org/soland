@@ -513,12 +513,12 @@ async fn realm_link_tombstone_recomputes_effective_policy() {
     );
 
     // Tombstoned is terminal. A later attempt to reactivate the same cell
-    // fails with the canonical FSM reason.
+    // fails with the canonical FSM reason. `error-code-registry.json` maps
+    // `failed_precondition` to HTTP 409, and `realm_link_invalid_transition`
+    // is a `state_resolution` reason carried under it -- 422 is not the
+    // status any part of the registry gives this rejection.
     let mut reactivate = submit_link(&state, &token, &realm_d, &realm_c, "active").await;
-    assert_eq!(
-        reactivate.status_code,
-        Some(StatusCode::UNPROCESSABLE_ENTITY)
-    );
+    assert_eq!(reactivate.status_code, Some(StatusCode::CONFLICT));
     let body: Value = reactivate
         .take_json()
         .await
