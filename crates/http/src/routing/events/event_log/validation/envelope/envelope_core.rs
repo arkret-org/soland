@@ -269,18 +269,25 @@ async fn validate_event_envelope_with_ingress(
     })?;
 
     // Identity verification is deliberately the last purely local gate before
-    // any admission lookup. The suite comes from the trusted Realm projection
-    // (or the signed Realm-create payload), then the shared storage verifier
-    // recomputes the exact digest preimage and binds the complete EventId.
+    // any admission lookup. Ordinary Realm traffic takes the suite from the
+    // trusted Realm projection (or the signed Realm-create payload). A private
+    // invite recipient intentionally has no shared-Realm projection, so its
+    // first-contact verifier recovers the active suite code carried by the
+    // self-describing EventId. The subsequent digest and content-bound-id
+    // checks still prove that the complete canonical Event matches that id.
     let canonical_bytes = event_canonical_bytes(envelope)?;
-    let digest_suite = event_digest_suite(
-        state,
-        &kind,
-        realm_id.as_str(),
-        object,
-        realm_bootstrap_contexts,
-    )
-    .await?;
+    let digest_suite = if private_invite_delivery {
+        event_id.digest_suite_code().as_str().to_owned()
+    } else {
+        event_digest_suite(
+            state,
+            &kind,
+            realm_id.as_str(),
+            object,
+            realm_bootstrap_contexts,
+        )
+        .await?
+    };
     let canonical_digest = event_digest_for_suite(&canonical_bytes, &digest_suite)?;
     validate_prelookup_event_identity(event_id.as_str(), &canonical_digest, &canonical_bytes)?;
     let typed_digest_suite = arkret_canonical::digest_suite(&digest_suite)

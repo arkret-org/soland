@@ -23,24 +23,58 @@ pub(super) fn realm_create_actor_is_creator(
         .is_some_and(|author| author.signing_principal_id().as_str() == actor)
 }
 
-/// True when an invite is authored by its exact inviter AccountId.
+/// True when an invite is authored by the authenticated inviter Account.
 /// Used to admit private delivery on a recipient Station outside the Realm.
+///
+/// `InviteCreatePayload` deliberately does not duplicate an
+/// `inviter_account_id`: the signed full `actor_id` is the inviter identity.
+/// Requiring a payload copy here made every canonical directed invite fail the
+/// recipient's private-ingress membership bypass.
 pub(super) fn invite_create_actor_is_inviter(
     object: &serde_json::Map<String, Value>,
     actor: &str,
 ) -> bool {
-    let inviter_id = object
-        .get("payload")
-        .and_then(|payload| payload.get("inviter_account_id"))
-        .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value).ok());
-    let author = object
+    object
         .get("actor_id")
         .cloned()
-        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok());
-    author.zip(inviter_id).is_some_and(|(author, inviter)| {
-        author.signing_principal_id().as_str() == actor && author.as_account_id() == Some(&inviter)
-    })
+        .and_then(|value| serde_json::from_value::<arkret_wire::ActorId>(value).ok())
+        .is_some_and(|author| {
+            author.signing_principal_id().as_str() == actor && author.as_account_id().is_some()
+        })
+}
+
+#[cfg(test)]
+mod private_invite_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_invite_payload_uses_signed_actor_as_inviter() {
+        let principal = "ak:did_core:webvh:QmZx45CviywxAszP7ZLdbGWXTKbaGqyZEBKJ1mu3U1Lw6P";
+        let event = serde_json::json!({
+            "actor_id": {
+                "kind": "account",
+                "account_id": {
+                    "principal_id": principal,
+                    "station_id": "ak:did_core:webvh:QmRRRztcj9JJ2sMx7g9CNZEoUJskv5ndMNFsDvQKxwx13a"
+                }
+            },
+            "payload": {
+                "invitee_account_id": {
+                    "principal_id": "ak:did_core:webvh:QmXaqGi2FZv9YMf441tjbm5nz8ZKnafjfE2S7QWzyRHqj1",
+                    "station_id": "ak:did_core:webvh:QmNzZX7HtR8SS1ANSNZZLSgJtpFDuUgFd7aP3PgkPtXZCV"
+                },
+                "introduction_evidence_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "expires_at": "2026-09-11T10:15:28.202Z"
+            }
+        });
+        let object = event.as_object().expect("fixture object");
+
+        assert!(invite_create_actor_is_inviter(object, principal));
+        assert!(!invite_create_actor_is_inviter(
+            object,
+            "ak:did_core:webvh:QmXaqGi2FZv9YMf441tjbm5nz8ZKnafjfE2S7QWzyRHqj1"
+        ));
+    }
 }
 
 /// True when a `ak.member.state` event is a self-authored join-policy entry by
