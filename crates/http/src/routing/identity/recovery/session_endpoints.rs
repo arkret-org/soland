@@ -907,11 +907,11 @@ pub(super) async fn recovery_session_proof_submit(
     )
     .await;
 
+    // A 2xx reply already means the proof verified and the session entered
+    // `verified`, so the outcome echoes neither `state` nor `verification`.
     json_ok(RecoverySessionProofSubmitOutcome {
         recovery_session_id: RecoverySessionId::new(updated.recovery_session_id.clone())
             .map_err(|error| stored_recovery_type_error("recovery_session_id", error))?,
-        state: updated.state,
-        verification: "verified".to_owned(),
         proof_summary: recovery_proof_summary(&updated),
     })
 }
