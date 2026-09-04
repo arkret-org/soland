@@ -140,10 +140,9 @@ pub fn service_with_request_size_limit(state: AppState, max_request_size_bytes: 
 
 #[cfg(test)]
 pub(crate) mod test_event {
-    use arkret_identifiers::{DidCoreId, Hash, Hlc};
-    use arkret_wire::{
-        DidUrl, Event, EventProof, ProducerEventProof, Result, ScopeRef, proof_kind,
-    };
+    use arkret_identifiers::{DidCoreId, Hlc};
+    use arkret_test_kit::proof::StructuralOnlyPayloadSigner;
+    use arkret_wire::{Did, DidUrl, Event, Result, ScopeRef};
     use chrono::{DateTime, Utc};
     use serde_json::Value;
 
@@ -194,23 +193,39 @@ pub(crate) mod test_event {
         )
     }
 
-    pub fn attach_fixture_producer_proof(event: &mut Event, verification_method: DidUrl) {
-        let event_digest = Hash::new(
-            event
-                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-                .expect("fixture Event digest"),
+    /// Attach a proof that binds the Event digest but carries no key material.
+    ///
+    /// Every caller stores the result straight into durable storage and then
+    /// exercises a read, query or stream path; none of them reaches admission,
+    /// so no signature is ever verified and a real one would assert something
+    /// the case does not establish. The name says which of the two fidelities
+    /// this is, and the placeholder comes from the shared test-kit signer,
+    /// whose JWS tracks the covered bytes -- a constant literal here would
+    /// survive a payload edit and pin nothing.
+    pub fn attach_structural_only_producer_proof(event: &mut Event, verification_method: DidUrl) {
+        let signer_did = Did::new(
+            verification_method
+                .as_str()
+                .split('#')
+                .next()
+                .expect("a DID URL has a subject")
+                .to_owned(),
         )
-        .expect("fixture Event digest is typed");
-        event.proofs = vec![EventProof::Producer(ProducerEventProof {
-            kind: proof_kind::DETACHED_JWS.to_owned(),
-            proof_purpose: None,
-            verification_method,
-            event_digest,
-            signer_resolution_evidence_ref: None,
-            created_at: event.created_at,
-            domain: None,
-            audience: None,
-            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
-        })];
+        .expect("fixture verification method has a DID subject");
+        let signer = StructuralOnlyPayloadSigner::new(signer_did, verification_method.clone());
+        let created_at = event.created_at;
+        let mut authored = arkret_wire::AuthoredEvent::finalize_with_digest_suite(
+            event.clone(),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .expect("fixture Event finalizes");
+        arkret_signatures::sign_event(
+            &mut authored,
+            &signer,
+            &verification_method,
+            arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+        )
+        .expect("structural-only fixture proof attaches");
+        *event = authored.into_event();
     }
 }

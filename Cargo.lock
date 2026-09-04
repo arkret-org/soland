@@ -653,6 +653,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "arkret-test-kit"
+version = "0.3.0"
+dependencies = [
+ "arkret-canonical",
+ "arkret-event-draft",
+ "arkret-identifiers",
+ "arkret-signatures",
+ "arkret-wire",
+ "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "arkret-wire"
 version = "0.3.0"
 dependencies = [
@@ -5945,6 +5959,7 @@ dependencies = [
  "arkret-server",
  "arkret-signatures",
  "arkret-state",
+ "arkret-test-kit",
  "arkret-wire",
  "async-stream",
  "async-trait",

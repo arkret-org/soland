@@ -939,7 +939,7 @@ fn canonical_event_record_received_at(
         created_at,
     )
     .expect("canonical sync fixture Event");
-    crate::test_event::attach_fixture_producer_proof(
+    crate::test_event::attach_structural_only_producer_proof(
         &mut event,
         arkret_wire::DidUrl::new(format!("{ROSTER_ACTOR_DID}#device-key")).unwrap(),
     );

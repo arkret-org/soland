@@ -67,6 +67,7 @@ arkret-schema-conformance = { version = "0.3.0", path = "../arkret-rust-sdk/crat
 arkret-server = { version = "0.3.0", path = "../arkret-rust-sdk/crates/server", default-features = false }
 arkret-signatures = { version = "0.3.0", path = "../arkret-rust-sdk/crates/signatures", default-features = false }
 arkret-state = { version = "0.3.0", path = "../arkret-rust-sdk/crates/state", default-features = false }
+arkret-test-kit = { version = "0.3.0", path = "../arkret-rust-sdk/crates/test-kit" }
 arkret-wire = { version = "0.3.0", path = "../arkret-rust-sdk/crates/wire", default-features = false }
 async-stream = "0.3.6"
 async-trait = "0.1.92"

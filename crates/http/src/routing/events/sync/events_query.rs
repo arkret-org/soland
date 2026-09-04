@@ -1706,7 +1706,7 @@ mod tests {
                 created_at + chrono::Duration::seconds(index),
             )
             .unwrap();
-            crate::test_event::attach_fixture_producer_proof(
+            crate::test_event::attach_structural_only_producer_proof(
                 &mut event,
                 arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
             );
@@ -1809,7 +1809,7 @@ mod tests {
             created_at,
         )
         .unwrap();
-        crate::test_event::attach_fixture_producer_proof(
+        crate::test_event::attach_structural_only_producer_proof(
             &mut event,
             arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
         );
@@ -1904,7 +1904,7 @@ mod tests {
         )
         .unwrap();
         event.hlc = None;
-        crate::test_event::attach_fixture_producer_proof(
+        crate::test_event::attach_structural_only_producer_proof(
             &mut event,
             arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
         );
@@ -2030,7 +2030,7 @@ mod tests {
                 created_at + chrono::Duration::seconds(index as i64),
             )
             .unwrap();
-            crate::test_event::attach_fixture_producer_proof(
+            crate::test_event::attach_structural_only_producer_proof(
                 &mut event,
                 arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
             );
@@ -2087,7 +2087,7 @@ mod tests {
             created_at,
         )
         .unwrap();
-        crate::test_event::attach_fixture_producer_proof(
+        crate::test_event::attach_structural_only_producer_proof(
             &mut message_event,
             arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
         );
@@ -2110,7 +2110,7 @@ mod tests {
             revised_at,
         )
         .unwrap();
-        crate::test_event::attach_fixture_producer_proof(
+        crate::test_event::attach_structural_only_producer_proof(
             &mut revise_event,
             arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
         );
@@ -2128,7 +2128,7 @@ mod tests {
             redacted_at,
         )
         .unwrap();
-        crate::test_event::attach_fixture_producer_proof(
+        crate::test_event::attach_structural_only_producer_proof(
             &mut redaction_event,
             arkret_wire::DidUrl::new(format!("{TEST_ACTOR}#device-key")).unwrap(),
         );
