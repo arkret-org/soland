@@ -1122,6 +1122,9 @@ impl From<EventValidationError> for SubmitOneError {
     fn from(error: EventValidationError) -> Self {
         let mut rendered = Self::new(error.status, error.code, error.message);
         if let Some(reason_code) = error.reason_code {
+            if let Self::Rejected { error, .. } = &mut rendered {
+                error.reason_code = Some(reason_code.to_owned().into_boxed_str());
+            }
             rendered = rendered.with_details(serde_json::json!({
                 "reason_code": reason_code,
             }));

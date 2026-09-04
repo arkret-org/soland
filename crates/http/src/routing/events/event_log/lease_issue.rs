@@ -309,6 +309,14 @@ async fn issue_event_leases(
             if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
                 staged.apply_via_lattice_registry(reducer_operation, cell_writes, &hlc, &registry)
             {
+                if soland_services::operation_semantics::canonical_kind_for_operation(operation)
+                    == Some(arkret_wire::EventKind::InviteClaim)
+                {
+                    // third-party-invites.md §6.1: failed claims are
+                    // wire-indistinguishable. Keep the reducer reason local.
+                    tracing::info!(internal_reason = %reason, "third-party invite claim rejected");
+                    return Err(crate::app_error!(NotFound, "invite claim not found"));
+                }
                 return Err(
                     crate::app_error!(FailedPrecondition, reason.clone()).with_reason_code(reason)
                 );

@@ -1114,6 +1114,13 @@ async fn events_query_impl(
                 "canonical Event index differs from signed envelope",
             ));
         }
+        // `ak.read_cursor.advance` is actor-private account data. It is read
+        // back through /_arkret/self/read-cursors (and account-data sync), not
+        // through the shared Realm timeline, even when the querying principal
+        // is the cursor owner (read-receipts.md section 6.6).
+        if !event_kind_visible_in_shared_realm_query(&event.kind) {
+            continue;
+        }
         // These transient views are derived from EVERY accepted Event, not from
         // persisted projection row presence. They are never emitted as Events.
         let view = ProjectedEvent {
@@ -1251,6 +1258,10 @@ async fn events_query_impl(
         next_cursor,
         has_more,
     })
+}
+
+fn event_kind_visible_in_shared_realm_query(kind: &arkret_wire::EventKind) -> bool {
+    *kind != arkret_wire::EventKind::ReadCursorAdvance
 }
 
 /// Bounds are absolute canonical positions; order controls presentation only.
@@ -1425,6 +1436,16 @@ mod tests {
     const TEST_REALM: &str = "ak:realm:ATdMSXE70ijF1u9M9PvT4WFuWRgKpqVf-tiHDAD-_stf";
     const TEST_ACTOR: &str = "did:web:alice.example";
     const TEST_ACTOR_CORE: &str = "ak:did_core:web:alice.example";
+
+    #[test]
+    fn shared_realm_query_excludes_actor_private_read_cursor_events() {
+        assert!(!event_kind_visible_in_shared_realm_query(
+            &arkret_wire::EventKind::ReadCursorAdvance,
+        ));
+        assert!(event_kind_visible_in_shared_realm_query(
+            &arkret_wire::EventKind::MessageCreate,
+        ));
+    }
 
     #[test]
     fn ndjson_frames_are_byte_for_byte_canonical_json() {

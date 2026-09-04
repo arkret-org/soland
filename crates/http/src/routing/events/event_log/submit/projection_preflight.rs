@@ -494,6 +494,17 @@ pub(super) async fn apply_projection_preflight(
                         message,
                     )
                 })?;
+            if operation.event_kind == arkret_wire::EventKind::InviteClaim {
+                tracing::info!(
+                    internal_reason = %reason,
+                    "invite claim rejected with non-enumerating wire response"
+                );
+                return Err(SubmitOneError::new(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "invite claim not found",
+                ));
+            }
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 reason.clone(),
@@ -513,10 +524,14 @@ pub(super) async fn apply_projection_preflight(
                         message,
                     )
                 })?;
+            tracing::info!(
+                internal_reason = %reason,
+                "invite claim proof rejected with non-enumerating wire response"
+            );
             return Err(SubmitOneError::new(
-                StatusCode::PRECONDITION_FAILED,
-                reason,
-                reason,
+                StatusCode::NOT_FOUND,
+                "not_found",
+                "invite claim not found",
             ));
         }
     }

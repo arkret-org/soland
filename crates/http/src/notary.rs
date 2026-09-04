@@ -50,7 +50,7 @@ use arkret_wire::{
     AvailabilityReceipt, ControlProposalDecision, ControlProposalDecisionPolicy,
     ControlProposalRejectReason, Event, NotarySig, PayloadProof, Seal, SealSignature,
 };
-use parking_lot::Mutex;
+use tokio::sync::Mutex;
 
 use crate::config::NotarySigningKeyOrigin;
 use crate::routing::federation::move_seal::select_jws_verifier;
@@ -2112,7 +2112,10 @@ fn warn_once_about_ephemeral_notary_key() {
     });
 }
 
-static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
+// Materialization holds this process-wide CAS boundary across durable store
+// I/O. Use an async mutex so concurrent frontier reads yield instead of
+// parking a Tokio worker and starving the HTTP runtime.
+static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// Current accepted Seal head for a Realm — the server side of the
 /// registered account-client Seal sourcing (`ak.self.seals.read.frontier.v1`
@@ -2186,7 +2189,7 @@ pub async fn ensure_materialized_event_seal(
     device_generation_seal_required: bool,
     generation_fence: Option<&FirstGenerationEventSealRequirement>,
 ) -> Result<MaterializedEventSealView, NotaryError> {
-    let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock();
+    let _guard = EVENT_SEAL_MATERIALIZE_LOCK.lock().await;
     let worker = NotaryWorker::for_service(state.service_id().clone());
     let mut leaves = state.projections().realm_seal_leaves(realm_id).await?;
     if let Some(requirement) = generation_fence {

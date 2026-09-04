@@ -795,8 +795,29 @@ async fn verify_mimi_consent_correlation(
     match body.decision {
         arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept => {
             let payload = &body.consent_event.event.payload;
-            if payload.get("peer").and_then(Value::as_str)
-                != Some(correlation.requester_id.as_str())
+            let peer_matches = payload
+                .get("peer")
+                .cloned()
+                .and_then(|peer| {
+                    serde_json::from_value::<
+                        arkret_models_collaboration::account_lifecycle::ConsentPeer,
+                    >(peer)
+                    .ok()
+                })
+                .is_some_and(|peer| {
+                    match peer {
+                    arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
+                        actor_id,
+                    } => {
+                        actor_id.signing_principal_id().as_str()
+                            == correlation.requester_id
+                    }
+                    arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+                        principal_id,
+                    } => principal_id.as_str() == correlation.requester_id,
+                }
+                });
+            if !peer_matches
                 || payload.get("consent_scope").and_then(Value::as_str)
                     != Some(correlation.purpose.as_str())
             {
@@ -826,7 +847,10 @@ async fn verify_mimi_consent_correlation(
                     (match &cell.peer {
                         arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
                             actor_id,
-                        } => actor_id.to_string() == correlation.requester_id,
+                        } => {
+                            actor_id.signing_principal_id().as_str()
+                                == correlation.requester_id
+                        }
                         arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
                             principal_id,
                         } => principal_id.as_str() == correlation.requester_id,
