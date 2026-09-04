@@ -121,9 +121,19 @@ fn key_backup_verification_method_matches_device_key(
     let fragment = did_key
         .strip_prefix("did:key:")
         .unwrap_or(device_public_key);
-    verification_method == format!("{principal_id}#{device_id}")
-        || verification_method == format!("{did_key}#{fragment}")
+    if verification_method == format!("{did_key}#{fragment}")
         || verification_method == format!("{did_key}#device")
+    {
+        return true;
+    }
+    let Ok(method) = arkret_wire::DidUrl::new(verification_method.to_owned()) else {
+        return false;
+    };
+    crate::routing::federation::move_seal::session_device_verification_method_matches(
+        principal_id,
+        device_id,
+        &method,
+    )
 }
 
 pub(super) fn key_backup_canonical_digest_without_signature(
@@ -207,20 +217,64 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
     let signature = Signature::from_slice(&raw).map_err(|_| {
         AppError::capability_denied("key backup unlock proof signature must be 64 Ed25519 bytes")
     })?;
+    let recovery_session = state
+        .recovery_sessions()
+        .session(proof.recovery_session_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?;
     let public_key = if proof.proof_kind == arkret_models_crypto::ProofKind::RecoveryUnlock {
+        let record = recovery_session.as_ref().ok_or_else(|| {
+            AppError::capability_denied(
+                "key backup unlock proof recovery session record is missing",
+            )
+        })?;
+        super::super::recovery::recovery_session_unlock_verifying_key(record, verification_method)?
+    } else if proof.proof_kind == arkret_models_crypto::ProofKind::PrincipalSigning
+        && recovery_session.is_none()
+    {
         let record = state
-            .recovery_sessions()
-            .session(proof.recovery_session_id.as_str())
+            .identities()
+            .find_device(soland_services::identity::FindDeviceQuery {
+                actor_id: proof.account_id.principal_id.to_string(),
+                device_id: proof.requesting_device_id.to_string(),
+            })
             .await
-            .map_err(|error| {
-                AppError::internal(format!("recovery session lookup failed: {error}"))
-            })?
+            .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
             .ok_or_else(|| {
                 AppError::capability_denied(
-                    "key backup unlock proof recovery session record is missing",
+                    "key backup unlock proof requesting device is not authorized",
                 )
             })?;
-        super::super::recovery::recovery_session_unlock_verifying_key(&record, verification_method)?
+        if record.revoked_at.is_some() || record.verification_state != "verified" {
+            return Err(AppError::capability_denied(
+                "key backup unlock proof requesting device is not active",
+            ));
+        }
+        let device_public_key = record
+            .payload
+            .get("device_public_key")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                AppError::capability_denied(
+                    "key backup unlock proof requesting device key is unavailable",
+                )
+            })?;
+        if !key_backup_verification_method_matches_device_key(
+            proof.account_id.principal_id.as_str(),
+            proof.requesting_device_id.as_str(),
+            device_public_key,
+            verification_method,
+        ) {
+            return Err(AppError::capability_denied(
+                "key backup unlock proof verification method does not match the requesting device key",
+            ));
+        }
+        crate::routing::identity::device_signing::decode_ed25519_key(device_public_key, "multibase")
+            .map_err(|_| {
+                AppError::capability_denied(
+                    "key backup unlock proof requesting device key is invalid",
+                )
+            })?
     } else {
         crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
             .await
@@ -354,27 +408,34 @@ mod tests {
     // verification method and must not satisfy the key-backup device binding.
     #[test]
     fn key_backup_verification_method_rejects_did_without_fragment() {
-        let principal = "did:webvh:z6mkfixture:alice.example";
+        let did = arkret_wire::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        let principal = arkret_wire::project_did_to_core_id(&did).unwrap();
         let device = "ak:device:primary";
         let key = "z6MkBackup";
 
         for accepted in [
-            format!("{principal}#{device}"),
+            format!("{did}#{device}"),
             format!("did:key:{key}#{key}"),
             format!("did:key:{key}#device"),
         ] {
             assert!(key_backup_verification_method_matches_device_key(
-                principal, device, key, &accepted
+                principal.as_str(),
+                device,
+                key,
+                &accepted
             ));
         }
         assert!(!key_backup_verification_method_matches_device_key(
-            principal,
+            principal.as_str(),
             device,
             key,
             &format!("did:key:{key}"),
         ));
         assert!(!key_backup_verification_method_matches_device_key(
-            principal, device, key, principal
+            principal.as_str(),
+            device,
+            key,
+            did.as_str()
         ));
     }
 
