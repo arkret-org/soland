@@ -2534,7 +2534,6 @@ pub(super) async fn submit_event_value_with_context(
         "submit_event"
     );
     let ProjectionPreflightOutcome {
-        strand_status_audit_payload,
         consent_admission,
         validated_agent_approval,
     } = apply_projection_preflight(
@@ -2825,7 +2824,6 @@ pub(super) async fn submit_event_value_with_context(
             projected_cell_writes: &projected_cell_writes,
             projected_event,
             envelope: &envelope_for_bootstrap,
-            strand_status_audit_payload,
         },
     )
     .await?;

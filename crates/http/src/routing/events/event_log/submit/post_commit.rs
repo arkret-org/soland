@@ -19,7 +19,6 @@ pub(super) struct AcceptedEventPostCommit<'a> {
     pub(super) projected_cell_writes: &'a [arkret_wire::cba::ProjectedCellWrite],
     pub(super) projected_event: Option<soland_services::events::ProjectedEvent>,
     pub(super) envelope: &'a Value,
-    pub(super) strand_status_audit_payload: Option<Value>,
 }
 
 /// Apply only rebuildable or externally observable effects after the durable
@@ -40,7 +39,6 @@ pub(super) async fn apply_accepted_event_post_commit(
         projected_cell_writes,
         projected_event,
         envelope,
-        strand_status_audit_payload,
     } = stage;
 
     if let Some(control_event) = accepted_control_event {
@@ -119,16 +117,6 @@ pub(super) async fn apply_accepted_event_post_commit(
             parsed.event_id.to_string(),
             envelope.clone(),
         ));
-    }
-    if let Some(payload) = strand_status_audit_payload {
-        append_audit_log(
-            state,
-            Some(parsed.actor_id.as_str()),
-            "incident.status.transition",
-            payload,
-            "accepted",
-        )
-        .await;
     }
     if parsed.kind == arkret_wire::event_kind_str::REALM_CREATE
         && let Some(envelope_object) = envelope.as_object()

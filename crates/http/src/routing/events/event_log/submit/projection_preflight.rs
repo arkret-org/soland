@@ -15,7 +15,6 @@ pub(super) struct ProjectionPreflightContext<'a> {
 }
 
 pub(super) struct ProjectionPreflightOutcome {
-    pub(super) strand_status_audit_payload: Option<Value>,
     pub(super) consent_admission: Option<crate::routing::identity::consent::ConsentAdmission>,
     pub(super) validated_agent_approval: Option<ValidatedAgentApproval>,
 }
@@ -48,7 +47,6 @@ pub(super) async fn apply_projection_preflight(
         preparing_agent_membership,
         has_internal_plaintext_service_binding,
     } = context;
-    let mut strand_status_audit_payload = None;
     let mut consent_admission = None;
     let mut validated_agent_approval = None;
     if let Some(operation) = projection_operation.as_ref() {
@@ -272,13 +270,6 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
-            if let Err(reason) = proj.check_strand_status_transition(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
             // event-and-patch.md §4.4 — a Control Move's generic
             // `preconditions[].head_eq` compare-and-swap MUST be evaluated
             // against the materialized head before any effect lands; a stale
@@ -291,8 +282,6 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
-            strand_status_audit_payload =
-                proj.strand_status_transition_audit_payload(operation, parsed.actor_id.as_str());
             if let Err(reason) = proj.check_morph_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -535,7 +524,6 @@ pub(super) async fn apply_projection_preflight(
         }
     }
     Ok(ProjectionPreflightOutcome {
-        strand_status_audit_payload,
         consent_admission,
         validated_agent_approval,
     })

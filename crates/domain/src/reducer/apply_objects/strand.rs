@@ -156,11 +156,6 @@ impl ProjectionState {
                 reason: "strand_not_active".to_owned(),
             };
         }
-        if let Err(reason) = check_strand_status_patch(strand, &operation.payload) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
         let patch = operation.payload.get("patch").and_then(|v| v.as_object());
         if let Some(patch) = patch {
             if let Err(reason) = validate_patch_semantic_safety(patch, Some("strand")) {

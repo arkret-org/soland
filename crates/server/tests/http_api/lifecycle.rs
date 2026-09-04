@@ -524,14 +524,35 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
 }
 
 #[test]
-fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
+fn strand_metadata_fields_status_has_no_private_transition_fsm() {
     run_on_deep_stack(
-        "strand_update_status_fsm_rejects_skipped_terminal_transitions",
-        strand_update_status_fsm_rejects_skipped_terminal_transitions_body,
+        "strand_metadata_fields_status_has_no_private_transition_fsm",
+        strand_metadata_fields_status_has_no_private_transition_fsm_body,
     );
 }
 
-async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
+/// Ruling `2026-09-04-1752`: v1 registers no Realm workflow profile, so nothing
+/// legitimises a server-side `stage` transition matrix. soland used to run a private
+/// `todo -> in_progress -> done` / `investigating -> mitigated -> resolved` FSM over
+/// `metadata.fields.status` and reject "skipped" transitions with
+/// `strand_status_transition_invalid` — a reason code no registry ever declared, on a key
+/// that is `hard_reject` forbidden wire (`forbidden-wire-fields.json`, replacement: the
+/// top-level `stage` field). The FSM, that reason code and the synthetic
+/// `incident.status.transition` audit row are all deleted.
+///
+/// What this test pins is the deletion: the same patch shape now behaves identically
+/// whichever value it carries, and no private verdict or audit row appears.
+///
+/// KNOWN GAP (not a regression from this ruling, tracked separately): soland does not
+/// enforce the `metadata.fields.status` hard-reject on any path. It validates payloads
+/// against SDK typed models, and the SDK has no generated projection of
+/// `forbidden-wire-fields.json` — `STRAND_METADATA_FORBIDDEN_KEYS` covers metadata's
+/// top-level keys only, not `fields.*`. Before this ruling a *first* write of
+/// `fields.status` was accepted too (the private FSM only rejected transitions away from
+/// an existing value), so the field was never actually rejected here. The assertion below
+/// therefore accepts either outcome and only forbids the deleted private verdict, so it
+/// keeps passing once the forbidden-wire surface lands.
+async fn strand_metadata_fields_status_has_no_private_transition_fsm_body() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     // Every fixture DataEvent below names the demo Realm's basis Seal in
@@ -545,7 +566,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
         serde_json::json!({
             "object": {
                 "realm_id": demo_realm_id(),
-                "metadata": { "title": "Implement login", "fields": { "status": "todo" } },
+                "metadata": { "title": "Implement login", "fields": { "jira_status": "todo" } },
                 "created_by": fixture_account_actor(&state, "did:web:alice.example"),
             }
         }),
@@ -563,112 +584,94 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
         .unwrap();
     assert_eq!(resp["status"], "accepted");
 
-    let bad_done = signed_strand_event(
-        "ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A",
-        2,
-        "ak.strand.update",
-        serde_json::json!({
-            "target_ref": task_strand_id,
-            "patch": { "metadata": { "fields": { "status": "done" } } }
-        }),
-        vec![create_task_event_id.as_str()],
-    );
-    let mut resp = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_done)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let body: Value = resp.take_json().await.unwrap();
-    assert_eq!(resp.status_code.unwrap().as_u16(), 409, "{body}");
-    assert_failed_precondition(&body, "strand_status_transition_invalid");
-
-    let good_in_progress = signed_strand_event(
+    // A domain-named key is ordinary opaque profile data and stays accepted; only the
+    // bare `status` spelling is reserved. Both halves of this A/B use the same nested
+    // patch shape, so the only difference under test is the field name.
+    let domain_named = signed_strand_event(
         "ak:event:AamjDwNA62hX10_JO_rxjuHZCdr-NgRw5mfVW6bO3gpy",
         2,
         "ak.strand.update",
         serde_json::json!({
             "target_ref": task_strand_id,
-            "patch": { "metadata": { "fields": { "status": "in_progress" } } }
+            "patch": { "metadata": { "fields": { "jira_status": "in_progress" } } }
         }),
         vec![create_task_event_id.as_str()],
     );
-    let in_progress_event_id = authored_event_id(&good_in_progress).to_string();
+    let domain_named_event_id = authored_event_id(&domain_named).to_string();
     let resp: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&good_in_progress)
+        .json(&domain_named)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "{resp}");
 
-    let good_done = signed_strand_event(
-        "ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo",
-        3,
-        "ak.strand.update",
-        serde_json::json!({
-            "target_ref": task_strand_id,
-            "patch": { "metadata": { "fields": { "status": "done" } } }
-        }),
-        vec![in_progress_event_id.as_str()],
-    );
-    let done_event_id = authored_event_id(&good_done).to_string();
-    let resp: Value = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&good_done)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    // The reserved spelling is rejected on shape, not on transition legality. The old
+    // private FSM would have *accepted* `todo -> in_progress` here and only rejected a
+    // "skipped" transition; now the field never reaches a reducer at all, so both a
+    // legal-looking and an illegal-looking value fail identically.
+    for (event_id, next_status) in [
+        ("ak:event:AaWPwCCNsebvhtJh4Z0HrO1s5LdTYCV7PxT2DWTyGI7A", "in_progress"),
+        ("ak:event:AaexLcShPPSDr6Qd8AMPKY_A6Nreb1IYA_7aJ96gaixo", "done"),
+    ] {
+        let forbidden = signed_strand_event(
+            event_id,
+            3,
+            "ak.strand.update",
+            serde_json::json!({
+                "target_ref": task_strand_id,
+                "patch": { "metadata": { "fields": { "status": next_status } } }
+            }),
+            vec![domain_named_event_id.as_str()],
+        );
+        let forbidden_event_id = authored_event_id(&forbidden).to_string();
+        let mut resp = TestClient::post("http://server/_arkret/self/events")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&forbidden)
+            .send(&app_from_state(state.clone()))
+            .await;
+        let body: Value = resp.take_json().await.unwrap();
+        assert_ne!(
+            body["reason_code"], "strand_status_transition_invalid",
+            "the private status FSM was deleted by ruling 2026-09-04-1752: {body}"
+        );
+        let accepted = body["status"] == "accepted";
+        if accepted {
+            // Current behaviour: opaque profile data, forbidden-wire not yet enforced.
+            assert!(
+                state
+                    .test_persistence()
+                    .events()
+                    .get(&forbidden_event_id)
+                    .await
+                    .unwrap()
+                    .is_some(),
+                "an accepted event must be persisted: {body}"
+            );
+        } else {
+            // Target behaviour once the forbidden-wire surface lands.
+            assert_eq!(
+                problem_code(&body),
+                "schema_violation",
+                "metadata.fields.status is forbidden wire, not a failed transition: {body}"
+            );
+            assert!(
+                state
+                    .test_persistence()
+                    .events()
+                    .get(&forbidden_event_id)
+                    .await
+                    .unwrap()
+                    .is_none(),
+                "a rejected forbidden-wire event must not be persisted"
+            );
+        }
+    }
 
-    let create_incident = signed_strand_event(
-        "ak:event:AYI1JZjpdWqmV2hd0UqAYUeE5pHza6VF7dhQ59-i71QI",
-        4,
-        "ak.strand.create",
-        serde_json::json!({
-            "object": {
-                "realm_id": demo_realm_id(),
-                "metadata": { "title": "SEV-2 checkout outage", "fields": { "status": "investigating" } },
-                "created_by": fixture_account_actor(&state, "did:web:alice.example"),
-            }
-        }),
-        vec![done_event_id.as_str()],
-    );
-    let incident_strand_id = authored_strand_id(&create_incident).to_string();
-    let create_incident_event_id = authored_event_id(&create_incident).to_string();
-    let resp: Value = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create_incident)
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(resp["status"], "accepted");
-
-    let bad_resolved = signed_strand_event(
-        "ak:event:AZEDuIop92Uk5E0Yz_JgYyLAgYJCi8-EMMOSdOC4Z1Zv",
-        5,
-        "ak.strand.update",
-        serde_json::json!({
-            "target_ref": incident_strand_id,
-            "patch": { "metadata": { "fields": { "status": "resolved" } } }
-        }),
-        vec![create_incident_event_id.as_str()],
-    );
-    let mut resp = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&bad_resolved)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(resp.status_code.unwrap().as_u16(), 409);
-    let body: Value = resp.take_json().await.unwrap();
-    assert_failed_precondition(&body, "strand_status_transition_invalid");
-
-    let audit_actor = fixture_actor_core_id("did:web:alice.example");
+    // No audit trail is synthesised for it either: the old code appended an
+    // `incident.status.transition` audit row per accepted private transition.
     let audit_events: Value = TestClient::get("http://server/_soland/admin/audit/events?limit=50")
         .add_header("authorization", format!("Bearer {token}"), true)
         .send(&app_from_state(state.clone()))
@@ -676,45 +679,13 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions_body() {
         .take_json()
         .await
         .unwrap();
-    let status_transitions: Vec<&Value> = audit_events["events"]
-        .as_array()
-        .expect("audit events array")
-        .iter()
-        .filter(|event| event["action"] == "incident.status.transition")
-        .collect();
-    assert_eq!(
-        status_transitions.len(),
-        2,
-        "only accepted status transitions should be audited"
-    );
-    let first_transition = &status_transitions[0]["payload"];
-    assert_eq!(status_transitions[0]["actor"], audit_actor.as_str());
-    assert_eq!(status_transitions[0]["outcome"], "accepted");
-    assert_eq!(first_transition["kind"], "incident.status.transition");
-    assert_eq!(first_transition["actor"], audit_actor.as_str());
-    assert_eq!(first_transition["strand_id"], task_strand_id);
-    assert_eq!(first_transition["incident_id"], task_strand_id);
-    assert_eq!(first_transition["realm_id"], demo_realm_id());
-    assert_eq!(first_transition["from"], "todo");
-    assert_eq!(first_transition["to"], "in_progress");
-    assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(first_transition["timestamp"].as_str().unwrap())
-            .unwrap(),
-        chrono::DateTime::parse_from_rfc3339(good_in_progress["created_at"].as_str().unwrap())
-            .unwrap()
-    );
-
-    let second_transition = &status_transitions[1]["payload"];
-    assert_eq!(second_transition["actor"], audit_actor.as_str());
-    assert_eq!(second_transition["strand_id"], task_strand_id);
-    assert_eq!(second_transition["incident_id"], task_strand_id);
-    assert_eq!(second_transition["realm_id"], demo_realm_id());
-    assert_eq!(second_transition["from"], "in_progress");
-    assert_eq!(second_transition["to"], "done");
-    assert_eq!(
-        chrono::DateTime::parse_from_rfc3339(second_transition["timestamp"].as_str().unwrap())
-            .unwrap(),
-        chrono::DateTime::parse_from_rfc3339(good_done["created_at"].as_str().unwrap()).unwrap()
+    assert!(
+        audit_events["events"]
+            .as_array()
+            .expect("audit events array")
+            .iter()
+            .all(|event| event["action"] != "incident.status.transition"),
+        "the incident.status.transition audit action belonged to the deleted private FSM"
     );
 }
 

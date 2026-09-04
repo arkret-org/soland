@@ -1203,63 +1203,6 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Read-only preflight for profile-level Strand status FSM stored at
-    /// `fields.status`. This guards common workflow statuses while leaving
-    /// unknown/custom statuses to Realm profiles.
-    pub fn check_strand_status_transition(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::StrandUpdate)
-        {
-            return Ok(());
-        }
-        let Some(strand_id) = strand_id_from_payload(&operation.payload) else {
-            return Ok(());
-        };
-        let Some(strand) = self.strands.get(strand_id) else {
-            return Ok(());
-        };
-        check_strand_status_patch(strand, &operation.payload).map(|_| ())
-    }
-
-    /// Return the audit payload for an accepted Strand `fields.status`
-    /// transition. Callers invoke this before projection is applied so
-    /// `from` is read from the current reducer state.
-    pub fn strand_status_transition_audit_payload(
-        &self,
-        operation: &Operation,
-        actor_id: &str,
-    ) -> Option<Value> {
-        if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::EventKind::StrandUpdate)
-        {
-            return None;
-        }
-        let strand_id = strand_id_from_payload(&operation.payload)?;
-        let strand = self.strands.get(strand_id)?;
-        let next_status = strand_status_patch_target(&operation.payload)
-            .ok()
-            .flatten()?;
-        let current_status = strand.fields.get("status").and_then(Value::as_str)?;
-        if current_status == next_status {
-            return None;
-        }
-        Some(serde_json::json!({
-            "actor": actor_id,
-            "strand_id": strand_id,
-            "incident_id": strand_id,
-            "realm_id": strand.realm_id,
-            "from": current_status,
-            "to": next_status,
-            "timestamp": arkret_canonical::format_timestamp_canonical(
-                operation.created_at
-            ),
-            "kind": "incident.status.transition",
-        }))
-    }
-
     /// Read-only preflight for `ak.redaction` events that
     /// target a Strand / Morph via `object_ref`. Per spec common-fields.md
     /// §5.1, redaction is legal only from `active` or `archived` source;

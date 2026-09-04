@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use serde_json::Value;
 
-use super::{DocumentVersionProjection, StrandProjection};
+use super::DocumentVersionProjection;
 
 pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
     arkret_canonical::format_timestamp_canonical(now)
@@ -166,44 +166,6 @@ fn patch_op_removes_value(value: &Value) -> bool {
         .is_some_and(|op| matches!(op, "unset" | "remove"))
 }
 
-pub(crate) fn strand_status_patch_target(payload: &Value) -> Result<Option<String>, &'static str> {
-    let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
-        return Ok(None);
-    };
-    let value = patch
-        .get("metadata.fields.status")
-        .or_else(|| {
-            patch
-                .get("metadata.fields")
-                .and_then(|fields_patch| match patch_action(fields_patch) {
-                    PatchAction::Set(value) => value.get("status"),
-                    PatchAction::Unset | PatchAction::Ignore => None,
-                })
-        })
-        .or_else(|| {
-            patch
-                .get("metadata")
-                .and_then(|metadata_patch| match patch_action(metadata_patch) {
-                    PatchAction::Set(value) => {
-                        value.get("fields").and_then(|fields| fields.get("status"))
-                    }
-                    PatchAction::Unset | PatchAction::Ignore => None,
-                })
-        });
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    match patch_action(value) {
-        PatchAction::Set(value) => value
-            .as_str()
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| Some(value.to_owned()))
-            .ok_or("strand_status_invalid"),
-        PatchAction::Unset => Err("strand_status_invalid"),
-        PatchAction::Ignore => Ok(None),
-    }
-}
-
 pub(crate) fn patch_metadata_string_value(
     patch: &serde_json::Map<String, Value>,
     key: &str,
@@ -243,41 +205,11 @@ pub(crate) fn apply_metadata_fields_value(fields: &mut BTreeMap<String, Value>, 
     }
 }
 
-pub(crate) fn strand_status_transition_allowed(current: &str, next: &str) -> bool {
-    if current == next {
-        return true;
-    }
-    match current {
-        "todo" => next == "in_progress",
-        "in_progress" => matches!(next, "done" | "blocked"),
-        "blocked" => matches!(next, "in_progress" | "cancelled"),
-        "investigating" => next == "mitigated",
-        "mitigated" => next == "resolved",
-        _ => true,
-    }
-}
-
 pub(crate) fn strand_id_from_payload(payload: &Value) -> Option<&str> {
     payload
         .get("target_ref")
         .and_then(Value::as_str)
         .filter(|value| value.starts_with("ak:strand:"))
-}
-
-pub(crate) fn check_strand_status_patch(
-    strand: &StrandProjection,
-    payload: &Value,
-) -> Result<Option<String>, &'static str> {
-    let Some(next_status) = strand_status_patch_target(payload)? else {
-        return Ok(None);
-    };
-    let Some(current_status) = strand.fields.get("status").and_then(Value::as_str) else {
-        return Ok(Some(next_status));
-    };
-    if strand_status_transition_allowed(current_status, &next_status) {
-        return Ok(Some(next_status));
-    }
-    Err("strand_status_transition_invalid")
 }
 
 pub(crate) fn apply_strand_fields_patch(
