@@ -1074,6 +1074,19 @@ struct StrandProjectionView {
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
     )]
     state_changed_at: Option<DateTime<Utc>>,
+    /// Business-progression stage (`common-fields.md` §5.3), written only by
+    /// `ak.strand.stage.set`. `common-fields.md` §3.2 keeps it in the
+    /// lifecycle cluster with `stage_changed_at` immediately after it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<String>,
+    /// Reducer-derived timestamp of the last real stage transition; absent
+    /// while the Strand carries no stage, and unchanged by a same-value
+    /// self-transition.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
+    )]
+    stage_changed_at: Option<DateTime<Utc>>,
     /// Track map. Synthesis narrative lives only at
     /// `tracks.synthesis.content` / `encrypted_content`.
     tracks: Value,
@@ -1247,6 +1260,11 @@ async fn get_strand_projection(
         realm_id: strand.realm_id,
         state: projection_object_state(strand.state),
         state_changed_at: strand.state_changed_at,
+        stage: strand
+            .stage
+            .as_ref()
+            .map(soland_domain::reducer::object_stage_wire_value),
+        stage_changed_at: strand.stage_changed_at,
         tracks: serde_json::to_value(&strand.tracks).unwrap_or_else(|_| serde_json::json!({})),
         title: strand.title,
         summary: strand.summary,
@@ -1309,6 +1327,8 @@ mod relation_actor_endpoint_tests {
             encrypted_content: None,
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage: None,
+            stage_changed_at: None,
             created_by: creator.to_string(),
             created_at: Utc::now(),
             history_basis_seals: Vec::new(),

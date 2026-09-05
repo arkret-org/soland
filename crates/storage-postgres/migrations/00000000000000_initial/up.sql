@@ -2472,11 +2472,22 @@ CREATE TABLE public.projection_strands (
     encrypted_content jsonb,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
+    -- common-fields.md 3.2 orders the lifecycle cluster state, state_changed_at,
+    -- stage, stage_changed_at ahead of the audit cluster, and requires
+    -- stage_changed_at to sit immediately after stage.
+    stage text,
+    stage_changed_at timestamp with time zone,
     created_by jsonb NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by jsonb,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
+    -- common-fields.md 5.3.1: stage_changed_at must never appear on its own.
+    CONSTRAINT projection_strands_stage_changed_at_requires_stage CHECK (
+        (stage IS NOT NULL) OR (stage_changed_at IS NULL)
+    ),
+    -- common-fields.md 5.3.2 freezes the business-progression enum at 8 values.
+    CONSTRAINT projection_strands_stage_check CHECK ((stage IS NULL) OR (stage = ANY (ARRAY['draft'::text, 'proposed'::text, 'planned'::text, 'in_progress'::text, 'blocked'::text, 'done'::text, 'cancelled'::text, 'superseded'::text]))),
     -- common-fields.md 5.2: an active object carries exactly one content slot,
     -- and a redacted one carries neither. Enforcing it here makes the invariant
     -- checkable from the row alone instead of by replaying the event stream.
@@ -2507,6 +2518,10 @@ CREATE TABLE public.projection_morphs (
     title text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
+    -- Same lifecycle-cluster ordering as projection_strands
+    -- (common-fields.md 3.2).
+    stage text,
+    stage_changed_at timestamp with time zone,
     created_by jsonb NOT NULL,
     history_basis_seals jsonb DEFAULT '[]'::jsonb NOT NULL,
     updated_by jsonb,
@@ -2519,6 +2534,11 @@ CREATE TABLE public.projection_morphs (
     scope_circle_id bytea CHECK (octet_length(scope_circle_id) = 33),
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone,
+    -- Same stage invariants as projection_strands (common-fields.md 5.3).
+    CONSTRAINT projection_morphs_stage_changed_at_requires_stage CHECK (
+        (stage IS NOT NULL) OR (stage_changed_at IS NULL)
+    ),
+    CONSTRAINT projection_morphs_stage_check CHECK ((stage IS NULL) OR (stage = ANY (ARRAY['draft'::text, 'proposed'::text, 'planned'::text, 'in_progress'::text, 'blocked'::text, 'done'::text, 'cancelled'::text, 'superseded'::text]))),
     -- Same content-slot invariant as projection_strands.
     CONSTRAINT projection_morphs_content_slot_check CHECK (
         (state = 'redacted' AND content IS NULL AND encrypted_content IS NULL)

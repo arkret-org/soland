@@ -62,6 +62,21 @@ impl ProjectionState {
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
+        // `common-fields.md` §5.3.1: `stage` is optional on create; a generic
+        // mirror/data Morph omits it. `stage_changed_at` is reducer-derived, so
+        // create leaves it absent and the first `ak.morph.stage.set` is an
+        // initialization rather than a transition from an implied default.
+        let stage = match object.get("stage") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let Some(stage) = value.as_str().and_then(object_stage_from_wire_value) else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                Some(stage)
+            }
+        };
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
@@ -99,6 +114,8 @@ impl ProjectionState {
             encrypted_content: object.get("encrypted_content").cloned(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage,
+            stage_changed_at: None,
             created_by,
             created_at: now,
             history_basis_seals: operation_history_basis_seals(operation),
@@ -166,6 +183,57 @@ impl ProjectionState {
                 morph.versions.push(next);
             }
         }
+        ProjectionEffect::MorphLifecycle {
+            morph_id,
+            new_state: morph.state,
+        }
+    }
+
+    /// Apply `ak.morph.stage.set`. Behaviourally identical to
+    /// [`ProjectionState::apply_strand_stage_set`]: the same §5.3.3 hard
+    /// invariants, the same absence of any direction rule, and the same
+    /// reducer-derived `stage_changed_at`. A Morph created without a stage
+    /// takes its first value here as an initialization.
+    pub(crate) fn apply_morph_stage_set(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Ok(payload) = operation.typed_payload::<arkret_wire::event_spec::MorphStageSet>()
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let morph_id = payload.morph_id.to_string();
+        let Some(stage) = object_stage_from_wire_value(&payload.stage) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let Some(morph) = self.morphs.get_mut(&morph_id) else {
+            return self.queue_pending_replay(morph_id, operation, "morph_unknown");
+        };
+        if morph.state.is_terminal() {
+            return ProjectionEffect::Rejected {
+                reason: "morph_already_terminal".to_owned(),
+            };
+        }
+        if morph.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "morph_not_active".to_owned(),
+            };
+        }
+        if morph.stage.as_ref() == Some(&stage) {
+            return ProjectionEffect::MorphLifecycle {
+                morph_id,
+                new_state: morph.state,
+            };
+        }
+        morph.stage = Some(stage);
+        morph.stage_changed_at = Some(now);
+        morph.updated_by = Some(operation.context.sender.to_string());
+        morph.updated_at = Some(now);
         ProjectionEffect::MorphLifecycle {
             morph_id,
             new_state: morph.state,

@@ -24,6 +24,8 @@ fn seed_strand(state: &mut ProjectionState, strand_id: &str, circle_id: Option<&
             fields: BTreeMap::new(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage: None,
+            stage_changed_at: None,
             created_by: "ak:did_core:web:alice.example".to_owned(),
             created_at: now,
             history_basis_seals: Vec::new(),

@@ -924,6 +924,8 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
                 fields: Default::default(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
+                stage: None,
+                stage_changed_at: None,
                 created_by: "ak:did_core:web:alice.example".to_owned(),
                 created_at: chrono::Utc::now(),
                 history_basis_seals: Vec::new(),

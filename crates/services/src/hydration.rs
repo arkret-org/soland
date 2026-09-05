@@ -697,6 +697,7 @@ pub async fn hydrate_projections_from_persistence(
         KeyPackageLifetimeProjection, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackageProjection,
         MlsWelcome, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+        object_stage_from_wire_value,
     };
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
@@ -883,6 +884,11 @@ pub async fn hydrate_projections_from_persistence(
                     fields: Default::default(),
                     state,
                     state_changed_at: record.state_changed_at,
+                    stage: record
+                        .stage
+                        .as_deref()
+                        .and_then(object_stage_from_wire_value),
+                    stage_changed_at: record.stage_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
                     history_basis_seals: record.history_basis_seals,
@@ -1025,6 +1031,11 @@ pub async fn hydrate_projections_from_persistence(
                     encrypted_content: record.encrypted_content,
                     state,
                     state_changed_at: record.state_changed_at,
+                    stage: record
+                        .stage
+                        .as_deref()
+                        .and_then(object_stage_from_wire_value),
+                    stage_changed_at: record.stage_changed_at,
                     created_by: record.created_by,
                     created_at: record.created_at,
                     history_basis_seals: record.history_basis_seals,
