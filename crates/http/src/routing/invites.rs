@@ -1278,7 +1278,7 @@ async fn persist_invite_quarantine_entry(
     let mut attempt = 0;
     let record = loop {
         let existing = account_data
-            .entry(&subject_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+            .entry(&subject_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
         let existing_cell = existing
@@ -1295,7 +1295,7 @@ async fn persist_invite_quarantine_entry(
             .map_err(|error| AppError::internal(format!("invite quarantine encode: {error}")))?;
         let record = AccountDataState {
             actor_id: subject_actor.clone(),
-            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
             revision: existing.as_ref().map_or(1, |record| record.revision + 1),
             payload,
             tombstone: false,
@@ -1341,7 +1341,7 @@ async fn persist_invite_quarantine_entry(
             sender: station_device_message_sender(state),
             content: ActorPrivateAccountDataUpdate {
                 operation: ActorPrivateAccountDataOperation::Put,
-                account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
                 revision: record.revision,
                 content: Some(record.payload.clone()),
                 updated_at: record.updated_at,
@@ -3063,7 +3063,7 @@ mod invite_locator_security_tests {
                     state.service_core_id().clone(),
                 ))
                 .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")
@@ -3133,7 +3133,7 @@ mod invite_locator_security_tests {
             .entry(
                 &arkret_wire::ActorId::account(delivery.invite_address.account_id.clone())
                     .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")
@@ -3159,7 +3159,7 @@ mod invite_locator_security_tests {
         assert!(!entry.get("invite_event_id").is_some_and(Value::is_null));
         assert_service_account_data_fanout(
             &state,
-            AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             cell.revision,
             &cell.payload,
         )
@@ -3167,7 +3167,7 @@ mod invite_locator_security_tests {
         assert!(
             state
                 .account_data()
-                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(PRODUCTION_HOLDER, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .unwrap()
                 .is_none()
@@ -3194,7 +3194,7 @@ mod invite_locator_security_tests {
                 .entry(
                     &arkret_wire::ActorId::account(foreign_delivery.invite_address.account_id)
                         .to_string(),
-                    AccountDataKey::ACCOUNT_INVITE_QUARANTINE
+                    AccountDataKey::ACCOUNT_HOLDER_QUARANTINE
                 )
                 .await
                 .unwrap()
@@ -3249,7 +3249,7 @@ mod invite_locator_security_tests {
             .entry(
                 &arkret_wire::ActorId::account(delivery_a.invite_address.account_id.clone())
                     .to_string(),
-                AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
             .expect("invite quarantine cell")

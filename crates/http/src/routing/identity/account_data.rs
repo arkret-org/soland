@@ -934,7 +934,7 @@ mod tests {
     fn account_data_get_accepts_only_registered_plaintext_service_cas_keys() {
         for key in [
             arkret_wire::AccountDataKey::ACCOUNT_INVITE_DELIVERY,
-            arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            arkret_wire::AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
         ] {
             assert!(validate_readable_account_data_key(key).is_ok());
             assert!(

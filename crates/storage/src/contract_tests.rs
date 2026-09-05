@@ -5510,7 +5510,7 @@ pub async fn assert_consent_projection_commit_contract(
     );
 
     // A revoke commits its cell mutation and its quarantine CAS together.
-    let quarantine_key = "ak.account.invite_quarantine";
+    let quarantine_key = "ak.account.holder_quarantine";
     let seeded = AccountDataRecord {
         actor: holder.to_string(),
         account_data_key: quarantine_key.to_owned(),

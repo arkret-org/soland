@@ -8,7 +8,7 @@ const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
     AccountDataKey::CLIENT_UI_STATE,
     AccountDataKey::COLLECTIONS_STICKERS,
     AccountDataKey::DND_SCHEDULE,
-    AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+    AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
     AccountDataKey::PRESENCE_PREFERENCE,
     AccountDataKey::PRESENCE_VISIBILITY,
     AccountDataKey::PUSH_RULES,
@@ -456,7 +456,7 @@ mod tests {
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
 
         let err = validate_encrypted_account_data_value(
-            AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+            AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             &json!({"invite_event_id": "ak:event:AcbFC8Nil95DfV11kMMMvRtzRdEC3g-tFtBE8_VQQ74j"}),
         )
         .unwrap_err();

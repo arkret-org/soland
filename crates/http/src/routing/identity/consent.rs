@@ -207,7 +207,7 @@ pub(crate) async fn apply_committed_consent_admission(
                         sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
                             operation: ActorPrivateAccountDataOperation::Put,
-                            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
                             revision: cas.record.revision,
                             content: Some(cas.record.payload.clone()),
                             updated_at: cas.record.updated_at,
@@ -1106,7 +1106,7 @@ async fn plan_invite_quarantine_invalidation(
     let holder = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let existing = state
         .account_data()
-        .entry(&holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+        .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
         .await
         .map_err(|error| {
             ConsentRejection::internal(format!("invite quarantine cell is unavailable: {error}"))
@@ -1151,7 +1151,7 @@ async fn plan_invite_quarantine_invalidation(
     })?;
     let record = AccountDataState {
         actor_id: holder.to_owned(),
-        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+        account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
         revision: existing.revision + 1,
         payload: serde_json::to_value(quarantine).map_err(|error| {
             ConsentRejection::internal(format!("invite quarantine encode: {error}"))
@@ -1639,7 +1639,7 @@ mod tests {
             .expect("holder device");
         let initial = AccountDataState {
             actor_id: holder_actor.clone(),
-            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
             revision: 1,
             payload: json!({
                 "schema": "ak.schema.invite_quarantine.v1",
@@ -1700,7 +1700,7 @@ mod tests {
         assert_eq!(
             state
                 .account_data()
-                .entry(&holder_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .expect("quarantine cell")
                 .expect("seeded cell")
