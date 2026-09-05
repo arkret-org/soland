@@ -636,7 +636,7 @@ async fn verify_mimi_key_material_request_proofs(
 /// The originator is the mandatory `requester_actor_id` field, and the proof
 /// issuer is that complete Actor rather than its signing principal: the
 /// correlation is only as strong as the identity the signature froze. Ruling
-/// `review/spec-done/2026-09-05-1240`.
+/// `review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`.
 async fn verify_mimi_request_consent_proofs(
     state: &AppState,
     body: &MimiRequestConsentRequestBody,
@@ -647,7 +647,7 @@ async fn verify_mimi_request_consent_proofs(
     // deliberately different: proving key control under a principal does not
     // authorise acting for an arbitrary account of that principal, which is why
     // the account authority is checked separately. Ruling
-    // `review/spec-done/2026-09-05-1240`.
+    // `review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`.
     let issuer = body.requester_actor_id.signing_principal_id().to_string();
     for proof in &body.proofs {
         let binding = body.proof_binding_bytes(proof).map_err(|error| {
@@ -838,7 +838,7 @@ async fn verify_mimi_consent_correlation(
     // The holder is compared as a complete AccountId. Comparing the principal
     // core here let the same principal's account on another Station accept a
     // consent addressed to this one; section 6.1.1.2 keys the holder dimension
-    // on the complete AccountId. Ruling review/spec-done/2026-09-05-1240.
+    // on the complete AccountId. Ruling review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md.
     let Some(body_holder_account_id) = body.actor_id.as_account_id() else {
         return Err(mimi_consent_correlation_unavailable());
     };
@@ -2120,7 +2120,7 @@ mod consent_proof_tests {
         assert_eq!(error.code, ErrorCode::NotFound);
     }
 
-    /// Ruling `review/spec-done/2026-09-05-1240`: the holder is compared as a
+    /// Ruling `review/spec-done/2026-09-05-1240-mimi-consent-correlation-cannot-carry-the-consent-peer.md`: the holder is compared as a
     /// complete AccountId. Before it, the correlation stored a principal core
     /// and this update -- from the same principal's account on a *different*
     /// Station -- was accepted.
