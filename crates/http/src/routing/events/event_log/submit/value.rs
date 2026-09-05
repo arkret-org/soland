@@ -286,15 +286,13 @@ pub(super) fn validate_cas_write_guards(
         if binding.lattice.kind() != arkret_state::lattice::LatticeKind::CasRegister {
             continue;
         }
-        // The lattice algebra alone does not know a `cas_register`'s free
-        // value; the registered contract does. Reading it from the registry
-        // keeps this guard and `ProjectionState::head_eq_holds` on one
-        // definition of "unwritten head", so a family like
-        // `ak.component.invite.live_target.v1` (free value `"__unset__"`) is
-        // not treated as already-occupied on its very first claim.
-        let initial = arkret_wire::registered_cell_initial_value(write.cell_id.as_str())
-            .or_else(|| binding.lattice.initial_state())
-            .unwrap_or(Value::Null);
+        // An unwritten `cas_register` cell reads `null` protocol-wide
+        // (`event-auth-state-resolution.md` section 9.3.1.2); the registered
+        // `initial_value` mechanism is gone. `initial_state()` is still
+        // consulted so a non-CAS lattice that grows its own notion of an
+        // unwritten head stays on one definition with
+        // `ProjectionState::head_eq_holds`.
+        let initial = binding.lattice.initial_state().unwrap_or(Value::Null);
         let observed = match frozen.get(&write.cell_id) {
             Some(arkret_state::lattice::CellState::Value(value)) => value,
             Some(arkret_state::lattice::CellState::Bottom(_)) => {

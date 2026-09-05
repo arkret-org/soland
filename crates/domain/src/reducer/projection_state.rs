@@ -747,21 +747,21 @@ impl ProjectionState {
 
     /// The head an unwritten cell presents to a `head_eq` predicate.
     ///
-    /// Genesis CAS writes assert `head_eq null`, but that is the *default*, not
-    /// the rule: a family whose registered contract declares an `initial_value`
-    /// presents that value instead. `ak.component.invite.live_target.v1` is the
-    /// case where the difference decides correctness — its free value is the
-    /// string `"__unset__"`, and `governance-objects.md` section 5.3 requires
-    /// `ak.invite.create`'s `head_eq:"__unset__"` to hold on a slot that was
-    /// released *and* on one that was never claimed. Reading the unwritten cell
-    /// as `null` would refuse the first invite ever sent in a Realm.
-    fn unwritten_cell_head(cell_ref: &str) -> Value {
-        arkret_wire::registered_cell_initial_value(cell_ref).unwrap_or(Value::Null)
+    /// An unwritten `cas_register` cell reads `null` protocol-wide
+    /// (`event-auth-state-resolution.md` section 9.3.1.2). The registered
+    /// `initial_value` / `sentinel_writers` mechanism is deleted: a family that
+    /// needs a reusable free slot — `ak.component.invite.live_target.v1` is the
+    /// one — registers an explicit `set null` release write instead, so
+    /// `ak.invite.create`'s `head_eq: null` holds both on a slot that was
+    /// released and on one that was never claimed. What separates those two
+    /// states is the head-identity guard of section 9.3.1.3 item 3, not a
+    /// distinguished sentinel value.
+    fn unwritten_cell_head(_cell_ref: &str) -> Value {
+        Value::Null
     }
 
     /// Compare `predicate.value` with the current cell head. Missing cells
-    /// present their registered initial value, defaulting to the JSON null head
-    /// used by genesis CAS writes.
+    /// present the JSON null head.
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
         const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_METADATA_V1;

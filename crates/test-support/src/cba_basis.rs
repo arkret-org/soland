@@ -993,7 +993,7 @@ fn apply_invite_live_target_precondition(event: &mut arkret_wire::Event) {
         return;
     };
     let slot = match &event.kind {
-        arkret_wire::EventKind::InviteCreate => arkret_schema::InviteLiveTargetSlot::Unset,
+        arkret_wire::EventKind::InviteCreate => arkret_schema::InviteLiveTargetSlot::Free,
         arkret_wire::EventKind::InviteAccept
         | arkret_wire::EventKind::InviteCancel
         | arkret_wire::EventKind::InviteRevoke => {

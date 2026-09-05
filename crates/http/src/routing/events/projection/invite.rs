@@ -289,7 +289,7 @@ pub(in crate::routing::events) enum InviteLiveTargetRejection {
 ///
 /// The slot is read from the same materialized head `check_move_preconditions`
 /// compares against, so a client that carried the required
-/// `head_eq:"__unset__"` and one that omitted it are both refused here — the
+/// `head_eq: null` and one that omitted it are both refused here — the
 /// difference is only that this lane names the sub-reason and echoes the
 /// occupant so the client can act (`details.create_event_id` is the slot value
 /// and therefore the `head_eq` a release Move must carry).
@@ -1172,7 +1172,7 @@ mod tests {
 
         // Two writes since the live-target slot landed (`governance-objects.md`
         // section 5.3): the lifecycle transition, and the release that puts the
-        // invitee's slot back to `__unset__` so a later invite can claim it.
+        // invitee's slot back to `null` so a later invite can claim it.
         // Neither touches member state — that is what "only the frozen invite
         // lifecycle" means here.
         let families = writes
@@ -1398,11 +1398,11 @@ mod tests {
         };
         assert_eq!(op.value.as_ref(), Some(&json!(create.event_id.as_str())));
 
-        // An unwritten slot presents its registered free value, so the very
-        // first invite in a Realm satisfies `head_eq:"__unset__"`.
+        // An unwritten cell reads `null`, so the very first invite in a Realm
+        // satisfies `head_eq: null`.
         create.preconditions = vec![head_eq_precondition(
             live_target_cell(CANCEL_INVITEE),
-            arkret_schema::invite_live_target_unset_value().unwrap(),
+            arkret_schema::invite_live_target_free_value(),
         )];
         let operation = operation_for(&create, "ak:operation:01904100-0000-7000-8000-000000000601");
         assert_eq!(
@@ -1463,7 +1463,7 @@ mod tests {
     async fn concurrent_directed_creates_resolve_to_one_slot_holder() {
         // Two concurrent creates contend on one cell rather than each writing
         // its own, which is what makes the outcome independent of any private
-        // index or insertion order. Both carry `head_eq:"__unset__"`; once
+        // index or insertion order. Both carry `head_eq: null`; once
         // either lands, the other's precondition no longer holds.
         let state = invite_test_state();
         let winner = live_target_create_event(CANCEL_INVITEE, 0);
@@ -1485,7 +1485,7 @@ mod tests {
         claim_live_target(&state, CANCEL_INVITEE, &winner);
         loser.preconditions = vec![head_eq_precondition(
             cell,
-            arkret_schema::invite_live_target_unset_value().unwrap(),
+            arkret_schema::invite_live_target_free_value(),
         )];
         assert_eq!(
             state
@@ -1505,9 +1505,11 @@ mod tests {
         let first = live_target_create_event(CANCEL_INVITEE, 0);
         claim_live_target(&state, CANCEL_INVITEE, &first);
 
-        // The release write sets the slot back to the registered free value,
-        // which is why the next create's `head_eq:"__unset__"` holds again.
-        // `"__unset__"` is a reusable register value, not a terminal sentinel.
+        // The release write sets the slot back to `null`, which is why the next
+        // create's `head_eq: null` holds again. `null` is a reusable register
+        // value here, not a terminal sentinel — the release keeps its own head
+        // (spec section 9.3.1.2), which is what a later head-identity guard
+        // will use to tell "released now" from "released one round ago".
         seed_cancel_invite(&state, false).await;
         let revoke = revoke_event("revoked", Some(CANCEL_INVITEE));
         let frozen = freeze_invite_lifecycle_pre_state(&state, &revoke)
@@ -1523,12 +1525,12 @@ mod tests {
         let arkret_wire::cba::ProjectedOp::Direct(op) = &release.op else {
             panic!("the release write is a direct set");
         };
-        let unset = arkret_schema::invite_live_target_unset_value().unwrap();
-        assert_eq!(op.value.as_ref(), Some(&unset));
+        let free = arkret_schema::invite_live_target_free_value();
+        assert_eq!(op.value.as_ref(), Some(&free));
 
         state
             .projections()
-            .cache_cell(live_target_cell(CANCEL_INVITEE), unset);
+            .cache_cell(live_target_cell(CANCEL_INVITEE), free);
         let reinvite = live_target_create_event(CANCEL_INVITEE, 2);
         assert!(
             validate_invite_live_target_admission(
