@@ -194,10 +194,10 @@ fn snapshot_item_from_event(
 ) -> Result<arkret_state::SnapshotMaterializedItem, soland_http::error::AppError> {
     let event_id = arkret_identifiers::EventId::new(record.event_id.clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    Ok(arkret_state::SnapshotMaterializedItem {
-        kind: record.kind.clone(),
-        id: record.event_id.clone(),
-        object: json!({
+    Ok(arkret_state::SnapshotMaterializedItem::object(
+        record.kind.clone(),
+        record.event_id.clone(),
+        json!({
             "event_id": record.event_id,
             "actor_id": record.actor_id,
             "actor_seq": record.actor_seq,
@@ -208,8 +208,8 @@ fn snapshot_item_from_event(
             "received_at": record.received_at,
             "envelope": record.envelope,
         }),
-        source_event_id: event_id,
-    })
+        event_id,
+    ))
 }
 
 fn snapshot_event_set_leaf(
