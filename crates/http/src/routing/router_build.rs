@@ -197,7 +197,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
     // service runs with `development_mode=true`; otherwise the
     // segment stays unknown and falls through to `api_not_found` (404
     // `unrecognized_endpoint`), exactly as §2.1.2 requires.
-    let conformance_harness_enabled = conformance::conformance_harness_enabled(state.config());
+    let conformance_harness_enabled = conformance_harness_enabled(state.config());
     let error_exposure = soland_http::error::ErrorExposure {
         development_mode: state.config().development_mode,
     };
@@ -284,6 +284,39 @@ fn mount_application_routes(router: Router, conformance_harness_enabled: bool) -
                 .push(soland_local_router()),
         )
         .push(arkret_protocol_router(conformance_harness_enabled))
+}
+
+/// Whether the development conformance harness is both compiled in and
+/// enabled by configuration.
+///
+/// The harness is gated twice: `conformance-harness` decides whether the module
+/// exists in this build, and `development_mode` decides whether it is mounted.
+/// Without the feature the answer is unconditionally `false`, so the
+/// `/_arkret/_conformance` segment stays unknown and falls through to
+/// `api_not_found` exactly as it does with the feature on and dev mode off.
+#[cfg(any(test, feature = "conformance-harness"))]
+fn conformance_harness_enabled(config: &soland_http::config::AppConfig) -> bool {
+    conformance::conformance_harness_enabled(config)
+}
+
+#[cfg(not(any(test, feature = "conformance-harness")))]
+fn conformance_harness_enabled(_config: &soland_http::config::AppConfig) -> bool {
+    false
+}
+
+/// Push the `/_arkret/_conformance/*` sub-router when the harness is active.
+#[cfg(any(test, feature = "conformance-harness"))]
+fn push_conformance_harness(router: Router, enabled: bool) -> Router {
+    if enabled {
+        router.push(conformance::router())
+    } else {
+        router
+    }
+}
+
+#[cfg(not(any(test, feature = "conformance-harness")))]
+fn push_conformance_harness(router: Router, _enabled: bool) -> Router {
+    router
 }
 
 /// Protocol surface, mounted under the negative-space root `/_arkret/...`.
@@ -374,9 +407,7 @@ fn arkret_protocol_router(conformance_harness_enabled: bool) -> Router {
     // never pushed, so the segment stays unknown and the catch-all below returns
     // `404 unrecognized_endpoint` — no business logic, not advertised in
     // describe / OpenAPI production binding.
-    if conformance_harness_enabled {
-        router = router.push(conformance::router());
-    }
+    router = push_conformance_harness(router, conformance_harness_enabled);
     // Catch-all so that anything under `/_arkret/...` that the typed
     // routers above don't match returns the canonical Arkret JSON
     // error envelope. `cors_preflight` is registered as an OPTIONS

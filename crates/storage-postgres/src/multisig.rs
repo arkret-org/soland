@@ -392,16 +392,7 @@ mod tests {
     use super::{PgMultisigPendingStore, PgPool};
 
     async fn test_pool() -> PgPool {
-        crate::Db::connect(
-            std::env::var("DATABASE_URL").ok().as_deref(),
-            Default::default(),
-        )
-        .await
-        .expect("initialize test database")
-        .pool
-        .expect(
-            "DATABASE_URL must point at a Postgres instance. These contract tests are the only proof the Postgres adapters honour the storage contracts, so they fail rather than skip when no database is configured.",
-        )
+        crate::test_database::contract_pool().await
     }
 
     fn unique_namespace() -> String {

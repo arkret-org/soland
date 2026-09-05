@@ -820,7 +820,7 @@ fn a_claim_gate_only_accepts_claims_from_a_trusted_issuer() {
             "claims": claims,
             "proofs": [{
                 "kind": "detached_jws",
-                "verification_method": format!("did:web:issuer.example#vc-1"),
+                "verification_method": "did:web:issuer.example#vc-1",
                 "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "created_at": arkret_canonical::format_timestamp_canonical(now),
                 "jws": "ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln"

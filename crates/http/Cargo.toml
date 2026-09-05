@@ -11,6 +11,13 @@ description = "Soland HTTP transport, middleware, routing, and OpenAPI surface."
 
 [features]
 default = []
+# COT-06-002 / `service-http-binding.md` §2.1.2: the `/_arkret/_conformance/*`
+# harness is test-only observation / injection. `development_mode` already
+# decides whether it is mounted; this feature decides whether it is compiled at
+# all, so a default `soland-server` build carries neither the handlers nor the
+# seeded notary signer they build fixtures with. `cotest` turns it on when it
+# builds the SUT binary.
+conformance-harness = ["soland-services/test-support"]
 test-support = [
     "arkret-event-draft/test-support",
     "arkret-wire/test-support",

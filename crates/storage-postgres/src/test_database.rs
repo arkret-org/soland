@@ -16,6 +16,33 @@
 //! There is no in-memory fallback and no skip. Without a reachable database
 //! [`TestDatabase::lease`] panics, which fails the test rather than emptying it.
 //!
+//! # Schema freshness
+//!
+//! Slot names carry [`schema_fingerprint`], eight hex characters of
+//! `sha256(up.sql)`. This repository rewrites its single migration in place
+//! (`AGENTS.md`: "需要修改数据库结构，直接修改现有 sql 文件"), and Diesel only
+//! applies migrations it has not seen -- so a slot created under an older
+//! revision keeps the schema it was born with while reporting the migration as
+//! applied. Every "relation does not exist" run of this suite has been that,
+//! never a regression.
+//!
+//! Editing the migration therefore renames the whole slot family and the next
+//! run creates it fresh. Leaving it alone reuses the slots, which is what keeps
+//! a run at one migration per slot instead of one per test. A timestamp suffix
+//! would also be correct, but it would never reuse -- every run would pay the
+//! full 1.4-1.9 s per slot and the server's database list would grow without
+//! bound.
+//!
+//! `db.rs`'s `SCHEMA_CONTRACT_VERSION` fence does not cover this: it is a
+//! hand-written constant that is also spelled in a `CHECK` constraint inside
+//! `up.sql`, so it only moves when someone renames it -- which an in-place edit
+//! never does. It still catches a database from before the migration squash;
+//! the fingerprint is what catches an edit.
+//!
+//! Slots from a superseded fingerprint linger until dropped. Reclaim them with
+//! `scripts/drop-stale-test-databases.sh`, which never touches a database that
+//! has an open connection.
+//!
 //! # Runtime ownership
 //!
 //! The advisory lock lives in a PostgreSQL session, and that session dies with
@@ -300,12 +327,64 @@ fn configured_max_slots() -> u32 {
         .unwrap_or(DEFAULT_MAX_SLOTS)
 }
 
+/// A migrated pool on the *base* database, for the storage-contract tests.
+///
+/// These differ from [`TestDatabase`]: they assert the PostgreSQL adapters
+/// honour the storage contracts, share one database, and each claims fresh
+/// identifiers instead of leasing a slot. Four copies of this function used to
+/// live in `store_contracts.rs`, `durable_plane_restart.rs`, `account_status.rs`
+/// and `multisig.rs`, and all four read `DATABASE_URL` alone -- so running the
+/// suite the way this module documents (`SOLAND_TEST_DATABASE_URL`, which
+/// [`configured_url`] prefers) produced 48 hard failures whose message told you
+/// to set the other variable. One resolver, both variables, one message.
+///
+/// # Panics
+///
+/// Panics for the same reasons as [`TestDatabase::lease`] when no database is
+/// configured, and when the configured database cannot be migrated.
+pub async fn contract_pool() -> crate::db::PgPool {
+    let url = configured_url();
+    Db::connect(Some(&url), crate::db::PoolTuning::default())
+        .await
+        .unwrap_or_else(|error| {
+            panic!("migrating the contract test database {url} failed: {error}")
+        })
+        .pool
+        .expect("Db::connect with a URL always yields a pool")
+}
+
+/// The migration this repository rewrites in place, embedded so its bytes can
+/// be fingerprinted.
+const INITIAL_MIGRATION_SQL: &str = include_str!("../migrations/00000000000000_initial/up.sql");
+
+/// Eight hex characters of `sha256(up.sql)` -- see the module docs.
+fn schema_fingerprint() -> &'static str {
+    static FINGERPRINT: OnceLock<String> = OnceLock::new();
+    FINGERPRINT.get_or_init(|| fingerprint_of(INITIAL_MIGRATION_SQL))
+}
+
+/// The fingerprint of one migration body. Split out so the property that
+/// matters -- different SQL, different name -- is testable without editing the
+/// real migration.
+fn fingerprint_of(sql: &str) -> String {
+    arkret_canonical::sha256_hex(sql.as_bytes())
+        .chars()
+        .take(8)
+        .collect()
+}
+
 /// The prefix leased slots take, derived from the configured database so two
-/// checkouts pointed at different databases on one server never share slots.
+/// checkouts pointed at different databases on one server never share slots,
+/// and from the migration body so a slot never outlives the schema it was
+/// created under.
+///
+/// The base name is truncated to 40 characters: with `_s` + 8 + `_slot` + two
+/// digits the longest slot name is 57, inside PostgreSQL's 63-byte identifier
+/// ceiling.
 fn slot_prefix(url: &str) -> String {
     let base = database_name(url);
-    let truncated = base.chars().take(48).collect::<String>();
-    format!("{truncated}_slot")
+    let truncated = base.chars().take(40).collect::<String>();
+    format!("{truncated}_s{}_slot", schema_fingerprint())
 }
 
 fn database_name(url: &str) -> String {
@@ -654,7 +733,7 @@ fn quote_ident(identifier: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{database_name, delete_order, replace_database, slot_prefix};
+    use super::{database_name, delete_order, fingerprint_of, replace_database, slot_prefix};
 
     #[test]
     fn slot_urls_keep_the_authority_and_query_of_the_configured_url() {
@@ -672,8 +751,45 @@ mod tests {
         );
         assert_eq!(
             slot_prefix("postgres://u:p@host:5432/base"),
-            "base_slot".to_owned()
+            format!("base_s{}_slot", super::schema_fingerprint())
         );
+    }
+
+    #[test]
+    fn a_migration_edit_renames_the_whole_slot_family() {
+        // The property the fingerprint exists for: a slot created under one
+        // revision of `up.sql` can never be leased by a run carrying another,
+        // because it is not even a candidate name.
+        assert_ne!(
+            fingerprint_of("CREATE TABLE a (id text);"),
+            fingerprint_of("CREATE TABLE a (id text, extra text);")
+        );
+        assert_eq!(
+            fingerprint_of("CREATE TABLE a (id text);"),
+            fingerprint_of("CREATE TABLE a (id text);")
+        );
+    }
+
+    #[test]
+    fn a_fingerprint_is_eight_lowercase_hex_characters() {
+        let fingerprint = super::schema_fingerprint();
+        assert_eq!(fingerprint.len(), 8, "{fingerprint}");
+        assert!(
+            fingerprint
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            "{fingerprint}"
+        );
+    }
+
+    #[test]
+    fn the_longest_slot_name_fits_a_postgresql_identifier() {
+        let base = "b".repeat(80);
+        let name = format!(
+            "{}63",
+            slot_prefix(&format!("postgres://u:p@host:5432/{base}"))
+        );
+        assert!(name.len() <= 63, "{} chars: {name}", name.len());
     }
 
     #[test]
