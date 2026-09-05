@@ -1469,11 +1469,22 @@ pub(crate) async fn admit_quarantine_new_source(
 /// An absent deployment object is not "quota off": section 6.1.1.1 makes the
 /// quota a MUST, so the specification defaults apply and the empty constraints
 /// object produces exactly those.
+///
+/// `applies_to` is deliberately NOT consulted here. Section 6.1.1.1 makes
+/// `new_source_quota` the threshold of the single holder admission chokepoint
+/// of section 6.1.1.3, where invite delivery, contact delivery and the section
+/// 6.1.2 consent request share one ledger and one set of thresholds; filtering
+/// it per surface would put two sets of thresholds on one ledger. `applies_to`
+/// only selects the introduction-evidence and disclosure members, which is why
+/// `constraints_for_surface` still applies it everywhere else in this file.
 fn effective_new_source_quota(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
 ) -> Result<EffectiveNewSourceQuota, AppError> {
-    let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery)
+    let constraints = state
+        .config()
+        .receive_policy_constraints
+        .as_ref()
         .and_then(|constraints| constraints.new_source_quota.clone())
         .unwrap_or_default();
     let policy = resolve_core_invite_receive_policy(state, account_id);
@@ -3179,6 +3190,98 @@ mod invite_locator_security_tests {
             arkret_identifiers::EventId::new(invite_event_id.to_owned()).unwrap();
         delivery.idempotency_key = idempotency_key.to_owned();
         delivery
+    }
+
+    /// `consent-model.md` section 6.1.1.1 -- `new_source_quota` is the
+    /// threshold of the single admission chokepoint, so `applies_to` MUST NOT
+    /// filter it. This deployment scopes its constraints object to
+    /// `contact_request` only and still sets `default_new_sources_per_window =
+    /// 2`; the invite delivery surface must enforce that 2, not fall back to
+    /// the specification default of 3. Reading the object through
+    /// `constraints_for_surface` admits the third source and fails here.
+    #[tokio::test]
+    async fn new_source_quota_ignores_applies_to() {
+        let mut config = crate::config::AppConfig {
+            development_mode: false,
+            seed_demo_data: false,
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-invite-quota-applies-to-test-blobs"),
+            ),
+            ..crate::config::AppConfig::test_default()
+        };
+        config.receive_policy_constraints = Some(ReceivePolicyConstraints {
+            policy_version: None,
+            applies_to: Some(vec![ReceivePolicySurface::ContactRequest]),
+            deployment_allowed_introduction_kinds: None,
+            deployment_denied_introduction_kinds: Vec::new(),
+            handle_claim_max_behavior: None,
+            explicit_address_max_behavior: None,
+            unknown_invites_max_behavior: None,
+            new_source_quota: Some(arkret_wire::receive_policy::NewSourceQuotaConstraints {
+                window_seconds: Some(3_600),
+                default_new_sources_per_window: Some(2),
+                max_new_sources_per_window: Some(10),
+                retention_seconds: Some(7_200),
+                default_new_sources_per_retention: Some(30),
+                max_new_sources_per_retention: Some(200),
+            }),
+            disclosure_max: None,
+            allowed_handle_domains: None,
+            trusted_handle_issuer_ids: None,
+            trusted_directory_ids: None,
+            trusted_source_ids: None,
+            denied_source_ids: None,
+            accepted_subject_did_methods: None,
+        });
+        let state = production_holder_state_with_config(config).await;
+        let decision = ReceiveDecision {
+            action: InviteReceiveAction::Quarantine,
+            effective_kind: "explicit_address",
+            trust_tier: TrustTier::Low,
+            disclosed_outcome: None,
+        };
+
+        let sources = [
+            (
+                "ak:did_core:web:scoped-one.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_F1",
+                "ak:idempotency:scoped-one",
+            ),
+            (
+                "ak:did_core:web:scoped-two.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_F2",
+                "ak:idempotency:scoped-two",
+            ),
+            (
+                "ak:did_core:web:scoped-three.example",
+                "ak:event:AbMdINsWEW01xiLsvC3anbe65njppPPCVoNeYM6ES_F3",
+                "ak:idempotency:scoped-three",
+            ),
+        ];
+        let mut admitted = Vec::new();
+        for (inviter_id, event_id, idempotency_key) in sources {
+            let delivery =
+                production_invite_delivery_from(&state, inviter_id, event_id, idempotency_key);
+            let body = serde_json::to_value(&delivery).unwrap();
+            admitted.push(
+                persist_invite_delivery_quarantine_entry(
+                    &state,
+                    PRODUCTION_HOLDER,
+                    state.service_id(),
+                    inviter_id,
+                    &delivery,
+                    &body,
+                    &decision,
+                )
+                .await
+                .expect("holder quarantine write"),
+            );
+        }
+        assert_eq!(
+            admitted,
+            vec![true, true, false],
+            "applies_to filtered new_source_quota away from the invite delivery surface"
+        );
     }
 
     /// `consent-model.md` section 6.1.1.3 -- the third distinct new source is
