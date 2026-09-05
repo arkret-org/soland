@@ -778,12 +778,40 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .get("recovery_reset")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    // The head identities this write superseded, derived at Seal admission from
+    // the Move's own signed basis (`event-auth-state-resolution.md` §9.3.1.1).
+    // A row that predates the field decodes as "superseded nothing", which is
+    // the fail-closed reading: such a write is treated as concurrent with every
+    // other head rather than silently replacing one.
+    let supersedes = match value.get("supersedes") {
+        None | Some(Value::Null) => Vec::new(),
+        Some(Value::Array(entries)) => entries
+            .iter()
+            .map(|entry| {
+                entry
+                    .as_str()
+                    .ok_or_else(|| {
+                        StoreError::Backend("sealed op supersedes entry is not a string".to_owned())
+                    })
+                    .and_then(|id| {
+                        Hash::new(id.to_owned())
+                            .map_err(|error| StoreError::Backend(error.to_string()))
+                    })
+            })
+            .collect::<StoreResult<Vec<Hash>>>()?,
+        Some(_) => {
+            return Err(StoreError::Backend(
+                "sealed op supersedes must be an array".to_owned(),
+            ));
+        }
+    };
     Ok(IssuedOp {
         issuer_id,
         op: SealedOp {
             move_id,
             op,
             recovery_reset,
+            supersedes,
         },
     })
 }
@@ -794,6 +822,12 @@ fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
         "move_id": issued.op.move_id.as_str(),
         "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
         "recovery_reset": issued.op.recovery_reset,
+        "supersedes": issued
+            .op
+            .supersedes
+            .iter()
+            .map(Hash::as_str)
+            .collect::<Vec<_>>(),
     }))
 }
 
@@ -2924,6 +2958,46 @@ mod event_seal_commit_tests {
         let decoded = sealed_op_from_value(encoded).expect("decode stored op");
         assert!(decoded.op.recovery_reset);
         assert_eq!(decoded, issued);
+    }
+
+    /// The derived head identities a `cas_register` write superseded must
+    /// survive the op log, or the cell's heads are lost on reload and every
+    /// stored write reads back as concurrent.
+    #[test]
+    fn superseded_head_identities_survive_the_postgres_json_round_trip() {
+        let superseded = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let issued = test_issued(SealedOp::superseding(
+            Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            LatticeOp {
+                op_type: LatticeOpType::Set,
+                tag: None,
+                value: Some(json!({"policy_revision": 8})),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+            vec![superseded.clone()],
+        ));
+        let encoded = sealed_op_to_value(&issued).expect("encode stored op");
+        assert_eq!(encoded["supersedes"], json!([superseded.as_str()]));
+        assert_eq!(
+            sealed_op_from_value(encoded).expect("decode stored op"),
+            issued
+        );
+
+        // A row written before the field existed decodes as "superseded
+        // nothing". That is the fail-closed reading: the write stays concurrent
+        // with every head instead of silently replacing one.
+        let mut legacy = sealed_op_to_value(&issued).expect("encode stored op");
+        legacy.as_object_mut().unwrap().remove("supersedes");
+        assert!(
+            sealed_op_from_value(legacy)
+                .expect("legacy rows stay decodable")
+                .op
+                .supersedes
+                .is_empty()
+        );
     }
 
     #[test]
