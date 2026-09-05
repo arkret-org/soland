@@ -3390,8 +3390,10 @@ async fn build_history_recipient_authority_views(
         else {
             unreachable!("current Agent evidence builder returned historical evidence")
         };
-        let snapshot = &admission_evidence.agent_authority_snapshot.core;
-        if snapshot.signing_key_binding.agent_key_authorize_event_id
+        let authority_state = &admission_evidence.agent_authority_state_evidence.state;
+        if authority_state
+            .signing_key_binding
+            .agent_key_authorize_event_id
             != *requester_agent_key_authorize_event_id
         {
             return Err(AppError::capability_denied(
@@ -3402,13 +3404,13 @@ async fn build_history_recipient_authority_views(
             agent_id: requester_agent_id.clone(),
             verification_method: requester_agent_verification_method.clone(),
             agent_key_authorize_event_id: requester_agent_key_authorize_event_id.clone(),
-            active_lifecycle_event_id: snapshot
+            active_lifecycle_event_id: authority_state
                 .agent_lifecycle_witness
                 .accepted_status_event
                 .event_id
                 .clone(),
             control_basis: arkret_wire::SealBasis {
-                leaves: vec![snapshot.frontier_seal_id.clone()],
+                leaves: vec![authority_state.frontier_seal_id.clone()],
             },
             agent_signer_evidence_digest: agent_signer_evidence_digest(&evidence)
                 .map_err(|error| AppError::internal(error.to_string()))?,

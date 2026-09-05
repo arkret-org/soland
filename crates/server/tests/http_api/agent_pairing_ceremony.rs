@@ -689,8 +689,8 @@ async fn public_pairing_ceremony_activates_the_agent_runtime_body() {
     };
     assert_eq!(
         admission_evidence
-            .agent_authority_snapshot
-            .core
+            .agent_authority_state_evidence
+            .state
             .authorization
             .status,
         arkret_models_identity::agent_signer_evidence::AgentAuthorizationStatus::Active

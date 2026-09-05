@@ -12,14 +12,14 @@ use arkret_models_collaboration::governance_dependencies::{
 };
 use arkret_models_identity::AuthenticatedSignerResolutionEvidence;
 use arkret_models_identity::agent_signer_evidence::{
-    AGENT_KEY_COMPONENT, AGENT_STATUS_COMPONENT, AgentAdmissionEvidence, AgentAuthoritySnapshot,
-    AgentAuthoritySnapshotCore, AgentAuthorizationEvidence, AgentAuthorizationStateWitness,
-    AgentAuthorizationStatus, AgentCurrentObservation, AgentDetachedJws,
-    AgentEvidenceOuterAttestation, AgentHistoricalEvidenceOuterAttestation, AgentKeyCellEntry,
-    AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness, AgentSignerEvidence,
-    AgentSignerEvidenceQueryFailure, AgentSignerEvidenceQueryFailureReason,
+    AGENT_KEY_COMPONENT, AGENT_STATUS_COMPONENT, AgentAdmissionEvidence, AgentAuthorityState,
+    AgentAuthorityStateEvidence, AgentAuthorityStateLease, AgentAuthorizationEvidence,
+    AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentCurrentObservation,
+    AgentDetachedJws, AgentEvidenceOuterAttestation, AgentHistoricalEvidenceOuterAttestation,
+    AgentKeyCellEntry, AgentLifecycleProvenance, AgentLifecycleStatus, AgentLifecycleWitness,
+    AgentSignerEvidence, AgentSignerEvidenceQueryFailure, AgentSignerEvidenceQueryFailureReason,
     AgentSignerEvidenceQueryOutcome, AgentSignerEvidenceQueryRequestBody,
-    AgentSignerEvidenceQuerySelector, AgentSnapshotLease, ControllerAccountGateAttestation,
+    AgentSignerEvidenceQuerySelector, ControllerAccountGateAttestation,
     ControllerAccountGateAttestationIssueOutcome, ControllerAccountGateAttestationIssueRequestBody,
     CurrentAgentSignerEvidence,
 };
@@ -147,8 +147,8 @@ pub(crate) async fn current_authenticated_agent_signer_evidence(
         unreachable!("current evidence producer returned a historical branch")
     };
     let binding = &admission_evidence
-        .agent_authority_snapshot
-        .core
+        .agent_authority_state_evidence
+        .state
         .signing_key_binding;
     let gate = &admission_evidence.controller_account_gate_attestation;
     let local_service_evidence = current_service_signer_evidence(state).await?;
@@ -1050,7 +1050,7 @@ async fn produce_current_agent_signer_evidence(
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let key_seal_id = key_seal.id.clone();
     let lifecycle_seal_id = lifecycle_seal.id.clone();
-    let core = AgentAuthoritySnapshotCore {
+    let core = AgentAuthorityState {
         authority_id: service_id.clone(),
         principal_control_realm_id: realm_id,
         frontier_seal_id: frontier.id.clone(),
@@ -1099,32 +1099,35 @@ async fn produce_current_agent_signer_evidence(
         },
         seal_lineages: seal_lineage,
     };
-    let snapshot_digest = canonical_digest(&core)?;
+    let state_digest = canonical_digest(&core)?;
     let expires_at = now + chrono::Duration::minutes(2);
-    let mut snapshot = AgentAuthoritySnapshot {
-        core,
-        snapshot_digest: snapshot_digest.clone(),
-        lease: AgentSnapshotLease {
+    let mut authority_state_evidence = AgentAuthorityStateEvidence {
+        state: core,
+        state_digest: state_digest.clone(),
+        lease: AgentAuthorityStateLease {
             authority_kind: non_empty("agent_authority")?,
             authority_id: service_id.clone(),
             verification_method: authority_method.clone(),
-            snapshot_digest: snapshot_digest.clone(),
+            state_digest: state_digest.clone(),
             issued_at: now,
             expires_at,
             proof: empty_proof()?,
         },
     };
-    arkret_signatures::agent_evidence::sign_agent_snapshot_lease(
-        &mut snapshot.lease,
+    arkret_signatures::agent_evidence::sign_agent_authority_state_lease(
+        &mut authority_state_evidence.lease,
         state.notary_signing_key().as_ref(),
     )
     .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let admission_evidence_digest =
-        arkret_signatures::agent_evidence::agent_admission_evidence_digest(&snapshot, &gate)
-            .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+        arkret_signatures::agent_evidence::agent_admission_evidence_digest(
+            &authority_state_evidence,
+            &gate,
+        )
+        .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     let gate_digest = canonical_digest(&gate)?;
     let admission_evidence = AgentAdmissionEvidence {
-        agent_authority_snapshot: snapshot,
+        agent_authority_state_evidence: authority_state_evidence,
         controller_account_gate_attestation: gate,
         admission_evidence_digest,
     };
@@ -1137,7 +1140,7 @@ async fn produce_current_agent_signer_evidence(
             verifier_id: verifier_id.clone(),
             audience_id: audience.clone(),
             challenge: challenge.clone(),
-            agent_snapshot_digest: snapshot_digest,
+            agent_authority_state_digest: state_digest,
             agent_key_seal_id: key_seal_id,
             agent_status_seal_id: lifecycle_seal_id,
             controller_gate_attestation_digest: gate_digest,
@@ -1402,8 +1405,8 @@ async fn verify_current_evidence(
     else {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     };
-    let snapshot = &admission_evidence.agent_authority_snapshot;
-    let binding = &snapshot.core.signing_key_binding;
+    let snapshot = &admission_evidence.agent_authority_state_evidence;
+    let binding = &snapshot.state.signing_key_binding;
     if binding.agent_id != *agent_id || binding.verification_method != *verification_method {
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
@@ -1455,7 +1458,7 @@ async fn verify_current_evidence(
         bytes: account_authority_key.to_bytes().to_vec(),
     };
     let mut seal_keys = std::collections::BTreeMap::new();
-    for seal in &snapshot.core.seal_lineages {
+    for seal in &snapshot.state.seal_lineages {
         for method in seal_signature_methods(seal) {
             if seal_keys.contains_key(method.as_str()) {
                 continue;
@@ -1505,7 +1508,7 @@ async fn verify_current_evidence(
         agent_key_authorize_event_id: &binding.agent_key_authorize_event_id,
         authorize_public_key_digest: &binding.public_key_digest,
         authorize_signing_key_binding_digest: &binding_digest,
-        expected_authority_id: &snapshot.core.authority_id,
+        expected_authority_id: &snapshot.state.authority_id,
         expected_authority_verification_method: &outer_attestation.verification_method,
         expected_account_authority_id: &gate.authority_id,
         expected_account_authority_verification_method: &gate.verification_method,
