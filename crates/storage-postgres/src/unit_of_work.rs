@@ -524,7 +524,7 @@ fn contact_event_ref(value: Option<&EventId>) -> PersistenceResult<Option<Vec<u8
 
 /// Commit one accepted consent Control Move's holder-private effects.
 ///
-/// The or_set cell row and the eager invite-quarantine invalidation
+/// The or_set cell row and the eager holder-quarantine invalidation
 /// (`consent-model.md` section 4.1.2) run inside the Event transaction, so a
 /// failure here rolls the canonical Event back with them. The intent guard
 /// repeats admission's `(holder, consent_id)` binding check inside the
@@ -565,7 +565,7 @@ async fn commit_consent_projection(
             "consent_intent_rebind".to_owned(),
         ));
     }
-    let Some(cas) = commit.invite_quarantine else {
+    let Some(cas) = commit.holder_quarantine else {
         return Ok(());
     };
     let record = cas.record;
@@ -938,7 +938,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .map_err(PersistenceError::database)?;
             let scoped = sql_query(
                 "SELECT id, digest_suite, digest, actor_id, actor_seq, realm_id, kind, schema_id, canonical_bytes, envelope, received_at \
-                 FROM canonical_events WHERE state = 'accepted' AND realm_pk = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
+                 FROM accepted_events WHERE realm_pk = $1 AND actor_id = $2 ORDER BY actor_seq ASC, id ASC",
             )
             .bind::<BigInt, _>(realm_pk)
             .bind::<Text, _>(&request.event.actor_id)

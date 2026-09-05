@@ -791,11 +791,11 @@ pub struct CommitAcceptedEventCommand {
 ///
 /// `consent-model.md` section 4.1.2 puts the downstream invalidation inside
 /// the same transaction boundary as the accepted revoke, so the or_set cell
-/// mutation and the invite-quarantine CAS commit with the canonical Event.
+/// mutation and the holder-quarantine CAS commit with the canonical Event.
 #[derive(Clone, Debug)]
 pub struct CommitConsentProjection {
     pub cell: crate::identity::ConsentCellRecord,
-    pub invite_quarantine: Option<CommitAccountDataCas>,
+    pub holder_quarantine: Option<CommitAccountDataCas>,
 }
 
 /// One account-data cell replaced by revision CAS inside an Event commit.

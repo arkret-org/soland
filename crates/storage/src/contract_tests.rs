@@ -5384,7 +5384,7 @@ pub struct ConsentCommitContractStores<'a> {
 }
 
 /// Both adapters commit a consent Control Move, its or_set cell row and its
-/// eager invite-quarantine invalidation as one unit, and both refuse to rebind
+/// eager holder-quarantine invalidation as one unit, and both refuse to rebind
 /// a `consent_id` to a different intent.
 ///
 /// Spec `consent-model.md` sections 3.1 and 4.1.2: the cell subject is the
@@ -5397,8 +5397,13 @@ pub async fn assert_consent_projection_commit_contract(
     let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
     let realm_id = contract_realm_id(&format!("consent-commit:{namespace}"));
     let holder = DidCoreId::new(format!("ak:did_core:web:{namespace}-holder.example")).unwrap();
-    let peer = DidCoreId::new(format!("ak:did_core:web:{namespace}-peer.example")).unwrap();
-    let other_peer = DidCoreId::new(format!("ak:did_core:web:{namespace}-other.example")).unwrap();
+    // Realm-local ephemeral pairwise peers: the branch only admits `did:key`
+    // projections and only inside the Realm named alongside them, so the
+    // projection has to round-trip `(realm_id, principal_id)` as one key.
+    let pairwise_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
+    let peer = DidCoreId::new("ak:did_core:key:z6MkContractPairwisePeer".to_owned()).unwrap();
+    let other_peer =
+        DidCoreId::new("ak:did_core:key:z6MkContractPairwiseOther".to_owned()).unwrap();
     let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.consent.grant.v1:ak:consent:01964137-0000-7000-8000-{:012x}",
         namespace.len()
@@ -5424,6 +5429,7 @@ pub async fn assert_consent_projection_commit_contract(
         cell_id: cell_id.clone(),
         holder_account_id: holder_account_id.clone(),
         peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+            realm_id: pairwise_realm_id.clone(),
             principal_id: peer.clone(),
         },
         consent_scope: "invite".to_owned(),
@@ -5446,7 +5452,7 @@ pub async fn assert_consent_projection_commit_contract(
             grant_ack,
             ConsentProjectionCommit {
                 cell: granted.clone(),
-                invite_quarantine: None,
+                holder_quarantine: None,
             },
         ))
         .await
@@ -5473,6 +5479,7 @@ pub async fn assert_consent_projection_commit_contract(
     let rebind_ack = contract_control_proposal_ack(&rebind_event, now);
     let mut rebound = granted.clone();
     rebound.peer = arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
+        realm_id: pairwise_realm_id,
         principal_id: other_peer,
     };
     let rejected = stores
@@ -5482,7 +5489,7 @@ pub async fn assert_consent_projection_commit_contract(
             rebind_ack,
             ConsentProjectionCommit {
                 cell: rebound,
-                invite_quarantine: None,
+                holder_quarantine: None,
             },
         ))
         .await;
@@ -5510,7 +5517,7 @@ pub async fn assert_consent_projection_commit_contract(
     );
 
     // A revoke commits its cell mutation and its quarantine CAS together.
-    let quarantine_key = "ak.account.invite_quarantine";
+    let quarantine_key = "ak.account.holder_quarantine";
     let seeded = AccountDataRecord {
         actor: holder.to_string(),
         account_data_key: quarantine_key.to_owned(),
@@ -5557,7 +5564,7 @@ pub async fn assert_consent_projection_commit_contract(
             stale_ack,
             ConsentProjectionCommit {
                 cell: revoked.clone(),
-                invite_quarantine: Some(stale_cas),
+                holder_quarantine: Some(stale_cas),
             },
         ))
         .await;
@@ -5611,7 +5618,7 @@ pub async fn assert_consent_projection_commit_contract(
             revoke_ack,
             ConsentProjectionCommit {
                 cell: revoked.clone(),
-                invite_quarantine: Some(applied_cas),
+                holder_quarantine: Some(applied_cas),
             },
         ))
         .await

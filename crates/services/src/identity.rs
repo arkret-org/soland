@@ -710,15 +710,26 @@ impl ConsentService {
             .cloned()
     }
 
-    pub fn cells_for_pair(
+    /// Holder cells whose frozen peer matches an authenticated counterparty.
+    ///
+    /// Matching is the kind-dispatched exact comparison of
+    /// `consent-model.md` section 6.1 query step 1: an ordinary Actor
+    /// counterparty is compared by complete ActorId, a Realm-local ephemeral
+    /// pairwise counterparty by `(realm_id, principal_id)`, and the two kinds
+    /// never match each other. Callers pass the counterparty they
+    /// authenticated, never a peer value they rebuilt, so no bare
+    /// `principal_id` fallback is reachable from here.
+    pub fn cells_for_counterparty(
         &self,
         holder_account_id: &arkret_wire::AccountId,
-        peer: &arkret_models_collaboration::account_lifecycle::ConsentPeer,
+        counterparty: &arkret_models_collaboration::account_lifecycle::ConsentCounterparty,
     ) -> Vec<ConsentCellRecord> {
         self.runtime_cells
             .lock()
             .values()
-            .filter(|cell| &cell.holder_account_id == holder_account_id && &cell.peer == peer)
+            .filter(|cell| {
+                &cell.holder_account_id == holder_account_id && cell.peer.matches(counterparty)
+            })
             .cloned()
             .collect()
     }

@@ -382,7 +382,7 @@ async fn validate_sidecar_mention_subjects(
         return Ok(());
     };
     let subjects = match operation.payload.get("content") {
-        Some(content) => mention_subject_ids(content)?,
+        Some(content) => mention_subject_account_ids(content)?,
         None => Vec::new(),
     };
     if subjects.is_empty() {
@@ -399,10 +399,18 @@ async fn validate_sidecar_mention_subjects(
     )
     .await
     .map_err(|_| "addressed_agent_not_eligible")?;
-    if subjects
+    // A Sidecar's desired agents are hosted at the controller's own Station,
+    // so the eligible set is the complete account of each desired agent. An
+    // addressed account that only shares the principal component with a
+    // desired agent MUST NOT pass (identity-handles.md §3.8).
+    let eligible = desired
         .iter()
-        .any(|subject| !desired.iter().any(|agent| agent == subject.as_str()))
-    {
+        .filter_map(|agent_id| arkret_wire::DidCoreId::new(agent_id.clone()).ok())
+        .map(|principal_id| {
+            arkret_wire::AccountId::new(principal_id, controller_account.station_id.clone())
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    if subjects.iter().any(|subject| !eligible.contains(subject)) {
         Err("addressed_agent_not_eligible")
     } else {
         Ok(())

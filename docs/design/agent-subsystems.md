@@ -83,7 +83,7 @@ pub(crate) async fn dispatch_message_notifications(
 ) -> ();
 ```
 流程:
-1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_id`(direct)与 `audience_mention`(broadcast);从 Strand watch cell 提取 watcher(`ak.strand.watch.set` 已有投影)。
+1. **解析 target**:从 `msg.content.mentions[]` 提取 `subject_account_id`(direct,完整 `AccountId`,比较 MUST 覆盖 `principal_id` 与 `station_id` 两个分量)与 `audience_mention`(broadcast);从 Strand watch cell 提取 watcher(`ak.strand.watch.set` 已有投影)。
 2. **逐 recipient gate**(顺序与 spec §9.4 覆盖序一致):
    - 去重:同 `(actor, source_event_id, type=mention)` 最多一条。
    - 发送者自我 mention 默认不通知。

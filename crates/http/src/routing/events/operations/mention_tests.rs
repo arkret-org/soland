@@ -61,19 +61,72 @@ mod direct_mention_tests {
 
     use super::super::*;
 
+    const STATION: &str = "ak:did_core:web:bob.station.example";
+
     #[test]
-    fn canonical_mention_accepts_did_core_subject() {
+    fn canonical_mention_accepts_complete_account_subject() {
         let content = json!({
             "kind": "ak.content.text",
             "body": "hello @bob",
             "mentions": [{
                 "kind": "mention",
-                "subject_id": "ak:did_core:webvh:z6mkfixtureBob",
+                "subject_account_id": {
+                    "principal_id": "ak:did_core:webvh:z6mkfixtureBob",
+                    "station_id": STATION
+                },
                 "mention_text_original": "@bob"
             }]
         });
 
         validate_mentions(&content).unwrap();
+        assert_eq!(
+            mention_subject_account_ids(&content).unwrap(),
+            vec![arkret_wire::AccountId::new(
+                arkret_wire::DidCoreId::new("ak:did_core:webvh:z6mkfixtureBob").unwrap(),
+                arkret_wire::DidCoreId::new(STATION).unwrap(),
+            )]
+        );
+    }
+
+    /// `identity-handles.md §3.8` — a mention subject is one complete account,
+    /// so a bare principal carrier is not admissible at all.
+    #[test]
+    fn canonical_mention_rejects_bare_principal_subject() {
+        let content = json!({
+            "kind": "ak.content.text",
+            "body": "hello @bob",
+            "mentions": [{
+                "kind": "mention",
+                "subject_account_id": "ak:did_core:webvh:z6mkfixtureBob"
+            }]
+        });
+
+        assert_eq!(validate_mentions(&content), Err("mention node is invalid"));
+    }
+
+    /// The same principal at another Station is a different subject: the
+    /// collected account ids MUST NOT compare equal.
+    #[test]
+    fn same_principal_on_another_station_is_a_different_mention_subject() {
+        let subject = |station: &str| {
+            json!({
+                "kind": "ak.content.text",
+                "body": "hello @bob",
+                "mentions": [{
+                    "kind": "mention",
+                    "subject_account_id": {
+                        "principal_id": "ak:did_core:webvh:z6mkfixtureBob",
+                        "station_id": station
+                    }
+                }]
+            })
+        };
+        let here = mention_subject_account_ids(&subject(STATION)).unwrap();
+        let elsewhere =
+            mention_subject_account_ids(&subject("ak:did_core:web:other.station.example")).unwrap();
+
+        assert_eq!(here[0].principal_id, elsewhere[0].principal_id);
+        assert_ne!(here, elsewhere);
     }
 
     #[test]
@@ -83,7 +136,10 @@ mod direct_mention_tests {
             "body": "hello @bob",
             "mentions": [{
                 "kind": "mention",
-                "subject_id": "did:web:bob.example"
+                "subject_account_id": {
+                    "principal_id": "did:web:bob.example",
+                    "station_id": STATION
+                }
             }]
         });
 
@@ -121,7 +177,10 @@ mod direct_mention_tests {
                     "body": "hello @bob",
                     "mentions": [{
                         "kind": "mention",
-                        "subject_id": "did:web:bob.example"
+                        "subject_account_id": {
+                            "principal_id": "did:web:bob.example",
+                            "station_id": STATION
+                        }
                     }]
                 }
             ]

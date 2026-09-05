@@ -580,6 +580,9 @@ CREATE TABLE public.membership_compensation_evidence (
     CONSTRAINT membership_compensation_evidence_single_use_key UNIQUE (admission_id, delegation_id)
 );
 
+-- Ordinary reads never select from this table. They go through
+-- public.accepted_events, which subtracts the siblings an accepted
+-- ak.fork.resolution verdict adjudicated out of the local read surface.
 CREATE INDEX canonical_events_realm_pk_idx
     ON public.canonical_events USING btree (realm_pk, received_at, pk);
 
@@ -1717,6 +1720,83 @@ CREATE TABLE public.federation_frontier_resolution (
         PRIMARY KEY (realm_id, cell_subject_key)
 );
 
+-- What the verdict on one adjudicated subject subtracts from the local read
+-- surface. Written in the same transaction as its federation_frontier_resolution
+-- row, and the only thing that makes an accepted verdict visible to a reader:
+-- public.accepted_events subtracts everything at the subject the verdict did
+-- not name. Nothing is deleted here — the canonical bytes a Seal pinned and the
+-- reducer output it produced stay exactly where they are — because a verdict
+-- governs what is read, not what is retained.
+--
+-- Exactly one subject shape is populated per row. An event_sibling_position
+-- subject names (actor_id, actor_seq) and, for canonical_winner, the winning
+-- Event id; an event_id_collision subject names the disputed Event id and, for
+-- canonical_winner, the winning canonical preimage. A NULL winner in either
+-- shape is void_all, whose exclusion is total. Because the position shape keys
+-- on the position rather than on the losing ids, a sibling that arrives after
+-- the verdict is excluded on arrival instead of reopening the subject.
+CREATE TABLE public.federation_fork_normalization (
+    realm_id text NOT NULL,
+    cell_subject_key text NOT NULL,
+    actor_id text,
+    actor_seq bigint,
+    winner_event_id bytea,
+    collision_event_id bytea,
+    winner_canonical_bytes bytea,
+    normalized_at bigint NOT NULL,
+    CONSTRAINT federation_fork_normalization_pkey
+        PRIMARY KEY (realm_id, cell_subject_key),
+    CONSTRAINT federation_fork_normalization_subject_check CHECK (
+        (actor_id IS NOT NULL AND actor_seq IS NOT NULL
+             AND collision_event_id IS NULL AND winner_canonical_bytes IS NULL)
+        OR (actor_id IS NULL AND actor_seq IS NULL
+             AND collision_event_id IS NOT NULL AND winner_event_id IS NULL)
+    ),
+    CONSTRAINT federation_fork_normalization_winner_id_length_check CHECK (
+        winner_event_id IS NULL OR octet_length(winner_event_id) = 33
+    ),
+    CONSTRAINT federation_fork_normalization_collision_id_length_check CHECK (
+        collision_event_id IS NULL OR octet_length(collision_event_id) = 33
+    )
+);
+
+CREATE INDEX federation_fork_normalization_position_idx
+    ON public.federation_fork_normalization USING btree (realm_id, actor_id, actor_seq)
+    WHERE actor_id IS NOT NULL;
+
+CREATE INDEX federation_fork_normalization_collision_idx
+    ON public.federation_fork_normalization USING btree (collision_event_id)
+    WHERE collision_event_id IS NOT NULL;
+
+-- The accepted read surface, and the only one. Ordinary Event reads, the
+-- frontier this Station publishes, the reducer's rebuild input and the
+-- federation sibling-position disclosure all read through this view, so a
+-- fork-resolution verdict cannot reach one of them and miss another. Writers,
+-- identity preflight and collision forensics keep reading canonical_events
+-- directly: an adjudicated loser still occupies its identity and still has to
+-- be retained.
+CREATE VIEW public.accepted_events AS
+SELECT event.*
+FROM public.canonical_events event
+WHERE event.state = 'accepted'
+  AND NOT EXISTS (
+      SELECT 1 FROM public.federation_fork_normalization norm
+      WHERE norm.realm_id = event.realm_id
+        AND norm.actor_id = event.actor_id
+        AND norm.actor_seq = event.actor_seq
+        AND (norm.winner_event_id IS NULL OR norm.winner_event_id <> event.id)
+  )
+  AND NOT EXISTS (
+      -- A collision group can span Realms, and each Realm's recovery authority
+      -- adjudicates only its own projection: a verdict from one Realm must not
+      -- rewrite another Realm's variant of the same identity.
+      SELECT 1 FROM public.federation_fork_normalization norm
+      WHERE norm.collision_event_id = event.id
+        AND norm.realm_id = event.realm_id
+        AND (norm.winner_canonical_bytes IS NULL
+             OR norm.winner_canonical_bytes <> event.canonical_bytes)
+  );
+
 CREATE TABLE public.federation_frontier_reduction_checkpoint (
     realm_id text NOT NULL,
     peer_id text NOT NULL CHECK (peer_id LIKE 'ak:did_core:%'),
@@ -2627,6 +2707,16 @@ ALTER TABLE ONLY public.realm_invites
 
 CREATE INDEX realm_invites_invitee_idx ON public.realm_invites USING btree (invitee_id);
 
+-- Read-model defence in depth only. It is NOT a reducer correctness premise.
+-- Live directed-invite uniqueness is carried by the registered Realm cell
+-- ak.component.invite.live_target.v1 and enforced at admission
+-- (zh/models/governance-objects.md section 5.3); this index only stops a bug in
+-- this projection from denormalising two live rows into one server's own
+-- read model. A conforming implementation reproduces the rule from the Realm's
+-- authoritative state without any private index, so nothing may treat an error
+-- from this index as the uniqueness decision. 'claimed' stays in the predicate
+-- because a 3PID invite that was claimed by an account still materialises an
+-- invitee_id row here; the slot itself is never claimed by a 3PID invite.
 CREATE UNIQUE INDEX realm_invites_live_direct_unique_idx ON public.realm_invites USING btree (realm_id, invitee_id) WHERE ((invitee_id IS NOT NULL) AND (third_party_invite IS NULL) AND (status = ANY (ARRAY['pending'::text, 'claimed'::text, 'send_failed'::text])));
 
 CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_id);

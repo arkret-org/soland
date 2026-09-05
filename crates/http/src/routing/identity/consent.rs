@@ -25,17 +25,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::{CellRef, ConsentId, DidCoreId};
 use arkret_models_collaboration::account_lifecycle::{
-    ConsentCellList, ConsentCellView, ConsentGrantRequestBody, ConsentPeer, ConsentRequestOutcome,
-    ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
+    ConsentCellList, ConsentCellView, ConsentCounterparty, ConsentGrantRequestBody, ConsentPeer,
+    ConsentRequestOutcome, ConsentRequestRequestBody, ConsentRevokeRequestBody, ConsentState,
 };
 use arkret_models_collaboration::governance::invite_addressing::{
-    InviteQuarantine, InviteQuarantineInvalidation, InviteQuarantineInvalidationReason,
-    InviteQuarantineInvalidationScope,
+    HolderQuarantine, HolderQuarantineEntry, HolderQuarantineInvalidation,
+    HolderQuarantineInvalidationReason, HolderQuarantineInvalidationScope, HolderQuarantineSurface,
 };
 use arkret_models_collaboration::sync_frames::account_sync::{
     ActorPrivateAccountDataOperation, ActorPrivateAccountDataUpdate, ActorPrivateDeviceUpdate,
 };
-use arkret_wire::{AccountDataKey, AccountId, ConsentScope, Event, SealId};
+use arkret_wire::{AccountDataKey, AccountId, ConsentRequestScope, ConsentScope, Event, SealId};
 use chrono::{DateTime, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
@@ -50,6 +50,10 @@ use soland_services::identity::{
 use super::{AuthArgs, append_audit_log, now, query_param};
 use crate::routing::identity::device_messages::{
     fanout_actor_private_update, station_device_message_sender,
+};
+use crate::routing::invites::{
+    HOLDER_QUARANTINE_TTL_DAYS, admit_quarantine_new_source, resolve_core_invite_receive_policy,
+    write_holder_quarantine_entry,
 };
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -199,7 +203,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 "accepted",
             )
             .await;
-            if let Some(cas) = admission.commit.invite_quarantine.as_ref() {
+            if let Some(cas) = admission.commit.holder_quarantine.as_ref() {
                 fanout_actor_private_update(
                     state,
                     admission.holder_account_id.principal_id.as_str(),
@@ -207,7 +211,7 @@ pub(crate) async fn apply_committed_consent_admission(
                         sender: station_device_message_sender(state),
                         content: ActorPrivateAccountDataUpdate {
                             operation: ActorPrivateAccountDataOperation::Put,
-                            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+                            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
                             revision: cas.record.revision,
                             content: Some(cas.record.payload.clone()),
                             updated_at: cas.record.updated_at,
@@ -219,7 +223,7 @@ pub(crate) async fn apply_committed_consent_admission(
                 append_audit_log(
                     state,
                     Some(admission.holder_account_id.principal_id.as_str()),
-                    "consent.revoke.invite_quarantine_invalidation",
+                    "consent.revoke.holder_quarantine_invalidation",
                     json!({
                         "holder_account_id": admission.holder_account_id,
                         "peer": admission.commit.cell.peer,
@@ -309,7 +313,7 @@ async fn plan_consent_grant(
         consent_id,
         commit: CommitConsentProjection {
             cell,
-            invite_quarantine: None,
+            holder_quarantine: None,
         },
         effect: ConsentAdmissionEffect::Grant { dot },
     })
@@ -407,12 +411,12 @@ async fn plan_consent_revoke(
     cell.revoked_dots.extend(observed_dot_ids.iter().cloned());
     cell.updated_at = revoked_at;
 
-    let quarantine = plan_invite_quarantine_invalidation(
+    let quarantine = plan_holder_quarantine_invalidation(
         state,
         event.actor_id.as_account_id().ok_or_else(|| {
             ConsentRejection::schema("consent quarantine holder must be an Account Actor")
         })?,
-        consent_peer_principal(&cell.peer).as_str(),
+        &cell.peer,
         &cell.consent_scope,
         revoked_at,
     )
@@ -428,7 +432,7 @@ async fn plan_consent_revoke(
         consent_id,
         commit: CommitConsentProjection {
             cell,
-            invite_quarantine: quarantine.map(|(cas, _)| cas),
+            holder_quarantine: quarantine.map(|(cas, _)| cas),
         },
         effect: ConsentAdmissionEffect::Revoke {
             observed_dot_ids,
@@ -727,18 +731,158 @@ async fn request_consent_cell(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let _peer = arkret_identifiers::DidCoreId::new(session.actor.clone())
+    let requester_principal_id = DidCoreId::new(session.actor.clone())
         .map_err(|e| AppError::internal(format!("authenticated actor is invalid: {e}")))?;
-    // Syntactic validation is safe, but holder existence, policy, rate-limit,
-    // silent drop and quarantine admission are intentionally indistinguishable.
-    // This operation never creates a consent cell or a pending consent state.
-    let _ = normalize_scope(body.consent_scope.as_ref().map(|scope| scope.as_str()))?;
+    // The scope enum is already the section 4 vocabulary without `invite`:
+    // `ConsentRequestScope` has no invite variant, so an invite-scope request is
+    // refused by body deserialization rather than being stored as a branch the
+    // schema forbids. Caller-shape rejection is not a holder signal.
+    let consent_scope = body.consent_scope.unwrap_or(ConsentRequestScope::DEFAULT);
     body.holder_account_id.validate().map_err(|error| {
         AppError::param_invalid(format!("holder_account_id is invalid: {error}"))
     })?;
+    // Everything past this point is holder-dependent, so it never changes the
+    // response. `consent-model.md` section 6.1.1 keeps five outcomes -- admitted
+    // to quarantine, anti-abuse drop, TTL discard, unknown holder, holder policy
+    // deny -- byte-identical, and section 6.1.2 adds this operation to that class.
+    admit_consent_request_quarantine_entry(
+        state,
+        &body.holder_account_id,
+        &requester_principal_id,
+        consent_scope,
+    )
+    .await?;
     json_ok(ConsentRequestOutcome {
         accepted_for_processing: true,
     })
+}
+
+/// Run `ak.self.consent.command.request.v1` through the section 6.1.1
+/// chokepoint the invite delivery surface already uses.
+///
+/// Ordering is normative: live-entry deduplication first, because section
+/// 6.1.1.4 makes a repeat request while an entry is still live a no-op that
+/// MUST NOT bill the quota; then the shared new-source ledger; then the shared
+/// CAS write. Every refusal returns `Ok(())` and leaves the opaque outcome
+/// untouched -- only an infrastructure failure is an error, and even that is
+/// mapped by the caller into the same response.
+async fn admit_consent_request_quarantine_entry(
+    state: &AppState,
+    holder_account_id: &AccountId,
+    requester_principal_id: &DidCoreId,
+    consent_scope: ConsentRequestScope,
+) -> Result<(), AppError> {
+    if holder_account_id.station_id != state.service_core_id()
+        || holder_account_id.principal_id == *requester_principal_id
+    {
+        return Ok(());
+    }
+    let holder_exists = state
+        .identities()
+        .account(holder_account_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .is_some();
+    if !holder_exists {
+        return Ok(());
+    }
+
+    let policy = resolve_core_invite_receive_policy(state, holder_account_id);
+    let requester_actor = arkret_wire::ActorId::account(AccountId::new(
+        requester_principal_id.clone(),
+        state.service_core_id(),
+    ));
+    // A consent request carries no introduction evidence at all, so under the
+    // `require_explicit_consent` profile it can never be the `consent_grant`
+    // evidence that profile admits: it is always a silent drop there.
+    if policy
+        .denied_actor_ids
+        .iter()
+        .any(|actor| actor == &requester_actor)
+        || policy.consent_profile.requires_explicit_consent()
+    {
+        return Ok(());
+    }
+
+    let received_at = now();
+    let holder = arkret_wire::ActorId::account(holder_account_id.clone()).to_string();
+    let existing = state
+        .account_data()
+        .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("holder quarantine cell is unavailable: {error}"))
+        })?;
+    if let Some(existing) = existing.as_ref() {
+        let cell: HolderQuarantine =
+            serde_json::from_value(existing.payload.clone()).map_err(|error| {
+                AppError::internal(format!("invalid holder quarantine cell: {error}"))
+            })?;
+        if cell
+            .live_consent_request(requester_principal_id, consent_scope)
+            .is_some()
+        {
+            // Section 6.1.1.4, consent_request branch: while one entry for
+            // `(account_id, source_peer_principal_id, consent_scope)` is live the
+            // repeat is a no-op. No second entry, no ledger charge, no new TTL.
+            return Ok(());
+        }
+    }
+
+    if !admit_quarantine_new_source(
+        state,
+        holder_account_id,
+        requester_principal_id.as_str(),
+        received_at,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
+    // `entry_digest` is required on both branches, but it is not a second
+    // deduplication rule here: it is the live key itself, hashed. Deriving it
+    // from anything else would let two entries share the live key while carrying
+    // different digests, which is exactly the two-rule split the ruling refused.
+    let entry_digest = crate::util::canonical_digest(&json!({
+        "account_id": holder_account_id,
+        "source_peer_principal_id": requester_principal_id,
+        "surface_kind": "consent_request",
+        "consent_scope": consent_scope,
+    }))?;
+    let entry = HolderQuarantineEntry {
+        entry_digest: arkret_wire::Hash::new(entry_digest)
+            .map_err(|error| AppError::internal(format!("holder quarantine digest: {error}")))?,
+        account_id: holder_account_id.clone(),
+        source_peer_principal_id: requester_principal_id.clone(),
+        // The authenticated transport source of a self operation is this
+        // Station: the requester reached the holder without a peer hop.
+        source_id: state.service_core_id(),
+        surface: HolderQuarantineSurface::ConsentRequest { consent_scope },
+        received_at,
+        expires_at: received_at + chrono::Duration::days(HOLDER_QUARANTINE_TTL_DAYS),
+    };
+    let written = write_holder_quarantine_entry(
+        state,
+        holder_account_id,
+        holder_account_id.principal_id.as_str(),
+        entry,
+        received_at,
+    )
+    .await?;
+    append_audit_log(
+        state,
+        Some(holder_account_id.principal_id.as_str()),
+        "self.consent.request.quarantine",
+        json!({
+            "holder_id": holder_account_id.principal_id,
+            "source_peer_principal_id": requester_principal_id,
+            "consent_scope": consent_scope,
+        }),
+        if written { "accepted" } else { "skipped" },
+    )
+    .await;
+    Ok(())
 }
 
 fn read_back_consent_cell(
@@ -915,23 +1059,17 @@ fn authenticated_holder_account_id(state: &AppState, actor: &str) -> Result<Acco
     ))
 }
 
-fn consent_peer_principal(peer: &ConsentPeer) -> &DidCoreId {
-    match peer {
-        ConsentPeer::Actor { actor_id } => actor_id.signing_principal_id(),
-        ConsentPeer::PairwisePrincipal { principal_id } => principal_id,
-    }
-}
-
+/// Spec section 3.2 Event admission: closed shape, `ak:did_core:key:` form for
+/// the pairwise branch, and peer principal != holder principal. No foreign
+/// Realm is queried here — "only an accepted binding counts" is a match-time
+/// condition (section 6.1 query step 1), so an unaccepted, cross-Realm or
+/// invented pairwise value simply yields an entry that never matches.
 fn validate_consent_intent(
     holder_account_id: &AccountId,
     peer: &ConsentPeer,
 ) -> Result<(), ConsentRejection> {
-    if consent_peer_principal(peer) == &holder_account_id.principal_id {
-        return Err(ConsentRejection::schema(
-            "peer signing principal must differ from holder principal",
-        ));
-    }
-    Ok(())
+    peer.validate_admission_form(&holder_account_id.principal_id)
+        .map_err(|error| ConsentRejection::schema(error.to_string()))
 }
 
 fn consent_grant_dot(operation: &Operation) -> String {
@@ -959,15 +1097,25 @@ fn active_grant_dots(cell: &ConsentCellRecord, at: DateTime<Utc>) -> Vec<String>
 /// Spec `sync/invite-addressing.md` section 2 — verify a `consent_grant`
 /// introduction evidence. The `consent_grant_ref` (and optional `consent_id`)
 /// MUST resolve to an **active** grant dot in `subject`'s (the invitee_id's)
-/// consent cell with `peer == inviter_id` and `consent_scope` in
-/// `{invite, any}`, unrevoked and unexpired. Returns `true` only when such a
-/// dot exists. On any mismatch the caller MUST downgrade the delivery to the
-/// low-trust `explicit_address` path.
+/// consent cell whose peer matches the authenticated inviter and whose
+/// `consent_scope` is in `{invite, any}`, unrevoked and unexpired. Returns
+/// `true` only when such a dot exists. On any mismatch the caller MUST
+/// downgrade the delivery to the low-trust `explicit_address` path.
+///
+/// `inviter_actor_id` is the **complete** ActorId that signed the durable
+/// `ak.invite.create` Event, and consent-model.md section 6.1 query step 1
+/// matches it as such: Station and actor role are part of the identity, so an
+/// invite authored from another Station or in another actor role by the same
+/// principal core is a different peer and finds no grant. An invite is always
+/// authored by an Account or service Actor, never by a Realm-local ephemeral
+/// pairwise actor, so this gate only ever resolves the `{kind:"actor"}` lane
+/// and `{kind:"pairwise_principal"}` entries are structurally unreachable
+/// from here.
 pub(crate) fn has_active_consent_grant_evidence(
     state: &AppState,
     subject: &str,
     holder_station_id: &str,
-    inviter_id: &str,
+    inviter_actor_id: &arkret_wire::ActorId,
     consent_grant_ref: &str,
     consent_id: Option<&str>,
     at: DateTime<Utc>,
@@ -983,23 +1131,17 @@ pub(crate) fn has_active_consent_grant_evidence(
         },
         None => None,
     };
-    let (Ok(holder_principal_id), Ok(holder_station_id), Ok(inviter_principal_id)) = (
+    let (Ok(holder_principal_id), Ok(holder_station_id)) = (
         DidCoreId::new(subject.to_owned()),
         DidCoreId::new(holder_station_id.to_owned()),
-        DidCoreId::new(inviter_id.to_owned()),
     ) else {
         return false;
     };
     let holder_account_id = arkret_wire::AccountId::new(holder_principal_id, holder_station_id);
-    let inviter = ConsentPeer::Actor {
-        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            inviter_principal_id,
-            state.service_core_id(),
-        )),
-    };
+    let inviter = ConsentCounterparty::actor(inviter_actor_id.clone());
     state
         .consents()
-        .cells_for_pair(&holder_account_id, &inviter)
+        .cells_for_counterparty(&holder_account_id, &inviter)
         .iter()
         .any(|cell| {
             if !matches!(cell.consent_scope.as_str(), "invite" | "any") {
@@ -1083,21 +1225,33 @@ fn consent_response(
 // Eager cache invalidation (spec section 4.1.2).
 // ────────────────────────────────────────────────────────────────────────
 
-/// Resolve the invite-quarantine mutation a revoke owes, without writing it.
+/// Resolve the holder-quarantine mutation a revoke owes, without writing it.
 ///
 /// Returns the staged CAS and how many `pending_review` entries it drops. The
 /// write itself happens inside the Event commit transaction, so a revoke that
 /// cannot invalidate is never accepted.
-async fn plan_invite_quarantine_invalidation(
+///
+/// The quarantine ledger keys new sources on the section 6.1.1.2 quota
+/// identity, whose peer component is the principal part of the **complete**
+/// inviter ActorId. Only the `{kind:"actor"}` branch can therefore address an
+/// entry: a Realm-local ephemeral pairwise actor exists solely inside its own
+/// minimal-metadata Realm and never authors an invite delivery into a holder
+/// Principal Control Realm, so a pairwise revoke invalidates nothing here
+/// rather than reaching entries by a bare principal core.
+async fn plan_holder_quarantine_invalidation(
     state: &AppState,
     account_id: &arkret_wire::AccountId,
-    peer: &str,
+    peer: &ConsentPeer,
     consent_scope: &str,
     revoked_at: DateTime<Utc>,
 ) -> Result<Option<(CommitAccountDataCas, usize)>, ConsentRejection> {
     if !matches!(consent_scope, "invite" | "any") {
         return Ok(None);
     }
+    let ConsentPeer::Actor { actor_id: peer } = peer else {
+        return Ok(None);
+    };
+    let peer = peer.signing_principal_id().as_str();
     if account_id.station_id != state.service_core_id() {
         return Err(ConsentRejection::schema(
             "consent quarantine holder must belong to this Station",
@@ -1106,20 +1260,20 @@ async fn plan_invite_quarantine_invalidation(
     let holder = arkret_wire::ActorId::account(account_id.clone()).to_string();
     let existing = state
         .account_data()
-        .entry(&holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+        .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
         .await
         .map_err(|error| {
-            ConsentRejection::internal(format!("invite quarantine cell is unavailable: {error}"))
+            ConsentRejection::internal(format!("holder quarantine cell is unavailable: {error}"))
         })?;
     let Some(existing) = existing else {
         return Ok(None);
     };
-    let mut quarantine: InviteQuarantine = serde_json::from_value(existing.payload.clone())
+    let mut quarantine: HolderQuarantine = serde_json::from_value(existing.payload.clone())
         .map_err(|error| {
-            ConsentRejection::internal(format!("invalid invite quarantine cell: {error}"))
+            ConsentRejection::internal(format!("invalid holder quarantine cell: {error}"))
         })?;
     quarantine.validate_holder(account_id).map_err(|error| {
-        ConsentRejection::internal(format!("invite quarantine binding: {error}"))
+        ConsentRejection::internal(format!("holder quarantine binding: {error}"))
     })?;
     let mut removed = 0usize;
     quarantine.quarantine_entries.retain(|entry| {
@@ -1133,28 +1287,28 @@ async fn plan_invite_quarantine_invalidation(
         return Ok(None);
     }
     quarantine.updated_at = revoked_at;
-    quarantine.last_invalidation = Some(InviteQuarantineInvalidation {
-        reason: InviteQuarantineInvalidationReason::ConsentRevoke,
+    quarantine.last_invalidation = Some(HolderQuarantineInvalidation {
+        reason: HolderQuarantineInvalidationReason::ConsentRevoke,
         peer_principal_id: DidCoreId::new(peer.to_owned()).map_err(|error| {
             ConsentRejection::internal(format!("invalid revoked peer: {error}"))
         })?,
         consent_scope: if consent_scope == "any" {
-            InviteQuarantineInvalidationScope::Any
+            HolderQuarantineInvalidationScope::Any
         } else {
-            InviteQuarantineInvalidationScope::Invite
+            HolderQuarantineInvalidationScope::Invite
         },
         revoked_at,
         removed_entries: removed as u64,
     });
     quarantine.validate_holder(account_id).map_err(|error| {
-        ConsentRejection::internal(format!("invite quarantine binding: {error}"))
+        ConsentRejection::internal(format!("holder quarantine binding: {error}"))
     })?;
     let record = AccountDataState {
         actor_id: holder.to_owned(),
-        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+        account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
         revision: existing.revision + 1,
         payload: serde_json::to_value(quarantine).map_err(|error| {
-            ConsentRejection::internal(format!("invite quarantine encode: {error}"))
+            ConsentRejection::internal(format!("holder quarantine encode: {error}"))
         })?,
         tombstone: false,
         updated_at: revoked_at,
@@ -1188,12 +1342,8 @@ async fn emit_consent_revoke_invalidation(
     } else {
         vec![cell.consent_scope.as_str()]
     };
-    let target_peer_ids = consent_invalidation_peer_ids(
-        state,
-        &cell.holder_account_id,
-        consent_peer_principal(&cell.peer),
-    )
-    .await;
+    let target_peer_ids =
+        consent_invalidation_peer_ids(state, &cell.holder_account_id, &cell.peer).await;
     let payload = json!({
         "schema": "ak.vector.consent.cache_invalidation.v1",
         "holder_account_id": cell.holder_account_id,
@@ -1223,11 +1373,20 @@ async fn emit_consent_revoke_invalidation(
     .await;
 }
 
+/// Downstream services that hold a cached view of this `(holder, peer)` pair.
+///
+/// Contact records address both sides by complete ActorId, so the lookup does
+/// too. A Realm-local ephemeral pairwise peer has no Contact record and no
+/// hosting Station of its own to notify, so it resolves to no target rather
+/// than to whatever Contact happens to share its principal core.
 async fn consent_invalidation_peer_ids(
     state: &AppState,
     holder_account_id: &AccountId,
-    peer: &DidCoreId,
+    peer: &ConsentPeer,
 ) -> Vec<String> {
+    let ConsentPeer::Actor { actor_id: peer } = peer else {
+        return Vec::new();
+    };
     let mut services = BTreeSet::new();
     let holder_actor = arkret_wire::ActorId::account(holder_account_id.clone());
     let records = match state.contacts().contacts_for_actor(&holder_actor).await {
@@ -1237,18 +1396,15 @@ async fn consent_invalidation_peer_ids(
                 %error,
                 actor = %holder_actor,
                 holder = %holder_account_id.principal_id,
-                peer = %peer.as_str(),
+                peer = %peer,
                 "failed to list contacts for consent invalidation target discovery"
             );
             return Vec::new();
         }
     };
     for record in records {
-        let same_pair = (record.requester_id.signing_principal_id()
-            == &holder_account_id.principal_id
-            && record.target_id.signing_principal_id() == peer)
-            || (record.requester_id.signing_principal_id() == peer
-                && record.target_id.signing_principal_id() == &holder_account_id.principal_id);
+        let same_pair = (record.requester_id == holder_actor && record.target_id == *peer)
+            || (record.requester_id == *peer && record.target_id == holder_actor);
         if !same_pair {
             continue;
         }
@@ -1425,7 +1581,15 @@ mod tests {
             cell.cell_id.as_str(),
             format!("ak:cell:ak.component.consent.grant.v1:{CONSENT_ID}")
         );
-        assert_eq!(consent_peer_principal(&cell.peer).as_str(), PEER);
+        assert_eq!(
+            cell.peer,
+            ConsentPeer::Actor {
+                actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                    DidCoreId::new(PEER.to_owned()).unwrap(),
+                    crate::test_event::station_id(),
+                )),
+            }
+        );
         assert_eq!(cell.consent_scope, "invite");
         assert_eq!(
             cell.grant_dots.keys().cloned().collect::<Vec<_>>(),
@@ -1639,17 +1803,17 @@ mod tests {
             .expect("holder device");
         let initial = AccountDataState {
             actor_id: holder_actor.clone(),
-            account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
+            account_data_key: AccountDataKey::ACCOUNT_HOLDER_QUARANTINE.to_owned(),
             revision: 1,
             payload: json!({
-                "schema": "ak.schema.invite_quarantine.v1",
+                "schema": "ak.schema.holder_quarantine.v1",
                 "quarantine_entries": [{
                     "entry_digest": format!("sha256:{}", "a".repeat(64)),
-                    "status": "pending_review",
                     "account_id": { "principal_id": HOLDER, "station_id": state.service_id() },
-                    "source_id": state.service_id(),
-                    "consent_scope": "invite",
                     "source_peer_principal_id": PEER,
+                    "source_id": state.service_id(),
+                    "surface_kind": "invite_delivery",
+                    "consent_scope": "invite",
                     "introduction_kind": "explicit_address",
                     "effective_kind": "explicit_address",
                     "trust_tier": "low",
@@ -1678,13 +1842,21 @@ mod tests {
             holder_account.principal_id.clone(),
             DidCoreId::new("ak:did_core:web:other-station.example").unwrap(),
         );
-        plan_invite_quarantine_invalidation(&state, &foreign_holder, PEER, "invite", revoked_at)
+        // The seeded entry names PEER as its source principal, so the peer this
+        // plan matches on is that principal hosted by this Station.
+        let peer = ConsentPeer::Actor {
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                DidCoreId::new(PEER.to_owned()).unwrap(),
+                state.service_core_id(),
+            )),
+        };
+        plan_holder_quarantine_invalidation(&state, &foreign_holder, &peer, "invite", revoked_at)
             .await
             .expect_err("the same principal at another Station cannot revoke this quarantine");
-        let (cas, removed) = plan_invite_quarantine_invalidation(
+        let (cas, removed) = plan_holder_quarantine_invalidation(
             &state,
             &holder_account,
-            PEER,
+            &peer,
             "invite",
             revoked_at,
         )
@@ -1700,7 +1872,7 @@ mod tests {
         assert_eq!(
             state
                 .account_data()
-                .entry(&holder_actor, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
                 .await
                 .expect("quarantine cell")
                 .expect("seeded cell")
@@ -1719,7 +1891,7 @@ mod tests {
             consent_id: CONSENT_ID.to_owned(),
             commit: CommitConsentProjection {
                 cell,
-                invite_quarantine: Some(cas),
+                holder_quarantine: Some(cas),
             },
             effect: ConsentAdmissionEffect::Revoke {
                 observed_dot_ids: vec![format!("{GRANT_EVENT}:0")],
@@ -1763,6 +1935,555 @@ mod tests {
                 .revoked_dots
                 .len(),
             1
+        );
+    }
+}
+
+/// `ak.self.consent.command.request.v1` admission.
+///
+/// Section 6.1.2 makes this operation write one `surface_kind="consent_request"`
+/// entry through the section 6.1.1 chokepoint, and section 6.1.1.4 deduplicates
+/// that branch by holder-local live-entry uniqueness rather than by a digest the
+/// request has no source for.
+#[cfg(test)]
+mod consent_request_admission_tests {
+    use arkret_models_collaboration::governance::invite_addressing::HolderQuarantineSurfaceKind;
+    use soland_services::identity::AccountProfileState;
+    use soland_storage_postgres::Db;
+
+    use super::*;
+    use crate::config::{AppConfig, ObjectStorageConfig};
+
+    const HOLDER: &str = "ak:did_core:web:request-holder.example";
+    const REQUESTER: &str = "ak:did_core:web:request-peer.example";
+    const OTHER_REQUESTER: &str = "ak:did_core:web:request-peer-two.example";
+
+    fn request_test_config() -> AppConfig {
+        AppConfig {
+            public_base_url: "http://test".to_owned(),
+            object_storage: ObjectStorageConfig::local(std::env::temp_dir()),
+            development_mode: false,
+            seed_demo_data: false,
+            ..AppConfig::test_default()
+        }
+    }
+
+    async fn holder_state(config: AppConfig) -> AppState {
+        let state = AppState::new(config, Db { pool: None });
+        state
+            .identities()
+            .save_account(AccountProfileState {
+                pk: soland_storage::AccountPk(0),
+                account_id: holder_account(&state),
+                principal_id: DidCoreId::new(HOLDER.to_owned()).unwrap(),
+                localpart: "request-holder".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now(),
+            })
+            .await
+            .expect("holder account");
+        state
+    }
+
+    fn holder_account(state: &AppState) -> AccountId {
+        AccountId::new(
+            DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            state.service_core_id(),
+        )
+    }
+
+    async fn quarantine_cell(state: &AppState) -> Option<HolderQuarantine> {
+        let holder = arkret_wire::ActorId::account(holder_account(state)).to_string();
+        state
+            .account_data()
+            .entry(&holder, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
+            .await
+            .expect("holder quarantine cell")
+            .map(|record| {
+                serde_json::from_value(record.payload).expect("cell decodes as the closed shape")
+            })
+    }
+
+    #[tokio::test]
+    async fn a_non_invite_scope_request_lands_in_the_consent_request_branch() {
+        let state = holder_state(request_test_config()).await;
+        let requester = DidCoreId::new(REQUESTER.to_owned()).unwrap();
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder_account(&state),
+            &requester,
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("consent request admission");
+
+        let cell = quarantine_cell(&state)
+            .await
+            .expect("one entry was written");
+        cell.validate_holder(&holder_account(&state))
+            .expect("the written cell binds its holder");
+        assert_eq!(cell.quarantine_entries.len(), 1);
+        let entry = &cell.quarantine_entries[0];
+        assert_eq!(
+            entry.surface_kind(),
+            HolderQuarantineSurfaceKind::ConsentRequest
+        );
+        assert_eq!(entry.consent_scope(), ConsentScope::DirectMessage);
+        assert_eq!(entry.source_peer_principal_id, requester);
+        // The branch carries no Event reference and neither digest: the type has
+        // no place to put one, and the wire form must not grow one either.
+        let encoded = serde_json::to_value(entry).unwrap();
+        for absent in [
+            "invite_event_id",
+            "request_digest",
+            "idempotency_key_digest",
+            "introduction_kind",
+            "effective_kind",
+            "trust_tier",
+            "status",
+        ] {
+            assert!(encoded.get(absent).is_none(), "{absent} leaked");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_repeat_request_while_the_entry_is_live_is_a_no_op() {
+        let state = holder_state(request_test_config()).await;
+        let requester = DidCoreId::new(REQUESTER.to_owned()).unwrap();
+        for _ in 0..3 {
+            admit_consent_request_quarantine_entry(
+                &state,
+                &holder_account(&state),
+                &requester,
+                ConsentRequestScope::DirectMessage,
+            )
+            .await
+            .expect("consent request admission");
+        }
+        let cell = quarantine_cell(&state)
+            .await
+            .expect("one entry was written");
+        assert_eq!(
+            cell.quarantine_entries.len(),
+            1,
+            "live-entry uniqueness, not a digest, is the deduplication rule"
+        );
+
+        // A different scope for the same requester is a different live key, so
+        // it is a second pending item rather than a replay.
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder_account(&state),
+            &requester,
+            ConsentRequestScope::VoiceCall,
+        )
+        .await
+        .expect("consent request admission");
+        let cell = quarantine_cell(&state).await.expect("two entries");
+        assert_eq!(cell.quarantine_entries.len(), 2);
+        cell.validate_holder(&holder_account(&state))
+            .expect("two distinct live keys are legal");
+    }
+
+    #[tokio::test]
+    async fn an_unknown_holder_and_a_self_addressed_request_write_nothing() {
+        let state = holder_state(request_test_config()).await;
+        let requester = DidCoreId::new(REQUESTER.to_owned()).unwrap();
+        let unknown = AccountId::new(
+            DidCoreId::new("ak:did_core:web:absent-holder.example".to_owned()).unwrap(),
+            state.service_core_id(),
+        );
+        admit_consent_request_quarantine_entry(
+            &state,
+            &unknown,
+            &requester,
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("an unknown holder is not an error the requester can see");
+
+        let foreign = AccountId::new(
+            DidCoreId::new(HOLDER.to_owned()).unwrap(),
+            DidCoreId::new("ak:did_core:web:other-station.example".to_owned()).unwrap(),
+        );
+        admit_consent_request_quarantine_entry(
+            &state,
+            &foreign,
+            &requester,
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("a holder hosted elsewhere is not this Station's cell");
+
+        let holder_principal = DidCoreId::new(HOLDER.to_owned()).unwrap();
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder_account(&state),
+            &holder_principal,
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("a self-addressed request needs no consent");
+        assert!(quarantine_cell(&state).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn the_require_explicit_consent_profile_drops_silently() {
+        let state = holder_state(request_test_config()).await;
+        let holder = holder_account(&state);
+        let mut policy = arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy::spec_default(holder.clone());
+        policy.consent_profile = arkret_wire::ConsentProfile::RequireExplicitConsent;
+        state
+            .contacts()
+            .apply_committed_invite_policy(holder.clone(), policy);
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder,
+            &DidCoreId::new(REQUESTER.to_owned()).unwrap(),
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("a policy deny is not visible to the requester");
+        assert!(
+            quarantine_cell(&state).await.is_none(),
+            "a consent request carries no introduction evidence, so it can never \
+             be the consent_grant evidence this profile admits"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_new_source_quota_is_shared_with_invite_delivery() {
+        let mut config = request_test_config();
+        config.receive_policy_constraints = Some(arkret_wire::ReceivePolicyConstraints {
+            policy_version: None,
+            applies_to: None,
+            deployment_allowed_introduction_kinds: None,
+            deployment_denied_introduction_kinds: Vec::new(),
+            handle_claim_max_behavior: None,
+            explicit_address_max_behavior: None,
+            unknown_invites_max_behavior: None,
+            new_source_quota: Some(arkret_wire::receive_policy::NewSourceQuotaConstraints {
+                window_seconds: Some(3_600),
+                default_new_sources_per_window: Some(1),
+                max_new_sources_per_window: Some(10),
+                retention_seconds: Some(7_200),
+                default_new_sources_per_retention: Some(30),
+                max_new_sources_per_retention: Some(200),
+            }),
+            disclosure_max: None,
+            allowed_handle_domains: None,
+            trusted_handle_issuer_ids: None,
+            trusted_directory_ids: None,
+            trusted_source_ids: None,
+            denied_source_ids: None,
+            accepted_subject_did_methods: None,
+        });
+        let state = holder_state(config).await;
+        let holder = holder_account(&state);
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder,
+            &DidCoreId::new(REQUESTER.to_owned()).unwrap(),
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("first source fits the ceiling");
+        admit_consent_request_quarantine_entry(
+            &state,
+            &holder,
+            &DidCoreId::new(OTHER_REQUESTER.to_owned()).unwrap(),
+            ConsentRequestScope::DirectMessage,
+        )
+        .await
+        .expect("the second source is dropped, not rejected");
+        let cell = quarantine_cell(&state)
+            .await
+            .expect("one entry was written");
+        assert_eq!(
+            cell.quarantine_entries.len(),
+            1,
+            "the second distinct source is over the shared ceiling"
+        );
+        assert_eq!(
+            cell.quarantine_entries[0].source_peer_principal_id.as_str(),
+            REQUESTER
+        );
+    }
+}
+
+/// Spec `zh/identity/consent-model.md` section 6.1 query step 1 — the peer of a
+/// consent entry is matched by kind, exactly, and never across kinds.
+///
+/// Every case here used to be a *hit* while `consent_peer_principal` folded
+/// both branches down to a bare `DidCoreId`, so each one is a closed
+/// escalation path rather than a hypothetical.
+#[cfg(test)]
+mod consent_peer_exact_matching_tests {
+    use soland_storage_postgres::Db;
+
+    use super::*;
+    use crate::config::AppConfig;
+
+    const HOLDER: &str = "ak:did_core:web:holder-matching.example";
+    const HOLDER_STATION: &str = "ak:did_core:web:soland.test";
+    const PEER_CORE: &str = "ak:did_core:web:peer-matching.example";
+    const PEER_STATION: &str = "ak:did_core:web:station-one.example";
+    const OTHER_STATION: &str = "ak:did_core:web:station-two.example";
+    const PAIRWISE_KEY: &str = "ak:did_core:key:z6MkfixturePairwiseMatching";
+    const REALM: &str = "ak:realm:Aaqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const OTHER_REALM: &str = "ak:realm:Abqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    const MATCHING_CONSENT_ID: &str = "ak:consent:01964137-0000-7000-8000-000000000051";
+    const MATCHING_GRANT_EVENT: &str = "ak:event:AbLN8Zik9Z7ZJiPG_sNwMk4iV0JGKAnWmyOB0FKWVGCV";
+
+    fn state() -> AppState {
+        AppState::new(
+            AppConfig {
+                development_mode: true,
+                ..AppConfig::test_default()
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn core(value: &str) -> DidCoreId {
+        DidCoreId::new(value.to_owned()).expect("did core id")
+    }
+
+    fn realm(value: &str) -> arkret_wire::RealmId {
+        arkret_wire::RealmId::new(value.to_owned()).expect("realm id")
+    }
+
+    fn account_actor(principal: &str, station: &str) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(core(principal), core(station)))
+    }
+
+    fn holder() -> AccountId {
+        arkret_wire::AccountId::new(core(HOLDER), core(HOLDER_STATION))
+    }
+
+    /// A committed `invite` cell whose frozen intent is `peer`, carrying one
+    /// active dot minted by [`MATCHING_GRANT_EVENT`].
+    fn install_invite_cell(state: &AppState, peer: ConsentPeer) {
+        state.consents().install_committed_cell(ConsentCellRecord {
+            cell_id: consent_cell_id_for_consent_id(MATCHING_CONSENT_ID).expect("cell id"),
+            holder_account_id: holder(),
+            peer,
+            consent_scope: "invite".to_owned(),
+            grant_dots: BTreeMap::from([(
+                format!("{MATCHING_GRANT_EVENT}:0"),
+                ConsentGrantDot {
+                    dot: format!("{MATCHING_GRANT_EVENT}:0"),
+                    not_before: None,
+                    expires_at: None,
+                    granted_at: Utc::now(),
+                },
+            )]),
+            revoked_dots: BTreeSet::new(),
+            updated_at: Utc::now(),
+        });
+    }
+
+    /// The invite gate verdict for one authenticated inviter ActorId.
+    fn invite_gate_admits(state: &AppState, inviter: &arkret_wire::ActorId) -> bool {
+        has_active_consent_grant_evidence(
+            state,
+            HOLDER,
+            HOLDER_STATION,
+            inviter,
+            MATCHING_GRANT_EVENT,
+            Some(MATCHING_CONSENT_ID),
+            Utc::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn the_exact_granted_actor_still_matches() {
+        let state = state();
+        install_invite_cell(
+            &state,
+            ConsentPeer::Actor {
+                actor_id: account_actor(PEER_CORE, PEER_STATION),
+            },
+        );
+        assert!(invite_gate_admits(
+            &state,
+            &account_actor(PEER_CORE, PEER_STATION)
+        ));
+    }
+
+    /// Negative 1 — same principal core, different Station.
+    #[tokio::test]
+    async fn a_different_station_with_the_same_core_is_a_different_peer() {
+        let state = state();
+        install_invite_cell(
+            &state,
+            ConsentPeer::Actor {
+                actor_id: account_actor(PEER_CORE, PEER_STATION),
+            },
+        );
+        assert!(!invite_gate_admits(
+            &state,
+            &account_actor(PEER_CORE, OTHER_STATION)
+        ));
+    }
+
+    /// Negative 2 — same principal core, different actor role.
+    #[tokio::test]
+    async fn a_different_actor_role_with_the_same_core_is_a_different_peer() {
+        let state = state();
+        install_invite_cell(
+            &state,
+            ConsentPeer::Actor {
+                actor_id: account_actor(PEER_CORE, PEER_STATION),
+            },
+        );
+        assert!(!invite_gate_admits(
+            &state,
+            &arkret_wire::ActorId::service(core(PEER_CORE))
+        ));
+    }
+
+    /// Negative 3 — the same pairwise key bound in another Realm.
+    #[tokio::test]
+    async fn the_same_pairwise_key_in_another_realm_is_a_different_peer() {
+        let state = state();
+        install_invite_cell(
+            &state,
+            ConsentPeer::PairwisePrincipal {
+                realm_id: realm(REALM),
+                principal_id: core(PAIRWISE_KEY),
+            },
+        );
+        let granted_realm =
+            ConsentCounterparty::realm_local_pairwise(realm(REALM), core(PAIRWISE_KEY))
+                .expect("verified pairwise counterparty");
+        let other_realm =
+            ConsentCounterparty::realm_local_pairwise(realm(OTHER_REALM), core(PAIRWISE_KEY))
+                .expect("verified pairwise counterparty");
+        assert_eq!(
+            state
+                .consents()
+                .cells_for_counterparty(&holder(), &granted_realm)
+                .len(),
+            1
+        );
+        assert!(
+            state
+                .consents()
+                .cells_for_counterparty(&holder(), &other_realm)
+                .is_empty(),
+            "(realm_id, principal_id) is the isolation key and MUST NOT aggregate across Realms"
+        );
+    }
+
+    /// Negative 4 — a pairwise value impersonating an ordinary Account, and the
+    /// mirror image of it. Neither kind may reach the entry of the other.
+    #[tokio::test]
+    async fn the_two_peer_kinds_never_reach_each_other() {
+        let pairwise_entry = state();
+        install_invite_cell(
+            &pairwise_entry,
+            ConsentPeer::PairwisePrincipal {
+                realm_id: realm(REALM),
+                principal_id: core(PAIRWISE_KEY),
+            },
+        );
+        // An ordinary Account whose principal core is the pairwise key.
+        assert!(!invite_gate_admits(
+            &pairwise_entry,
+            &account_actor(PAIRWISE_KEY, PEER_STATION)
+        ));
+        assert!(!invite_gate_admits(
+            &pairwise_entry,
+            &arkret_wire::ActorId::service(core(PAIRWISE_KEY))
+        ));
+
+        let actor_entry = state();
+        install_invite_cell(
+            &actor_entry,
+            ConsentPeer::Actor {
+                actor_id: account_actor(PAIRWISE_KEY, PEER_STATION),
+            },
+        );
+        let pairwise = ConsentCounterparty::realm_local_pairwise(realm(REALM), core(PAIRWISE_KEY))
+            .expect("verified pairwise counterparty");
+        assert!(
+            actor_entry
+                .consents()
+                .cells_for_counterparty(&holder(), &pairwise)
+                .is_empty(),
+            "an Account entry MUST NOT be reachable through the pairwise lane"
+        );
+    }
+
+    /// Negative 5 — the counterparty is not the actor projected by the target
+    /// Realm current active LeafNode.
+    ///
+    /// Admission never queries a foreign Realm (section 3.2), so a holder can
+    /// write a pairwise entry for a Realm it has no accepted binding in. The
+    /// entry is inert: a counterparty only enters the pairwise lane once its
+    /// caller has verified the active-leaf binding, and every gate that cannot
+    /// verify one presents an ordinary Actor counterparty instead, which the
+    /// pairwise entry refuses. Equivalent to no-consent, fail closed.
+    #[tokio::test]
+    async fn an_unbound_pairwise_entry_is_inert() {
+        let state = state();
+        let peer = ConsentPeer::PairwisePrincipal {
+            realm_id: realm(OTHER_REALM),
+            principal_id: core(PAIRWISE_KEY),
+        };
+        // Admission accepts the form without reaching into OTHER_REALM.
+        peer.validate_admission_form(&core(HOLDER))
+            .expect("admission validates form only");
+        install_invite_cell(&state, peer);
+
+        // No gate in this deployment can authenticate a Realm-local pairwise
+        // actor, so nothing ever reaches the entry.
+        assert!(!invite_gate_admits(
+            &state,
+            &account_actor(PAIRWISE_KEY, HOLDER_STATION)
+        ));
+        assert!(
+            state
+                .consents()
+                .cells_for_counterparty(
+                    &holder(),
+                    &ConsentCounterparty::actor(account_actor(PAIRWISE_KEY, HOLDER_STATION)),
+                )
+                .is_empty()
+        );
+        // A verified binding in the Realm the holder actually named is the only
+        // thing that reaches it.
+        assert_eq!(
+            state
+                .consents()
+                .cells_for_counterparty(
+                    &holder(),
+                    &ConsentCounterparty::realm_local_pairwise(
+                        realm(OTHER_REALM),
+                        core(PAIRWISE_KEY)
+                    )
+                    .expect("verified pairwise counterparty"),
+                )
+                .len(),
+            1
+        );
+    }
+
+    /// An ordinary account principal MUST NOT be smuggled into the pairwise
+    /// branch: the `ak:did_core:key:` form is an admission-time check.
+    #[test]
+    fn the_pairwise_branch_admits_only_did_key_projections() {
+        let peer = ConsentPeer::PairwisePrincipal {
+            realm_id: realm(REALM),
+            principal_id: core(PEER_CORE),
+        };
+        assert!(peer.validate_admission_form(&core(HOLDER)).is_err());
+        assert!(
+            ConsentCounterparty::realm_local_pairwise(realm(REALM), core(PEER_CORE)).is_err(),
+            "an ordinary account principal is not a Realm-local pairwise actor"
         );
     }
 }

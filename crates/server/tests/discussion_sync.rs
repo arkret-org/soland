@@ -327,6 +327,23 @@ async fn seed_pending_invite(
             reason: None,
         },
     );
+    // The read-model row alone is not the Realm's state. `ak.invite.accept`
+    // resolves its registered pre-state from the invite lifecycle cell and
+    // releases the invitee's live-target slot, so a fixture that seeded only
+    // the row would be admitting an Event against a Realm that never claimed
+    // the slot (`governance-objects.md` section 5.3).
+    state.test_projections().cache_cell(
+        arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
+        ))
+        .expect("fixture invite lifecycle cell"),
+        json!("pending"),
+    );
+    state.test_projections().cache_cell(
+        arkret_schema::invite_live_target_cell(&invitee_account)
+            .expect("registered live-target subject rule"),
+        json!(invite_event_id.as_str()),
+    );
     invite_id
 }
 
@@ -338,8 +355,12 @@ async fn accept_invite(
     realm_id: &str,
     invite_id: &str,
 ) {
+    // A directed accept carries the stored invitee: it is the only signed
+    // source the live-target release write can derive its subject from, and the
+    // registered pre-state requirement rejects an accept that omits it.
     let payload = json!({
         "invite_id": invite_id,
+        "invitee_account_id": local_account_id(&state, actor_did),
     });
     let event_id = soland_test_support::fixture_content_bound_id("ak:event:");
     let event = signed_event(SignedEvent {
@@ -1309,7 +1330,7 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
     let alice_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
     let alice = dev_token(state.clone(), alice_did, "a11ce0000001").await;
     let bob_did = BOB_DID.as_str();
-    let bob_core = core_actor_id(bob_did);
+    let bob_account = local_account_id(&state, bob_did);
     let bob_actor = local_actor_id(&state, bob_did).to_string();
     let bob_device_id = "ak:device:01904100-0000-7000-8000-b0b000000011";
     let bob = dev_token(state.clone(), bob_did, "b0b000000011").await;
@@ -1345,7 +1366,7 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
                 "body": "root mentions bob",
                 "mentions": [{
                     "kind": "mention",
-                    "subject_id": bob_core,
+                    "subject_account_id": bob_account,
                     "mention_text_original": "@bob"
                 }]
             }
@@ -1420,8 +1441,8 @@ async fn chat_projection_exposes_reactions_reply_and_mentions_body() {
         .find(|event| event["event_id"] == root_event_id)
         .unwrap_or_else(|| panic!("root message missing from sync projection: {timeline:?}"));
     assert_eq!(
-        root["payload"]["content"]["mentions"][0]["subject_id"],
-        bob_core
+        root["payload"]["content"]["mentions"][0]["subject_account_id"],
+        serde_json::to_value(&bob_account).expect("encode mention subject account"),
     );
 
     {

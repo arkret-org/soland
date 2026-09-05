@@ -440,10 +440,11 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn record_frontier_local_normalization(
         &self,
         resolution: &crate::federation::FederationFrontierResolutionRecord,
+        scope: &soland_storage::FederationForkNormalizationScope,
     ) -> crate::ServiceResult<()> {
         self.0
             .federation_frontier_exchange()
-            .record_local_normalization(resolution)
+            .record_local_normalization(resolution, scope)
             .await?;
         Ok(())
     }

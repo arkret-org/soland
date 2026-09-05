@@ -3904,6 +3904,12 @@ mod control_governance_health_tests {
             .unwrap()
         };
         let invite_id = "ak:invite:AVcbARXDOZuMaYlp1-g60cl4c6Y5NzY10J6VMsgtrakA";
+        // `ak.invite.cancel` writes two cells: the lifecycle transition and
+        // the release of the `ak.component.invite.live_target.v1` slot keyed
+        // by the invitee AccountId (governance-objects.md section 5.3).
+        // The slot subject is what carries the complete account identity, so
+        // the same principal at two Stations MUST address two distinct slots.
+        let mut slot_cells = Vec::new();
         for station in [
             "ak:did_core:web:station-a.example",
             "ak:did_core:web:station-b.example",
@@ -3916,12 +3922,22 @@ mod control_governance_health_tests {
                 "target_state": "revoked",
             }));
             let writes = service.project_accepted_cell_writes(&event).unwrap();
-            assert_eq!(writes.len(), 1);
+            assert_eq!(writes.len(), 2);
             assert_eq!(
                 writes[0].cell_id.as_str(),
                 format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
             );
+            assert!(
+                writes[1]
+                    .cell_id
+                    .as_str()
+                    .starts_with("ak:cell:ak.component.invite.live_target.v1:"),
+                "{}",
+                writes[1].cell_id.as_str()
+            );
+            slot_cells.push(writes[1].cell_id.as_str().to_owned());
         }
+        assert_ne!(slot_cells[0], slot_cells[1]);
         let legacy = make_event(serde_json::json!({
             "invite_id": invite_id, "invitee_id": principal, "target_state": "revoked",
         }));

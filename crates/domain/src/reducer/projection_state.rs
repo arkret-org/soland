@@ -745,8 +745,23 @@ impl ProjectionState {
         Ok(())
     }
 
-    /// Compare `predicate.value` with the current cell head. Missing cells are
-    /// the JSON null head used by genesis CAS writes.
+    /// The head an unwritten cell presents to a `head_eq` predicate.
+    ///
+    /// Genesis CAS writes assert `head_eq null`, but that is the *default*, not
+    /// the rule: a family whose registered contract declares an `initial_value`
+    /// presents that value instead. `ak.component.invite.live_target.v1` is the
+    /// case where the difference decides correctness — its free value is the
+    /// string `"__unset__"`, and `governance-objects.md` section 5.3 requires
+    /// `ak.invite.create`'s `head_eq:"__unset__"` to hold on a slot that was
+    /// released *and* on one that was never claimed. Reading the unwritten cell
+    /// as `null` would refuse the first invite ever sent in a Realm.
+    fn unwritten_cell_head(cell_ref: &str) -> Value {
+        arkret_wire::registered_cell_initial_value(cell_ref).unwrap_or(Value::Null)
+    }
+
+    /// Compare `predicate.value` with the current cell head. Missing cells
+    /// present their registered initial value, defaulting to the JSON null head
+    /// used by genesis CAS writes.
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
         const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
         const STRAND_FIELDS_FAMILY: &str = arkret_wire::CellFamilyId::STRAND_METADATA_V1;
@@ -804,7 +819,7 @@ impl ProjectionState {
             return false;
         };
         let Some(value) = self.realm_cell_value(realm_id, &cell_id) else {
-            return expected.is_null();
+            return Self::observed_head_eq(&Self::unwritten_cell_head(cell_ref), expected);
         };
         if Self::observed_head_eq(value, expected) {
             return true;

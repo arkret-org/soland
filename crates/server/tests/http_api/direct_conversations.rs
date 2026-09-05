@@ -368,8 +368,15 @@ async fn seed_remote_claim_prerequisites(
             core_id(BOB_DID),
             state.service_core_id().clone(),
         ),
-        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
-            principal_id: core_id(alice),
+        // Alice is an ordinary remote Account, so her consent peer is the
+        // complete ActorId including her hosting Station. The pairwise branch
+        // is reserved for a minimal-metadata Realm's Realm-local actor and
+        // would never match her.
+        peer: arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
+            actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                core_id(alice),
+                arkret_wire::DidCoreId::new(source_id).unwrap(),
+            )),
         },
         consent_scope: "direct_message".to_owned(),
         grant_dots: BTreeMap::from([(

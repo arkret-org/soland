@@ -256,6 +256,17 @@ fn fit_sibling_positions_outcome_to_budget(
 /// which positions exist, which resolutions this Station holds, and which
 /// Realms it serves, and the challenge is supposed to reach only positions an
 /// authorized recovery Move already adjudicated.
+///
+/// The disclosed set is read from the accepted read surface, not from a
+/// disclosure-only view of it. That surface is already normalized: applying an
+/// accepted `ak.fork.resolution` subtracts the siblings the verdict did not
+/// name from the one `accepted_events` projection that ordinary reads, the
+/// published frontier and the reducer's input also read, so a position under a
+/// `canonical_winner` reads back as exactly the winner and one under
+/// `void_all` reads back empty without this path knowing the verdict at all.
+/// Disclosing that surface verbatim is also the honest answer when the two do
+/// disagree: a set that contradicts the verdict says this Station has not
+/// aligned, which is precisely what the challenger needs to see.
 async fn adjudicated_position_siblings(
     state: &AppState,
     realm_id: &RealmId,

@@ -74,10 +74,10 @@ pub struct ContactProjectionCommit {
 #[derive(Clone, Debug)]
 pub struct ConsentProjectionCommit {
     pub cell: ConsentCellRecord,
-    /// Eager invite-quarantine invalidation for an accepted revoke
+    /// Eager holder-quarantine invalidation for an accepted revoke
     /// (`consent-model.md` section 4.1.2), staged as a whole-value CAS against
     /// the revision admission read.
-    pub invite_quarantine: Option<AccountDataCasCommit>,
+    pub holder_quarantine: Option<AccountDataCasCommit>,
 }
 
 /// One account-data cell replaced by revision CAS inside an Event commit.

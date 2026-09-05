@@ -271,6 +271,31 @@ pub(super) async fn apply_projection_preflight(
                     reason,
                 ));
             }
+            // governance-objects.md §5.3 — a directed invite whose invitee
+            // already holds the Realm live-target slot is an invalid duplicate,
+            // not a stale head. It is refused before the generic head_eq check
+            // so the rejection carries its registered sub-reason and echoes the
+            // occupying invite instead of a bare `failed_precondition` the
+            // client cannot act on.
+            if let Err(rejection) =
+                crate::routing::events::projection::validate_invite_live_target_admission(
+                    operation, &proj,
+                )
+            {
+                return Err(match rejection {
+                    crate::routing::events::projection::InviteLiveTargetRejection::ProjectionFailed(
+                        reason,
+                    ) => SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason),
+                    crate::routing::events::projection::InviteLiveTargetRejection::Occupied(
+                        problem,
+                    ) => SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        "the invitee already holds a live directed invite in this Realm",
+                    )
+                    .with_details(problem),
+                });
+            }
             // event-and-patch.md §4.4 — a Control Move's generic
             // `preconditions[].head_eq` compare-and-swap MUST be evaluated
             // against the materialized head before any effect lands; a stale

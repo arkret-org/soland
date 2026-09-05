@@ -2,19 +2,78 @@ use arkret_wire::{ActorId, DidCoreId, Hash};
 use serde_json::Value;
 
 use super::{
-    AsyncConnection, AsyncPgConnection, BigInt, ExistsRow,
-    FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
-    FederationFrontierExchangeStore, FederationFrontierReductionCheckpoint,
-    FederationFrontierResolutionRecord, FederationOperationsStore, FederationOutboxClaim,
-    FederationOutboxDeadLetterRecord, FederationOutboxOutcome, FederationOutboxPolicyResolution,
-    FederationOutboxRecord, FederationOutboxRequeue, FederationOutboxState,
-    FederationOutboxStateDepth, FederationOutboxStore, FederationOutboxTransition, Integer,
-    JsonPayloadRow, Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult,
-    PgPool, PgTransactionError, ProjectedEventOperation, QueryableByName, RunQueryDsl, Text,
-    Timestamptz, async_trait, classify_federation_outbox_completion,
-    frontier_exchange_failure_record, frontier_exchange_success_record, ids, pg_conn, sql_query,
-    sql_types,
+    AsyncConnection, AsyncPgConnection, BigInt, Binary, ExistsRow,
+    FederationForkNormalizationScope, FederationFrontierConfirmedEvidenceRecord,
+    FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
+    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
+    FederationOperationsStore, FederationOutboxClaim, FederationOutboxDeadLetterRecord,
+    FederationOutboxOutcome, FederationOutboxPolicyResolution, FederationOutboxRecord,
+    FederationOutboxRequeue, FederationOutboxState, FederationOutboxStateDepth,
+    FederationOutboxStore, FederationOutboxTransition, Integer, JsonPayloadRow, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    ProjectedEventOperation, QueryableByName, RunQueryDsl, Text, Timestamptz, async_trait,
+    classify_federation_outbox_completion, frontier_exchange_failure_record,
+    frontier_exchange_success_record, ids, pg_conn, sql_query, sql_types,
 };
+
+/// `federation_fork_normalization` columns for one verdict.
+///
+/// Exactly one subject shape is populated, matching the table's own CHECK. Both
+/// Event ids are stored as the 33-octet identity token rather than the wire
+/// string so the view can compare them against `canonical_events.id` directly,
+/// and a malformed id is rejected here rather than silently never matching.
+struct NormalizationScopeColumns {
+    actor_id: Option<String>,
+    actor_seq: Option<i64>,
+    winner_event_id: Option<Vec<u8>>,
+    collision_event_id: Option<Vec<u8>>,
+    winner_canonical_bytes: Option<Vec<u8>>,
+}
+
+fn normalization_event_id(event_id: &str) -> PersistenceResult<Vec<u8>> {
+    ids::parse_event_id(event_id)
+        .map(|id| id.to_vec())
+        .ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed fork resolution Event id: {event_id:?}"
+            ))
+        })
+}
+
+fn normalization_scope_columns(
+    scope: &FederationForkNormalizationScope,
+) -> PersistenceResult<NormalizationScopeColumns> {
+    Ok(match scope {
+        FederationForkNormalizationScope::SiblingPosition {
+            actor_id,
+            actor_seq,
+            winner_event_id,
+        } => NormalizationScopeColumns {
+            actor_id: Some(actor_id.clone()),
+            actor_seq: Some(i64::try_from(*actor_seq).map_err(|_| {
+                PersistenceError::SchemaViolation(
+                    "fork resolution actor_seq exceeds i64 range".to_owned(),
+                )
+            })?),
+            winner_event_id: winner_event_id
+                .as_deref()
+                .map(normalization_event_id)
+                .transpose()?,
+            collision_event_id: None,
+            winner_canonical_bytes: None,
+        },
+        FederationForkNormalizationScope::EventIdCollision {
+            event_id,
+            winner_canonical_bytes,
+        } => NormalizationScopeColumns {
+            actor_id: None,
+            actor_seq: None,
+            winner_event_id: None,
+            collision_event_id: Some(normalization_event_id(event_id)?),
+            winner_canonical_bytes: winner_canonical_bytes.clone(),
+        },
+    })
+}
 
 /// Every column of `federation_outbox`, aliased to the record field names.
 pub(crate) const OUTBOX_COLUMNS: &str = "id, peer_id, peer_url, endpoint, idempotency_key, \
@@ -824,11 +883,13 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
     async fn record_local_normalization(
         &self,
         resolution: &FederationFrontierResolutionRecord,
+        scope: &FederationForkNormalizationScope,
     ) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         let resolution = resolution.clone();
+        let scope = normalization_scope_columns(scope)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
             crate::realm_identity::ensure_realm_pk(conn, &resolution.realm_id).await?;
             // Replaying one accepted Event is idempotent; a second verdict for
@@ -859,6 +920,28 @@ impl FederationFrontierExchangeStore for PgFederationFrontierExchangeStore {
                     )));
                 }
             }
+            // The read-surface subtraction rides the same transaction as the
+            // verdict above. A DO NOTHING here is safe precisely because the
+            // insert above already refused a second, byte-different verdict for
+            // a settled subject: the columns below are a pure function of that
+            // subject and verdict, so an existing row is the same row.
+            sql_query(
+                "INSERT INTO federation_fork_normalization \
+                 (realm_id, cell_subject_key, actor_id, actor_seq, winner_event_id, \
+                  collision_event_id, winner_canonical_bytes, normalized_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (realm_id, cell_subject_key) DO NOTHING",
+            )
+            .bind::<Text, _>(&resolution.realm_id)
+            .bind::<Text, _>(&resolution.cell_subject_key)
+            .bind::<Nullable<Text>, _>(scope.actor_id.as_deref())
+            .bind::<Nullable<BigInt>, _>(scope.actor_seq)
+            .bind::<Nullable<Binary>, _>(scope.winner_event_id.as_deref())
+            .bind::<Nullable<Binary>, _>(scope.collision_event_id.as_deref())
+            .bind::<Nullable<Binary>, _>(scope.winner_canonical_bytes.as_deref())
+            .bind::<BigInt, _>(resolution.normalized_at)
+            .execute(conn)
+            .await?;
             sql_query(
                 "UPDATE federation_frontier_confirmed_evidence \
                  SET local_resolution_kind = 'fork_resolution_event', \

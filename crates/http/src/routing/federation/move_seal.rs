@@ -145,21 +145,22 @@ pub(crate) async fn verified_availability_dependency_writes(
         .collect()
 }
 
-/// Verify every `ak.fork.resolution` an accepted Seal covers and record the
-/// scope-bound resolution it settles.
+/// Verify every `ak.fork.resolution` an accepted Seal covers, apply its verdict
+/// to the local read surface, and record the scope-bound resolution it settles.
 ///
 /// This is the first of the two phases that clear confirmed fork evidence
-/// (`sync/federation.md` §4.5.3), and it clears nothing: no peer leaves
-/// `peer_stale` here, because an accepted verdict says nothing about whether
-/// any particular replica has aligned its sibling set with it.
+/// (`sync/federation.md` §4.5.3), and it clears nothing on any peer: an
+/// accepted verdict says nothing about whether a particular replica has aligned
+/// its sibling set with it.
 ///
-/// What it does not yet do is recompute the local disputed scope — the losing
-/// siblings stay in the accepted view. That is a gap, not a design choice: it
-/// keeps this node fail closed rather than unsafe, but it also means a peer
-/// running this same code can never answer an alignment challenge with the
-/// verdict, so the second phase has a path that will not fire. Closing it needs
-/// a per-position sibling exclusion surface, which the Event store does not
-/// have yet (`collision_variants` covers only full-hash collisions).
+/// Locally it says everything. The verdict and the read-surface subtraction it
+/// implies land in one transaction, after which the disputed scope reads back
+/// as exactly the winner or as the empty set — through the one
+/// `accepted_events` projection that ordinary reads, the published frontier,
+/// the reducer's input and the sibling-position disclosure all share, so the
+/// verdict cannot reach one of them and miss another. Nothing is deleted: the
+/// canonical bytes a Seal pinned and the reducer output it produced are
+/// retained, because normalization governs what is read, not what is kept.
 pub(crate) async fn validate_accepted_fork_resolution_records(
     state: &AppState,
     seal: &Seal,
@@ -198,7 +199,8 @@ pub(crate) async fn validate_accepted_fork_resolution_records(
         record
             .validate_collision_evidence(&event, &records, digest_suite)
             .map_err(|error| seal_admission_error(error.to_string()))?;
-        record_fork_resolution_normalization(state, &event, &record).await?;
+        let scope = fork_normalization_scope(&event, &record, &records, digest_suite)?;
+        record_fork_resolution_normalization(state, &event, &record, &scope).await?;
     }
     Ok(())
 }
@@ -255,10 +257,108 @@ async fn resolved_collision_variant_records(
     Ok(records)
 }
 
+/// The exact read-surface subtraction one verdict implies.
+///
+/// The subject fixes what is governed and the verdict fixes what survives; the
+/// SDK payload validator has already refused every other pairing, so the arms
+/// below are total. A collision winner is named by index into the Move's own
+/// evidence and can only be carried as complete canonical bytes — two variants
+/// of one hash are by construction indistinguishable by id.
+fn fork_normalization_scope(
+    event: &Event,
+    record: &arkret_models_collaboration::events_payloads::ForkResolutionRecord,
+    records: &BTreeMap<
+        arkret_identifiers::CollisionVariantRecordId,
+        arkret_models_collaboration::events_payloads::state::CollisionVariantRecord,
+    >,
+    digest_suite: arkret_canonical::DigestSuite,
+) -> Result<soland_services::federation::FederationForkNormalizationScope, AppError> {
+    use arkret_models_collaboration::events_payloads::{
+        ForkResolutionConflictEvidence, ForkResolutionSubject, ForkResolutionVariantLocator,
+        ForkResolutionVerdict,
+    };
+    use soland_services::federation::FederationForkNormalizationScope;
+
+    match (&record.subject, &record.verdict) {
+        (
+            ForkResolutionSubject::EventSiblingPosition {
+                actor_id,
+                actor_seq,
+            },
+            verdict,
+        ) => {
+            let winner_event_id = match verdict {
+                ForkResolutionVerdict::SiblingWinner {
+                    winner_event_id, ..
+                } => Some(winner_event_id.as_str().to_owned()),
+                ForkResolutionVerdict::VoidAll { .. } => None,
+                ForkResolutionVerdict::CollisionWinner { .. } => {
+                    return Err(seal_admission_error(
+                        "collision verdict cannot govern an Event sibling position",
+                    ));
+                }
+            };
+            Ok(FederationForkNormalizationScope::SiblingPosition {
+                actor_id: actor_id.to_string(),
+                actor_seq: *actor_seq,
+                winner_event_id,
+            })
+        }
+        (ForkResolutionSubject::EventIdCollision { event_id }, verdict) => {
+            let winner_canonical_bytes = match verdict {
+                ForkResolutionVerdict::VoidAll { .. } => None,
+                ForkResolutionVerdict::CollisionWinner { winner_index, .. } => {
+                    let ForkResolutionConflictEvidence::FullHashCollision { variants } =
+                        &record.conflict_evidence
+                    else {
+                        return Err(seal_admission_error(
+                            "collision verdict without full-hash collision evidence",
+                        ));
+                    };
+                    let locator = variants.get(usize::from(*winner_index)).ok_or_else(|| {
+                        seal_admission_error("collision winner index is out of range")
+                    })?;
+                    Some(match locator {
+                        ForkResolutionVariantLocator::InlineCanonicalBytes {
+                            canonical_event_bytes_b64u,
+                        } => arkret_canonical::base64url_decode(
+                            canonical_event_bytes_b64u.as_str(),
+                        )
+                        .map_err(|error| seal_admission_error(error.to_string()))?,
+                        ForkResolutionVariantLocator::CollisionVariantRecord {
+                            collision_variant_record_id,
+                            ..
+                        } => records
+                            .get(collision_variant_record_id)
+                            .ok_or_else(|| {
+                                crate::app_error!(
+                                    DependencyMissing,
+                                    "fork resolution winner names a collision variant record that is not durably available",
+                                )
+                            })?
+                            .canonical_event_bytes_for_locator(event, locator, digest_suite)
+                            .map_err(|error| seal_admission_error(error.to_string()))?,
+                    })
+                }
+                ForkResolutionVerdict::SiblingWinner { .. } => {
+                    return Err(seal_admission_error(
+                        "sibling verdict cannot govern a colliding Event identity",
+                    ));
+                }
+            };
+            Ok(FederationForkNormalizationScope::EventIdCollision {
+                event_id: event_id.as_str().to_owned(),
+                winner_canonical_bytes,
+            })
+        }
+    }
+}
+
 async fn record_fork_resolution_normalization(
     state: &AppState,
     event: &Event,
     record: &arkret_models_collaboration::events_payloads::ForkResolutionRecord,
+    scope: &soland_services::federation::FederationForkNormalizationScope,
 ) -> Result<(), AppError> {
     let cell_subject_key = record
         .subject
@@ -279,7 +379,7 @@ async fn record_fork_resolution_normalization(
     };
     state
         .federation()
-        .record_frontier_local_normalization(&normalization)
+        .record_frontier_local_normalization(&normalization, scope)
         .await
         .map_err(|error| seal_admission_error(error.to_string()))
 }

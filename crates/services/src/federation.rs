@@ -4,9 +4,9 @@ use arkret_event_draft::ProjectedEventOperation as Operation;
 use arkret_identifiers::DidCoreId;
 use async_trait::async_trait;
 pub use soland_storage::{
-    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationFrontierConfirmedEvidenceRecord,
-    FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
-    FederationFrontierResolutionRecord,
+    FEDERATION_FRONTIER_STATUS_PEER_STALE, FederationForkNormalizationScope,
+    FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
+    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
 };
 
 use crate::ServiceResult;
@@ -221,6 +221,7 @@ pub trait FederationStatePort: Send + Sync {
     async fn record_frontier_local_normalization(
         &self,
         resolution: &FederationFrontierResolutionRecord,
+        scope: &FederationForkNormalizationScope,
     ) -> ServiceResult<()>;
     async fn frontier_local_normalization(
         &self,
@@ -442,13 +443,15 @@ impl FederationService {
             .await
     }
     /// First phase: record what an accepted `ak.fork.resolution` normalized
-    /// locally. This clears nothing on any peer.
+    /// locally, and subtract the siblings it adjudicated out from the accepted
+    /// read surface in the same transaction. This clears nothing on any peer.
     pub async fn record_frontier_local_normalization(
         &self,
         resolution: &FederationFrontierResolutionRecord,
+        scope: &FederationForkNormalizationScope,
     ) -> ServiceResult<()> {
         self.state
-            .record_frontier_local_normalization(resolution)
+            .record_frontier_local_normalization(resolution, scope)
             .await
     }
     pub async fn frontier_local_normalization(
@@ -572,6 +575,7 @@ mod tests {
         async fn record_frontier_local_normalization(
             &self,
             _resolution: &FederationFrontierResolutionRecord,
+            _scope: &FederationForkNormalizationScope,
         ) -> ServiceResult<()> {
             Ok(())
         }

@@ -226,8 +226,9 @@ pub fn validate_content_blocks(content: &serde_json::Value) -> Result<(), &'stat
 /// Canonical mention admission for a Message Content Block tree.
 ///
 /// The only admissible shapes are the spec AST nodes — `{"kind":"mention"}`
-/// with a `did_core_id` `subject_id` and `{"kind":"audience_mention"}` with a
-/// closed `audience` — both parsed by the SDK models that own the wire types.
+/// with a complete `AccountId` `subject_account_id` and
+/// `{"kind":"audience_mention"}` with a closed `audience` — both parsed by the
+/// SDK models that own the wire types.
 pub fn validate_mentions(content: &serde_json::Value) -> Result<(), &'static str> {
     arkret_models_collaboration::events_payloads::collect_mention_nodes(content)
         .map(|_| ())
@@ -244,11 +245,16 @@ pub(crate) fn operation_audience_mentions(
     Ok(mentions)
 }
 
-/// Direct-mention subject DIDs carried by a Message Content Block tree.
-pub(crate) fn mention_subject_ids(
+/// Complete direct-mention subject accounts carried by a Message Content Block
+/// tree.
+///
+/// Callers MUST match these against a candidate's whole `AccountId`; the same
+/// principal hosted by another Station is a different subject
+/// (`identity-handles.md §3.8`).
+pub(crate) fn mention_subject_account_ids(
     content: &serde_json::Value,
-) -> Result<Vec<arkret_identifiers::DidCoreId>, &'static str> {
-    arkret_models_collaboration::events_payloads::collect_mention_subject_ids(content)
+) -> Result<Vec<arkret_wire::AccountId>, &'static str> {
+    arkret_models_collaboration::events_payloads::collect_mention_subject_account_ids(content)
         .map_err(|error| error.message())
 }
 

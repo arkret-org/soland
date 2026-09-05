@@ -968,6 +968,39 @@ pub struct FederationFrontierResolutionRecord {
     pub normalized_at: i64,
 }
 
+/// What one accepted verdict subtracts from the local accepted read surface.
+///
+/// This is the executable half of local normalization: the resolution record
+/// says what was adjudicated, this says which Events stop being readable. Both
+/// are written in one transaction, because a verdict that is durable while its
+/// read-surface effect is not would let this Station disclose a sibling set
+/// that contradicts a resolution it has already accepted.
+///
+/// The subtraction is by subject, not by a list of losing ids, so a sibling
+/// that arrives after the verdict is excluded on arrival — `void_all` is final
+/// for the position and `canonical_winner` cannot be reopened by a later
+/// variant. Nothing is deleted: canonical bytes a Seal pinned, and the reducer
+/// output it produced, are retained exactly as they were.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FederationForkNormalizationScope {
+    /// `subject.kind=event_sibling_position`. Every Event at this exact
+    /// `(realm_id, actor_id, actor_seq)` leaves the accepted read surface
+    /// except `winner_event_id`; `None` is `void_all` and empties the position.
+    SiblingPosition {
+        actor_id: String,
+        actor_seq: u64,
+        winner_event_id: Option<String>,
+    },
+    /// `subject.kind=event_id_collision`. The local row for this identity stays
+    /// readable only while its canonical preimage is byte-identical to the
+    /// winning variant, which is the only way to tell two variants of one hash
+    /// apart; `None` is `void_all`.
+    EventIdCollision {
+        event_id: String,
+        winner_canonical_bytes: Option<Vec<u8>>,
+    },
+}
+
 /// Durable progress through one immutable remote frontier observation.
 ///
 /// The actor is the complete closed `ActorId`; a principal-only projection is

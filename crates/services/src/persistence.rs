@@ -710,10 +710,14 @@ impl PersistenceHandle {
         self.persistence.governance_dependencies()
     }
 
-    /// Server-internal seen-source ledger behind the invite quarantine
-    /// new-source quota (`identity/consent-model.md` section 6.1.1.4). It is
-    /// reachable only from the admission chokepoint and from account erasure;
-    /// no operation projects it onto the wire.
+    /// Server-internal seen-source ledger behind the per-holder new-source
+    /// quota (`identity/consent-model.md` section 6.1.1.4). One ledger serves
+    /// all three converging surfaces -- private invite delivery,
+    /// `ak.self.consent.command.request.v1` and a stranger's first Contact
+    /// request -- so a rotated pairwise DID cannot buy a fresh budget on
+    /// whichever surface is cheapest. It is reachable only from the admission
+    /// chokepoint and from account erasure; no operation projects it onto the
+    /// wire.
     pub fn invite_new_source_ledger_store(
         &self,
     ) -> &dyn soland_storage::InviteNewSourceLedgerStore {

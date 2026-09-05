@@ -617,14 +617,19 @@ pub struct PgProjectionEventStore {
 }
 
 // The Event identity is not duplicated onto `projection_events`; it is reached
-// through `event_pk`, so every read joins `canonical_events` to recover it.
+// through `event_pk`, so every read joins `accepted_events` to recover it.
 // One shared column list keeps the eight read paths from drifting apart.
+//
+// The join is against the normalized read surface rather than the base table:
+// a sibling an accepted `ak.fork.resolution` adjudicated out must leave the
+// reducer's input as well as the ordinary Event reads, and one projection is
+// the only way those two cannot drift apart.
 const PROJECTION_EVENT_SELECT: &str = "SELECT parent.id AS event_id, projected.realm_id, \
      projected.event_kind, projected.operation_kind, projected.operation_id, \
      projected.sender_id AS sender, projected.payload, projected.created_at, \
      projected.received_at \
      FROM projection_events projected \
-     JOIN canonical_events parent ON parent.pk = projected.event_pk";
+     JOIN accepted_events parent ON parent.pk = projected.event_pk";
 #[derive(QueryableByName)]
 struct ProjectionEventRow {
     #[diesel(sql_type = diesel::sql_types::Binary)]
@@ -696,7 +701,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         let event_pk =
-            sql_query("SELECT pk FROM canonical_events WHERE state = 'accepted' AND id = $1 AND realm_pk = $2")
+            sql_query("SELECT pk FROM accepted_events WHERE id = $1 AND realm_pk = $2")
                 .bind::<diesel::sql_types::Binary, _>(event_id.to_vec())
                 .bind::<diesel::sql_types::BigInt, _>(realm_pk)
                 .get_result::<ProjectionEventPkRow>(&mut *conn)

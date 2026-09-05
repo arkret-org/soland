@@ -3602,6 +3602,29 @@ async fn project_delivered_contact_fact(
                     "ak.contact.requested conflicts with the permanent Contact request slot",
                 ));
             }
+            // `contact-and-direct-conversation.md` section 1.1 -- a stranger's
+            // first Contact request is billed to the same per-holder new-source
+            // ledger as invite delivery and `ak.self.consent.command.request.v1`.
+            // Only the discarded object differs: Contact shares the chokepoint,
+            // not the carrier, so an over-quota first contact drops the
+            // establishment of this `pending_incoming` row and leaves the holder
+            // quarantine cell with zero entries. Contact still neither reads nor
+            // writes Consent. Reaching here means no row exists yet, which is
+            // exactly the "first contact" the quota is defined over.
+            if let Some(holder_account_id) = subject_actor_id.as_account_id()
+                && !crate::routing::invites::admit_quarantine_new_source(
+                    state,
+                    holder_account_id,
+                    issuer_id.signing_principal_id().as_str(),
+                    now(),
+                )
+                .await?
+            {
+                // Byte-identical to an ordinary acceptance: the requester learns
+                // nothing the four other members of the section 6.1.1
+                // equivalence class would not also show.
+                return Ok("accepted");
+            }
             let contact = ContactRecord {
                 requester_id: issuer_id.clone(),
                 target_id: subject_actor_id.clone(),
@@ -4148,6 +4171,27 @@ mod tests {
         let state = AppState::new(test_config(), Db { pool: None });
         let requester_id = "ak:did_core:web:remote-alice.example"; // issuer, on source PS
         let target = "ak:did_core:web:local-bob.example"; // subject_id, this holder
+        // A first contact now meters the shared new-source quota before the
+        // pending_incoming row is established (consent-model.md 6.1.1.3), and the
+        // ledger is keyed by a real holder account row. Without one the delivery
+        // never reaches the projection this test is about.
+        state
+            .identities()
+            .save_account(soland_services::identity::AccountProfileState {
+                pk: soland_storage::AccountPk(0),
+                account_id: arkret_wire::AccountId::new(
+                    DidCoreId::new(target.to_owned()).unwrap(),
+                    state.service_core_id().clone(),
+                ),
+                principal_id: DidCoreId::new(target.to_owned()).unwrap(),
+                localpart: "local-bob".to_owned(),
+                display_name: None,
+                bio: None,
+                avatar_blob_ref: None,
+                created_at: now(),
+            })
+            .await
+            .expect("holder account");
         let source_id = "ak:did_core:web:remote.local"; // requester_id's home PS
 
         let payload = json!({

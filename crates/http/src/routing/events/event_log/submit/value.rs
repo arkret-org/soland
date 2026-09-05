@@ -202,15 +202,20 @@ pub(super) async fn derive_submit_cell_writes(
         return Ok((Vec::new(), arkret_schema::FrozenPreState::new()));
     }
     let frozen_pre_state =
-        crate::routing::events::projection::freeze_invite_cancel_pre_state(state, event)
+        crate::routing::events::projection::freeze_invite_lifecycle_pre_state(state, event)
             .await
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
-    let projected = if matches!(
-        parsed.kind.as_str(),
-        arkret_wire::event_kind_str::INVITE_CANCEL | arkret_wire::event_kind_str::CAPABILITY_GRANT
-    ) {
+    // Every kind whose registered contract declares `pre_state_requirements`
+    // MUST be projected against the frozen snapshot. Routing one of them
+    // through the pre-state-free evaluator would compare its payload against an
+    // empty pre-state, which for `stored_field_matches_payload` reads as
+    // "stored absent" and rejects every legitimate directed accept/revoke.
+    let projected = if crate::routing::events::projection::INVITE_LIFECYCLE_PRE_STATE_KINDS
+        .contains(&parsed.kind.as_str())
+        || parsed.kind.as_str() == arkret_wire::event_kind_str::CAPABILITY_GRANT
+    {
         state
             .projections()
             .project_cell_writes_with_pre_state(event, &frozen_pre_state)
@@ -281,7 +286,15 @@ pub(super) fn validate_cas_write_guards(
         if binding.lattice.kind() != arkret_state::lattice::LatticeKind::CasRegister {
             continue;
         }
-        let initial = binding.lattice.initial_state().unwrap_or(Value::Null);
+        // The lattice algebra alone does not know a `cas_register`'s free
+        // value; the registered contract does. Reading it from the registry
+        // keeps this guard and `ProjectionState::head_eq_holds` on one
+        // definition of "unwritten head", so a family like
+        // `ak.component.invite.live_target.v1` (free value `"__unset__"`) is
+        // not treated as already-occupied on its very first claim.
+        let initial = arkret_wire::registered_cell_initial_value(write.cell_id.as_str())
+            .or_else(|| binding.lattice.initial_state())
+            .unwrap_or(Value::Null);
         let observed = match frozen.get(&write.cell_id) {
             Some(arkret_state::lattice::CellState::Value(value)) => value,
             Some(arkret_state::lattice::CellState::Bottom(_)) => {

@@ -770,6 +770,33 @@ fn mimi_consent_correlation_unavailable() -> AppError {
     AppError::not_found("MIMI consent correlation is unavailable")
 }
 
+/// The exact `consent_peer` a MIMI consent correlation names.
+///
+/// `mimi_request_consent_request_body.requester_id` is a bare `did_core_id`
+/// (spec `extensions/mimi-interop.md` section 10), while a consent entry's
+/// actor branch is matched by its **complete** ActorId and the pairwise branch
+/// by `(realm_id, principal_id)` (`identity/consent-model.md` section 6.1
+/// query step 1). The facade therefore reconciles against the one complete
+/// ActorId it can attest for that requester — an account hosted by this
+/// Station, the same completion `authenticated_holder_account_id` performs —
+/// and compares the whole `ConsentPeer`, never a principal core.
+///
+/// Two things consequently fail closed rather than degrade to a core-only
+/// comparison: a peer that names any other Station or actor role, and every
+/// `{kind:"pairwise_principal"}` peer, because a correlation carries no
+/// `realm_id` and a Realm-local ephemeral pairwise actor is not a MIMI
+/// requester this facade can host.
+fn mimi_correlation_peer(state: &AppState, requester_id: &str) -> Option<ConsentPeer> {
+    let requester_principal_id =
+        arkret_identifiers::DidCoreId::new(requester_id.to_owned()).ok()?;
+    Some(ConsentPeer::Actor {
+        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            requester_principal_id,
+            state.service_core_id(),
+        )),
+    })
+}
+
 async fn verify_mimi_consent_correlation(
     state: &AppState,
     body: &MimiUpdateConsentRequestBody,
@@ -792,31 +819,16 @@ async fn verify_mimi_consent_correlation(
         return Err(mimi_consent_correlation_unavailable());
     }
 
+    let correlation_peer = mimi_correlation_peer(state, &correlation.requester_id);
+
     match body.decision {
         arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept => {
             let payload = &body.consent_event.event.payload;
             let peer_matches = payload
                 .get("peer")
                 .cloned()
-                .and_then(|peer| {
-                    serde_json::from_value::<
-                        arkret_models_collaboration::account_lifecycle::ConsentPeer,
-                    >(peer)
-                    .ok()
-                })
-                .is_some_and(|peer| {
-                    match peer {
-                    arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
-                        actor_id,
-                    } => {
-                        actor_id.signing_principal_id().as_str()
-                            == correlation.requester_id
-                    }
-                    arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
-                        principal_id,
-                    } => principal_id.as_str() == correlation.requester_id,
-                }
-                });
+                .and_then(|peer| serde_json::from_value::<ConsentPeer>(peer).ok())
+                .is_some_and(|peer| correlation_peer.as_ref() == Some(&peer));
             if !peer_matches
                 || payload.get("consent_scope").and_then(Value::as_str)
                     != Some(correlation.purpose.as_str())
@@ -844,17 +856,7 @@ async fn verify_mimi_consent_correlation(
                 .consents()
                 .holder_cell(holder_account_id, &cell_id)
                 .filter(|cell| {
-                    (match &cell.peer {
-                        arkret_models_collaboration::account_lifecycle::ConsentPeer::Actor {
-                            actor_id,
-                        } => {
-                            actor_id.signing_principal_id().as_str()
-                                == correlation.requester_id
-                        }
-                        arkret_models_collaboration::account_lifecycle::ConsentPeer::PairwisePrincipal {
-                            principal_id,
-                        } => principal_id.as_str() == correlation.requester_id,
-                    })
+                    correlation_peer.as_ref() == Some(&cell.peer)
                         && cell.consent_scope == correlation.purpose
                         && observed_dot_ids.iter().all(|observed_dot| {
                             observed_dot.as_str().is_some_and(|observed_dot| {

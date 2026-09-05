@@ -971,6 +971,55 @@ pub fn apply_registered_cba_plane_seal(
             leaves: vec![seal_id],
         });
     }
+    apply_invite_live_target_precondition(event);
+}
+
+/// Give an invite fixture the `ak.component.invite.live_target.v1` `head_eq`
+/// its registered write owes.
+///
+/// `governance-objects.md` section 5.3 puts directed-invite live uniqueness on
+/// that one cell, so a claim asserts the registered free value and every
+/// release asserts the stored `ak:event:` create id. Deriving it here keeps
+/// every fixture conformant without each test re-spelling the cell — and stops
+/// any of them from spelling the value `ak:invite:`, which never matches and
+/// would strand the slot. A fixture that set its own guard on the same cell
+/// (a negative case) keeps it.
+fn apply_invite_live_target_precondition(event: &mut arkret_wire::Event) {
+    let Some(invitee) = event
+        .payload
+        .get("invitee_account_id")
+        .and_then(|value| serde_json::from_value::<arkret_wire::AccountId>(value.clone()).ok())
+    else {
+        return;
+    };
+    let slot = match &event.kind {
+        arkret_wire::EventKind::InviteCreate => arkret_schema::InviteLiveTargetSlot::Unset,
+        arkret_wire::EventKind::InviteAccept
+        | arkret_wire::EventKind::InviteCancel
+        | arkret_wire::EventKind::InviteRevoke => {
+            let Some(invite_id) = event
+                .payload
+                .get("invite_id")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| arkret_identifiers::InviteId::new(value.to_owned()).ok())
+            else {
+                return;
+            };
+            arkret_schema::InviteLiveTargetSlot::held_by_invite(&invite_id)
+        }
+        _ => return,
+    };
+    let Ok(precondition) = slot.precondition(&invitee) else {
+        return;
+    };
+    if event
+        .preconditions
+        .iter()
+        .any(|existing| existing.cell_id == precondition.cell_id)
+    {
+        return;
+    }
+    event.preconditions.push(precondition);
 }
 
 /// Whether `event`'s kind owes a CBA basis field at all.

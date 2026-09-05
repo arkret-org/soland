@@ -113,19 +113,21 @@ fn actor_can_receive_watched_message(
     true
 }
 
-/// Direct-mention subject DIDs of a message payload's Content Block.
+/// Complete direct-mention subject accounts of a message payload's Content
+/// Block.
 ///
-/// Only the canonical `mention_node.subject_id` is authoritative for routing
-/// (strand-and-message.md §9.4.2); a payload that fails canonical mention
-/// admission routes to nobody.
-fn mention_subjects(payload: &Value) -> Vec<String> {
+/// Only the canonical `mention_node.subject_account_id` is authoritative for
+/// routing (strand-and-message.md §9.4.2); a payload that fails canonical
+/// mention admission routes to nobody.
+fn mention_subject_accounts(payload: &Value) -> BTreeSet<arkret_wire::AccountId> {
     payload
         .get("content")
         .or_else(|| payload.get("payload").and_then(|p| p.get("content")))
-        .and_then(|content| crate::routing::events::operations::mention_subject_ids(content).ok())
+        .and_then(|content| {
+            crate::routing::events::operations::mention_subject_account_ids(content).ok()
+        })
         .unwrap_or_default()
         .into_iter()
-        .map(arkret_identifiers::DidCoreId::into_string)
         .collect()
 }
 
@@ -311,16 +313,19 @@ pub(crate) async fn dispatch_message_notifications(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    // Mention subjects name principals, but delivery must retain each actual
-    // member's immutable Station. Never manufacture an account from a DID.
-    let mentioned_principals = mention_subjects(payload)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
+    // A mention names one complete account. Matching MUST compare both
+    // components: the same principal joined from another Station is a
+    // different member and MUST NOT receive this notification
+    // (identity-handles.md §3.8, strand-and-message.md §9.4.2). Service
+    // actors carry no account and can never be a mention subject.
+    let mentioned_accounts = mention_subject_accounts(payload);
     let mentioned_subjects = realm_joined_members(state, &realm_id)
         .into_iter()
         .filter(|member| {
             serde_json::from_str::<arkret_wire::ActorId>(member).is_ok_and(|actor| {
-                mentioned_principals.contains(actor.signing_principal_id().as_str())
+                actor
+                    .as_account_id()
+                    .is_some_and(|account_id| mentioned_accounts.contains(account_id))
             })
         })
         .collect::<BTreeSet<_>>();
@@ -737,6 +742,53 @@ mod tests {
         state.realm_directory().upsert(entry);
     }
 
+    /// Join one member under an explicit Station so a test can hold two
+    /// distinct accounts that share a principal component.
+    fn seed_realm_member_at_station(
+        state: &AppState,
+        realm_id: &str,
+        principal: &str,
+        station: &str,
+    ) -> arkret_wire::ActorId {
+        let actor = arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            arkret_wire::DidCoreId::new(principal).expect("valid principal id"),
+            arkret_wire::DidCoreId::new(station).expect("valid station id"),
+        ));
+        let member = actor.to_string();
+        state.test_projection().lock().members.insert(
+            (realm_id.to_owned(), member.clone()),
+            soland_domain::reducer::SolandMembershipState {
+                member,
+                realm_id: realm_id.to_owned(),
+                state: "join".to_owned(),
+                role: "member".to_owned(),
+                membership_event_ref: None,
+                invited_at: None,
+                joined_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                reason: None,
+            },
+        );
+        actor
+    }
+
+    async fn notifications_for_actor(state: &AppState, actor: &arkret_wire::ActorId) -> Vec<Value> {
+        state
+            .deliveries()
+            .list_recipient_notifications(
+                soland_services::delivery::ListRecipientNotificationsQuery {
+                    recipient_id: actor.to_string(),
+                },
+            )
+            .await
+            .expect("notification query")
+            .into_iter()
+            .map(|record| {
+                serde_json::to_value(record.notification).expect("encode typed notification")
+            })
+            .collect()
+    }
+
     async fn put_agent(state: &AppState, agent: &str, controller: &str, verification_method: &str) {
         let controller_account = fixture_actor(controller).as_account_id().unwrap().clone();
         state
@@ -1087,6 +1139,10 @@ mod tests {
         strand_id: Option<&str>,
     ) -> arkret_event_draft::ProjectedEventOperation {
         let event_id = fixture_event_id(seed);
+        let subject_account_id = fixture_actor(agent)
+            .as_account_id()
+            .cloned()
+            .expect("mention subject is an account actor");
         let mut payload = json!({
             "sender": sender,
             "event_id": event_id,
@@ -1094,7 +1150,7 @@ mod tests {
                 "body": "ping",
                 "mentions": [{
                     "kind": "mention",
-                    "subject_id": agent,
+                    "subject_account_id": subject_account_id,
                     "mention_text_original": "@agent"
                 }]
             }
@@ -1205,6 +1261,37 @@ mod tests {
                 .get("notification_kind")
                 .and_then(Value::as_str),
             Some("mention")
+        );
+    }
+
+    /// `strand-and-message.md` §9.4.2 and `conformance-vectors.md` §11.1.1
+    /// step 6 — the mention target is one complete account. A member that
+    /// joined the same Realm with the same principal but another Station is a
+    /// different subject: it MUST NOT receive the mention notification, and
+    /// the addressed account still MUST.
+    #[tokio::test]
+    async fn mention_does_not_notify_the_same_principal_at_another_station() {
+        let state = test_state();
+        let realm_id = "ak:realm:AQXbZyLXDsJ3IQYeoGi2pg7v2-EAb87QmzHIKinXcPx7";
+        let alice = "ak:did_core:web:alice.example";
+        let bob = "ak:did_core:web:bob.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+        let bob_elsewhere = seed_realm_member_at_station(
+            &state,
+            realm_id,
+            bob,
+            "ak:did_core:web:other-station.example",
+        );
+
+        let delivered = mention_message(realm_id, "000000009974", alice, bob);
+        dispatch_message_notifications(&state, &delivered).await;
+
+        assert_eq!(notifications_for(&state, bob).await.len(), 1);
+        assert!(
+            notifications_for_actor(&state, &bob_elsewhere)
+                .await
+                .is_empty(),
+            "a same-principal account at another Station must not be mentioned"
         );
     }
 

@@ -803,7 +803,7 @@ impl FrontierExchangeWorker {
     }
 
     /// Every Event this peer discloses at one exact `(actor_id, actor_seq)`,
-    /// or `None` when it discloses that position at all.
+    /// or `None` when it does not disclose that position at all.
     ///
     /// The disclosure is bounded by the request rather than by the actor's
     /// history length: one position, at most the cross-bucket sibling ceiling
@@ -1476,6 +1476,12 @@ mod tests {
             actor_seq: 7,
         };
         let scope_key = subject.cell_subject_key().unwrap();
+        let normalization_scope =
+            soland_services::federation::FederationForkNormalizationScope::SiblingPosition {
+                actor_id: arkret_wire::ActorId::service(peer.clone()).to_string(),
+                actor_seq: 7,
+                winner_event_id: None,
+            };
         state
             .federation()
             .record_frontier_confirmed_evidence(
@@ -1562,7 +1568,7 @@ mod tests {
         };
         state
             .federation()
-            .record_frontier_local_normalization(&normalization)
+            .record_frontier_local_normalization(&normalization, &normalization_scope)
             .await
             .unwrap();
         assert!(
@@ -1619,6 +1625,12 @@ mod tests {
             actor_seq: 7,
         };
         let scope_key = subject.cell_subject_key().unwrap();
+        let normalization_scope =
+            soland_services::federation::FederationForkNormalizationScope::SiblingPosition {
+                actor_id: arkret_wire::ActorId::service(peer.clone()).to_string(),
+                actor_seq: 7,
+                winner_event_id: None,
+            };
         state
             .federation()
             .record_frontier_confirmed_evidence(
@@ -1650,13 +1662,13 @@ mod tests {
         };
         state
             .federation()
-            .record_frontier_local_normalization(&normalization)
+            .record_frontier_local_normalization(&normalization, &normalization_scope)
             .await
             .unwrap();
         // Replaying one accepted Event is idempotent.
         state
             .federation()
-            .record_frontier_local_normalization(&normalization)
+            .record_frontier_local_normalization(&normalization, &normalization_scope)
             .await
             .unwrap();
         assert_eq!(
@@ -1686,7 +1698,7 @@ mod tests {
         assert!(
             state
                 .federation()
-                .record_frontier_local_normalization(&reversed)
+                .record_frontier_local_normalization(&reversed, &normalization_scope)
                 .await
                 .is_err()
         );

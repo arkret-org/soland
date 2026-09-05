@@ -1586,7 +1586,7 @@ async fn account_contacts_and_realm_lifecycle_workflow_body() {
             "body": "structured hello",
             "mentions": [{
                 "kind": "mention",
-                "subject_id": bob_core.as_str(),
+                "subject_account_id": bob_actor.as_account_id().expect("bob is an account actor"),
                 "mention_text_original": "@bob"
             }],
             "parts": [

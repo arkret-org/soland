@@ -125,18 +125,32 @@ pub(super) async fn project_invite_cancel_operation(
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
 }
 
-/// Freeze the authoritative lifecycle row and its two registered cells before
-/// an `ak.invite.cancel` reaches durable acceptance.
+/// Every invite kind whose registered contract declares
+/// `pre_state_requirements` over `ak.component.invite.lifecycle.v1`.
+///
+/// `ak.invite.cancel` binds its required `invitee_account_id`;
+/// `ak.invite.accept` and `ak.invite.revoke` bind their optional one with
+/// `stored_field_matches_payload`, which is what stops a third-party invite
+/// from releasing somebody else's live-target slot and stops a directed invite
+/// from stranding its own (`governance-objects.md` section 5.3).
+pub(in crate::routing::events) const INVITE_LIFECYCLE_PRE_STATE_KINDS: &[&str] = &[
+    arkret_wire::event_kind_str::INVITE_ACCEPT,
+    arkret_wire::event_kind_str::INVITE_CANCEL,
+    arkret_wire::event_kind_str::INVITE_REVOKE,
+];
+
+/// Freeze the authoritative lifecycle row and its registered cell before an
+/// invite lifecycle Move reaches durable acceptance.
 ///
 /// The caller holds the per-Invite lifecycle admission lock while this
 /// snapshot is built and consumed. The SDK pre-state predicates and Soland's
 /// lifecycle/member checks therefore inspect exactly the same values.
-pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
+pub(in crate::routing::events) async fn freeze_invite_lifecycle_pre_state(
     state: &AppState,
     event: &arkret_wire::Event,
 ) -> Result<arkret_schema::FrozenPreState, &'static str> {
     let mut frozen = arkret_schema::FrozenPreState::new();
-    if event.kind != arkret_wire::EventKind::InviteCancel {
+    if !INVITE_LIFECYCLE_PRE_STATE_KINDS.contains(&event.kind.as_str()) {
         return Ok(frozen);
     }
     let invite_id = event
@@ -253,6 +267,57 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     Ok(())
 }
 
+/// Why an `ak.invite.create` cannot claim its invitee's Realm live-target slot.
+pub(in crate::routing::events) enum InviteLiveTargetRejection {
+    /// The registered contract cannot be evaluated for this Event at all.
+    ProjectionFailed(&'static str),
+    /// Another live directed Invite already holds the slot.
+    Occupied(Box<arkret_wire::InviteLiveTargetOccupiedProblem>),
+}
+
+/// Reject a duplicate directed invite before it is accepted.
+///
+/// `governance-objects.md` section 5.3 makes
+/// `ak.component.invite.live_target.v1` the sole truth source for "one live
+/// directed Invite per invitee per Realm", and gives the duplicate exactly one
+/// outcome: `failed_precondition` + `invite_live_target_occupied`, with the
+/// Event refused, absent from canonical history, and deriving no cell write,
+/// projection or notification. There is no idempotent-replay branch — the
+/// second Event cannot compute the first one's `invite_id`, and admitting it
+/// with zero registered writes is the contract violation this whole slot
+/// exists to remove.
+///
+/// The slot is read from the same materialized head `check_move_preconditions`
+/// compares against, so a client that carried the required
+/// `head_eq:"__unset__"` and one that omitted it are both refused here — the
+/// difference is only that this lane names the sub-reason and echoes the
+/// occupant so the client can act (`details.create_event_id` is the slot value
+/// and therefore the `head_eq` a release Move must carry).
+pub(in crate::routing::events) fn validate_invite_live_target_admission(
+    operation: &Operation,
+    projection: &soland_domain::reducer::ProjectionState,
+) -> Result<(), InviteLiveTargetRejection> {
+    if !kinds::operation_is_invite_create(operation) {
+        return Ok(());
+    }
+    let invitee_account = invitee_for_operation(operation).ok_or(
+        InviteLiveTargetRejection::ProjectionFailed("reducer_projection_failed"),
+    )?;
+    let cell = arkret_schema::invite_live_target_cell(&invitee_account)
+        .map_err(|_| InviteLiveTargetRejection::ProjectionFailed("reducer_projection_failed"))?;
+    let Some(value) = projection.realm_cell_value(operation.realm_id.as_str(), &cell) else {
+        return Ok(());
+    };
+    let slot = arkret_schema::InviteLiveTargetSlot::from_cell_value(value)
+        .map_err(|_| InviteLiveTargetRejection::ProjectionFailed("reducer_projection_failed"))?;
+    match slot.create_event_id() {
+        None => Ok(()),
+        Some(create_event_id) => Err(InviteLiveTargetRejection::Occupied(Box::new(
+            arkret_wire::InviteLiveTargetOccupiedProblem::new(create_event_id.clone()),
+        ))),
+    }
+}
+
 pub(super) async fn project_invite_revoke_operation(
     state: &AppState,
     origin: &str,
@@ -334,6 +399,13 @@ async fn project_invite_terminal_operation(
         };
     let terminal_status_allowed = match terminal_event {
         InviteTerminalEvent::Cancel => terminal_status == expected_cancel_status,
+        // `send_failed` is the one non-terminal `ak.invite.revoke` target. Its
+        // only legal in-edge is `pending -> send_failed`
+        // (`governance-objects.md` section 5.3), and it keeps the invite inside
+        // the live set, so it releases no live-target slot.
+        InviteTerminalEvent::Revoke if terminal_status == "send_failed" => {
+            record.status == "pending"
+        }
         InviteTerminalEvent::Revoke => matches!(
             terminal_status,
             "revoked"
@@ -352,7 +424,13 @@ async fn project_invite_terminal_operation(
         return;
     }
     let direct_invitee = record.invitee_id.clone();
-    if let Some(invitee_id) = direct_invitee.as_deref()
+    // `send_failed` derives no live-target write, so the payload schema forbids
+    // `invitee_account_id` on it and there is nothing to match. Every other
+    // terminal target carries it and MUST match the stored account byte for
+    // byte — the SDK pre-state predicate already refused a mismatch, this keeps
+    // the read-model projection on the same rule.
+    if terminal_status != "send_failed"
+        && let Some(invitee_id) = direct_invitee.as_deref()
         && invitee_for_operation(operation)
             .map(|account| account.to_string())
             .as_deref()
@@ -654,33 +732,16 @@ pub(super) async fn project_invite_create_operation(state: &AppState, operation:
             return;
         }
     }
-    let already_live = invites
-        .snapshot_all()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .any(|existing| {
-            existing.realm_id == operation.realm_id.as_str()
-                && existing.invitee_id.as_deref() == Some(invitee_id.as_str())
-                && existing.third_party_invite.is_none()
-                && matches!(
-                    existing.status.as_str(),
-                    "pending" | "claimed" | "send_failed"
-                )
-                && existing
-                    .expires_at
-                    .is_none_or(|expires_at| expires_at > operation.created_at)
-        });
-    if already_live {
-        tracing::debug!(
-            invite_id = %invite_id,
-            invitee_id = %invitee_id.as_str(),
-            realm_id = %operation.realm_id,
-            "ak.invite.create projection skipped: live direct invite already exists"
-        );
-        return;
-    }
-
+    // No duplicate scan here. Live directed-invite uniqueness is carried by the
+    // registered `ak.component.invite.live_target.v1` slot and enforced at
+    // admission by `validate_invite_live_target_admission`
+    // (`governance-objects.md` section 5.3). A projection-time scan would be a
+    // second, implementation-private truth source: it cannot revoke a cell the
+    // registered reducer already wrote, it silently omits a registered write
+    // (a contract violation in its own right), and it made "is this invite
+    // live" depend on a local `expires_at` comparison, which the same section
+    // forbids. An Event that reaches this point has already been admitted with
+    // its `head_eq` on the slot.
     let invite_token = crate::routing::generate_invite_token(
         &invite_id,
         operation.realm_id.as_str(),
@@ -1101,7 +1162,7 @@ mod tests {
         let state = invite_test_state();
         seed_cancel_invite(&state, false).await;
         let event = cancel_event(Some(CANCEL_INVITEE));
-        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &event)
             .await
             .unwrap();
         let writes = state
@@ -1109,7 +1170,18 @@ mod tests {
             .project_cell_writes_with_pre_state(&event, &frozen)
             .unwrap();
 
-        assert_eq!(writes.len(), 1);
+        // A directed cancel is a two-cell Move: the lifecycle transition and
+        // the release of the live-target slot keyed by the invitee AccountId
+        // (governance-objects.md section 5.3).
+        assert_eq!(writes.len(), 2);
+        assert!(
+            writes[1]
+                .cell_id
+                .as_str()
+                .starts_with("ak:cell:ak.component.invite.live_target.v1:"),
+            "{}",
+            writes[1].cell_id.as_str()
+        );
         validate_invite_cancel_pre_admission(
             CANCEL_INVITER,
             &cancel_operation(Some(CANCEL_INVITEE)),
@@ -1125,7 +1197,7 @@ mod tests {
             let state = invite_test_state();
             seed_cancel_invite(&state, false).await;
             let event = cancel_event(supplied_invitee);
-            let frozen = freeze_invite_cancel_pre_state(&state, &event)
+            let frozen = freeze_invite_lifecycle_pre_state(&state, &event)
                 .await
                 .unwrap();
             let error = state
@@ -1145,7 +1217,7 @@ mod tests {
         let mut event = cancel_event(Some(CANCEL_INVITEE));
         event.payload.get_mut("invitee_account_id").unwrap()["station_id"] =
             json!("ak:did_core:web:other-station.example");
-        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &event)
             .await
             .unwrap();
         assert_eq!(
@@ -1177,7 +1249,7 @@ mod tests {
         let state = invite_test_state();
         seed_cancel_invite(&state, true).await;
         let event = cancel_event(Some(CANCEL_INVITEE));
-        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &event)
             .await
             .unwrap();
         let error = state
@@ -1192,7 +1264,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_invite_cancel_is_reducer_failure_with_zero_side_effects() {
         let state = invite_test_state();
-        let error = freeze_invite_cancel_pre_state(&state, &cancel_event(Some(CANCEL_INVITEE)))
+        let error = freeze_invite_lifecycle_pre_state(&state, &cancel_event(Some(CANCEL_INVITEE)))
             .await
             .unwrap_err();
 
@@ -1212,6 +1284,399 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // ak.component.invite.live_target.v1 (governance-objects.md section 5.3)
+    // ------------------------------------------------------------------
+
+    /// The `ak.invite.create` Event that claims the slot in the tests below.
+    /// Its `event_id` is the slot value, verbatim and in `ak:event:` form.
+    fn live_target_create_event(invitee_did: &str, actor_seq: u64) -> arkret_wire::Event {
+        crate::test_event::raw_event(
+            arkret_wire::EventKind::InviteCreate.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(CANCEL_REALM).unwrap(),
+            },
+            crate::test_actor_id_str(CANCEL_INVITER),
+            actor_seq,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            json!({
+                "invitee_account_id": fixture_account(invitee_did),
+                "introduction_evidence_digest": format!("sha256:{}", "a".repeat(64)),
+                "expires_at": "2026-08-05T10:00:00Z",
+            }),
+        )
+        .unwrap()
+    }
+
+    fn operation_for(event: &arkret_wire::Event, operation_id: &str) -> Operation {
+        arkret_event_draft::ProjectedEventOperation::from_accepted_event(
+            arkret_identifiers::OperationId::new(operation_id).unwrap(),
+            arkret_wire::OperationKind::Create,
+            None,
+            event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap()
+    }
+
+    fn revoke_event(target_state: &str, invitee_did: Option<&str>) -> arkret_wire::Event {
+        let mut payload = json!({
+            "invite_id": CANCEL_INVITE,
+            "target_state": target_state,
+        });
+        if let Some(invitee_did) = invitee_did {
+            payload["invitee_account_id"] = json!(fixture_account(invitee_did));
+        }
+        crate::test_event::raw_event(
+            arkret_wire::EventKind::InviteRevoke.as_str(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(CANCEL_REALM).unwrap(),
+            },
+            crate::test_actor_id_str(CANCEL_INVITER),
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            payload,
+        )
+        .unwrap()
+    }
+
+    fn live_target_cell(invitee_did: &str) -> arkret_identifiers::CellRef {
+        arkret_schema::invite_live_target_cell(&fixture_account(invitee_did)).unwrap()
+    }
+
+    /// Put the slot into the state the given create Event would leave it in.
+    fn claim_live_target(state: &AppState, invitee_did: &str, create: &arkret_wire::Event) {
+        state.projections().cache_cell(
+            live_target_cell(invitee_did),
+            json!(create.event_id.as_str()),
+        );
+    }
+
+    fn head_eq_precondition(
+        cell_id: arkret_identifiers::CellRef,
+        value: Value,
+    ) -> arkret_wire::Precondition {
+        arkret_wire::Precondition {
+            cell_id,
+            predicate: arkret_wire::Predicate {
+                op: arkret_wire::PredicateOp::HeadEq,
+                value: Some(value),
+                values: None,
+                predicate_id: None,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn first_directed_create_claims_the_free_live_target_slot() {
+        let state = invite_test_state();
+        let mut create = live_target_create_event(CANCEL_INVITEE, 0);
+        // The registered contract, not this test, decides the target and the
+        // stored value.
+        let writes = state.projections().project_cell_writes(&create).unwrap();
+        let claim = writes
+            .iter()
+            .find(|write| write.cell_id == live_target_cell(CANCEL_INVITEE))
+            .expect("ak.invite.create must claim the live-target slot");
+        let arkret_wire::cba::ProjectedOp::Direct(op) = &claim.op else {
+            panic!("the claim write is a direct set");
+        };
+        assert_eq!(op.value.as_ref(), Some(&json!(create.event_id.as_str())));
+
+        // An unwritten slot presents its registered free value, so the very
+        // first invite in a Realm satisfies `head_eq:"__unset__"`.
+        create.preconditions = vec![head_eq_precondition(
+            live_target_cell(CANCEL_INVITEE),
+            arkret_schema::invite_live_target_unset_value().unwrap(),
+        )];
+        let operation = operation_for(&create, "ak:operation:01904100-0000-7000-8000-000000000601");
+        assert_eq!(
+            state
+                .projections()
+                .snapshot()
+                .check_move_preconditions(&operation),
+            Ok(())
+        );
+        assert!(
+            validate_invite_live_target_admission(&operation, &state.projections().snapshot())
+                .is_ok(),
+            "a free slot admits the create"
+        );
+    }
+
+    #[tokio::test]
+    async fn second_directed_create_for_the_same_account_is_rejected_with_zero_writes() {
+        let state = invite_test_state();
+        let first = live_target_create_event(CANCEL_INVITEE, 0);
+        claim_live_target(&state, CANCEL_INVITEE, &first);
+
+        // A distinct second create Event. It is an invalid duplicate, never an
+        // idempotent replay: it cannot compute the first invite's id, and
+        // admitting it with zero registered writes is the contract violation
+        // this slot exists to remove.
+        let second = live_target_create_event(CANCEL_INVITEE, 1);
+        let rejection = validate_invite_live_target_admission(
+            &operation_for(&second, "ak:operation:01904100-0000-7000-8000-000000000611"),
+            &state.projections().snapshot(),
+        )
+        .err()
+        .expect("an occupied slot rejects the duplicate");
+        let InviteLiveTargetRejection::Occupied(problem) = rejection else {
+            panic!("a claimed slot must report invite_live_target_occupied");
+        };
+        assert_eq!(
+            problem.reason_code(),
+            arkret_wire::ReasonCode::INVITE_LIVE_TARGET_OCCUPIED
+        );
+        assert_eq!(problem.create_event_id().as_str(), first.event_id.as_str());
+        assert_eq!(
+            problem.invite_id().as_str(),
+            arkret_wire::InviteId::from_event_id(&first.event_id).as_str()
+        );
+        assert!(
+            state
+                .event_queries()
+                .accepted_events()
+                .await
+                .unwrap()
+                .is_empty(),
+            "the duplicate must not enter canonical history"
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_directed_creates_resolve_to_one_slot_holder() {
+        // Two concurrent creates contend on one cell rather than each writing
+        // its own, which is what makes the outcome independent of any private
+        // index or insertion order. Both carry `head_eq:"__unset__"`; once
+        // either lands, the other's precondition no longer holds.
+        let state = invite_test_state();
+        let winner = live_target_create_event(CANCEL_INVITEE, 0);
+        let mut loser = live_target_create_event(CANCEL_INVITEE, 1);
+        let cell = live_target_cell(CANCEL_INVITEE);
+        assert_ne!(winner.event_id, loser.event_id);
+        for event in [&winner, &loser] {
+            assert!(
+                state
+                    .projections()
+                    .project_cell_writes(event)
+                    .unwrap()
+                    .iter()
+                    .any(|write| write.cell_id == cell),
+                "concurrent creates must contend on one cell"
+            );
+        }
+
+        claim_live_target(&state, CANCEL_INVITEE, &winner);
+        loser.preconditions = vec![head_eq_precondition(
+            cell,
+            arkret_schema::invite_live_target_unset_value().unwrap(),
+        )];
+        assert_eq!(
+            state
+                .projections()
+                .snapshot()
+                .check_move_preconditions(&operation_for(
+                    &loser,
+                    "ak:operation:01904100-0000-7000-8000-000000000621"
+                )),
+            Err("failed_precondition")
+        );
+    }
+
+    #[tokio::test]
+    async fn terminal_release_then_reinvite_is_accepted() {
+        let state = invite_test_state();
+        let first = live_target_create_event(CANCEL_INVITEE, 0);
+        claim_live_target(&state, CANCEL_INVITEE, &first);
+
+        // The release write sets the slot back to the registered free value,
+        // which is why the next create's `head_eq:"__unset__"` holds again.
+        // `"__unset__"` is a reusable register value, not a terminal sentinel.
+        seed_cancel_invite(&state, false).await;
+        let revoke = revoke_event("revoked", Some(CANCEL_INVITEE));
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &revoke)
+            .await
+            .unwrap();
+        let release = state
+            .projections()
+            .project_cell_writes_with_pre_state(&revoke, &frozen)
+            .unwrap()
+            .into_iter()
+            .find(|write| write.cell_id == live_target_cell(CANCEL_INVITEE))
+            .expect("a directed terminal revoke releases the slot");
+        let arkret_wire::cba::ProjectedOp::Direct(op) = &release.op else {
+            panic!("the release write is a direct set");
+        };
+        let unset = arkret_schema::invite_live_target_unset_value().unwrap();
+        assert_eq!(op.value.as_ref(), Some(&unset));
+
+        state
+            .projections()
+            .cache_cell(live_target_cell(CANCEL_INVITEE), unset);
+        let reinvite = live_target_create_event(CANCEL_INVITEE, 2);
+        assert!(
+            validate_invite_live_target_admission(
+                &operation_for(
+                    &reinvite,
+                    "ak:operation:01904100-0000-7000-8000-000000000631"
+                ),
+                &state.projections().snapshot(),
+            )
+            .is_ok(),
+            "a released slot admits a new invite"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_at_wall_clock_alone_does_not_release_the_slot() {
+        // Liveness is the slot, never a local clock comparison. The second
+        // create is stamped long after the invite's `expires_at`, and the slot
+        // still refuses it until a registered Move frees it.
+        let state = invite_test_state();
+        let first = live_target_create_event(CANCEL_INVITEE, 0);
+        claim_live_target(&state, CANCEL_INVITEE, &first);
+        let mut later = live_target_create_event(CANCEL_INVITEE, 3);
+        later.created_at = "2099-01-01T00:00:00Z".parse().unwrap();
+        assert!(matches!(
+            validate_invite_live_target_admission(
+                &operation_for(&later, "ak:operation:01904100-0000-7000-8000-000000000641"),
+                &state.projections().snapshot(),
+            ),
+            Err(InviteLiveTargetRejection::Occupied(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn send_failed_holder_keeps_the_slot_claimed() {
+        // `send_failed` stays inside the live set, so the payload schema
+        // forbids `invitee_account_id` there and the Move derives no release
+        // write. The condition simply does not fire: it MUST NOT be written as
+        // a same-value no-op (`event-and-patch.md` section 2.4.2).
+        let state = invite_test_state();
+        seed_cancel_invite(&state, false).await;
+        let send_failed = revoke_event("send_failed", None);
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &send_failed)
+            .await
+            .unwrap();
+        let writes = state
+            .projections()
+            .project_cell_writes_with_pre_state(&send_failed, &frozen)
+            .unwrap();
+        assert!(
+            writes
+                .iter()
+                .all(|write| write.cell_id != live_target_cell(CANCEL_INVITEE)),
+            "send_failed must derive no live-target write at all"
+        );
+
+        let first = live_target_create_event(CANCEL_INVITEE, 0);
+        claim_live_target(&state, CANCEL_INVITEE, &first);
+        let replacement = live_target_create_event(CANCEL_INVITEE, 4);
+        assert!(
+            matches!(
+                validate_invite_live_target_admission(
+                    &operation_for(
+                        &replacement,
+                        "ak:operation:01904100-0000-7000-8000-000000000651"
+                    ),
+                    &state.projections().snapshot(),
+                ),
+                Err(InviteLiveTargetRejection::Occupied(_))
+            ),
+            "a send_failed holder must be revoked before a replacement create"
+        );
+    }
+
+    #[tokio::test]
+    async fn third_party_revoke_forging_invitee_account_id_is_reducer_projection_failed() {
+        // Stored absent, payload present: `stored_field_matches_payload` fails,
+        // so a third-party invite cannot release somebody else's directed slot.
+        let state = invite_test_state();
+        seed_cancel_invite(&state, true).await;
+        let forged = revoke_event("revoked", Some(CANCEL_INVITEE));
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &forged)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .projections()
+                .project_cell_writes_with_pre_state(&forged, &frozen)
+                .unwrap_err()
+                .reason_code(),
+            "reducer_projection_failed"
+        );
+        assert_cancel_state_unchanged(&state, None).await;
+    }
+
+    #[tokio::test]
+    async fn directed_revoke_omitting_invitee_account_id_is_reducer_projection_failed() {
+        // Stored present, payload absent: the same predicate fails in the other
+        // direction, so a directed invite cannot strand its own slot by
+        // omitting the field on a terminal revoke.
+        let state = invite_test_state();
+        seed_cancel_invite(&state, false).await;
+        let omitted = revoke_event("revoked", None);
+        let frozen = freeze_invite_lifecycle_pre_state(&state, &omitted)
+            .await
+            .unwrap();
+        assert_eq!(
+            state
+                .projections()
+                .project_cell_writes_with_pre_state(&omitted, &frozen)
+                .unwrap_err()
+                .reason_code(),
+            "reducer_projection_failed"
+        );
+        assert_cancel_state_unchanged(&state, Some(CANCEL_INVITEE)).await;
+    }
+
+    #[tokio::test]
+    async fn release_head_eq_spelled_as_invite_id_is_failed_precondition() {
+        // The slot stores `ak:event:`; the `ak:invite:` retype of the same
+        // 33-octet token is a different string and never compares equal. The
+        // failure would otherwise only surface the second time this account is
+        // invited, with the slot stranded for good.
+        let state = invite_test_state();
+        let first = live_target_create_event(CANCEL_INVITEE, 0);
+        claim_live_target(&state, CANCEL_INVITEE, &first);
+        let invite_id = arkret_wire::InviteId::from_event_id(&first.event_id);
+
+        let mut wrong = revoke_event("revoked", Some(CANCEL_INVITEE));
+        wrong.preconditions = vec![head_eq_precondition(
+            live_target_cell(CANCEL_INVITEE),
+            json!(invite_id.as_str()),
+        )];
+        assert_eq!(
+            state
+                .projections()
+                .snapshot()
+                .check_move_preconditions(&operation_for(
+                    &wrong,
+                    "ak:operation:01904100-0000-7000-8000-000000000661"
+                )),
+            Err("failed_precondition")
+        );
+
+        // The SDK helper produces the accepted spelling from the same InviteId.
+        let mut right = revoke_event("revoked", Some(CANCEL_INVITEE));
+        right.preconditions = vec![
+            arkret_schema::InviteLiveTargetSlot::held_by_invite(&invite_id)
+                .precondition(&fixture_account(CANCEL_INVITEE))
+                .unwrap(),
+        ];
+        assert_eq!(
+            state
+                .projections()
+                .snapshot()
+                .check_move_preconditions(&operation_for(
+                    &right,
+                    "ak:operation:01904100-0000-7000-8000-000000000662"
+                )),
+            Ok(())
         );
     }
 

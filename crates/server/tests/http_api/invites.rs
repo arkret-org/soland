@@ -188,10 +188,10 @@ impl DispatchFixture {
             .account_data()
             .get(
                 &fixture_account_actor(&self.state, BOB).to_string(),
-                arkret_wire::AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+                arkret_wire::AccountDataKey::ACCOUNT_HOLDER_QUARANTINE,
             )
             .await
-            .expect("invite quarantine account data read")
+            .expect("holder quarantine account data read")
             .and_then(|record| {
                 record
                     .payload

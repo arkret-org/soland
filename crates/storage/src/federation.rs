@@ -1,10 +1,11 @@
 use arkret_wire::DidCoreId;
 
 use super::{
-    FederationFrontierConfirmedEvidenceRecord, FederationFrontierExchangeRecord,
-    FederationFrontierReductionCheckpoint, FederationFrontierResolutionRecord,
-    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxState,
-    PersistenceError, PersistenceResult, ProjectedEventOperation, async_trait,
+    FederationForkNormalizationScope, FederationFrontierConfirmedEvidenceRecord,
+    FederationFrontierExchangeRecord, FederationFrontierReductionCheckpoint,
+    FederationFrontierResolutionRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
+    FederationOutboxState, PersistenceError, PersistenceResult, ProjectedEventOperation,
+    async_trait,
 };
 
 /// One atomic "read due rows and take ownership of them" operation.
@@ -323,13 +324,23 @@ pub trait FederationFrontierExchangeStore: Send + Sync {
         realm_id: &str,
         peer_id: &DidCoreId,
     ) -> PersistenceResult<Vec<FederationFrontierConfirmedEvidenceRecord>>;
-    /// Record the local normalization an accepted `ak.fork.resolution`
-    /// produces. Idempotent by `(realm_id, cell_subject_key)`: the same Event
-    /// replays into one row, and a second, byte-different verdict for a subject
-    /// that is already settled is refused rather than silently re-adjudicated.
+    /// Apply the local normalization an accepted `ak.fork.resolution` produces:
+    /// record the verdict and, in the same transaction, subtract everything the
+    /// verdict did not name from the accepted read surface.
+    ///
+    /// The two halves cannot be split. A durable verdict whose read-surface
+    /// effect is still pending would let this Station disclose a sibling set
+    /// that contradicts a resolution it has already accepted, which is exactly
+    /// what the second phase of `sync/federation.md` §4.5.3 reads to decide
+    /// whether a peer has aligned.
+    ///
+    /// Idempotent by `(realm_id, cell_subject_key)`: the same Event replays
+    /// into one row, and a second, byte-different verdict for a subject that is
+    /// already settled is refused rather than silently re-adjudicated.
     async fn record_local_normalization(
         &self,
         resolution: &FederationFrontierResolutionRecord,
+        scope: &FederationForkNormalizationScope,
     ) -> PersistenceResult<()>;
     async fn local_normalization(
         &self,
