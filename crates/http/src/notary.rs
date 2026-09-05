@@ -2096,45 +2096,14 @@ pub(crate) async fn durable_control_event_by_digest(
 }
 
 fn effective_membership_join_digest(ops: &[IssuedOp]) -> Result<Option<Hash>, NotaryError> {
-    let ops = ops
-        .iter()
-        .rposition(|issued| issued.op.recovery_reset)
-        .map_or(ops, |boundary| &ops[boundary..]);
-    let mut current = serde_json::Value::String("leave".to_owned());
-    let mut seen = BTreeSet::<(String, String)>::new();
-    let mut winning_join = None;
-    for issued in ops {
-        let from = issued
-            .op
-            .op
-            .from
-            .as_ref()
-            .and_then(serde_json::Value::as_str);
-        let to = issued.op.op.to.as_ref().and_then(serde_json::Value::as_str);
-        let (Some(from), Some(to)) = (from, to) else {
-            return Err(NotaryError::Construction(
-                "membership cell contains a non-transition operation".to_owned(),
-            ));
-        };
-        let transition = (from.to_owned(), to.to_owned());
-        if seen.contains(&transition) {
-            continue;
-        }
-        if seen
-            .iter()
-            .any(|(seen_from, seen_to)| seen_from == from && seen_to != to)
-            || current.as_str() != Some(from)
-        {
-            return Err(NotaryError::Construction(
-                "membership operation history does not resolve to the effective FSM value"
-                    .to_owned(),
-            ));
-        }
-        seen.insert(transition);
-        current = serde_json::Value::String(to.to_owned());
-        winning_join = (to == "join").then(|| issued.op.move_id.clone());
-    }
-    Ok(winning_join)
+    // One membership fold, in the SDK, shared with the MLS governance proof
+    // replay. This Station used to carry its own copy with its own hardcoded
+    // initial state, which meant the notary and the proof replay could drift
+    // apart on the same cell without anything noticing. The fold itself is still
+    // the arrival-ordered one the `fsm` transition algebra has to replace; see
+    // `arkret-work/review/spec-open/2026-09-06-1610`.
+    arkret_state::lattice::membership_transition_head_into(ops, "join")
+        .map_err(NotaryError::Construction)
 }
 
 /// Build a 64-zero-byte signature placeholder used purely as a typed
