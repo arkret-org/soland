@@ -285,12 +285,27 @@ async fn reset(connection: &mut AsyncPgConnection) {
 }
 
 /// The runtime that owns every lock connection for the life of the process.
+///
+/// Every concurrent `lease_blocking` / `block_on_lease_runtime` caller drives
+/// its future through this one runtime, and the futures they drive spawn work
+/// of their own (the connection pool's background tasks, the timer and IO
+/// drivers). Sizing it at one worker therefore deadlocks under the test
+/// harness's own parallelism: `crates/server/tests/extensions_smoke.rs` stopped
+/// dead with four tests in flight, zero process CPU, and every one of its
+/// Postgres connections `idle`, while `--test-threads=1` ran the same nine
+/// cases green in 16 seconds. Track the harness's thread count instead, with a
+/// floor so a single-core machine still has room for a spawned task to run
+/// while its parent is parked.
 fn lease_runtime() -> &'static tokio::runtime::Handle {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME
         .get_or_init(|| {
+            let workers = std::thread::available_parallelism()
+                .map(std::num::NonZeroUsize::get)
+                .unwrap_or(4)
+                .clamp(4, 16);
             tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(1)
+                .worker_threads(workers)
                 .enable_all()
                 .thread_name("soland-test-database-lease")
                 .build()

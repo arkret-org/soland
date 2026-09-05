@@ -775,7 +775,7 @@ mod tests {
 
     use super::*;
 
-    fn signed_fixture_event() -> Event {
+    fn structural_only_fixture_event() -> Event {
         let realm_id = RealmId::from_event_id(&EventId::from_digest(
             arkret_canonical::DigestSuite::Sha256,
             [0x51; 32],
@@ -790,9 +790,12 @@ mod tests {
             json!({"content": {"kind": "ak.content.text", "body": "stored"}}),
         )
         .unwrap();
-        let digest = event
-            .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
-            .unwrap();
+        let event_digest = Hash::new(
+            event
+                .event_digest_with_digest_suite(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+        )
+        .unwrap();
         event.proofs = vec![
             ProducerEventProof {
                 kind: "detached_jws".to_owned(),
@@ -800,13 +803,13 @@ mod tests {
                     "did:webvh:z6mkstoredactor:example.test#key-1".to_owned(),
                 )
                 .unwrap(),
-                event_digest: Hash::new(digest).unwrap(),
+                event_digest: event_digest.clone(),
                 signer_resolution_evidence_ref: None,
                 created_at: event.created_at,
                 domain: None,
                 audience: None,
                 proof_purpose: None,
-                jws: arkret_wire::test_support::DETACHED_JWS_FIXTURE.to_owned(),
+                jws: arkret_wire::test_support::structural_only_detached_jws(&event_digest),
             }
             .into(),
         ];
@@ -815,7 +818,7 @@ mod tests {
 
     #[test]
     fn stored_event_validation_rejects_canonical_content_tampering() {
-        let event = signed_fixture_event();
+        let event = structural_only_fixture_event();
         validate_stored_event(&event, EventSubmitContext::Standard, "fixture").unwrap();
 
         let mut tampered = event;
@@ -827,7 +830,7 @@ mod tests {
 
     #[test]
     fn stored_fixed_role_ref_rejects_extra_or_noncritical_refs() {
-        let mut event = signed_fixture_event();
+        let mut event = structural_only_fixture_event();
         let target = EventId::from_digest(arkret_canonical::DigestSuite::Sha256, [0x52; 32]);
         event.refs = vec![arkret_wire::EventRef::new(
             target.as_str(),
