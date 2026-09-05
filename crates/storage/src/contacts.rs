@@ -130,9 +130,10 @@ pub trait ConsentCellStore: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MimiConsentCorrelationRecord {
     pub consent_id: String,
-    pub requester_id: String,
-    pub target_kind: String,
-    pub target_id: String,
+    /// Canonical JSON of the complete requester `ActorId`, exactly as signed.
+    pub requester_actor_id: String,
+    /// Canonical JSON of the complete holder `AccountId`, exactly as signed.
+    pub holder_account_id: String,
     pub purpose: String,
     pub strand_id: Option<String>,
     pub source_id: Option<String>,

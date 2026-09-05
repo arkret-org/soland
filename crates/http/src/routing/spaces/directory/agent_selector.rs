@@ -68,11 +68,15 @@ pub(super) fn selector_claim_audience(
         .to_owned()
 }
 
+/// The signed target is the complete Agent `AccountId`, derived by the caller
+/// from the accepted provision's controller account rather than from this
+/// service's own Station. The selector namespace stays principal-scoped.
+/// Ruling `review/spec-done/2026-09-05-1310`.
 pub(super) fn signed_agent_selector_claim(
     state: &AppState,
     controller_subject: &str,
     agent_slug: &str,
-    subject: &str,
+    subject_account_id: &arkret_wire::AccountId,
     request: &DirectoryResolveAgentSelectorRequestBody,
 ) -> Result<AgentSelectorClaim, AppError> {
     let service_id = DidCoreId::new(state.service_id().clone())
@@ -81,8 +85,7 @@ pub(super) fn signed_agent_selector_claim(
     let issuer_did = state.service_resolution_commitment().did.clone();
     let controller_subject = DidCoreId::new(controller_subject.to_owned())
         .map_err(|err| AppError::internal(format!("invalid controller DID: {err}")))?;
-    let subject = DidCoreId::new(subject.to_owned())
-        .map_err(|err| AppError::internal(format!("invalid agent DID: {err}")))?;
+    let subject_account_id = subject_account_id.clone();
     let audience = selector_claim_audience(request);
     let created_at = now();
     let expires_at = created_at + chrono::Duration::hours(24);
@@ -95,7 +98,8 @@ pub(super) fn signed_agent_selector_claim(
         "schema": SchemaId::AGENT_SELECTOR_CLAIM_V1,
         "controller_subject_id": controller_subject.as_str(),
         "agent_slug": agent_slug,
-        "subject_id": subject.as_str(),
+        "subject_account_id": serde_json::to_value(&subject_account_id)
+            .map_err(|error| AppError::internal(format!("serialize agent AccountId: {error}")))?,
         "issuer_id": issuer.as_str(),
         "vouching_id": service_id.as_str(),
         "binding_state": "verified",
@@ -138,7 +142,7 @@ pub(super) fn signed_agent_selector_claim(
         schema: SchemaId::AGENT_SELECTOR_CLAIM_V1.to_owned(),
         controller_subject_id: controller_subject,
         agent_slug: agent_slug.to_owned(),
-        subject_id: subject,
+        subject_account_id,
         issuer_id: issuer,
         vouching_id: Some(service_id),
         binding_state: HandleBindingState::Verified,
@@ -233,11 +237,20 @@ pub(super) async fn resolve_agent_selector(
     {
         return Err(selector_not_found());
     }
-    let selector_claim =
-        signed_agent_selector_claim(state, controller_subject, &body.agent_slug, subject, &body)?;
+    let subject_account_id = subject_actor
+        .as_account_id()
+        .ok_or_else(selector_not_found)?
+        .clone();
+    let selector_claim = signed_agent_selector_claim(
+        state,
+        controller_subject,
+        &body.agent_slug,
+        &subject_account_id,
+        &body,
+    )?;
     let response = DirectoryAgentSelectorResolutionOutcome {
         controller_subject_id: selector_claim.controller_subject_id.clone(),
-        subject_id: selector_claim.subject_id.clone(),
+        subject_account_id: selector_claim.subject_account_id.clone(),
         agent_slug: body.agent_slug,
         expires_at: selector_claim.expires_at,
         source_refs: Vec::new(),

@@ -363,8 +363,13 @@ pub(super) async fn mimi_consent_request(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::param_invalid(message).with_reason_code("mimi_draft_unsupported"));
     }
-    let source_id =
-        verify_mimi_consent_write_authority(state, req, aa, body.requester_id.as_str()).await?;
+    let source_id = verify_mimi_consent_write_authority(
+        state,
+        req,
+        aa,
+        body.requester_actor_id.signing_principal_id().as_str(),
+    )
+    .await?;
     verify_mimi_request_consent_proofs(state, &body).await?;
     let consent_id = ids::generate("consent");
     let consent_id = arkret_identifiers::ConsentId::new(consent_id)
@@ -373,9 +378,8 @@ pub(super) async fn mimi_consent_request(
         .consents()
         .save_mimi_correlation(MimiConsentCorrelation {
             consent_id: consent_id.to_string(),
-            requester_id: body.requester_id.to_string(),
-            target_kind: mimi_consent_target_kind(body.target.kind).to_owned(),
-            target_id: body.target.id.to_string(),
+            requester_actor_id: canonical_identity_json(&body.requester_actor_id)?,
+            holder_account_id: canonical_identity_json(&body.holder_account_id)?,
             purpose: mimi_consent_purpose(body.purpose).to_owned(),
             strand_id: body.strand_id.as_ref().map(ToString::to_string),
             source_id,
@@ -629,13 +633,22 @@ async fn verify_mimi_key_material_request_proofs(
 
 /// Verify every proof carried by a MIMI consent request.
 ///
-/// `proofs` is `#[serde(default)]` on the wire; an empty vector stays valid.
-/// The originator is the mandatory `requester_id` field.
+/// The originator is the mandatory `requester_actor_id` field, and the proof
+/// issuer is that complete Actor rather than its signing principal: the
+/// correlation is only as strong as the identity the signature froze. Ruling
+/// `review/spec-done/2026-09-05-1240`.
 async fn verify_mimi_request_consent_proofs(
     state: &AppState,
     body: &MimiRequestConsentRequestBody,
 ) -> Result<(), AppError> {
-    let issuer = body.requester_id.to_string();
+    // The proof binding carries the complete Actor (the SDK builds it from
+    // requester_actor_id), but resolving the verification method is a key and
+    // authority question, so it projects the signing principal. The two are
+    // deliberately different: proving key control under a principal does not
+    // authorise acting for an arbitrary account of that principal, which is why
+    // the account authority is checked separately. Ruling
+    // `review/spec-done/2026-09-05-1240`.
+    let issuer = body.requester_actor_id.signing_principal_id().to_string();
     for proof in &body.proofs {
         let binding = body.proof_binding_bytes(proof).map_err(|error| {
             AppError::param_invalid(format!(
@@ -746,15 +759,6 @@ async fn verify_mimi_consent_update_authority(
     Ok((session, source_id))
 }
 
-fn mimi_consent_target_kind(kind: MimiConsentTargetKind) -> &'static str {
-    match kind {
-        MimiConsentTargetKind::Did => "did",
-        MimiConsentTargetKind::MimiUri => "mimi_uri",
-        MimiConsentTargetKind::Handle => "handle",
-        MimiConsentTargetKind::ProviderUser => "provider_user",
-    }
-}
-
 fn mimi_consent_purpose(purpose: MimiConsentPurpose) -> &'static str {
     match purpose {
         MimiConsentPurpose::Invite => "invite",
@@ -786,14 +790,28 @@ fn mimi_consent_correlation_unavailable() -> AppError {
 /// `{kind:"pairwise_principal"}` peer, because a correlation carries no
 /// `realm_id` and a Realm-local ephemeral pairwise actor is not a MIMI
 /// requester this facade can host.
-fn mimi_correlation_peer(state: &AppState, requester_id: &str) -> Option<ConsentPeer> {
-    let requester_principal_id =
-        arkret_identifiers::DidCoreId::new(requester_id.to_owned()).ok()?;
-    Some(ConsentPeer::Actor {
-        actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
-            requester_principal_id,
-            state.service_core_id(),
-        )),
+fn mimi_correlation_peer(correlation_requester_actor_id: &str) -> Option<ConsentPeer> {
+    let actor_id: arkret_wire::ActorId =
+        serde_json::from_str(correlation_requester_actor_id).ok()?;
+    Some(ConsentPeer::Actor { actor_id })
+}
+
+/// Canonical JSON for an identity frozen into the private correlation.
+///
+/// The correlation stores exactly what the requester signed, so the later
+/// comparison is a byte comparison over canonical bytes rather than a
+/// structural re-derivation.
+fn canonical_identity_json<T: serde::Serialize>(value: &T) -> Result<String, AppError> {
+    let value = serde_json::to_value(value).map_err(|error| {
+        AppError::internal(format!("serialize MIMI correlation identity: {error}"))
+    })?;
+    let bytes = arkret_wire::canonical::canonical_json_bytes(&value).map_err(|error| {
+        AppError::internal(format!("canonicalize MIMI correlation identity: {error}"))
+    })?;
+    String::from_utf8(bytes).map_err(|error| {
+        AppError::internal(format!(
+            "canonical MIMI correlation identity is not UTF-8: {error}"
+        ))
     })
 }
 
@@ -813,13 +831,22 @@ async fn verify_mimi_consent_correlation(
         .expires_at
         .is_some_and(|expires_at| expires_at <= now())
         || correlation.source_id.as_deref() != source_id
-        || correlation.target_kind != "did"
-        || correlation.target_id != body.actor_id.signing_principal_id().as_str()
     {
         return Err(mimi_consent_correlation_unavailable());
     }
 
-    let correlation_peer = mimi_correlation_peer(state, &correlation.requester_id);
+    // The holder is compared as a complete AccountId. Comparing the principal
+    // core here let the same principal's account on another Station accept a
+    // consent addressed to this one; section 6.1.1.2 keys the holder dimension
+    // on the complete AccountId. Ruling review/spec-done/2026-09-05-1240.
+    let Some(body_holder_account_id) = body.actor_id.as_account_id() else {
+        return Err(mimi_consent_correlation_unavailable());
+    };
+    if canonical_identity_json(body_holder_account_id)? != correlation.holder_account_id {
+        return Err(mimi_consent_correlation_unavailable());
+    }
+
+    let correlation_peer = mimi_correlation_peer(&correlation.requester_actor_id);
 
     match body.decision {
         arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept => {
@@ -1688,9 +1715,7 @@ mod reporter_event_binding_tests {
 mod consent_proof_tests {
     use arkret_identifiers::{ConsentId, DeviceId, Did, DidCoreId, Hash, Hlc, RealmId, StrandId};
     use arkret_models_collaboration::http_bodies::MimiConsentDecision;
-    use arkret_models_collaboration::objects::mimi::{
-        MimiConsentTarget, MimiIdentifier, MimiIdentifierKind,
-    };
+    use arkret_models_collaboration::objects::mimi::{MimiIdentifier, MimiIdentifierKind};
     use arkret_wire::{
         Audience, EventInitialSubmission, EventKind, PayloadProof, ScopeRef, proof_kind,
     };
@@ -1923,18 +1948,33 @@ mod consent_proof_tests {
             .unwrap();
     }
 
+    /// Canonical JSON for an identity, matching what the request handler
+    /// freezes into the correlation.
+    fn canonical_json<T: serde::Serialize>(value: &T) -> String {
+        let value = serde_json::to_value(value).unwrap();
+        String::from_utf8(arkret_wire::canonical::canonical_json_bytes(&value).unwrap()).unwrap()
+    }
+
+    /// The peer the update payload names, so the correlation and the grant
+    /// agree in the positive cases.
+    fn test_requester_actor(state: &AppState) -> arkret_wire::ActorId {
+        arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:mimi-peer-test.invalid").unwrap(),
+            state.service_core_id(),
+        ))
+    }
+
     async fn install_correlation(
         state: &AppState,
         request: &MimiUpdateConsentRequestBody,
-        target_id: &str,
+        holder_account_id: &arkret_wire::AccountId,
     ) {
         state
             .consents()
             .save_mimi_correlation(MimiConsentCorrelation {
                 consent_id: request.consent_id.to_string(),
-                requester_id: "ak:did_core:web:mimi-peer-test.invalid".to_owned(),
-                target_kind: "did".to_owned(),
-                target_id: target_id.to_owned(),
+                requester_actor_id: canonical_json(&test_requester_actor(state)),
+                holder_account_id: canonical_json(holder_account_id),
                 purpose: "direct_message".to_owned(),
                 strand_id: None,
                 source_id: None,
@@ -2057,12 +2097,12 @@ mod consent_proof_tests {
     async fn consent_correlation_binds_target_peer_and_scope() {
         let state = state();
         let request = request(&state);
-        install_correlation(
-            &state,
-            &request,
-            request.actor_id.signing_principal_id().as_str(),
-        )
-        .await;
+        let holder_account_id = request
+            .actor_id
+            .as_account_id()
+            .expect("holder actor is an account")
+            .clone();
+        install_correlation(&state, &request, &holder_account_id).await;
 
         verify_mimi_consent_correlation(&state, &request, None)
             .await
@@ -2080,11 +2120,44 @@ mod consent_proof_tests {
         assert_eq!(error.code, ErrorCode::NotFound);
     }
 
+    /// Ruling `review/spec-done/2026-09-05-1240`: the holder is compared as a
+    /// complete AccountId. Before it, the correlation stored a principal core
+    /// and this update -- from the same principal's account on a *different*
+    /// Station -- was accepted.
+    #[tokio::test]
+    async fn consent_correlation_rejects_same_principal_on_another_station() {
+        let state = state();
+        let request = request(&state);
+        let holder = request
+            .actor_id
+            .as_account_id()
+            .expect("holder actor is an account")
+            .clone();
+        let other_station_holder = arkret_wire::AccountId::new(
+            holder.principal_id.clone(),
+            DidCoreId::new("ak:did_core:web:other-holder-station.invalid").unwrap(),
+        );
+        assert_eq!(
+            other_station_holder.principal_id, holder.principal_id,
+            "the negative is only meaningful while the principal cores match"
+        );
+        install_correlation(&state, &request, &other_station_holder).await;
+
+        let error = verify_mimi_consent_correlation(&state, &request, None)
+            .await
+            .expect_err("same principal on another Station is a different holder");
+        assert_eq!(error.code, ErrorCode::NotFound);
+    }
+
     #[tokio::test]
     async fn unknown_and_invisible_consent_correlations_are_indistinguishable() {
         let state = state();
         let request = request(&state);
-        install_correlation(&state, &request, "did:web:another-holder.invalid").await;
+        let another_holder = arkret_wire::AccountId::new(
+            DidCoreId::new("ak:did_core:web:another-holder.invalid").unwrap(),
+            DidCoreId::new("ak:did_core:web:another-holder-station.invalid").unwrap(),
+        );
+        install_correlation(&state, &request, &another_holder).await;
 
         let invisible = verify_mimi_consent_correlation(&state, &request, None)
             .await
@@ -2176,11 +2249,14 @@ mod consent_proof_tests {
         method: &arkret_wire::DidUrl,
     ) -> MimiRequestConsentRequestBody {
         MimiRequestConsentRequestBody {
-            requester_id: requester_id.clone(),
-            target: MimiConsentTarget {
-                kind: MimiConsentTargetKind::Did,
-                id: arkret_wire::NonEmptyString::new("did:web:mimi-peer-test.invalid").unwrap(),
-            },
+            requester_actor_id: arkret_wire::ActorId::account(arkret_wire::AccountId::new(
+                requester_id.clone(),
+                DidCoreId::new("ak:did_core:web:mimi-requester-station.invalid").unwrap(),
+            )),
+            holder_account_id: arkret_wire::AccountId::new(
+                DidCoreId::new("ak:did_core:web:mimi-holder-test.invalid").unwrap(),
+                DidCoreId::new("ak:did_core:web:mimi-holder-station.invalid").unwrap(),
+            ),
             purpose: MimiConsentPurpose::DirectMessage,
             strand_id: None,
             expires_at: None,

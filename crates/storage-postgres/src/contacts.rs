@@ -485,11 +485,9 @@ struct MimiConsentCorrelationRow {
     #[diesel(sql_type = Text)]
     consent_id: String,
     #[diesel(sql_type = Text)]
-    requester_id: String,
+    requester_actor_id: String,
     #[diesel(sql_type = Text)]
-    target_kind: String,
-    #[diesel(sql_type = Text)]
-    target_id: String,
+    holder_account_id: String,
     #[diesel(sql_type = Text)]
     purpose: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -506,9 +504,8 @@ impl From<MimiConsentCorrelationRow> for MimiConsentCorrelationRecord {
     fn from(row: MimiConsentCorrelationRow) -> Self {
         Self {
             consent_id: row.consent_id,
-            requester_id: row.requester_id,
-            target_kind: row.target_kind,
-            target_id: row.target_id,
+            requester_actor_id: row.requester_actor_id,
+            holder_account_id: row.holder_account_id,
             purpose: row.purpose,
             strand_id: row.strand_id,
             source_id: row.source_id,
@@ -528,7 +525,7 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
+            "SELECT consent_id, requester_actor_id, holder_account_id, purpose, strand_id, \
              source_id, created_at, expires_at \
              FROM mimi_consent_correlations WHERE consent_id = $1",
         )
@@ -546,15 +543,14 @@ impl MimiConsentCorrelationStore for PgMimiConsentCorrelationStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO mimi_consent_correlations \
-             (consent_id, requester_id, target_kind, target_id, purpose, strand_id, \
+             (consent_id, requester_actor_id, holder_account_id, purpose, strand_id, \
               source_id, created_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
              ON CONFLICT (consent_id) DO NOTHING",
         )
         .bind::<Text, _>(&record.consent_id)
-        .bind::<Text, _>(&record.requester_id)
-        .bind::<Text, _>(&record.target_kind)
-        .bind::<Text, _>(&record.target_id)
+        .bind::<Text, _>(&record.requester_actor_id)
+        .bind::<Text, _>(&record.holder_account_id)
         .bind::<Text, _>(&record.purpose)
         .bind::<Nullable<Text>, _>(record.strand_id.as_deref())
         .bind::<Nullable<Text>, _>(record.source_id.as_deref())

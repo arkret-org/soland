@@ -1218,9 +1218,12 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     let consent_id = format!("ak:consent:{namespace}");
     let first = MimiConsentCorrelationRecord {
         consent_id: consent_id.clone(),
-        requester_id: format!("ak:did_core:web:{namespace}-requester_id.example"),
-        target_kind: "did".to_owned(),
-        target_id: format!("ak:did_core:web:{namespace}-target.example"),
+        requester_actor_id: format!(
+            "{{\"account_id\":{{\"principal_id\":\"ak:did_core:web:{namespace}-requester.example\",\"station_id\":\"ak:did_core:web:{namespace}-requester-station.example\"}},\"kind\":\"account\"}}"
+        ),
+        holder_account_id: format!(
+            "{{\"principal_id\":\"ak:did_core:web:{namespace}-holder.example\",\"station_id\":\"ak:did_core:web:{namespace}-holder-station.example\"}}"
+        ),
         purpose: "direct_message".to_owned(),
         strand_id: None,
         source_id: Some(format!("ak:did_core:web:{namespace}-provider.example")),
@@ -1234,7 +1237,9 @@ pub async fn assert_mimi_consent_correlation_store_contract(
     );
 
     let mut competing = first.clone();
-    competing.target_id = format!("ak:did_core:web:{namespace}-other-target.example");
+    competing.holder_account_id = format!(
+        "{{\"principal_id\":\"ak:did_core:web:{namespace}-holder.example\",\"station_id\":\"ak:did_core:web:{namespace}-other-station.example\"}}"
+    );
     store
         .put(&competing)
         .await

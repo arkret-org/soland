@@ -1324,9 +1324,14 @@ CREATE INDEX consent_cells_holder_intent_idx
 -- Event submission.
 CREATE TABLE public.mimi_consent_correlations (
     consent_id text PRIMARY KEY,
-    requester_id text NOT NULL,
-    target_kind text NOT NULL,
-    target_id text NOT NULL,
+    -- Canonical JSON of the complete requester ActorId and holder AccountId the
+    -- signed request named. Storing principal cores here left update_consent
+    -- with no implementable comparison: consent-model.md section 6.1 compares an
+    -- ordinary peer by complete ActorId, so the facade had to either reduce
+    -- dimensions or invent a Station of its own. Ruling
+    -- review/spec-done/2026-09-05-1240.
+    requester_actor_id text NOT NULL,
+    holder_account_id text NOT NULL,
     purpose text NOT NULL,
     strand_id text,
     source_id text,
