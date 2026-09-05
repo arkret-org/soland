@@ -57,6 +57,8 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
 
+mod capability_closure;
+
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 /// HTTP binding of `ak.peer.invites.command.submit.v1` — the only endpoint a
@@ -245,7 +247,23 @@ async fn peer_invites_submit(
     let delivery = req
         .parse_json::<InviteDeliveryRequestBody>()
         .await
-        .map_err(|_| {
+        .map_err(|error| {
+            // openapi_routes.rs draws this line for every other route: a body
+            // that parses as JSON but violates the declared schema is a
+            // schema_violation, and only a body that never parsed is
+            // json_invalid. A request missing the required cba_proof_bundles
+            // parses fine, so reporting it as unparseable would name the wrong
+            // contract.
+            if let salvo::http::ParseError::SerdeJson(serde_error) = &error
+                && serde_error.classify() == serde_json::error::Category::Data
+            {
+                return AppError::new(
+                    soland_http::error::ErrorCode::SchemaViolation,
+                    format!(
+                        "ak.peer.invites.command.submit.v1 request body violates the declared schema: {serde_error}"
+                    ),
+                );
+            }
             AppError::json_invalid("invalid ak.peer.invites.command.submit.v1 request body")
         })?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
@@ -337,7 +355,27 @@ async fn receive_private_invite_delivery(
     audit_operation: &'static str,
     projection: InvitePrivateProjection<'_>,
 ) -> Result<InviteDeliveryOutcome, AppError> {
-    validate_invite_delivery_consistency(body, delivery, state)?;
+    // §7 step 2's receiver-local half. Cheap, holder-independent, and a
+    // precondition for even naming a holder.
+    if delivery.invite_address.account_id.station_id.as_str() != state.service_id() {
+        return Err(super::events::peer::cross_domain_replay(
+            "invite_address.account_id.station_id does not match this service",
+        ));
+    }
+
+    // §7 step 4, complete and strictly before step 5. Its result is a function
+    // of `(invite_event, cba_proof_bundles)` alone: nothing above this line
+    // reads whether the holder exists, its `invite_receive_policy`, a consent
+    // cell or the §6.1.1 quota, and nothing above this line writes. A rejection
+    // here therefore leaves zero holder-private writes, zero outbox entries and
+    // zero quota charged, which is what lets it report a precise registered
+    // outcome instead of joining the holder-indistinguishable class.
+    let step_four = evaluate_invite_realm_capability(state, delivery, body, &projection).await?;
+
+    // §7 steps 5-7 — the bindings between `invite_event` and the delivery
+    // envelope. `invite_event.kind` is re-checked inside; it is also step 4's
+    // first clause, and the sender-side caller of this helper needs it too.
+    validate_invite_delivery_event_binding(body, delivery)?;
 
     // The inviter is the actor that signed the durable `ak.invite.create`
     // event; it is the exact peer we test `denied_actor_ids` and the
@@ -418,16 +456,11 @@ async fn receive_private_invite_delivery(
     }
 
     let (event_id, event_canonical_digest, duplicate, realm_id) = match projection {
-        InvitePrivateProjection::FromDeliveredEvent { session } => {
-            let validated = super::events::event_log::validate_private_invite_envelope(
-                state,
-                session,
-                &body["invite_event"],
-            )
-            .await
-            .map_err(|error| {
-                crate::app_error!(SchemaViolation, error.message).with_rejection_code(error.code)
-            })?;
+        InvitePrivateProjection::FromDeliveredEvent { .. } => {
+            // §7 step 8. The envelope was already verified in step 4 above; the
+            // holder-private row is written only once the receive decision is
+            // notify, so a step-4 or policy rejection writes nothing.
+            let validated = step_four.expect("peer ingress resolves its envelope in step 4");
             let duplicate = persist_private_invite_projection(
                 state,
                 &delivery.invite_address.account_id,
@@ -540,11 +573,19 @@ async fn self_invites_dispatch(
     // complete accepted Event, which is stored separately as the envelope.
     let invite_event = serde_json::from_value(accepted.envelope.clone())
         .map_err(|error| AppError::internal(format!("stored invite Event is invalid: {error}")))?;
+    // §7 — the inviting Station is a member of the Realm and holds the whole
+    // accepted closure, so building the receiver's step-4 material is a local
+    // read and needs no new read surface. `self_invite_dispatch_request_body`
+    // deliberately does not carry it: the authenticated inviter submits only an
+    // Event id.
+    let cba_proof_bundles =
+        capability_closure::build_invite_capability_bundles(state, &invite_event).await?;
     let delivery = InviteDeliveryRequestBody {
         schema: dispatch.schema,
         invite_event,
         invite_address: dispatch.invite_address,
         introduction_evidence: dispatch.introduction_evidence,
+        cba_proof_bundles,
         idempotency_key: dispatch.idempotency_key,
     };
     let delivery_body = serde_json::to_value(&delivery)
@@ -2276,27 +2317,90 @@ fn resolved_by_allowed(
         })
 }
 
-fn validate_invite_delivery_consistency(
-    body: &Value,
-    delivery: &InviteDeliveryRequestBody,
+/// Spec invite-addressing.md §7 step 4 — the invite Control Move's Realm
+/// capability, evaluated exactly the way a member Station evaluates it when it
+/// admits the Move, with the authority closure swapped for the branch's own
+/// source.
+///
+/// Peer ingress sources the closure from the request's `cba_proof_bundles[]`:
+/// the receiver is by definition not a federation peer of that Realm, so
+/// `ak.peer.seals.read.*` fails closed for it and it MUST NOT attempt a
+/// dependency fetch. The local branch sources it from this Station's own
+/// accepted Seals — it is a member — and MUST NOT serialise that state into a
+/// bundle first, which would add no guarantee.
+///
+/// Nothing in here reads holder state and nothing in here writes, which is the
+/// precondition §7 attaches to reporting a precise registered failure rather
+/// than the holder-indistinguishable class.
+async fn evaluate_invite_realm_capability(
     state: &AppState,
-) -> Result<(), AppError> {
-    if delivery.invite_address.account_id.station_id.as_str() != state.service_id() {
-        return Err(super::events::peer::cross_domain_replay(
-            "invite_address.account_id.station_id does not match this service",
-        ));
+    delivery: &InviteDeliveryRequestBody,
+    body: &Value,
+    projection: &InvitePrivateProjection<'_>,
+) -> Result<Option<super::events::event_log::ValidatedEventEnvelope>, AppError> {
+    validate_invite_delivery_event_kind(body)?;
+    let invite_event_object = body
+        .pointer("/invite_event")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event must be an object"))?;
+    match projection {
+        InvitePrivateProjection::FromDeliveredEvent { session } => {
+            let closure = capability_closure::invite_capability_closure_from_bundles(
+                state,
+                &delivery.invite_event,
+                &delivery.cba_proof_bundles,
+            )
+            .await?;
+            let validated = super::events::event_log::validate_private_invite_envelope(
+                state,
+                session,
+                &body["invite_event"],
+                Some(&closure),
+            )
+            .await
+            .map_err(invite_capability_rejection)?;
+            Ok(Some(validated))
+        }
+        InvitePrivateProjection::AlreadyAcceptedLocally { .. } => {
+            // The signature, `invite_id` and `realm_id` clauses of step 4 were
+            // discharged when this Station admitted the Event; re-verifying an
+            // envelope it already accepted proves nothing new. The capability
+            // clause runs here through the same verifier the peer branch uses,
+            // with `None` selecting local accepted Seals as the closure.
+            super::events::event_log::validate_realm_authority_root_authorization(
+                state,
+                invite_event_object,
+                arkret_wire::EventKind::InviteCreate.as_str(),
+                delivery.invite_event.realm_id.as_str(),
+                &delivery.invite_event.actor_id,
+                false,
+                &[],
+                None,
+            )
+            .await
+            .map_err(invite_capability_rejection)?;
+            Ok(None)
+        }
     }
-    validate_invite_delivery_event_binding(body, delivery)
 }
 
-/// Spec invite-addressing.md §7 steps 4-7 — the target-independent bindings
-/// between `invite_event` and the delivery envelope. The receiving service and
-/// the dispatching service both owe these; only the recipient-service identity
-/// check above is local to the receiver.
-fn validate_invite_delivery_event_binding(
-    body: &Value,
-    delivery: &InviteDeliveryRequestBody,
-) -> Result<(), AppError> {
+/// Map an envelope rejection onto the narrowest registered outcome.
+///
+/// `invite-addressing.md` §7's step-4 table is closed over already registered
+/// codes: a registered top-level code stays top-level, and a registered reason
+/// code (`realm_authority_root_missing`,
+/// `realm_authority_controller_mismatch`, …) rides on `capability_denied`
+/// rather than being flattened into one opaque class. `cba-profiles.md` §5
+/// forbids inventing a generic "authorization rejected" reason here.
+fn invite_capability_rejection(error: super::events::event_log::EventValidationError) -> AppError {
+    match soland_http::error::ErrorCode::from_wire(error.code) {
+        Some(code) => AppError::new(code, error.message),
+        None => AppError::capability_denied(error.message).with_internal_reason(error.code),
+    }
+}
+
+/// Spec invite-addressing.md §7 step 4's first clause.
+fn validate_invite_delivery_event_kind(body: &Value) -> Result<(), AppError> {
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
         != Some(arkret_wire::EventKind::InviteCreate.as_str())
     {
@@ -2304,6 +2408,17 @@ fn validate_invite_delivery_event_binding(
             "invite_event.kind must be ak.invite.create",
         ));
     }
+    Ok(())
+}
+
+/// Spec invite-addressing.md §7 steps 4-7 — the target-independent bindings
+/// between `invite_event` and the delivery envelope. The receiving service and
+/// the dispatching service both owe these.
+fn validate_invite_delivery_event_binding(
+    body: &Value,
+    delivery: &InviteDeliveryRequestBody,
+) -> Result<(), AppError> {
+    validate_invite_delivery_event_kind(body)?;
     let payload = body
         .pointer("/invite_event/payload")
         .and_then(Value::as_object)
@@ -2591,12 +2706,85 @@ mod invite_locator_security_tests {
                     pinned_record_digest: None,
                 },
             );
+        // These fixtures exercise the receive policy, quarantine and fanout
+        // helpers directly; §7 step 4 has its own coverage and is not on their
+        // path, so they carry no capability bundle.
         InviteDeliveryRequestBody::new(
             event,
             address,
             IntroductionEvidence::ExplicitAddress,
+            Vec::new(),
             "ak:idempotency:production-service-fanout",
         )
+    }
+
+    /// `invite-addressing.md` §7 — a step-4 rejection MUST leave zero
+    /// holder-private writes, zero outbox entries and zero quota charged.
+    ///
+    /// The delivery below never reaches a holder lookup at all: step 4 runs
+    /// first and refuses an `ak.invite.create` that names no accepted
+    /// governance basis, so the holder's quarantine cell and private invite
+    /// row both stay untouched. That ordering is what keeps a step-4 failure
+    /// out of the §6.1.1 holder-indistinguishable class.
+    #[tokio::test]
+    async fn a_step_four_rejection_writes_nothing_holder_private() {
+        let state = production_holder_state().await;
+        let delivery = production_invite_delivery(&state);
+        let body = serde_json::to_value(&delivery).unwrap();
+        let session = SessionRecord {
+            token_hash: "peer-invite:test".to_owned(),
+            account_pk: None,
+            actor: PRODUCTION_INVITER.to_owned(),
+            device_id: "peer-invite:test".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            session_grant: None,
+            expires_at: now() + Duration::minutes(5),
+            created_at: now(),
+            revoked_at: None,
+        };
+        let error = receive_private_invite_delivery(
+            &state,
+            &delivery,
+            &body,
+            state.service_id(),
+            "peer.invites.submit",
+            InvitePrivateProjection::FromDeliveredEvent { session: &session },
+        )
+        .await
+        .expect_err("an invite Control Move with no accepted basis fails step 4");
+        assert_eq!(error.wire_code(), "schema_violation");
+
+        let holder_actor =
+            arkret_wire::ActorId::account(delivery.invite_address.account_id.clone()).to_string();
+        assert!(
+            state
+                .account_data()
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_HOLDER_QUARANTINE)
+                .await
+                .expect("holder quarantine read")
+                .is_none(),
+            "a step-4 rejection must not create the holder quarantine cell"
+        );
+        assert!(
+            state
+                .account_data()
+                .entry(&holder_actor, AccountDataKey::ACCOUNT_INVITE_DELIVERY)
+                .await
+                .expect("holder invite delivery read")
+                .is_none(),
+            "a step-4 rejection must not create the holder invite delivery cell"
+        );
+        assert!(
+            state
+                .realm_invites()
+                .get(arkret_wire::InviteId::from_event_id(&delivery.invite_event.event_id).as_str())
+                .await
+                .expect("private invite row read")
+                .is_none(),
+            "a step-4 rejection must not project a holder-private invite row"
+        );
     }
 
     #[test]

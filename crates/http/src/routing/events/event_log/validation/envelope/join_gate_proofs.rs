@@ -12,7 +12,9 @@
 //! its holder to any Realm; without the signature the tuple is unattested
 //! self-assertion.
 
-use arkret_models_collaboration::governance::membership_invite::{JoinGateProof, JoinGateProofKind};
+use arkret_models_collaboration::governance::membership_invite::{
+    JoinGateProof, JoinGateProofKind,
+};
 
 use super::*;
 
@@ -74,8 +76,8 @@ async fn verify_gate_proof(
         let binding = proof
             .proof_binding_object(detached)
             .map_err(|_| gate_check_failed())?;
-        let canonical_bytes = arkret_canonical::canonical_json_bytes(&binding)
-            .map_err(|_| gate_check_failed())?;
+        let canonical_bytes =
+            arkret_canonical::canonical_json_bytes(&binding).map_err(|_| gate_check_failed())?;
         crate::jws_verify::verify_did_controlled_jws_async(
             &canonical_bytes,
             &detached.jws,

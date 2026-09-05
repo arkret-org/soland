@@ -1026,6 +1026,8 @@ async fn list_strand_projections(
                 realm_id: parse_projection_id::<RealmId>(&f.realm_id, "realm_id")?,
                 state: projection_object_state(f.state),
                 state_changed_at: f.state_changed_at,
+                stage: f.stage.clone(),
+                stage_changed_at: f.stage_changed_at,
                 title: Some(f.title.clone()),
                 summary: f.summary.clone(),
                 board_space_id,
@@ -1757,10 +1759,12 @@ async fn list_morph_projections(
                 morph_kind: m.morph_kind.clone(),
                 state: projection_object_state(m.state),
                 title: m.title.clone(),
+                state_changed_at: m.state_changed_at,
+                stage: m.stage.clone(),
+                stage_changed_at: m.stage_changed_at,
                 created_by: Some(parse_projection_actor(&m.created_by, "created_by")?),
                 created_at: Some(m.created_at),
                 updated_at: m.updated_at,
-                state_changed_at: m.state_changed_at,
             })
         })
         .collect::<Result<_, AppError>>()?;

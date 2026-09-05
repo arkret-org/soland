@@ -18,7 +18,7 @@ use super::*;
 /// Validate an Event whose `authorization_ref` is the Realm authority-root cell.
 ///
 /// Events that cite anything else are unaffected.
-pub(super) async fn validate_realm_authority_root_authorization(
+pub(in crate::routing) async fn validate_realm_authority_root_authorization(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     kind: &str,
@@ -26,6 +26,9 @@ pub(super) async fn validate_realm_authority_root_authorization(
     actor_id: &arkret_wire::ActorId,
     bootstrap_unit_member: bool,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    governance_closure: Option<
+        &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    >,
 ) -> Result<(), EventValidationError> {
     let authorization_ref = event_string_field(object, &["authorization_ref"]);
     let root_control_only = arkret_schema::capability_action(kind)
@@ -60,7 +63,7 @@ pub(super) async fn validate_realm_authority_root_authorization(
     let root = if bootstrap_unit_member {
         staged_genesis_root(realm_id, &actor_id.to_string(), realm_bootstrap_contexts)?
     } else {
-        accepted_seal_root(state, object, realm_id).await?
+        accepted_seal_root(state, object, realm_id, governance_closure).await?
     };
 
     if root.controller_actor_id != subject {
@@ -124,6 +127,9 @@ async fn accepted_seal_root(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     realm_id: &str,
+    governance_closure: Option<
+        &BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    >,
 ) -> Result<arkret_policy::realm_bootstrap::RealmAuthorityRootValue, EventValidationError> {
     let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
         event_validation_error(
@@ -133,17 +139,33 @@ async fn accepted_seal_root(
         )
     })?;
     let leaves = governance_basis_leaves(object)?;
-    let effective = state
-        .projections()
-        .effective_state_at(&leaves, &realm)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "realm_authority_root_missing",
-                format!("Realm authority-root inclusion proof could not be resolved: {error}"),
-            )
-        })?;
+    // The closure is the only thing the two branches differ in. A caller that
+    // already resolved the Event's own `seal_basis` — the private invite
+    // receiver, whose closure travelled in `cba_proof_bundles[]` because it is
+    // not a federation peer of this Realm — hands the joined control view in
+    // directly; everyone else reads it out of local accepted Seals. Neither
+    // branch may fall back to `realm_state.owner`, membership or `created_by`
+    // (`capabilities.md` §3.2).
+    let resolved;
+    let effective = match governance_closure {
+        Some(closure) => closure,
+        None => {
+            resolved = state
+                .projections()
+                .effective_state_at(&leaves, &realm)
+                .await
+                .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::FORBIDDEN,
+                        "realm_authority_root_missing",
+                        format!(
+                            "Realm authority-root inclusion proof could not be resolved: {error}"
+                        ),
+                    )
+                })?;
+            &resolved
+        }
+    };
     let cell = arkret_identifiers::CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
         .expect("the authority-root cell ref constant is well-formed");
     let value = match effective.get(&cell) {

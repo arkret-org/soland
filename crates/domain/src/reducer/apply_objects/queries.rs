@@ -3,8 +3,9 @@
 //! Inherent-impl block on `ProjectionState`; methods resolve by type, so
 //! cross-family `self.apply_*` / `self.check_*` calls are unaffected.
 
-use super::*;
 use arkret_models_collaboration::governance::membership_invite::JoinGateProof;
+
+use super::*;
 
 fn is_policy_frontier_component(component: &str) -> bool {
     (component.starts_with("ak.component.realm.")
@@ -1199,6 +1200,9 @@ impl ProjectionState {
     }
 }
 
-fn gate_proof_for_gate<'a>(proofs: &'a [JoinGateProof], gate_id: &str) -> Option<&'a JoinGateProof> {
+fn gate_proof_for_gate<'a>(
+    proofs: &'a [JoinGateProof],
+    gate_id: &str,
+) -> Option<&'a JoinGateProof> {
     proofs.iter().find(|proof| proof.gate_id == gate_id)
 }

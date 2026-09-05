@@ -383,8 +383,7 @@ fn an_epoch_release_without_the_sealing_commit_is_an_invalid_manifest() {
 
 const CHAIN_ROOT_BYTES: &[u8] = b"vendor-attestation-root";
 const CHAIN_ROOT_B64U: &str = "dmVuZG9yLWF0dGVzdGF0aW9uLXJvb3Q";
-const CODE_DIGEST: &str =
-    "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+const CODE_DIGEST: &str = "sha256:5555555555555555555555555555555555555555555555555555555555555555";
 const POLICY_VERSION: &str = "release-service-1.4.2";
 
 fn trust_root_digest() -> String {

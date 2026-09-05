@@ -3786,6 +3786,9 @@ use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
+pub(in crate::routing) use post_commit::{
+    CbaBundleClosure, cba_proof_bundles_for_targets, digest_suite_from_hash,
+};
 use preflight::*;
 use projection_preflight::*;
 #[cfg(feature = "test-support")]
