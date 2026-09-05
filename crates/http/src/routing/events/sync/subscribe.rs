@@ -212,12 +212,12 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     if let Some(event_id) = wait_for_event_id.as_deref() {
         if !wait_for_account_projection_barrier(&state, &mut rx, event_id).await {
             let current = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
-            let envelope = arkret_wire::problem_details::ErrorEnvelope::new(
+            let envelope = arkret_wire::problem_details::Problem::from_code(
                 "temporarily_unavailable",
                 "account projection did not reach the requested barrier before timeout",
             )
-            .with_request_id(arkret_identifiers::new_prefixed_uuid7("ak:request:"))
-            .with_detail(
+            .with_instance(arkret_identifiers::new_prefixed_uuid7("ak:request:"))
+            .with_extension(
                 "frontier",
                 current.cursor.map(Value::String).unwrap_or(Value::Null),
             );

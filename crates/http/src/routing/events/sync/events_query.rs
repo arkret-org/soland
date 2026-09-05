@@ -774,11 +774,11 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     crate::error::render_problem_envelope(
         res,
         StatusCode::TOO_MANY_REQUESTS,
-        arkret_wire::problem_details::ErrorEnvelope::new(
+        arkret_wire::problem_details::Problem::from_code(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
-        .with_request_id(ids::generate_request_id())
+        .with_instance(ids::generate_request_id())
         .with_retry_after_ms(Some(retry_after_ms)),
     );
 }

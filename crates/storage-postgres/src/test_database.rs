@@ -343,7 +343,12 @@ fn configured_max_slots() -> u32 {
 /// Panics for the same reasons as [`TestDatabase::lease`] when no database is
 /// configured, and when the configured database cannot be migrated.
 pub async fn contract_pool() -> crate::db::PgPool {
-    let url = configured_url();
+    let admin_url = configured_url();
+    let database = contract_database(&admin_url);
+    let url = replace_database(&admin_url, &database);
+    if AsyncPgConnection::establish(&url).await.is_err() {
+        ensure_database(&admin_url, &database).await;
+    }
     Db::connect(Some(&url), crate::db::PoolTuning::default())
         .await
         .unwrap_or_else(|error| {
@@ -351,6 +356,21 @@ pub async fn contract_pool() -> crate::db::PgPool {
         })
         .pool
         .expect("Db::connect with a URL always yields a pool")
+}
+
+/// The database [`contract_pool`] shares, named for the migration it was built
+/// from.
+///
+/// It carries [`schema_fingerprint`] for the same reason the slots do, and the
+/// omission was real: the first version of this module fingerprinted only the
+/// slots, so the contract tests kept sharing a database built from an older
+/// `up.sql`. The next migration edit surfaced it as
+/// `column "requester_actor_id" does not exist` in a contract test -- exactly
+/// the failure shape the fingerprint exists to remove, one layer down.
+fn contract_database(url: &str) -> String {
+    let base = database_name(url);
+    let truncated = base.chars().take(38).collect::<String>();
+    format!("{truncated}_s{}_contract", schema_fingerprint())
 }
 
 /// The migration this repository rewrites in place, embedded so its bytes can

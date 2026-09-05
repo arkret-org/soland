@@ -4,8 +4,12 @@
 //! pool, drops it, reconnects with a fresh pool (equivalent to a process
 //! restart) and verifies the rows survive.
 //!
-//! Every case requires `DATABASE_URL`; without one they fail rather than skip,
-//! because a silent skip here would leave the durable planes unverified.
+//! Every case requires `SOLAND_TEST_DATABASE_URL` or `DATABASE_URL`; without one
+//! they fail rather than skip, because a silent skip here would leave the
+//! durable planes unverified. The database they build is named for the
+//! migration it came from -- see `tests/support/mod.rs`.
+
+mod support;
 
 use soland_storage::contract_tests::{
     assert_device_key_store_contract, assert_member_identity_store_contract,
@@ -25,35 +29,10 @@ use soland_storage_postgres::{
 /// Build a fresh pool against the configured database. Migrations are
 /// idempotent, so a second `Db::connect` behaves like a restarted process
 /// attaching to the same database.
-/// The database these contracts run against.
-///
-/// Same rule as `test_database::configured_url`: `SOLAND_TEST_DATABASE_URL`
-/// wins, `DATABASE_URL` is the fallback. It is spelled again here rather than
-/// called because an integration test links the library *without* `cfg(test)`,
-/// and a crate cannot enable its own `test-support` feature for its own
-/// `tests/` targets. Keep the two in step -- reading only `DATABASE_URL`, as
-/// this did until 2026-09-05, made the documented way of running the suite
-/// fail 48 contract tests with a message naming the other variable.
-fn configured_url() -> String {
-    for key in ["SOLAND_TEST_DATABASE_URL", "DATABASE_URL"] {
-        if let Ok(value) = std::env::var(key)
-            && !value.trim().is_empty()
-        {
-            return value;
-        }
-    }
-    panic!(
-        "{}",
-        concat!(
-            "no test database is configured: set SOLAND_TEST_DATABASE_URL or DATABASE_URL ",
-            "to a PostgreSQL instance. These contract tests are the only proof the Postgres ",
-            "adapters honour the storage contracts, so they fail rather than skip."
-        )
-    );
-}
-
 async fn fresh_pool() -> PgPool {
-    Db::connect(Some(&configured_url()), Default::default())
+    let url = support::contract_database_url();
+    support::ensure_contract_database(&url).await;
+    Db::connect(Some(&url), Default::default())
         .await
         .expect("initialize test database")
         .pool

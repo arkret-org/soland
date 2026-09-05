@@ -1177,26 +1177,26 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         unreachable!();
     };
     let mut envelope =
-        arkret_wire::problem_details::ErrorEnvelope::new(error.wire_code(), error.message.as_ref())
-            .with_request_id(crate::ids::generate_request_id());
+        arkret_wire::problem_details::Problem::from_code(error.wire_code(), error.message.as_ref())
+            .with_instance(crate::ids::generate_request_id());
     if let Some(wire_details) = error.wire_details.as_deref() {
         for (key, value) in wire_details {
-            envelope = envelope.with_detail(key.clone(), value.clone());
+            envelope = envelope.with_extension(key.clone(), value.clone());
         }
     }
     if let Some(object) = details.as_ref().and_then(Value::as_object) {
         for (key, value) in object {
-            envelope = envelope.with_detail(key.clone(), value.clone());
+            envelope = envelope.with_extension(key.clone(), value.clone());
         }
     }
     if let Some(reason_code) = error.reason_code.as_deref() {
-        envelope = envelope.with_detail(
+        envelope = envelope.with_extension(
             "reason_code",
             serde_json::Value::String(reason_code.to_owned()),
         );
     }
     if let Some(reason_detail) = error.reason_detail.as_deref() {
-        envelope = envelope.with_detail(
+        envelope = envelope.with_extension(
             "reason_detail",
             serde_json::Value::String(reason_detail.to_owned()),
         );

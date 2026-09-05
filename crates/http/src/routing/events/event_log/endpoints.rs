@@ -1106,11 +1106,11 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         unreachable!();
     };
     let mut body = json!(
-        arkret_wire::problem_details::ErrorEnvelope::new(
+        arkret_wire::problem_details::Problem::from_code(
             error.wire_code(),
             error.message.as_ref(),
         )
-            .with_request_id(crate::ids::generate_request_id())
+            .with_instance(crate::ids::generate_request_id())
     );
     if let Some(details) = details.as_ref().and_then(Value::as_object)
         && let Some(problem) = body.as_object_mut()

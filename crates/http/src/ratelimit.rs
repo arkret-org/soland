@@ -414,11 +414,11 @@ impl Handler for RateLimiterMiddleware {
             crate::error::render_problem_envelope(
                 res,
                 StatusCode::TOO_MANY_REQUESTS,
-                arkret_wire::problem_details::ErrorEnvelope::new(
+                arkret_wire::problem_details::Problem::from_code(
                     "rate_limited",
                     "Too many requests. Please try again later.",
                 )
-                .with_request_id(request_id)
+                .with_instance(request_id)
                 .with_retry_after_ms(Some(retry_after_ms)),
             );
             return;

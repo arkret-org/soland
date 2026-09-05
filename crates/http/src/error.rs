@@ -63,10 +63,9 @@ fn request_id() -> String {
 pub(crate) fn render_problem_envelope(
     res: &mut Response,
     status: StatusCode,
-    envelope: arkret_wire::problem_details::ErrorEnvelope,
+    envelope: arkret_wire::problem_details::Problem,
 ) {
-    let problem =
-        arkret_wire::problem_details::Problem::from_error_envelope(&envelope, status.as_u16());
+    let problem = envelope.with_status(status.as_u16());
     let mut salvo_problem = salvo::http::Problem::new(status)
         .kind(problem.problem_type)
         .title(problem.title)
@@ -87,8 +86,7 @@ pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message:
     render_problem_envelope(
         res,
         status,
-        arkret_wire::problem_details::ErrorEnvelope::new(code, message)
-            .with_request_id(request_id()),
+        arkret_wire::problem_details::Problem::from_code(code, message).with_instance(request_id()),
     );
 }
 
@@ -102,9 +100,9 @@ pub fn render_error_with_detail(
     render_problem_envelope(
         res,
         status,
-        arkret_wire::problem_details::ErrorEnvelope::new(code, message)
-            .with_request_id(request_id())
-            .with_detail(
+        arkret_wire::problem_details::Problem::from_code(code, message)
+            .with_instance(request_id())
+            .with_extension(
                 "reason_detail",
                 serde_json::Value::String(reason_detail.to_owned()),
             ),
@@ -124,14 +122,14 @@ pub fn render_error_with_reason_code(
         "unregistered reason code `{reason_code}`; internal discriminators belong on the \
          `reason_detail` channel"
     );
-    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message)
-        .with_request_id(request_id())
-        .with_detail(
+    let mut envelope = arkret_wire::problem_details::Problem::from_code(code, message)
+        .with_instance(request_id())
+        .with_extension(
             "reason_code",
             serde_json::Value::String(reason_code.to_owned()),
         );
     if let Some(reason_detail) = reason_detail {
-        envelope = envelope.with_detail(
+        envelope = envelope.with_extension(
             "reason_detail",
             serde_json::Value::String(reason_detail.to_owned()),
         );
@@ -555,19 +553,19 @@ impl Writer for AppError {
         });
         if let Some(wire_details) = self.wire_details.filter(|details| !details.is_empty()) {
             let mut envelope =
-                arkret_wire::problem_details::ErrorEnvelope::new(&wire, public_message)
-                    .with_request_id(request_id());
+                arkret_wire::problem_details::Problem::from_code(&wire, public_message)
+                    .with_instance(request_id());
             for (key, value) in *wire_details {
-                envelope = envelope.with_detail(key, value);
+                envelope = envelope.with_extension(key, value);
             }
             if let Some(reason_code) = self.reason_code.as_deref() {
-                envelope = envelope.with_detail(
+                envelope = envelope.with_extension(
                     "reason_code",
                     serde_json::Value::String(reason_code.to_owned()),
                 );
             }
             if let Some(reason_detail) = wire_reason_detail {
-                envelope = envelope.with_detail(
+                envelope = envelope.with_extension(
                     "reason_detail",
                     serde_json::Value::String(reason_detail.to_owned()),
                 );

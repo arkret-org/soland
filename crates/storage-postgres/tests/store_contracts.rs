@@ -1,3 +1,5 @@
+mod support;
+
 use soland_storage::contract_tests::{
     AppletFormalCommitContractStores, ConsentCommitContractStores,
     DeviceRevocationSealSettlementStores, EventCommitContractStores,
@@ -587,37 +589,12 @@ struct LedgerCountRow {
     value: i64,
 }
 
-/// The database these contracts run against.
-///
-/// Same rule as `test_database::configured_url`: `SOLAND_TEST_DATABASE_URL`
-/// wins, `DATABASE_URL` is the fallback. It is spelled again here rather than
-/// called because an integration test links the library *without* `cfg(test)`,
-/// and a crate cannot enable its own `test-support` feature for its own
-/// `tests/` targets. Keep the two in step -- reading only `DATABASE_URL`, as
-/// this did until 2026-09-05, made the documented way of running the suite
-/// fail 48 contract tests with a message naming the other variable.
-fn configured_url() -> String {
-    for key in ["SOLAND_TEST_DATABASE_URL", "DATABASE_URL"] {
-        if let Ok(value) = std::env::var(key)
-            && !value.trim().is_empty()
-        {
-            return value;
-        }
-    }
-    panic!(
-        "{}",
-        concat!(
-            "no test database is configured: set SOLAND_TEST_DATABASE_URL or DATABASE_URL ",
-            "to a PostgreSQL instance. These contract tests are the only proof the Postgres ",
-            "adapters honour the storage contracts, so they fail rather than skip."
-        )
-    );
-}
-
 async fn test_pool() -> PgPool {
     TEST_POOL
         .get_or_init(|| async {
-            Db::connect(Some(&configured_url()), Default::default())
+            let url = support::contract_database_url();
+            support::ensure_contract_database(&url).await;
+            Db::connect(Some(&url), Default::default())
                 .await
                 .expect("initialize test database")
                 .pool
