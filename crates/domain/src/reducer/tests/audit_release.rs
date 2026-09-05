@@ -375,3 +375,263 @@ fn an_epoch_release_without_the_sealing_commit_is_an_invalid_manifest() {
         "got {effect:?}"
     );
 }
+
+// `audited-e2ee.md` section 6 — remote attestation. The evidence rides inline on
+// the release, so these exercise the reducer's own verdict rather than a
+// transport check: `_invalid` for untrustworthy evidence, `_mismatch` for valid
+// evidence describing some other Realm, service, policy revision or auditor.
+
+const CHAIN_ROOT_BYTES: &[u8] = b"vendor-attestation-root";
+const CHAIN_ROOT_B64U: &str = "dmVuZG9yLWF0dGVzdGF0aW9uLXJvb3Q";
+const CODE_DIGEST: &str =
+    "sha256:5555555555555555555555555555555555555555555555555555555555555555";
+const POLICY_VERSION: &str = "release-service-1.4.2";
+
+fn trust_root_digest() -> String {
+    arkret_canonical::sha256_digest(CHAIN_ROOT_BYTES)
+}
+
+fn attestation_policy() -> Value {
+    json!({
+        "trust_root_digests": [trust_root_digest()],
+        "allowed_code_digests": [CODE_DIGEST],
+        "allowed_policy_versions": [POLICY_VERSION]
+    })
+}
+
+fn attested_binding_payload() -> Value {
+    let mut payload = binding_payload();
+    payload["audit_assurance_class"] = json!("attested_hardware");
+    payload["attestation_policy"] = attestation_policy();
+    payload
+}
+
+/// A validity window relative to the release Event's own signed `created_at`,
+/// which is the only clock the verdict may depend on. The fixture Event is
+/// stamped at build time, so the window is built the same way rather than
+/// pinned to a date that would silently expire.
+fn window(from_days: i64, to_days: i64) -> Value {
+    let now = chrono::Utc::now();
+    let stamp = |days: i64| {
+        arkret_canonical::format_timestamp_canonical(now + chrono::TimeDelta::days(days))
+    };
+    json!({"not_before": stamp(from_days), "expires_at": stamp(to_days)})
+}
+
+/// Evidence that clears every section 6 check for the fixture binding.
+fn attestation() -> Value {
+    json!({
+        "attestation_id": "ak:attestation:01904100-0000-7000-8000-a00000000099",
+        "realm_id": REALM,
+        "audit_actor_id": actor(SERVICE),
+        "service_id": SERVICE,
+        "platform": {"family": "tee_tdx", "vendor": "example", "model": "x1"},
+        "measurement": {"code_digest": CODE_DIGEST, "policy_version": POLICY_VERSION},
+        "attestation_chains": [{"format": "tdx_quote", "bytes_b64u": CHAIN_ROOT_B64U}],
+        "attestation_key": {"algorithm": "Ed25519", "public_key_b64u": "cHVibGljLWtleQ"},
+        "verification_method": "did:web:audit.example#attestation-1",
+        "validity": window(-1, 30),
+        "operator_id": "ak:did_core:web:operator.example",
+        "audit_purpose": "compliance_lawful_access",
+        "audit_policy_version_digest": POLICY_DIGEST,
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "proofs": [{
+            "kind": "detached_jws",
+            "verification_method": "did:web:operator.example#release-1",
+            "payload_digest": OTHER_DIGEST,
+            "created_at": "2026-01-01T00:00:00.000Z",
+            "jws": "ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln"
+        }]
+    })
+}
+
+/// Binding, request, authorize, notice under `attested_hardware`, then a
+/// release carrying `mutate`d evidence. Setting the evidence to `null` drops
+/// the member entirely.
+fn attested_release_effect(mutate: impl FnOnce(&mut Value)) -> ProjectionEffect {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let (binding_event, effect) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditAppletBindingCreate.as_str(),
+        attested_binding_payload(),
+    );
+    assert!(
+        matches!(effect, ProjectionEffect::AuditBindingProjected { .. }),
+        "attested binding create must project, got {effect:?}"
+    );
+    let binding_id = arkret_identifiers::AuditBindingId::from_event_id(&binding_event).to_string();
+
+    let (request_event, effect) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditSessionRequest.as_str(),
+        request_payload(&binding_id, realm_scope()),
+    );
+    let session_id = match effect {
+        ProjectionEffect::AuditSessionProjected { session_id, .. } => session_id,
+        other => panic!("session request must project, got {other:?}"),
+    };
+    let (authorize_event, _) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditSessionAuthorize.as_str(),
+        authorize_payload(&binding_id, &session_id, &request_event.to_string()),
+    );
+    let (notice_event, _) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditSessionNotice.as_str(),
+        notice_payload(&binding_id, &session_id, &authorize_event.to_string()),
+    );
+
+    let mut payload = release_payload(&binding_id, &session_id, &notice_event.to_string());
+    let mut evidence = attestation();
+    mutate(&mut evidence);
+    if !evidence.is_null() {
+        payload["release_attestation"] = evidence;
+    }
+    let (_, effect) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditRelease.as_str(),
+        payload,
+    );
+    effect
+}
+
+fn rejection_reason(effect: &ProjectionEffect) -> &str {
+    match effect {
+        ProjectionEffect::Rejected { reason } => reason.as_str(),
+        other => panic!("expected a rejection, got {other:?}"),
+    }
+}
+
+#[test]
+fn attested_release_evidence_that_clears_every_check_projects() {
+    let effect = attested_release_effect(|_| {});
+    assert!(
+        matches!(effect, ProjectionEffect::AuditReleaseProjected { .. }),
+        "got {effect:?}"
+    );
+}
+
+#[test]
+fn attestation_evidence_the_binding_does_not_trust_is_invalid() {
+    // Trust root not in the Realm-declared list.
+    let untrusted = attested_release_effect(|evidence| {
+        evidence["attestation_chains"] =
+            json!([{"format": "tdx_quote", "bytes_b64u": "b3RoZXItcm9vdA"}]);
+    });
+    assert_eq!(
+        rejection_reason(&untrusted),
+        "audit_release_attestation_invalid"
+    );
+
+    // Validity window closed before the Event's signed created_at.
+    let expired = attested_release_effect(|evidence| {
+        evidence["validity"] = window(-60, -30);
+    });
+    assert_eq!(
+        rejection_reason(&expired),
+        "audit_release_attestation_invalid"
+    );
+
+    // A window wider than the 90 days the profile allows.
+    let over_long = attested_release_effect(|evidence| {
+        evidence["validity"] = window(-100, 100);
+    });
+    assert_eq!(
+        rejection_reason(&over_long),
+        "audit_release_attestation_invalid"
+    );
+
+    // Measurement outside the binding's allowed set.
+    let measurement = attested_release_effect(|evidence| {
+        evidence["measurement"]["code_digest"] = json!(OTHER_DIGEST);
+    });
+    assert_eq!(
+        rejection_reason(&measurement),
+        "audit_release_attestation_invalid"
+    );
+    let policy_version = attested_release_effect(|evidence| {
+        evidence["measurement"]["policy_version"] = json!("release-service-9.9.9");
+    });
+    assert_eq!(
+        rejection_reason(&policy_version),
+        "audit_release_attestation_invalid"
+    );
+
+    // software_test_only is a fixture platform and never backs a real release.
+    let software = attested_release_effect(|evidence| {
+        evidence["platform"]["family"] = json!("software_test_only");
+    });
+    assert_eq!(
+        rejection_reason(&software),
+        "audit_release_attestation_invalid"
+    );
+}
+
+#[test]
+fn attestation_evidence_bound_to_other_state_is_a_mismatch() {
+    // A different service than the active binding names.
+    let service = attested_release_effect(|evidence| {
+        evidence["service_id"] = json!("ak:did_core:web:other-audit.example");
+    });
+    assert_eq!(
+        rejection_reason(&service),
+        "audit_release_attestation_mismatch"
+    );
+
+    // A policy revision other than the binding's.
+    let policy = attested_release_effect(|evidence| {
+        evidence["audit_policy_version_digest"] = json!(OTHER_DIGEST);
+    });
+    assert_eq!(
+        rejection_reason(&policy),
+        "audit_release_attestation_mismatch"
+    );
+
+    // An auditor the accepted authorize never approved as recipient.
+    let recipient = attested_release_effect(|evidence| {
+        evidence["audit_actor_id"] = actor("ak:did_core:web:other-auditor.example");
+    });
+    assert_eq!(
+        rejection_reason(&recipient),
+        "audit_release_attestation_mismatch"
+    );
+
+    // Evidence issued for another Realm.
+    let realm = attested_release_effect(|evidence| {
+        evidence["realm_id"] = json!("ak:realm:AfJRB2whShXS-ghpXQhgN5u_MsXwor5nNWDxQ6YCfvcf");
+    });
+    assert_eq!(
+        rejection_reason(&realm),
+        "audit_release_attestation_mismatch"
+    );
+}
+
+#[test]
+fn the_assurance_class_decides_whether_evidence_may_be_present() {
+    // attested_hardware without evidence has nothing to verify.
+    let missing = attested_release_effect(|evidence| {
+        *evidence = Value::Null;
+    });
+    assert_eq!(rejection_reason(&missing), "schema_violation");
+
+    // disclosed_policy is a process guarantee; carrying evidence would claim a
+    // controlled-output guarantee the binding never bought.
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let (binding_id, session_id, notice_ref) = noticed_session(&mut state, &hlc);
+    let mut payload = release_payload(&binding_id, &session_id, &notice_ref);
+    payload["release_attestation"] = attestation();
+    let (_, effect) = apply(
+        &mut state,
+        &hlc,
+        arkret_wire::EventKind::AuditRelease.as_str(),
+        payload,
+    );
+    assert_eq!(rejection_reason(&effect), "schema_violation");
+}

@@ -89,6 +89,21 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        // `common-fields.md` §5.3.1: `stage` is optional on create and, when
+        // present, MUST be one of the eight registered values. `stage_changed_at`
+        // is reducer-derived (§5.3.3 rule 3) — create is an initialization, not a
+        // transition, so it stays absent no matter what the wire object carries.
+        let stage = match object.get("stage") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let Some(stage) = value.as_str().and_then(object_stage_from_wire_value) else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                Some(stage)
+            }
+        };
         let realm_id = projection_object_realm_id(object, operation);
         let created_by = object
             .get("created_by")
@@ -110,6 +125,8 @@ impl ProjectionState {
             fields,
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage,
+            stage_changed_at: None,
             created_by,
             created_at: now,
             history_basis_seals: operation_history_basis_seals(operation),
@@ -433,6 +450,71 @@ impl ProjectionState {
                 };
             }
         }
+        strand.updated_by = Some(operation.context.sender.to_string());
+        strand.updated_at = Some(now);
+        ProjectionEffect::StrandLifecycle {
+            strand_id,
+            new_state: strand.state,
+        }
+    }
+
+    /// Apply `ak.strand.stage.set` — the only wire path that mutates the
+    /// Strand business-progression axis (`common-fields.md` §5.3, spec
+    /// `strand-and-message.md` §3.2).
+    ///
+    /// v1 registers no per-Realm workflow-profile carrier, so the core reducer
+    /// imposes **no direction** between the eight stage values: `planned ->
+    /// done` and `done -> in_progress` are equally admissible (§5.3.3). The
+    /// enforced invariants are exactly the physical-lifecycle guards (also run
+    /// as a read-only preflight so admission fails closed with 412), the
+    /// reducer-derived `stage_changed_at`, and the same-value no-op. Unknown
+    /// Strand is queued for pending replay, matching the other strand
+    /// reducers' causal/backfill tolerance.
+    pub(crate) fn apply_strand_stage_set(
+        &mut self,
+        operation: &Operation,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> ProjectionEffect {
+        let Ok(payload) = operation.typed_payload::<arkret_wire::event_spec::StrandStageSet>()
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let strand_id = payload.strand_id.to_string();
+        let Some(stage) = object_stage_from_wire_value(&payload.stage) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let Some(strand) = self.strands.get_mut(&strand_id) else {
+            return self.queue_pending_replay(strand_id, operation, "strand_unknown");
+        };
+        // §5.3.3 rule 1 then rule 2: a physically terminal object reports
+        // `strand_already_terminal`, a merely archived one `strand_not_active`.
+        if strand.state.is_terminal() {
+            return ProjectionEffect::Rejected {
+                reason: "strand_already_terminal".to_owned(),
+            };
+        }
+        if strand.state != ObjectLifecycleState::Active {
+            return ProjectionEffect::Rejected {
+                reason: "strand_not_active".to_owned(),
+            };
+        }
+        if strand.stage.as_ref() == Some(&stage) {
+            // §5.3.3 rule 4 — an idempotent same-value self-transition is
+            // accepted but records no change: neither `stage_changed_at` nor
+            // the audit columns move.
+            return ProjectionEffect::StrandLifecycle {
+                strand_id,
+                new_state: strand.state,
+            };
+        }
+        strand.stage = Some(stage);
+        // §5.3.3 rule 3 — any actor-supplied `stage_changed_at` is ignored; the
+        // triggering event's `created_at` is the only source.
+        strand.stage_changed_at = Some(now);
         strand.updated_by = Some(operation.context.sender.to_string());
         strand.updated_at = Some(now);
         ProjectionEffect::StrandLifecycle {

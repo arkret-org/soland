@@ -121,6 +121,7 @@ pub use projections::{
     SidecarContextProjection, SidecarProjection, SolandKeyBackupActiveSeries,
     SolandMembershipState, SolandRealmState, SolandRelationState, SpaceContainerLifecycleState,
     SpaceContainerProjection, StrandProjection, StrandWatchProjection,
+    object_stage_from_wire_value, object_stage_wire_value,
 };
 pub(crate) use projections::{
     CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,

@@ -19,6 +19,7 @@ mod realm_authority;
 mod redaction_message;
 mod security_genesis;
 mod space_container;
+mod stage_axis;
 mod strand_morph;
 
 pub(super) fn test_single_signer_notary(did: &str) -> arkret_wire::NotaryValue {

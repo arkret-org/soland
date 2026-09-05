@@ -486,6 +486,8 @@ async fn circle_scoped_reaction_requires_circle_membership() {
                 fields: std::collections::BTreeMap::new(),
                 state: soland_domain::reducer::ObjectLifecycleState::Active,
                 state_changed_at: None,
+                stage: None,
+                stage_changed_at: None,
                 created_by: member.to_owned(),
                 created_at: now,
                 history_basis_seals: Vec::new(),
@@ -602,6 +604,8 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                     encrypted_content: None,
                     state: soland_domain::reducer::ObjectLifecycleState::Active,
                     state_changed_at: None,
+                    stage: None,
+                    stage_changed_at: None,
                     created_by: member.to_owned(),
                     created_at: now,
                     history_basis_seals: Vec::new(),
@@ -2130,4 +2134,144 @@ fn strictness_issued(
         )),
         op,
     }
+}
+
+// `join-policy.md` section 4 rule 4, signature half. The reducer owns the
+// binding tuple; these cover the part that needs DID resolution, so a proof
+// whose signature does not lead back to a key the gate's provider or issuer
+// controls cannot admit anyone.
+
+fn gate_proof_signed_by(
+    signing_key: &ed25519_dalek::SigningKey,
+    mutate: impl FnOnce(&mut Value),
+) -> Value {
+    let did = did_key_for(signing_key);
+    let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
+    let verification_method = format!("{did}#{did_key_fragment}");
+    let created_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
+
+    // Built through the typed carrier so the signed bytes come from the same
+    // constructor a conforming producer uses, not from a hand-rolled literal.
+    let mut proof: arkret_models_collaboration::governance::membership_invite::JoinGateProof =
+        serde_json::from_value(json!({
+            "gate_id": "g-captcha",
+            "kind": "challenge_response",
+            "realm_id": "ak:realm:Ac-UY3Pau13QQGFsa1i0Ncx61I9bOu86K1F-dM8J34tC",
+            "applicant_actor_id": {
+                "kind": "account",
+                "account_id": {
+                    "principal_id": "ak:did_core:web:bob.example",
+                    "station_id": "ak:did_core:web:station.example"
+                }
+            },
+            "policy_digest": format!("sha256:{}", "c".repeat(64)),
+            "created_at": created_at,
+            "challenge_kind": "captcha",
+            "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
+            "proofs": [{
+                "kind": "detached_jws",
+                "verification_method": verification_method,
+                "payload_digest": format!("sha256:{}", "0".repeat(64)),
+                "created_at": created_at,
+                "jws": "ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln"
+            }]
+        }))
+        .expect("fixture gate proof parses as the registered carrier");
+
+    // The digest covers the body without `proofs`, so it is stamped before the
+    // signature is made over the binding object that carries it.
+    proof.proofs[0].payload_digest = proof.payload_digest().expect("fixture payload digest");
+    let binding = proof
+        .proof_binding_object(&proof.proofs[0].clone())
+        .expect("fixture binding object");
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&binding).expect("canonical binding bytes");
+    proof.proofs[0].jws =
+        arkret_signatures::sign_ed25519_detached_jws(signing_key, &canonical_bytes)
+            .expect("fixture detached JWS");
+
+    let mut value = serde_json::to_value(&proof).expect("gate proof serializes");
+    mutate(&mut value);
+    value
+}
+
+fn join_event_with_gate_proof(proof: Value) -> serde_json::Map<String, Value> {
+    json!({
+        "payload": {
+            "membership": "join",
+            "gate_proofs": [proof]
+        }
+    })
+    .as_object()
+    .expect("fixture event object")
+    .clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_correctly_signed_gate_proof_passes_the_signature_gate() {
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[21u8; 32]);
+    let object = join_event_with_gate_proof(gate_proof_signed_by(&signing_key, |_| {}));
+    validate_join_gate_proof_signatures(&object, &state)
+        .await
+        .expect("a gate proof signed by its own verification method verifies");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gate_proof_with_an_invalid_signature_is_refused() {
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[22u8; 32]);
+    let object = join_event_with_gate_proof(gate_proof_signed_by(&signing_key, |proof| {
+        proof["proofs"][0]["jws"] = json!("ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln");
+    }));
+    let error = validate_join_gate_proof_signatures(&object, &state)
+        .await
+        .expect_err("an unverifiable signature must fail closed");
+    assert_eq!(error.message, "gate_check_failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gate_proof_whose_binding_was_altered_after_signing_is_refused() {
+    // The signature covers the binding tuple, so moving the proof to another
+    // Realm invalidates it even before the reducer compares the field.
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[23u8; 32]);
+    let object = join_event_with_gate_proof(gate_proof_signed_by(&signing_key, |proof| {
+        proof["realm_id"] = json!("ak:realm:AZpEa1TBWdyQensfzl-MJg8_sdcSNKSeAKHbyCN5ZXjb");
+    }));
+    let error = validate_join_gate_proof_signatures(&object, &state)
+        .await
+        .expect_err("a proof lifted to another Realm must fail closed");
+    assert_eq!(error.message, "gate_check_failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gate_proof_carrying_a_digest_over_another_body_is_refused() {
+    // `payload_digest` is recomputed from the body, so a signature made over
+    // some other object cannot be presented alongside this one.
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[24u8; 32]);
+    let object = join_event_with_gate_proof(gate_proof_signed_by(&signing_key, |proof| {
+        proof["proofs"][0]["payload_digest"] = json!(format!("sha256:{}", "d".repeat(64)));
+    }));
+    let error = validate_join_gate_proof_signatures(&object, &state)
+        .await
+        .expect_err("a foreign payload digest must fail closed");
+    assert_eq!(error.message, "gate_check_failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_gate_proof_with_no_detached_proof_is_refused() {
+    // `proofs` is `minItems: 1` in the schema, but a Rust `Vec` has no such
+    // floor, so an empty array reaches this pass. Nothing is attested, and the
+    // verdict must not default to "no signature to reject".
+    let state = make_state(false);
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&[25u8; 32]);
+    let object = join_event_with_gate_proof(gate_proof_signed_by(&signing_key, |proof| {
+        proof["proofs"] = json!([]);
+    }));
+    let error = validate_join_gate_proof_signatures(&object, &state)
+        .await
+        .expect_err("a gate proof attesting nothing must fail closed");
+    assert_eq!(error.message, "gate_check_failed");
 }

@@ -1170,17 +1170,29 @@ mod tests {
             .project_cell_writes_with_pre_state(&event, &frozen)
             .unwrap();
 
-        // A directed cancel is a two-cell Move: the lifecycle transition and
-        // the release of the live-target slot keyed by the invitee AccountId
-        // (governance-objects.md section 5.3).
-        assert_eq!(writes.len(), 2);
-        assert!(
-            writes[1]
-                .cell_id
-                .as_str()
-                .starts_with("ak:cell:ak.component.invite.live_target.v1:"),
-            "{}",
-            writes[1].cell_id.as_str()
+        // Two writes since the live-target slot landed (`governance-objects.md`
+        // section 5.3): the lifecycle transition, and the release that puts the
+        // invitee's slot back to `__unset__` so a later invite can claim it.
+        // Neither touches member state — that is what "only the frozen invite
+        // lifecycle" means here.
+        let families = writes
+            .iter()
+            .map(|write| {
+                write
+                    .cell_id
+                    .as_str()
+                    .split(':')
+                    .nth(2)
+                    .expect("cell ref carries its family")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            families,
+            vec![
+                arkret_wire::CellFamilyId::INVITE_LIFECYCLE_V1.to_owned(),
+                arkret_wire::CellFamilyId::INVITE_LIVE_TARGET_V1.to_owned(),
+            ]
         );
         validate_invite_cancel_pre_admission(
             CANCEL_INVITER,

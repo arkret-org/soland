@@ -115,16 +115,42 @@ fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation 
     operation
 }
 
-fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
+/// The digest a gate proof binds itself to: the accepted `join_policy`
+/// component this join is evaluated against.
+fn policy_digest(state: &ProjectionState) -> String {
+    let policy = state
+        .realm_join_policy_cell_value(REALM_A)
+        .expect("join policy cell must be projected");
+    arkret_canonical::canonical_sha256(policy).expect("canonical policy digest")
+}
+
+/// A `challenge_response` item in the registered `join_gate_proof` shape.
+///
+/// The binding tuple is carried as wire members, so the fixture has to name the
+/// same Realm, applicant and policy revision the reducer is evaluating; that is
+/// exactly what the private pre-ruling shape could not express.
+fn challenge_proof(
+    state: &ProjectionState,
+    gate_id: &str,
+    member: &str,
+    created_at: chrono::DateTime<Utc>,
+) -> Value {
     json!({
         "gate_id": gate_id,
-        "challenge_proof": {
-            "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
-            "issued_by": CAPTCHA_PROVIDER_DID,
-            "challenge_kind": "captcha",
-            "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
-            "proof": "base64url:test-proof"
-        }
+        "kind": "challenge_response",
+        "realm_id": REALM_A,
+        "applicant_actor_id": member_actor(member),
+        "policy_digest": policy_digest(state),
+        "created_at": arkret_canonical::format_timestamp_canonical(created_at),
+        "challenge_kind": "captcha",
+        "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
+        "proofs": [{
+            "kind": "detached_jws",
+            "verification_method": format!("{CAPTCHA_PROVIDER_DID}#challenge-1"),
+            "payload_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "created_at": arkret_canonical::format_timestamp_canonical(created_at),
+            "jws": "ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln"
+        }]
     })
 }
 
@@ -392,8 +418,12 @@ fn all_combinator_requires_parent_membership_and_challenge_proof() {
     let now = Utc::now();
     let mut accepted = join_op(BOB);
     accepted.created_at = now;
-    accepted.payload["gate_proofs"] =
-        json!([challenge_proof("g-captcha", now - Duration::minutes(1))]);
+    accepted.payload["gate_proofs"] = json!([challenge_proof(
+        &state,
+        "g-captcha",
+        BOB,
+        now - Duration::minutes(1)
+    )]);
     assert!(matches!(
         state.apply(&accepted, &hlc),
         ProjectionEffect::MembershipChanged { .. }
@@ -446,8 +476,12 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
     let join_at = leave_at + Duration::minutes(20);
     let mut challenged = join_op(BOB);
     challenged.created_at = join_at;
-    challenged.payload["gate_proofs"] =
-        json!([challenge_proof("g-captcha", join_at - Duration::minutes(1))]);
+    challenged.payload["gate_proofs"] = json!([challenge_proof(
+        &state,
+        "g-captcha",
+        BOB,
+        join_at - Duration::minutes(1)
+    )]);
     match state.apply(&challenged, &hlc) {
         ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
         other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
@@ -542,13 +576,65 @@ fn knock_restricted_accepts_a_policy_that_carries_an_automatic_gate() {
                 {
                     "gate_id": "employee",
                     "kind": "claim_required",
-                    "required_claims": ["employee"]
+                    "required_claims": ["employee"],
+                    "trusted_issuer_ids": ["ak:did_core:web:issuer.example"]
                 }
             ],
             "combinator": "all"
         }),
     );
     assert!(state.realm_policy_bundle_cell_value(REALM_A).is_some());
+}
+
+#[test]
+fn a_claim_gate_without_an_issuer_boundary_is_not_an_admissible_policy() {
+    // join-policy.md 3.1 makes `trusted_issuer_ids` required material: without
+    // it the gate would accept a claim the applicant issued to themselves, so
+    // the policy is refused rather than stored and evaluated leniently. The
+    // closed gate type rejects it while parsing, which is earlier than the
+    // reducer's own check on the same field — both are kept, because a lane
+    // that reaches the reducer without the typed parse must not be lenient.
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "restricted");
+    let effect = state.apply(
+        &op(
+            arkret_wire::EventKind::RealmPolicyBundle,
+            REALM_A,
+            json!({
+                "policy_revision": 1,
+                "join_policy": {
+                    "gates": [{
+                        "gate_id": "employee",
+                        "kind": "claim_required",
+                        "auto_resolve": true,
+                        "required_claims": ["employee"]
+                    }],
+                    "combinator": "all"
+                }
+            }),
+        ),
+        &hlc,
+    );
+    match effect {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "schema_violation"),
+        other => panic!("expected the policy to be refused, got {other:?}"),
+    }
+    assert!(state.realm_join_policy_cell_value(REALM_A).is_none());
+
+    // The reducer's own check, reached directly.
+    assert_eq!(
+        soland_domain::reducer::validate_join_policy_payload(&json!({
+            "gates": [{
+                "gate_id": "employee",
+                "kind": "claim_required",
+                "auto_resolve": true,
+                "required_claims": ["employee"]
+            }],
+            "combinator": "all"
+        })),
+        Err("claim_required_trusted_issuers_invalid")
+    );
 }
 
 /// The other half of the same rule: a `restricted` Realm that has no automatic
@@ -570,4 +656,217 @@ fn restricted_without_an_automatic_gate_never_admits_a_join() {
         ),
         "got {effect:?}"
     );
+}
+
+// `join-policy.md` section 4 rule 4 — the binding tuple every `join_gate_proof`
+// carries. Each of these mutates exactly one member of the tuple and asserts the
+// join is refused, so a proof cannot be lifted across Realms, applicants or
+// policy revisions. The outward verdict stays the single non-enumerable
+// `gate_check_failed` in every case.
+
+fn captcha_policy() -> Value {
+    json!({
+        "gates": [{
+            "gate_id": "g-captcha",
+            "kind": "challenge_response",
+            "auto_resolve": true,
+            "provider_did": CAPTCHA_PROVIDER_DID,
+            "challenge_kinds": ["captcha"],
+            "max_proof_age": "PT5M"
+        }],
+        "combinator": "all"
+    })
+}
+
+/// A `restricted` Realm whose only gate is the captcha challenge, plus the join
+/// Event that would clear it. The caller mutates the proof before applying.
+fn captcha_join(
+    mutate: impl FnOnce(&mut Value),
+) -> (ProjectionState, ServerHlc, Operation) {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "restricted");
+    apply_policy(&mut state, &hlc, captcha_policy());
+
+    let now = Utc::now();
+    let mut join = join_op(BOB);
+    join.created_at = now;
+    let mut proof = challenge_proof(&state, "g-captcha", BOB, now - Duration::minutes(1));
+    mutate(&mut proof);
+    join.payload["gate_proofs"] = json!([proof]);
+    (state, hlc, join)
+}
+
+fn assert_gate_check_failed(mutate: impl FnOnce(&mut Value)) {
+    let (mut state, hlc, join) = captcha_join(mutate);
+    match state.apply(&join, &hlc) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
+        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
+    }
+}
+
+#[test]
+fn an_unmutated_gate_proof_admits_the_applicant() {
+    // The control for every mutation below: without it the negatives could all
+    // be passing for an unrelated reason.
+    let (mut state, hlc, join) = captcha_join(|_| {});
+    assert!(matches!(
+        state.apply(&join, &hlc),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
+}
+
+#[test]
+fn a_gate_proof_bound_to_another_realm_is_refused() {
+    assert_gate_check_failed(|proof| {
+        proof["realm_id"] = json!(REALM_PARENT);
+    });
+}
+
+#[test]
+fn a_gate_proof_bound_to_another_applicant_is_refused() {
+    assert_gate_check_failed(|proof| {
+        proof["applicant_actor_id"] = serde_json::to_value(member_actor(MALLORY)).unwrap();
+    });
+}
+
+#[test]
+fn a_gate_proof_bound_to_another_policy_revision_is_refused() {
+    assert_gate_check_failed(|proof| {
+        proof["policy_digest"] =
+            json!(format!("sha256:{}", "b".repeat(64)));
+    });
+}
+
+#[test]
+fn a_gate_proof_older_than_max_proof_age_is_refused() {
+    assert_gate_check_failed(|proof| {
+        let stale = Utc::now() - Duration::minutes(30);
+        proof["created_at"] = json!(arkret_canonical::format_timestamp_canonical(stale));
+    });
+}
+
+#[test]
+fn a_gate_proof_stamped_after_the_event_is_refused() {
+    // Freshness is measured against the Event's own signed created_at, so a
+    // proof from the future was not in the applicant's hands when they signed.
+    assert_gate_check_failed(|proof| {
+        let ahead = Utc::now() + Duration::minutes(5);
+        proof["created_at"] = json!(arkret_canonical::format_timestamp_canonical(ahead));
+    });
+}
+
+#[test]
+fn a_gate_proof_for_an_unaccepted_challenge_family_is_refused() {
+    assert_gate_check_failed(|proof| {
+        proof["challenge_kind"] = json!("pow");
+    });
+}
+
+#[test]
+fn a_gate_proof_whose_kind_contradicts_the_gate_is_refused() {
+    assert_gate_check_failed(|proof| {
+        proof["kind"] = json!("claim_required");
+        proof["issuer_id"] = json!("ak:did_core:web:issuer.example");
+        proof["claims"] = json!(["employee"]);
+        proof.as_object_mut().unwrap().remove("challenge_kind");
+        proof.as_object_mut().unwrap().remove("challenge_id");
+    });
+}
+
+#[test]
+fn a_gate_proof_in_the_pre_ruling_private_shape_is_refused() {
+    // The shape soland used to accept: member names it invented, with no
+    // binding tuple at all. It is not the registered carrier, so the payload
+    // does not parse and the Move is refused before any gate is evaluated.
+    let (mut state, hlc, join) = captcha_join(|proof| {
+        *proof = json!({
+            "gate_id": "g-captcha",
+            "challenge_proof": {
+                "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
+                "issued_by": CAPTCHA_PROVIDER_DID,
+                "challenge_kind": "captcha",
+                "issued_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
+                "proof": "base64url:test-proof"
+            }
+        });
+    });
+    match state.apply(&join, &hlc) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "schema_violation"),
+        other => panic!("expected Rejected(schema_violation), got {other:?}"),
+    }
+}
+
+#[test]
+fn a_claim_gate_only_accepts_claims_from_a_trusted_issuer() {
+    let issuer = "ak:did_core:web:issuer.example";
+    let policy = json!({
+        "gates": [{
+            "gate_id": "g-vc",
+            "kind": "claim_required",
+            "auto_resolve": true,
+            "required_claims": ["employee"],
+            "trusted_issuer_ids": [issuer]
+        }],
+        "combinator": "all"
+    });
+    let claim_proof = |state: &ProjectionState, issuer_id: &str, claims: Value| {
+        let now = Utc::now();
+        json!({
+            "gate_id": "g-vc",
+            "kind": "claim_required",
+            "realm_id": REALM_A,
+            "applicant_actor_id": member_actor(BOB),
+            "policy_digest": policy_digest(state),
+            "created_at": arkret_canonical::format_timestamp_canonical(now),
+            "issuer_id": issuer_id,
+            "claims": claims,
+            "proofs": [{
+                "kind": "detached_jws",
+                "verification_method": format!("did:web:issuer.example#vc-1"),
+                "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "created_at": arkret_canonical::format_timestamp_canonical(now),
+                "jws": "ZXlKaGJHY2lPaUpGWkRJMU5URTVJbjA..c2ln"
+            }]
+        })
+    };
+
+    let apply_claim = |issuer_id: &str, claims: Value| {
+        let mut state = ProjectionState::new();
+        let hlc = ServerHlc::new("test");
+        apply_join_rule(&mut state, "restricted");
+        apply_policy(&mut state, &hlc, policy.clone());
+        let mut join = join_op(BOB);
+        join.created_at = Utc::now();
+        join.payload["gate_proofs"] = json!([claim_proof(&state, issuer_id, claims)]);
+        state.apply(&join, &hlc)
+    };
+
+    assert!(matches!(
+        apply_claim(issuer, json!(["employee"])),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
+
+    // An issuer outside the gate's boundary is a self-signed claim.
+    match apply_claim("ak:did_core:web:attacker.example", json!(["employee"])) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
+        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
+    }
+
+    // Claims that do not cover what the gate requires.
+    match apply_claim(issuer, json!(["contractor"])) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "gate_check_failed"),
+        other => panic!("expected Rejected(gate_check_failed), got {other:?}"),
+    }
+}
+
+#[test]
+fn two_proofs_for_one_gate_are_a_schema_violation() {
+    let (mut state, hlc, mut join) = captcha_join(|_| {});
+    let proof = join.payload["gate_proofs"][0].clone();
+    join.payload["gate_proofs"] = json!([proof.clone(), proof]);
+    match state.apply(&join, &hlc) {
+        ProjectionEffect::Rejected { reason } => assert_eq!(reason, "schema_violation"),
+        other => panic!("expected Rejected(schema_violation), got {other:?}"),
+    }
 }

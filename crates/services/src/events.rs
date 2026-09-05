@@ -62,6 +62,11 @@ pub struct MorphProjectionRecord {
     pub encrypted_content: Option<serde_json::Value>,
     pub state: String,
     pub state_changed_at: Option<DateTime<Utc>>,
+    /// Wire spelling of the business-progression stage (`common-fields.md`
+    /// §5.3), absent when the Morph carries no stage.
+    pub stage: Option<String>,
+    /// Reducer-derived timestamp of the last real stage transition.
+    pub stage_changed_at: Option<DateTime<Utc>>,
     pub created_by: String,
     pub created_at: DateTime<Utc>,
     pub history_basis_seals: Vec<String>,

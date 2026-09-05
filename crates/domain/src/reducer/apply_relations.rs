@@ -1062,6 +1062,8 @@ mod cross_realm_relation_tests {
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage: None,
+            stage_changed_at: None,
             created_by: String::new(),
             created_at: chrono::Utc::now(),
             history_basis_seals: Vec::new(),

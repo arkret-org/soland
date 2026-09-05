@@ -368,6 +368,20 @@ fn apply_strand_restore_dispatch(
 ) -> ProjectionEffect {
     s.apply_strand_lifecycle(op, op.created_at, ObjectLifecycleTransition::Restore)
 }
+fn apply_strand_stage_set_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_strand_stage_set(op, op.created_at)
+}
+fn apply_morph_stage_set_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_morph_stage_set(op, op.created_at)
+}
 fn apply_strand_position_touch_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1044,6 +1058,14 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
         arkret_wire::EventKind::StrandRestore,
         apply_strand_restore_dispatch,
     );
+    // `common-fields.md` §5.3 — the business-progression axis. Its own event
+    // kind exists for capability slicing and audit filtering, so it needs its
+    // own reducer arm: `ak.strand.update` patches on `stage` /
+    // `stage_changed_at` are forbidden wire.
+    m.insert(
+        arkret_wire::EventKind::StrandStageSet,
+        apply_strand_stage_set_dispatch,
+    );
     m.insert(
         arkret_wire::EventKind::StrandMove,
         apply_strand_position_touch_dispatch,
@@ -1079,6 +1101,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<EventKind, ApplyFn>
     m.insert(
         arkret_wire::EventKind::MorphRestore,
         apply_morph_restore_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::MorphStageSet,
+        apply_morph_stage_set_dispatch,
     );
     // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
     // active kind, `ak.circle.seal_commit`, is reducer-derived (sub-

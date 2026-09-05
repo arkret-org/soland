@@ -524,6 +524,8 @@ fn install_projected_strand_scope(
             fields: Default::default(),
             state: ObjectLifecycleState::Active,
             state_changed_at: None,
+            stage: None,
+            stage_changed_at: None,
             created_by: local_actor_id(state, created_by).to_string(),
             created_at: now,
             history_basis_seals: Vec::new(),

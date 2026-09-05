@@ -1164,6 +1164,33 @@ impl ProjectionState {
 
     // ── Strand / Morph projection state machine ──
 
+    /// Shared source-state guard for `ak.<kind>.stage.set`
+    /// (`common-fields.md` §5.3.3 rules 1-2).
+    ///
+    /// A physically terminal object reports `<kind>_already_terminal`, an
+    /// archived one `<kind>_not_active`; both surface as 412
+    /// `failed_precondition` at admission. An unknown object is tolerated,
+    /// matching the causal/backfill tolerance of the sibling preflights. No
+    /// direction between the eight stage values is checked here or anywhere
+    /// else: v1 registers no workflow-profile carrier (§5.3.4).
+    fn check_stage_set_source_state(
+        &self,
+        state: Option<ObjectLifecycleState>,
+        terminal_reason: &'static str,
+        not_active_reason: &'static str,
+    ) -> Result<(), &'static str> {
+        let Some(state) = state else {
+            return Ok(());
+        };
+        if state.is_terminal() {
+            return Err(terminal_reason);
+        }
+        if state != ObjectLifecycleState::Active {
+            return Err(not_active_reason);
+        }
+        Ok(())
+    }
+
     /// Read-only state-machine preflight for a `ak.strand.*` lifecycle event.
     /// Mirror of `check_space_container_lifecycle_transition` — used by
     /// `event_log::submit_event` to short-circuit HTTP admission with 412
@@ -1181,6 +1208,21 @@ impl ProjectionState {
         // `ak.strand.update` requires Active source.
         // `ak.strand.archive` requires Active source.
         // `ak.strand.restore` requires Archived source.
+        // `common-fields.md` §5.3.3 rules 1-2: the stage axis has two distinct
+        // physical-lifecycle guards, so it cannot share the single-reason
+        // `(allowed_source, reason)` shape below.
+        if kind == arkret_wire::EventKind::StrandStageSet {
+            return self.check_stage_set_source_state(
+                operation
+                    .payload
+                    .get("strand_id")
+                    .and_then(Value::as_str)
+                    .and_then(|strand_id| self.strands.get(strand_id))
+                    .map(|strand| strand.state),
+                "strand_already_terminal",
+                "strand_not_active",
+            );
+        }
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match &kind {
             arkret_wire::EventKind::StrandCreate => return Ok(()),
             arkret_wire::EventKind::StrandUpdate => {
@@ -1264,6 +1306,18 @@ impl ProjectionState {
             Some(k) => k,
             None => return Ok(()),
         };
+        if kind == arkret_wire::EventKind::MorphStageSet {
+            return self.check_stage_set_source_state(
+                operation
+                    .payload
+                    .get("morph_id")
+                    .and_then(Value::as_str)
+                    .and_then(|morph_id| self.morphs.get(morph_id))
+                    .map(|morph| morph.state),
+                "morph_already_terminal",
+                "morph_not_active",
+            );
+        }
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
             arkret_wire::EventKind::MorphCreate => return Ok(()),
             arkret_wire::EventKind::MorphUpdate => {

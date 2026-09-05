@@ -7,6 +7,9 @@
 use std::collections::BTreeSet;
 
 use arkret_event_draft::ProjectedEventOperation as Operation;
+use arkret_models_collaboration::governance::membership_invite::{
+    JoinGateProof, JoinGateProofKind,
+};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
@@ -373,6 +376,23 @@ pub(crate) fn validate_claim_required_gate(
     if claims.is_empty() {
         return Err("claim_required_claims_invalid");
     }
+    // join-policy.md 3.1: the issuer boundary is required material. A gate
+    // without one accepts a claim the applicant signed for themselves, so a
+    // policy that omits it is not admissible in the first place.
+    let Some(issuers) = gate.get("trusted_issuer_ids").and_then(Value::as_array) else {
+        return Err("claim_required_trusted_issuers_invalid");
+    };
+    if issuers.is_empty() {
+        return Err("claim_required_trusted_issuers_invalid");
+    }
+    for issuer in issuers {
+        let valid = issuer
+            .as_str()
+            .is_some_and(|did| arkret_identifiers::DidCoreId::new(did.to_owned()).is_ok());
+        if !valid {
+            return Err("claim_required_trusted_issuers_invalid");
+        }
+    }
     Ok(())
 }
 
@@ -541,10 +561,56 @@ pub(crate) fn membership_state_satisfies_minimum(state: &str, required: &str) ->
     }
 }
 
+/// `join-policy.md` §4 rule 4 — the binding tuple every gate proof carries.
+///
+/// This is compared before any signature is looked at, so a proof minted for
+/// another Realm, another applicant or an older policy revision is rejected by
+/// field comparison alone. Freshness uses the enclosing Event's own signed
+/// `created_at`: a receiver clock would make the same Event admissible on one
+/// replay and not on another.
+pub(crate) fn join_gate_proof_binding_holds(
+    proof: &JoinGateProof,
+    realm_id: &str,
+    applicant_actor_id: &arkret_wire::ActorId,
+    policy_digest: &arkret_wire::Hash,
+    event_created_at: DateTime<Utc>,
+    max_proof_age: Option<Duration>,
+) -> bool {
+    if proof.realm_id.as_str() != realm_id
+        || &proof.applicant_actor_id != applicant_actor_id
+        || &proof.policy_digest != policy_digest
+    {
+        return false;
+    }
+    // A proof stamped after the Event that carries it was not in the
+    // applicant's hands when they signed, so it cannot be evidence for it.
+    if proof.created_at > event_created_at {
+        return false;
+    }
+    match max_proof_age {
+        Some(max_age) => event_created_at.signed_duration_since(proof.created_at) <= max_age,
+        None => true,
+    }
+}
+
+/// `join-policy.md` §3.1 `claim_required` — the presented claims have to come
+/// from an issuer the gate trusts and cover everything it requires.
+///
+/// The issuer boundary is not optional: a gate with no `trusted_issuer_ids`
+/// would accept a self-signed claim, so an absent or empty list rejects.
 pub(crate) fn claim_required_gate_has_proof(
     gate: &serde_json::Map<String, Value>,
-    proof: &serde_json::Map<String, Value>,
+    proof: &JoinGateProof,
 ) -> bool {
+    if proof.kind != JoinGateProofKind::ClaimRequired {
+        return false;
+    }
+    let Some(issuer_id) = proof.issuer_id.as_ref() else {
+        return false;
+    };
+    if !did_list_contains(gate, "trusted_issuer_ids", issuer_id.as_str()) {
+        return false;
+    }
     let required_claims = gate
         .get("required_claims")
         .and_then(Value::as_array)
@@ -556,121 +622,68 @@ pub(crate) fn claim_required_gate_has_proof(
     if required_claims.is_empty() {
         return false;
     }
-    let Some(presentation) = proof.get("claim_presentation") else {
-        return false;
-    };
-    claim_presentation_present(presentation)
-        && required_claims
-            .iter()
-            .all(|claim| claim_presentation_covers_claim(presentation, claim))
+    let presented = proof
+        .claims
+        .as_ref()
+        .map(|claims| {
+            claims
+                .iter()
+                .map(|claim| claim.as_str())
+                .collect::<BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    required_claims
+        .iter()
+        .all(|claim| presented.contains(claim))
 }
 
-fn claim_presentation_present(value: &Value) -> bool {
-    match value {
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Object(object) => !object.is_empty(),
-        Value::Array(values) => !values.is_empty(),
-        _ => false,
-    }
-}
-
-fn claim_presentation_covers_claim(value: &Value, claim: &str) -> bool {
-    match value {
-        Value::String(value) => !value.trim().is_empty(),
-        Value::Array(values) => values
-            .iter()
-            .any(|value| claim_presentation_covers_claim(value, claim)),
-        Value::Object(object) => {
-            for field in ["claim", "claim_kind", "type", "id", "name"] {
-                if object.get(field).and_then(Value::as_str) == Some(claim) {
-                    return true;
-                }
-            }
-            match object.get("claims") {
-                Some(Value::Object(claims)) if claims.contains_key(claim) => true,
-                Some(value) => claim_presentation_covers_claim(value, claim),
-                None => false,
-            }
-        }
-        _ => false,
-    }
-}
-
+/// `join-policy.md` §3.1 `challenge_response` — the solved challenge has to be
+/// one of the families the gate accepts, and identify itself so the provider
+/// can treat it as single-use.
+///
+/// The signature over the proof, and the resolution of its
+/// `verification_method` to a key controlled by the gate's `provider_did`,
+/// are the admission layer's job: they need DID resolution, which a reducer
+/// replaying accepted history cannot perform.
 pub(crate) fn challenge_response_gate_allows(
     gate: &serde_json::Map<String, Value>,
-    proof: &serde_json::Map<String, Value>,
-    now: DateTime<Utc>,
+    proof: &JoinGateProof,
 ) -> bool {
-    let Some(challenge_proof) = proof.get("challenge_proof").and_then(Value::as_object) else {
+    if proof.kind != JoinGateProofKind::ChallengeResponse {
         return false;
-    };
-    if challenge_proof
-        .get("challenge_id")
+    }
+    if gate
+        .get("provider_did")
         .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+    {
+        return false;
+    }
+    if proof
+        .challenge_id
+        .as_deref()
         .is_none_or(|value| value.trim().is_empty())
     {
         return false;
     }
-    let provider_did = gate.get("provider_did").and_then(Value::as_str);
-    if challenge_proof.get("issued_by").and_then(Value::as_str) != provider_did {
+    let Some(challenge_kind) = proof.challenge_kind else {
         return false;
-    }
-    if !challenge_kind_allowed(gate, challenge_proof) {
+    };
+    let Ok(challenge_kind) = serde_json::to_value(challenge_kind) else {
         return false;
-    }
-    if challenge_proof
-        .get("proof")
-        .is_none_or(|value| matches!(value, Value::Null))
-    {
-        return false;
-    }
-    let Some(max_age) = gate
-        .get("max_proof_age")
+    };
+    gate.get("challenge_kinds")
+        .and_then(Value::as_array)
+        .is_some_and(|kinds| kinds.contains(&challenge_kind))
+}
+
+/// The gate's `max_proof_age`, which bounds how stale a proof may be relative
+/// to the Event carrying it. A gate that declares an unparseable duration has
+/// no evaluable freshness bound and fails closed at the call site.
+pub(crate) fn gate_max_proof_age(gate: &serde_json::Map<String, Value>) -> Option<Duration> {
+    gate.get("max_proof_age")
         .and_then(Value::as_str)
         .and_then(parse_iso8601_duration)
-    else {
-        return false;
-    };
-    let Some(issued_at) = challenge_proof
-        .get("issued_at")
-        .and_then(Value::as_str)
-        .and_then(parse_rfc3339_timestamp)
-    else {
-        return false;
-    };
-    let age = now.signed_duration_since(issued_at);
-    age >= Duration::seconds(-60) && age <= max_age
-}
-
-fn challenge_kind_allowed(
-    gate: &serde_json::Map<String, Value>,
-    challenge_proof: &serde_json::Map<String, Value>,
-) -> bool {
-    let allowed = |kind: &str| {
-        gate.get("challenge_kinds")
-            .and_then(Value::as_array)
-            .is_some_and(|kinds| kinds.iter().any(|value| value.as_str() == Some(kind)))
-    };
-    if let Some(kind) = challenge_proof
-        .get("challenge_kind")
-        .or_else(|| challenge_proof.get("kind"))
-        .and_then(Value::as_str)
-    {
-        return allowed(kind);
-    }
-    if let Some(kinds) = challenge_proof
-        .get("challenge_kinds")
-        .and_then(Value::as_array)
-    {
-        return kinds.iter().filter_map(Value::as_str).any(allowed);
-    }
-    false
-}
-
-pub(crate) fn parse_rfc3339_timestamp(value: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(value)
-        .ok()
-        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 pub(crate) fn parse_iso8601_duration(value: &str) -> Option<Duration> {
