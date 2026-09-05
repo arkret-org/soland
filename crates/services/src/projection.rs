@@ -33,7 +33,7 @@ use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
     MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
-    SolandMembershipState, SolandRealmState,
+    SolandMembershipState, SolandRealmState, object_stage_wire_value,
 };
 use soland_storage::{
     HistoryAuthorityViewCas, PersistenceError, PersistenceResult, PersistenceStore,
@@ -2166,6 +2166,7 @@ impl ProjectionService {
                 | arkret_wire::EventKind::StrandRestore
                 | arkret_wire::EventKind::StrandMove
                 | arkret_wire::EventKind::StrandReorder
+                | arkret_wire::EventKind::StrandStageSet
                 | arkret_wire::EventKind::StrandTracksUpdate
         );
         let is_morph_kind = matches!(
@@ -2174,6 +2175,7 @@ impl ProjectionService {
                 | arkret_wire::EventKind::MorphUpdate
                 | arkret_wire::EventKind::MorphArchive
                 | arkret_wire::EventKind::MorphRestore
+                | arkret_wire::EventKind::MorphStageSet
         );
         let is_circle_kind = matches!(
             &kind,
@@ -2347,6 +2349,8 @@ impl ProjectionService {
                     encrypted_content: row.encrypted_content.clone(),
                     state: row.state.as_str().to_owned(),
                     state_changed_at: row.state_changed_at,
+                    stage: row.stage.as_ref().map(object_stage_wire_value),
+                    stage_changed_at: row.stage_changed_at,
                     created_by: row.created_by.clone(),
                     created_at: row.created_at,
                     history_basis_seals: row.history_basis_seals.clone(),
@@ -2359,6 +2363,10 @@ impl ProjectionService {
         if is_morph_kind {
             let id = if kind == arkret_wire::EventKind::MorphCreate {
                 object_id()
+            } else if kind == arkret_wire::EventKind::MorphStageSet {
+                // `morph_stage_set_payload` names its target `morph_id`; every
+                // other Morph mutation carries the generic `target_ref`.
+                string_field("morph_id")
             } else {
                 string_field("target_ref")
             }?;
@@ -2382,6 +2390,8 @@ impl ProjectionService {
                     encrypted_content: row.encrypted_content.clone(),
                     state: row.state.as_str().to_owned(),
                     state_changed_at: row.state_changed_at,
+                    stage: row.stage.as_ref().map(object_stage_wire_value),
+                    stage_changed_at: row.stage_changed_at,
                     created_by: row.created_by.clone(),
                     created_at: row.created_at,
                     history_basis_seals: row.history_basis_seals.clone(),
@@ -3184,6 +3194,8 @@ fn morph_write_through_record(
         encrypted_content: row.encrypted_content.clone(),
         state: row.state.as_str().to_owned(),
         state_changed_at: row.state_changed_at,
+        stage: row.stage.as_ref().map(object_stage_wire_value),
+        stage_changed_at: row.stage_changed_at,
         created_by: row.created_by.clone(),
         created_at: row.created_at,
         history_basis_seals: row.history_basis_seals.clone(),

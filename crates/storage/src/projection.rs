@@ -129,6 +129,12 @@ pub struct StrandProjectionRecord {
     /// One of `active` / `archived` / `deleted` / `redacted` per spec.
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Wire spelling of the business-progression stage, absent when the object
+    /// carries no stage (`common-fields.md` §5.3).
+    pub stage: Option<String>,
+    /// Reducer-derived timestamp of the last real stage transition; never
+    /// present without `stage`.
+    pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub history_basis_seals: Vec<String>,
@@ -155,6 +161,12 @@ pub struct MorphProjectionRecord {
     pub encrypted_content: Option<serde_json::Value>,
     pub state: String,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Wire spelling of the business-progression stage, absent when the object
+    /// carries no stage (`common-fields.md` §5.3).
+    pub stage: Option<String>,
+    /// Reducer-derived timestamp of the last real stage transition; never
+    /// present without `stage`.
+    pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub history_basis_seals: Vec<String>,

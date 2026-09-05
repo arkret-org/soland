@@ -12,7 +12,7 @@ use arkret_models_collaboration::events_payloads::ContentBlock;
 use arkret_models_collaboration::governance::third_party_invite::ThirdPartyInvite;
 use arkret_models_collaboration::objects::profiles::StrandTrack;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_wire::{AppletId, DidCoreId};
+use arkret_wire::{AppletId, DidCoreId, ObjectStage};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -535,6 +535,25 @@ impl SpaceContainerLifecycleState {
     }
 }
 
+/// Wire spelling of an [`ObjectStage`], taken from the SDK enum's own serde
+/// mapping. soland never re-declares the protocol-level 8-value stage
+/// enumeration; both directions round-trip through the SDK type so the
+/// projection, the durable mirror and the read surface agree by construction.
+#[must_use]
+pub fn object_stage_wire_value(stage: &ObjectStage) -> String {
+    serde_json::to_value(stage)
+        .ok()
+        .and_then(|value| value.as_str().map(ToOwned::to_owned))
+        .unwrap_or_default()
+}
+
+/// Inverse of [`object_stage_wire_value`]. Returns `None` for any spelling
+/// outside the registered enumeration.
+#[must_use]
+pub fn object_stage_from_wire_value(value: &str) -> Option<ObjectStage> {
+    serde_json::from_value(Value::String(value.to_owned())).ok()
+}
+
 /// Server-side Strand state cache. Mirrors `projection_strands` table.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StrandProjection {
@@ -557,6 +576,15 @@ pub struct StrandProjection {
     pub fields: BTreeMap<String, Value>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Business-progression axis (`common-fields.md` §5.3). Orthogonal to
+    /// `state`: archive never moves `stage`, and `stage=done` never archives.
+    /// Written at create from the wire object and afterwards only by
+    /// `ak.strand.stage.set`; `ak.strand.update` patches on it are rejected.
+    pub stage: Option<ObjectStage>,
+    /// Reducer-derived timestamp of the most recent real stage transition.
+    /// Never read from the wire, absent while `stage` is absent, and left
+    /// untouched by a same-value self-transition (`common-fields.md` §5.3.3).
+    pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub history_basis_seals: Vec<String>,
@@ -749,6 +777,11 @@ pub struct MorphProjection {
     pub encrypted_content: Option<Value>,
     pub state: ObjectLifecycleState,
     pub state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Business-progression axis (`common-fields.md` §5.3), written at create
+    /// from the wire object and afterwards only by `ak.morph.stage.set`.
+    pub stage: Option<ObjectStage>,
+    /// Reducer-derived timestamp of the most recent real stage transition.
+    pub stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_by: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub history_basis_seals: Vec<String>,

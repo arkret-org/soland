@@ -265,6 +265,10 @@ struct StrandProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    stage: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Jsonb)]
     created_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
@@ -292,6 +296,8 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
             encrypted_content: row.encrypted_content,
             state: row.state,
             state_changed_at: row.state_changed_at,
+            stage: row.stage,
+            stage_changed_at: row.stage_changed_at,
             created_by: row.created_by.to_string(),
             created_at: row.created_at,
             history_basis_seals: serde_json::from_value(row.history_basis_seals)
@@ -302,7 +308,7 @@ impl From<StrandProjectionRow> for StrandProjectionRecord {
     }
 }
 const STRAND_PROJECTION_COLUMNS: &str = "id AS strand_id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, state, \
-     state_changed_at, created_by AS created_by, created_at, history_basis_seals, updated_by AS updated_by, updated_at";
+     state_changed_at, stage, stage_changed_at, created_by AS created_by, created_at, history_basis_seals, updated_by AS updated_by, updated_at";
 #[async_trait]
 impl StrandProjectionStore for PgStrandProjectionStore {
     async fn get(&self, strand_id: &str) -> PersistenceResult<Option<StrandProjectionRecord>> {
@@ -330,8 +336,8 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         sql_query(
             "INSERT INTO projection_strands \
              (id, realm_id, scope_circle_id, tracks, title, summary, content, encrypted_content, state, state_changed_at, \
-              created_by, created_at, history_basis_seals, updated_by, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+              stage, stage_changed_at, created_by, created_at, history_basis_seals, updated_by, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -342,6 +348,8 @@ impl StrandProjectionStore for PgStrandProjectionStore {
                 encrypted_content = EXCLUDED.encrypted_content, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
+                stage = EXCLUDED.stage, \
+                stage_changed_at = EXCLUDED.stage_changed_at, \
                 history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_by = EXCLUDED.updated_by, \
                 updated_at = EXCLUDED.updated_at",
@@ -361,6 +369,8 @@ impl StrandProjectionStore for PgStrandProjectionStore {
         .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
+        .bind::<Nullable<Text>, _>(&record.stage)
+        .bind::<Nullable<Timestamptz>, _>(record.stage_changed_at)
         .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Jsonb, _>(&serde_json::json!(record.history_basis_seals))
@@ -446,6 +456,10 @@ struct MorphProjectionRow {
     state: String,
     #[diesel(sql_type = Nullable<Timestamptz>)]
     state_changed_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[diesel(sql_type = Nullable<Text>)]
+    stage: Option<String>,
+    #[diesel(sql_type = Nullable<Timestamptz>)]
+    stage_changed_at: Option<chrono::DateTime<chrono::Utc>>,
     #[diesel(sql_type = Jsonb)]
     created_by: arkret_wire::ActorId,
     #[diesel(sql_type = Timestamptz)]
@@ -476,6 +490,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
             encrypted_content: row.encrypted_content,
             state: row.state,
             state_changed_at: row.state_changed_at,
+            stage: row.stage,
+            stage_changed_at: row.stage_changed_at,
             created_by: row.created_by.to_string(),
             created_at: row.created_at,
             history_basis_seals: serde_json::from_value(row.history_basis_seals)
@@ -486,8 +502,8 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
     }
 }
 const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_kind, title, fields, \
-     schema_refs, facets, versions, content, encrypted_content, state, state_changed_at, created_by AS created_by, \
-     created_at, updated_by AS updated_by, history_basis_seals, updated_at";
+     schema_refs, facets, versions, content, encrypted_content, state, state_changed_at, stage, stage_changed_at, \
+     created_by AS created_by, created_at, updated_by AS updated_by, history_basis_seals, updated_at";
 #[async_trait]
 impl MorphProjectionStore for PgMorphProjectionStore {
     async fn get(&self, morph_id: &str) -> PersistenceResult<Option<MorphProjectionRecord>> {
@@ -513,8 +529,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         sql_query(
             "INSERT INTO projection_morphs \
              (id, realm_id, scope_circle_id, morph_kind, title, fields, schema_refs, facets, versions, content, encrypted_content, \
-              state, state_changed_at, created_by, created_at, updated_by, history_basis_seals, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+              state, state_changed_at, stage, stage_changed_at, created_by, created_at, updated_by, history_basis_seals, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
@@ -528,6 +544,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 encrypted_content = EXCLUDED.encrypted_content, \
                 state = EXCLUDED.state, \
                 state_changed_at = EXCLUDED.state_changed_at, \
+                stage = EXCLUDED.stage, \
+                stage_changed_at = EXCLUDED.stage_changed_at, \
                 updated_by = EXCLUDED.updated_by, \
                 history_basis_seals = EXCLUDED.history_basis_seals, \
                 updated_at = EXCLUDED.updated_at",
@@ -550,6 +568,8 @@ impl MorphProjectionStore for PgMorphProjectionStore {
         .bind::<Nullable<Jsonb>, _>(&record.encrypted_content)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Timestamptz>, _>(record.state_changed_at)
+        .bind::<Nullable<Text>, _>(&record.stage)
+        .bind::<Nullable<Timestamptz>, _>(record.stage_changed_at)
         .bind::<Jsonb, _>(stored_actor(&record.created_by)?)
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Nullable<Jsonb>, _>(record.updated_by.as_deref().map(stored_actor).transpose()?)

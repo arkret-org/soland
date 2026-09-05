@@ -655,6 +655,8 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
             encrypted_content: record.encrypted_content.clone(),
             state: record.state.clone(),
             state_changed_at: record.state_changed_at,
+            stage: record.stage.clone(),
+            stage_changed_at: record.stage_changed_at,
             created_by: record.created_by.clone(),
             created_at: record.created_at,
             history_basis_seals: record.history_basis_seals.clone(),
