@@ -2017,6 +2017,19 @@ impl AppState {
         self.projections.effective_state_at(leaves, realm_id).await
     }
 
+    /// The `cas_register` head identities of the same view
+    /// [`Self::test_effective_state_at`] resolves. A fixture that recomputes a
+    /// `state_root` needs both halves (spec section 6.2.1).
+    pub async fn test_effective_cas_heads_at(
+        &self,
+        leaves: &[arkret_identifiers::SealId],
+        realm_id: &arkret_identifiers::RealmId,
+    ) -> Result<arkret_state::CasHeadsByCell, arkret_state::state::SealReject> {
+        self.projections
+            .effective_cas_heads_at(leaves, realm_id)
+            .await
+    }
+
     pub(crate) fn hlc(&self) -> &ServiceClock {
         self.projections.clock()
     }

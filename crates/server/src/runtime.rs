@@ -138,6 +138,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
                         covered_event_digests: checkpoint.covered_event_digests,
                         covered_seal_ids: checkpoint.covered_seal_ids,
                         state: checkpoint.state,
+                        cas_heads: checkpoint.cas_heads,
                     }
                 })
             })

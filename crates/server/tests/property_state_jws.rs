@@ -69,9 +69,9 @@ proptest! {
             reverse.insert(cell, CellState::Value(json!({"value": value})));
         }
 
-        let forward_root = compute_state_root(&forward, arkret_canonical::DigestSuite::Sha256)
+        let forward_root = compute_state_root(arkret_state::GovernanceView::values_only(&forward), arkret_canonical::DigestSuite::Sha256)
             .expect("forward root");
-        let reverse_root = compute_state_root(&reverse, arkret_canonical::DigestSuite::Sha256)
+        let reverse_root = compute_state_root(arkret_state::GovernanceView::values_only(&reverse), arkret_canonical::DigestSuite::Sha256)
             .expect("reverse root");
         prop_assert_eq!(forward_root, reverse_root);
     }

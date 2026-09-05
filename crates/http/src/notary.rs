@@ -655,6 +655,12 @@ impl NotaryWorker {
         let pre_state = self
             .read_effective_state(state, realm_id, &view.predecessor_refs)
             .await?;
+        // `previous_state_root` is a governance `state_root`, so its
+        // `cas_register` leaves need the head half of the same view (spec
+        // section 6.2.1).
+        let pre_cas_heads = self
+            .read_effective_cas_heads(state, realm_id, &view.predecessor_refs)
+            .await?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
@@ -968,7 +974,12 @@ impl NotaryWorker {
                 .unwrap_or_default(),
             previous_state_root: digest_suites
                 .previous_state_digest_suite
-                .map(|suite| compute_state_root(&pre_state, suite))
+                .map(|suite| {
+                    compute_state_root(
+                        arkret_state::GovernanceView::new(&pre_state, &pre_cas_heads),
+                        suite,
+                    )
+                })
                 .transpose()
                 .map_err(|error| {
                     NotaryError::Construction(format!("previous_state_root: {error}"))
@@ -1505,6 +1516,19 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Store(format!("effective state: {e}")))
     }
 
+    async fn read_effective_cas_heads(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        leaves: &[SealId],
+    ) -> Result<arkret_state::CasHeadsByCell, NotaryError> {
+        state
+            .projections()
+            .effective_cas_heads_at(leaves, realm_id)
+            .await
+            .map_err(|e| NotaryError::Store(format!("effective cas heads: {e}")))
+    }
+
     /// Predict the state_root after the accepted Moves' effects are
     /// appended on top of the current per-cell op log. Replicates the
     /// SDK's apply_seal steps 6-7 in memory without persisting.
@@ -1559,18 +1583,30 @@ impl NotaryWorker {
         }
         // Run lattice.join per cell to get predicted CellState.
         let mut post_state: BTreeMap<CellRef, CellState> = BTreeMap::new();
+        let mut post_cas_heads = arkret_state::CasHeadsByCell::new();
         for (cell, batches) in batches_by_cell {
             let binding = state
                 .projections()
                 .resolve_cell(realm_id, &cell)
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
+            // A `cas_register` cell's state_root leaf is its head set (spec
+            // section 6.2.1), derived from the same batches as the join.
+            if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+                let heads = arkret_state::cas_heads_for_batches(&batches);
+                if !heads.is_empty() {
+                    post_cas_heads.insert(cell.clone(), heads);
+                }
+            }
             let resolved =
                 arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches);
             post_state.insert(cell, resolved);
         }
         // canonical Merkle state_root.
-        compute_state_root(&post_state, digest_suite)
-            .map_err(|e| NotaryError::Construction(format!("compute_state_root: {e}")))
+        compute_state_root(
+            arkret_state::GovernanceView::new(&post_state, &post_cas_heads),
+            digest_suite,
+        )
+        .map_err(|e| NotaryError::Construction(format!("compute_state_root: {e}")))
     }
 
     pub(crate) async fn issue_availability_dependencies(
@@ -2746,8 +2782,11 @@ mod tests {
         }
 
         // 1) Empty map -> sha256("").
-        let empty =
-            compute_state_root(&BTreeMap::new(), arkret_canonical::DigestSuite::Sha256).unwrap();
+        let empty = compute_state_root(
+            arkret_state::GovernanceView::values_only(&BTreeMap::new()),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         assert_eq!(empty.as_str(), arkret_state::EMPTY_STATE_ROOT);
         assert_eq!(
             empty.as_str(),
@@ -2760,7 +2799,11 @@ mod tests {
         let val_a = json!("alpha");
         let mut one = BTreeMap::new();
         one.insert(cell_a.clone(), CellState::Value(val_a.clone()));
-        let root_one = compute_state_root(&one, arkret_canonical::DigestSuite::Sha256).unwrap();
+        let root_one = compute_state_root(
+            arkret_state::GovernanceView::values_only(&one),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         assert_eq!(
             root_one.as_str(),
             format!("sha256:{}", hex(&leaf(cell_a.as_str(), &val_a)))
@@ -2776,7 +2819,11 @@ mod tests {
         let mut two = BTreeMap::new();
         two.insert(cell_a, CellState::Value(val_a.clone()));
         two.insert(cell_b, CellState::Value(val_b.clone()));
-        let root_two = compute_state_root(&two, arkret_canonical::DigestSuite::Sha256).unwrap();
+        let root_two = compute_state_root(
+            arkret_state::GovernanceView::values_only(&two),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let mut node = Sha256::new();
         node.update([0x01u8]);
         node.update(leaf(&cell_a_wire, &val_a)); // lo cell wire

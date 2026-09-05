@@ -95,6 +95,11 @@ pub struct SealEffectiveStateCheckpoint {
     pub covered_event_digests: BTreeSet<Hash>,
     pub covered_seal_ids: BTreeSet<SealId>,
     pub state: BTreeMap<CellRef, CellState>,
+    /// The `cas_register` head identities of the same view. Spec section 6.2.1
+    /// builds a CAS leaf from these rather than from the settled value, so a
+    /// checkpoint without them cannot reproduce the `state_root` it stands in
+    /// for.
+    pub cas_heads: arkret_state::CasHeadsByCell,
 }
 
 #[async_trait::async_trait]
@@ -1084,8 +1089,11 @@ impl ProjectionService {
             .digest_suite(seal_id)
             .await?
             .ok_or_else(|| SealReject::Store(format!("checkpoint Seal {seal_id} has no suite")))?;
-        let state_root = arkret_state::compute_state_root(&checkpoint.state, digest_suite)
-            .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
+        let state_root = arkret_state::compute_state_root(
+            arkret_state::GovernanceView::new(&checkpoint.state, &checkpoint.cas_heads),
+            digest_suite,
+        )
+        .map_err(|error| SealReject::Store(format!("checkpoint state_root: {error}")))?;
         if state_root != seal.state_root {
             return Err(SealReject::StateRootMismatch {
                 declared: seal.state_root.as_str().to_owned(),
@@ -1224,6 +1232,33 @@ impl ProjectionService {
             self.cell_store(),
             self.cell_registry(),
             digest_suite,
+        )
+        .await
+    }
+
+    /// The `cas_register` head identities of the same view
+    /// [`Self::effective_state_at`] resolves.
+    ///
+    /// Spec section 6.2.1 builds a CAS `state_root` leaf from these rather than
+    /// from the settled value, so anything recomputing a root needs both halves.
+    pub async fn effective_cas_heads_at(
+        &self,
+        leaves: &[SealId],
+        realm_id: &RealmId,
+    ) -> Result<arkret_state::CasHeadsByCell, SealReject> {
+        if let [seal_id] = leaves
+            && let Some(checkpoint) = self
+                .validated_effective_state_checkpoint(seal_id, realm_id)
+                .await?
+        {
+            return Ok(checkpoint.cas_heads);
+        }
+        arkret_state::effective_cas_heads_at(
+            leaves,
+            realm_id,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
         )
         .await
     }
@@ -3614,9 +3649,11 @@ mod effective_checkpoint_tests {
         let cell_store = Arc::new(CountingCellStore::default());
         let state = BTreeMap::new();
         let covered = BTreeSet::new();
-        let state_root =
-            arkret_state::compute_state_root(&state, arkret_canonical::DigestSuite::Sha256)
-                .unwrap();
+        let state_root = arkret_state::compute_state_root(
+            arkret_state::GovernanceView::values_only(&state),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let control_root =
             arkret_state::control_event_set_root(&covered, arkret_canonical::DigestSuite::Sha256)
                 .unwrap();
@@ -3648,6 +3685,7 @@ mod effective_checkpoint_tests {
                     covered_event_digests: covered.clone(),
                     covered_seal_ids: closure.clone(),
                     state: state.clone(),
+                    cas_heads: arkret_state::CasHeadsByCell::new(),
                 },
             );
             leaf = Some(seal.id);

@@ -2291,7 +2291,7 @@ mod seal_delta_tests {
             )
         );
         let empty_root = arkret_state::state::compute_state_root(
-            &BTreeMap::new(),
+            arkret_state::GovernanceView::values_only(&BTreeMap::new()),
             arkret_canonical::DigestSuite::Sha256,
         )
         .unwrap();

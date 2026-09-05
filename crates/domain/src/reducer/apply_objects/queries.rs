@@ -970,6 +970,11 @@ impl ProjectionState {
     /// verifier cannot drift; a hash assembled from policy field names would be
     /// issuer-local and would fail the cross-issuer structured comparison the
     /// section requires.
+    ///
+    /// This is a value frontier digest, **not** the section 6.2.1 governance
+    /// `state_root`: the two issuers comparing it hold each other's cell values,
+    /// not each other's `cas_register` write identities, and `realm-and-space.md`
+    /// section 3.6 defines this digest's own coverage.
     pub fn realm_policy_frontier_digest(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
         let cells = self
             .realm_policy_control_cells(realm_id)
@@ -982,7 +987,7 @@ impl ProjectionState {
             .collect::<BTreeMap<_, _>>();
         self.realm_digest_algorithm(realm_id)
             .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
-            .and_then(|suite| arkret_state::compute_state_root(&cells, suite).ok())
+            .and_then(|suite| arkret_state::value_frontier_digest(&cells, suite).ok())
     }
 
     /// Actor-scoped membership/role filtered state root used by peer authority
@@ -1079,7 +1084,7 @@ impl ProjectionState {
     ) -> Option<arkret_wire::Hash> {
         self.realm_digest_algorithm(realm_id)
             .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
-            .and_then(|suite| arkret_state::compute_state_root(cells, suite).ok())
+            .and_then(|suite| arkret_state::value_frontier_digest(cells, suite).ok())
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {

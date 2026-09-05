@@ -244,9 +244,9 @@ async fn apply_authoritative_event_seal_path(
             .map_err(|error| {
                 proof_state_error(format!("resolve authoritative Event Seal state: {error}"))
             })?;
-        let expected_state_root =
-            compute_state_root(&target_state, digest_suites.seal_digest_suite)
-                .map_err(proof_state_error)?;
+        let expected_state_root = target_state
+            .state_root(digest_suites.seal_digest_suite)
+            .map_err(proof_state_error)?;
         if seal.state_root != expected_state_root {
             return Err(proof_state_error(format!(
                 "authoritative Event Seal state_root mismatch: submitted {}, expected {}",
@@ -778,7 +778,7 @@ async fn materialize_realm_control_with_transported_seals(
 
     let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered).await?;
     let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
-    let state_root = compute_state_root(&joined, digest_suite).map_err(|error| {
+    let state_root = joined.state_root(digest_suite).map_err(|error| {
         crate::app_error!(
             StateMismatch,
             format!("governance state root failed: {error}"),
@@ -789,7 +789,7 @@ async fn materialize_realm_control_with_transported_seals(
         arkret_state::control_event_completeness_root(&completeness_events, &covered, digest_suite)
             .map_err(proof_state_error)?;
     if let Some(seals) = transported_seals {
-        let authoritative_notary = authoritative_notary(&joined)?.ok_or_else(|| {
+        let authoritative_notary = authoritative_notary(&joined.cells)?.ok_or_else(|| {
             proof_state_error("transported Event Seal path has no frozen notary authority")
         })?;
         apply_authoritative_event_seal_path(
@@ -1611,8 +1611,8 @@ async fn join_control_state_batches(
     realm_id: &RealmId,
     ops_by_cell: &BTreeMap<CellRef, Vec<IssuedOp>>,
     covered: &BTreeSet<Hash>,
-) -> Result<BTreeMap<CellRef, CellState>, AppError> {
-    let mut joined = BTreeMap::new();
+) -> Result<arkret_state::JoinedView, AppError> {
+    let mut joined = arkret_state::JoinedView::default();
     for (cell, projected_ops) in ops_by_cell {
         let persisted = state
             .projections()
@@ -1662,6 +1662,14 @@ async fn join_control_state_batches(
                 )
             })?;
         let bottom_mode = binding.bottom_mode;
+        // A `cas_register` cell's state_root leaf is its head set (spec section
+        // 6.2.1), derived from the same batches as the join.
+        if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+            let heads = arkret_state::cas_heads_for_batches(&batches);
+            if !heads.is_empty() {
+                joined.cas_heads.insert(cell.clone(), heads);
+            }
+        }
         let resolved =
             arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, &batches);
         // `event-auth-state-resolution.md` §9.1.1: an exposed Bottom remains
@@ -1676,7 +1684,7 @@ async fn join_control_state_batches(
                 format!("governance cell {cell} is in Bottom state"),
             ));
         }
-        joined.insert(cell.clone(), resolved);
+        joined.cells.insert(cell.clone(), resolved);
     }
     Ok(joined)
 }
@@ -1986,13 +1994,19 @@ mod tests {
             .expect("bottom=expose must not make unrelated governance unavailable");
 
         assert!(matches!(
-            joined.get(&selector_cell),
+            joined.cells.get(&selector_cell),
             Some(CellState::Bottom(_))
         ));
         assert_eq!(
-            compute_state_root(&joined, arkret_canonical::DigestSuite::Sha256).unwrap(),
-            compute_state_root(&BTreeMap::new(), arkret_canonical::DigestSuite::Sha256).unwrap(),
-            "an exposed Bottom is omitted from the governance state-root leaves"
+            joined
+                .state_root(arkret_canonical::DigestSuite::Sha256)
+                .unwrap(),
+            compute_state_root(
+                arkret_state::GovernanceView::values_only(&BTreeMap::new()),
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .unwrap(),
+            "an exposed Bottom on a non-CAS cell is omitted from the state-root leaves"
         );
     }
 

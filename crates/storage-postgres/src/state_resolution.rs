@@ -39,6 +39,29 @@ pub struct SealEffectiveStateCheckpoint {
     pub covered_event_digests: BTreeSet<Hash>,
     pub covered_seal_ids: BTreeSet<SealId>,
     pub state: BTreeMap<CellRef, CellState>,
+    /// The `cas_register` head identities of the same view.
+    ///
+    /// A checkpoint exists to skip recomputing `state_root`, and since spec
+    /// section 6.2.1 a CAS cell's leaf is its head set rather than its settled
+    /// value — so a checkpoint without these cannot reproduce the root it is
+    /// supposed to stand in for.
+    pub cas_heads: arkret_state::CasHeadsByCell,
+}
+
+/// The stored form of a checkpoint's joined view.
+///
+/// Written as a tagged object so the `cas_heads` half travels with the values it
+/// was derived from. A row written before the head half existed decodes as
+/// `None` and the checkpoint is skipped, which costs one full recompute and is
+/// the only safe reading: such a row cannot reproduce a CAS cell's leaf.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StoredCheckpointView {
+    cells: BTreeMap<CellRef, CellState>,
+    cas_heads: arkret_state::CasHeadsByCell,
+}
+
+fn checkpoint_view_from_value(value: Value) -> Option<StoredCheckpointView> {
+    serde_json::from_value::<StoredCheckpointView>(value).ok()
 }
 
 #[async_trait]
@@ -2138,12 +2161,22 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         )
                         .into());
                     }
-                    let checkpoint_state = serde_json::from_value::<BTreeMap<CellRef, CellState>>(
-                        checkpoint.state_json,
+                    let checkpoint_view = checkpoint_view_from_value(checkpoint.state_json)
+                        .ok_or_else(|| {
+                            StoreError::Conflict(
+                                "duplicate_conflict: exact Seal replay checkpoint predates the \
+                                 cas_register head set and cannot reproduce state_root"
+                                    .to_owned(),
+                            )
+                        })?;
+                    let checkpoint_root = compute_state_root(
+                        arkret_state::GovernanceView::new(
+                            &checkpoint_view.cells,
+                            &checkpoint_view.cas_heads,
+                        ),
+                        digest_suite,
                     )
-                    .map_err(serde_to_store)?;
-                    let checkpoint_root = compute_state_root(&checkpoint_state, digest_suite)
-                        .map_err(|error| StoreError::Backend(error.to_string()))?;
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
                     if checkpoint_root != declared_state_root {
                         return Err(StoreError::Conflict(
                             "duplicate_conflict: exact Seal replay has an invalid effective-state checkpoint"
@@ -2251,24 +2284,34 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 let realm = RealmId::new(realm_id.clone())
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
                 let mut joined = std::collections::BTreeMap::new();
+                let mut joined_cas_heads = arkret_state::CasHeadsByCell::new();
                 // No pre-sort: joins are commutative and ordering by the typed
                 // `move_id` string would imply a tie-break `encoding.md` 4.2 forbids.
                 for (cell, batches) in batches_by_cell {
                     let binding = cell_registry.resolve(&realm, &cell)?;
+                    let batches = batches.into_iter().map(|(_, ops)| ops).collect::<Vec<_>>();
+                    // A `cas_register` cell's state_root leaf is its head set
+                    // (spec section 6.2.1), derived from these same batches.
+                    if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+                        let heads = arkret_state::cas_heads_for_batches(&batches);
+                        if !heads.is_empty() {
+                            joined_cas_heads.insert(cell.clone(), heads);
+                        }
+                    }
                     joined.insert(
                         cell.clone(),
                         arkret_state::join_cell_seal_batches(
                             binding.lattice.as_ref(),
                             &cell,
-                            &batches
-                                .into_iter()
-                                .map(|(_, ops)| ops)
-                                .collect::<Vec<_>>(),
+                            &batches,
                         ),
                     );
                 }
-                let recomputed = compute_state_root(&joined, digest_suite)
-                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                let recomputed = compute_state_root(
+                    arkret_state::GovernanceView::new(&joined, &joined_cas_heads),
+                    digest_suite,
+                )
+                .map_err(|error| StoreError::Backend(error.to_string()))?;
                 if recomputed != declared_state_root {
                     return Err(StoreError::Conflict(format!(
                         "Event Seal state_root mismatch: declared {declared_state_root}, recomputed {recomputed}"
@@ -2305,8 +2348,11 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 // covered Event remains visible in the pending queue and can
                 // be proposed repeatedly after a restart.
                 insert_new_state_seal(conn, &insert).await?;
-                let checkpoint_state_json =
-                    serde_json::to_value(&joined).map_err(serde_to_store)?;
+                let checkpoint_state_json = serde_json::to_value(StoredCheckpointView {
+                    cells: joined.clone(),
+                    cas_heads: joined_cas_heads.clone(),
+                })
+                .map_err(serde_to_store)?;
                 let checkpoint_coverage = covered.iter().cloned().collect::<Vec<_>>();
                 let checkpoint_seal_ids = checkpoint_seals.into_iter().collect::<Vec<_>>();
                 sql_query(
@@ -2426,16 +2472,22 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         SealId::new(id).map_err(|error| StoreError::Backend(error.to_string()))
                     })
                     .collect::<StoreResult<BTreeSet<_>>>()?;
-                let state = serde_json::from_value(row.state_json).map_err(serde_to_store)?;
-                Ok(SealEffectiveStateCheckpoint {
-                    realm_id,
-                    seal_id,
-                    covered_event_digests,
-                    covered_seal_ids,
-                    state,
-                })
+                // A pre-head row yields `None`: skipping it costs one recompute,
+                // whereas trusting it would compare against a value-shaped CAS
+                // leaf and reject a perfectly good Seal.
+                Ok(checkpoint_view_from_value(row.state_json).map(|view| {
+                    SealEffectiveStateCheckpoint {
+                        realm_id,
+                        seal_id,
+                        covered_event_digests,
+                        covered_seal_ids,
+                        state: view.cells,
+                        cas_heads: view.cas_heads,
+                    }
+                }))
             })
             .transpose()
+            .map(Option::flatten)
         })
     }
 }
@@ -2484,8 +2536,11 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             })?;
             if checkpoint.realm_id != seal.realm_id
                 || checkpoint.covered_event_digests != *covered
-                || compute_state_root(&checkpoint.state, digest_suite)
-                    .map_err(|error| StoreError::Backend(error.to_string()))?
+                || compute_state_root(
+                    arkret_state::GovernanceView::new(&checkpoint.state, &checkpoint.cas_heads),
+                    digest_suite,
+                )
+                .map_err(|error| StoreError::Backend(error.to_string()))?
                     != seal.state_root
             {
                 return Err(StoreError::Conflict(
@@ -2533,8 +2588,22 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
             new_ops,
         )
         .await?;
-        let state_root = compute_state_root(&post_state, digest_suite)
-            .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
+        // The head half of the same candidate assembly: `new_ops` are not
+        // visible through the store until this Seal commits.
+        let post_cas_heads = arkret_state::effective_cas_heads_with_new_ops(
+            covered,
+            &seal.realm_id,
+            self.cell_store.as_ref(),
+            self.cell_registry.as_ref(),
+            new_ops,
+        )
+        .await
+        .map_err(|error| StoreError::Backend(format!("cas heads: {error}")))?;
+        let state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&post_state, &post_cas_heads),
+            digest_suite,
+        )
+        .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
                 "Event Seal state_root mismatch: declared {}, recomputed {}",
@@ -2563,6 +2632,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
                         covered_event_digests: covered.clone(),
                         covered_seal_ids: checkpoint_seals,
                         state: post_state,
+                        cas_heads: post_cas_heads,
                     },
                 );
                 // Match the PostgreSQL transaction: accepted delta Events
@@ -3068,7 +3138,16 @@ mod event_seal_commit_tests {
         let state = effective_state_with_new_ops(cell_store, registry, realm, &covered, &ops)
             .await
             .unwrap();
-        let state_root = compute_state_root(&state, arkret_canonical::DigestSuite::Sha256).unwrap();
+        let cas_heads = arkret_state::effective_cas_heads_with_new_ops(
+            &covered, realm, cell_store, registry, &ops,
+        )
+        .await
+        .unwrap();
+        let state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&state, &cas_heads),
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
         let control_root = arkret_state::state::control_event_set_root(
             &covered,
             arkret_canonical::DigestSuite::Sha256,

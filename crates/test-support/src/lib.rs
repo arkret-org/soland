@@ -969,8 +969,22 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
             new_ops,
         )
         .await?;
-        let state_root = compute_state_root(&post_state, digest_suite)
-            .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
+        // The head half of the same candidate assembly: `new_ops` are not
+        // visible through the store until this Seal commits.
+        let post_cas_heads = arkret_state::effective_cas_heads_with_new_ops(
+            covered,
+            &seal.realm_id,
+            self.cell_store.as_ref(),
+            self.cell_registry.as_ref(),
+            new_ops,
+        )
+        .await
+        .map_err(|error| StoreError::Backend(format!("cas heads: {error}")))?;
+        let state_root = compute_state_root(
+            arkret_state::GovernanceView::new(&post_state, &post_cas_heads),
+            digest_suite,
+        )
+        .map_err(|error| StoreError::Backend(format!("state_root recompute: {error}")))?;
         if state_root != seal.state_root {
             return Err(StoreError::Conflict(format!(
                 "Event Seal state_root mismatch: declared {}, recomputed {}",

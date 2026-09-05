@@ -1456,15 +1456,11 @@ fn seal_dependency_contract_seal(
     let root =
         arkret_state::state::control_event_set_root(covered, arkret_canonical::DigestSuite::Sha256)
             .unwrap();
-    let state_root =
-        arkret_state::state::compute_state_root(
-            &std::collections::BTreeMap::<
-                arkret_identifiers::CellRef,
-                arkret_state::lattice::CellState,
-            >::new(),
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .unwrap();
+    let state_root = arkret_state::state::compute_state_root(
+        arkret_state::GovernanceView::values_only(&std::collections::BTreeMap::new()),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .unwrap();
     let mut seal = arkret_wire::Seal {
         id: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "0".repeat(64))).unwrap(),
         realm_id: realm_id.clone(),

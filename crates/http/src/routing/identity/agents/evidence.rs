@@ -1253,8 +1253,20 @@ async fn witnessed_cell(
         .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?
         .seal_digest_suite;
-    let proof = arkret_state::state_inclusion_proof(&effective, &cell, digest_suite)
+    // The branch is over the governance `state_root`, so `cas_register` cells in
+    // this view need their head half to hash the leaf shape spec section 6.2.1
+    // defines.
+    let cas_heads = state
+        .projections()
+        .effective_cas_heads_at(std::slice::from_ref(&seal.id), realm_id)
+        .await
         .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    let proof = arkret_state::state_inclusion_proof(
+        arkret_state::GovernanceView::new(&effective, &cas_heads),
+        &cell,
+        digest_suite,
+    )
+    .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
     Ok((value, proof))
 }
 

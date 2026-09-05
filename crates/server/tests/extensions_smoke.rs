@@ -395,11 +395,19 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
         &admin_grant_cell,
         std::slice::from_ref(&admin_grant_op),
     );
+    // The notary cell is a `cas_register`, so its state_root leaf is the head
+    // set spec section 6.2.1 defines, not its settled value; the head is the op
+    // joined just above. The grant cell is an `or_set` and keeps its value leaf.
+    let cells = BTreeMap::from([
+        (notary_cell.clone(), notary_joined),
+        (admin_grant_cell.clone(), grant_joined),
+    ]);
+    let cas_heads = arkret_state::CasHeadsByCell::from([(
+        notary_cell.clone(),
+        arkret_state::cas_heads_for_batches(&[vec![notary_op.clone()]]),
+    )]);
     let state_root = arkret_state::compute_state_root(
-        &BTreeMap::from([
-            (notary_cell.clone(), notary_joined),
-            (admin_grant_cell.clone(), grant_joined),
-        ]),
+        arkret_state::GovernanceView::new(&cells, &cas_heads),
         arkret_canonical::DigestSuite::Sha256,
     )
     .unwrap();

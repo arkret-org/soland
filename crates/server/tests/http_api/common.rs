@@ -401,17 +401,29 @@ fn fixture_sealed_state_root(
         grouped.entry(cell.clone()).or_default().push(op.clone());
     }
     let mut post_state = std::collections::BTreeMap::new();
+    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, cell_ops) in grouped {
         let binding = registry
             .resolve(realm, &cell)
             .expect("fixture cell family is registered");
+        // A `cas_register` cell's state_root leaf is its head set (spec section
+        // 6.2.1), derived from the same ops as the join.
+        if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+            let heads = arkret_state::cas_heads_for_batches(std::slice::from_ref(&cell_ops));
+            if !heads.is_empty() {
+                cas_heads.insert(cell.clone(), heads);
+            }
+        }
         post_state.insert(
             cell.clone(),
             arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
         );
     }
-    arkret_state::compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
-        .expect("fixture state_root")
+    arkret_state::compute_state_root(
+        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture state_root")
 }
 
 pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {

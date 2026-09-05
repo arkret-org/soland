@@ -173,13 +173,28 @@ async fn state_root_for(
             .await
             .expect("fixture predecessor Seal state is valid")
     };
+    // The predecessor view carries `cas_register` cells (the Realm notary among
+    // them), whose state_root leaves are their head sets rather than their
+    // settled values (spec section 6.2.1). The grant this fixture adds is an
+    // `or_set`, so it contributes no head.
+    let cas_heads = if predecessors.is_empty() {
+        arkret_state::CasHeadsByCell::new()
+    } else {
+        state
+            .test_effective_cas_heads_at(predecessors, realm)
+            .await
+            .expect("fixture predecessor Seal heads are valid")
+    };
     insert_new_grant_cell(
         &mut post_state,
         cell.clone(),
         arkret_state::join_cell(binding.lattice.as_ref(), cell, std::slice::from_ref(op)),
     );
-    compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
-        .expect("fixture grant post-state root")
+    compute_state_root(
+        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("fixture grant post-state root")
 }
 
 fn insert_new_grant_cell(

@@ -64,6 +64,7 @@ async fn seal_accepted_invite_create(
     }
 
     let mut sealed_ops = Vec::new();
+    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, ops) in ops_by_cell {
         assert!(
             !post_state.contains_key(&cell),
@@ -72,15 +73,25 @@ async fn seal_accepted_invite_create(
         let binding = registry
             .resolve(&event.realm_id, &cell)
             .expect("invite cell family is registered");
+        // The live-target slot is a `cas_register`, so its state_root leaf is
+        // the head set of spec section 6.2.1 rather than its settled value.
+        if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+            let heads = arkret_state::cas_heads_for_batches(std::slice::from_ref(&ops));
+            if !heads.is_empty() {
+                cas_heads.insert(cell.clone(), heads);
+            }
+        }
         post_state.insert(
             cell.clone(),
             arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
         );
         sealed_ops.extend(ops.into_iter().map(|op| (cell.clone(), op)));
     }
-    let state_root =
-        arkret_state::state::compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
-            .expect("invite successor state root");
+    let state_root = arkret_state::state::compute_state_root(
+        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("invite successor state root");
     let signer = soland_services::identity::FrozenEd25519NotarySigner::from_seed(
         state.notary_signing_key().to_bytes(),
         state.service_did(),

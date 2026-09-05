@@ -511,17 +511,29 @@ fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Has
         grouped.entry(cell.clone()).or_default().push(op.clone());
     }
     let mut post_state = BTreeMap::new();
+    let mut cas_heads = arkret_state::CasHeadsByCell::new();
     for (cell, cell_ops) in grouped {
         let binding = registry
             .resolve(realm, &cell)
             .map_err(|error| error.to_string())?;
+        // A `cas_register` cell's state_root leaf carries its heads rather than
+        // its settled value (spec section 6.2.1); both come from these same ops.
+        if binding.lattice.kind() == arkret_state::LatticeKind::CasRegister {
+            let heads = arkret_state::cas_heads_for_batches(std::slice::from_ref(&cell_ops));
+            if !heads.is_empty() {
+                cas_heads.insert(cell.clone(), heads);
+            }
+        }
         post_state.insert(
             cell.clone(),
             arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
         );
     }
-    compute_state_root(&post_state, arkret_canonical::DigestSuite::Sha256)
-        .map_err(|error| error.to_string())
+    compute_state_root(
+        arkret_state::GovernanceView::new(&post_state, &cas_heads),
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn capability_grant_cell(grant_id: &str) -> Result<CellRef, String> {
